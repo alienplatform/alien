@@ -984,6 +984,7 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            runtime_identity_audience: None,
             gcp_federation_scope: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),

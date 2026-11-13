@@ -9,7 +9,8 @@ import * as z from "zod";
  * @description Azure Key Vault key created by the customer-installed setup stack.
  */
 export const AzureKeyImportDataSchema = z.object({
-    "keyId": z.string().describe("Full versioned Key Vault key ID used for new wrapping operations."),
+    "diskEncryptionSetId": z.string().describe("Disk Encryption Set created for volumes that use the key; absent when none do.").nullish(),
+"keyId": z.string().describe("Full versioned Key Vault key ID used for new wrapping operations."),
 "keyName": z.string().describe("Key name within the vault."),
 "lineageVersionId": z.string().describe("Version ID that identifies the original key lineage."),
 "vaultResourceId": z.string().describe("ARM resource ID of the dedicated Key Vault.")

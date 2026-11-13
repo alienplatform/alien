@@ -300,7 +300,6 @@ Resources:
       - Key: resource-type
         Value: network
     DependsOn:
-    - AgentsBuildRole
     - AgentsEgressOperatorRole
     Condition: NetworkModeCreate
   DefaultNetworkPublicSubnet2:
@@ -364,7 +363,6 @@ Resources:
       - Key: resource-type
         Value: network
     DependsOn:
-    - AgentsBuildRole
     - AgentsEgressOperatorRole
     Condition: NetworkCreateUseAz2
   DefaultNetworkPublicSubnet3:
@@ -428,7 +426,6 @@ Resources:
       - Key: resource-type
         Value: network
     DependsOn:
-    - AgentsBuildRole
     - AgentsEgressOperatorRole
     Condition: NetworkCreateUseAz3
   DefaultNetworkPublicRouteTable:
@@ -579,7 +576,6 @@ Resources:
       - Key: resource-type
         Value: network
     DependsOn:
-    - AgentsBuildRole
     - AgentsEgressOperatorRole
     Condition: NetworkModeCreate
   DefaultNetworkFlowLogGroup:

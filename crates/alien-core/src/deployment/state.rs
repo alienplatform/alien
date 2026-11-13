@@ -132,6 +132,12 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub airgapped_report: Option<AirgappedReportMetadata>,
 
+    /// Version of the Operator binary that last reported this deployment, set
+    /// by the manager from the sync request. Missing until an Operator that
+    /// reports its version has synced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
+
     /// Bounded credential retry state shared by all deployment drivers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_retry: Option<CredentialRetry>,
@@ -257,6 +263,11 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deployer_secrets: Vec<crate::DeployerSecretReport>,
 
+    /// What a one-token call with the customer admin's setup credentials said about each
+    /// model an AI resource declares. Written once, during setup; the AI controller's heartbeat
+    /// reports it. Absent when no model is declared or the setup could not check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ai_access_checks: Vec<AiAccessCheck>,
     /// When `deployer_secrets` was last read from the customer's secret store. While the
     /// deployment waits for secrets the check is repeated at most every 30 seconds, because
     /// the engine steps much faster than the store's rate limits allow.
@@ -269,6 +280,32 @@ pub struct RuntimeMetadata {
     /// so readers must treat absence as unknown.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources_waiting_for_secrets: Vec<String>,
+}
+
+/// The setup-time answer for one declared model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AiAccessCheck {
+    /// The AI resource that declares the model.
+    pub resource_id: String,
+    /// The model id as the app uses it.
+    pub model_id: String,
+    /// `verified`, `refused` (the cloud refused the model) or `not-checked`.
+    pub result: AiAccessCheckResult,
+    /// The cloud's error code or the reason the check could not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub tested_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum AiAccessCheckResult {
+    Verified,
+    Refused,
+    NotChecked,
 }
 
 /// Cloud objects a direct setup created so a runtime-owned resource can run.

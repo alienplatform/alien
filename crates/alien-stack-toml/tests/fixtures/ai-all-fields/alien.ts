@@ -14,6 +14,7 @@ const inputs = alien.inputs({
 const main = new alien.AI("main")
   .displayName("Primary ai")
   .description("The ai the acme services share.")
+  .models([{ id: "claude-sonnet-4-6", required: true }, { id: "claude-haiku-4-5" }])
   .enabled(inputs.ai_enabled)
   .build()
 

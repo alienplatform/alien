@@ -1013,6 +1013,8 @@ pub struct Environment {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct FunctionConfiguration {
+    /// Current execution role returned by Lambda.
+    pub role: Option<String>,
     pub function_name: Option<String>,
     pub function_arn: Option<String>,
     pub state: Option<String>,

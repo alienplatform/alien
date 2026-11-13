@@ -70,6 +70,7 @@ use alien_azure_clients::{
     tables::{AzureTableManagementClient, TableManagementApi},
     AzureClientConfig, AzureTokenCache,
 };
+use alien_client_core::runtime_credentials::RuntimeCapability;
 use alien_error::Context;
 use alien_gcp_clients::{
     agent_platform::{AgentPlatformApi, AgentPlatformClient},
@@ -108,6 +109,42 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
 
+/// Supplies transient source-registry authority without serializing it into
+/// deployment configuration or controller state.
+#[async_trait::async_trait]
+pub trait RuntimeRegistryCredentialProvider: Send + Sync {
+    /// Publish only after the workload credential file or Secret write succeeds.
+    async fn runtime_credential_published(
+        &self,
+        _deployment_id: &str,
+        _purpose: serde_json::Value,
+        _credential: RuntimeCapability,
+    ) -> Result<()> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential publication is unavailable".into(),
+                resource_id: None,
+            },
+        ))
+    }
+
+    async fn registry_pull_credential(&self, deployment_id: &str) -> Result<RuntimeCapability>;
+
+    /// Issue one exact-purpose leaf for a workload; never return parent authority.
+    async fn runtime_credential(
+        &self,
+        _deployment_id: &str,
+        _purpose: serde_json::Value,
+    ) -> Result<RuntimeCapability> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential issuance is unavailable".into(),
+                resource_id: None,
+            },
+        ))
+    }
+}
+
 /// Trait that provides methods to get platform service clients.
 /// This enables dependency injection for testing by allowing mock clients to be provided.
 ///
@@ -116,6 +153,54 @@ use mockall::automock;
 #[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait::async_trait]
 pub trait PlatformServiceProvider: Send + Sync {
+    /// Publish only after the workload credential file or Secret write succeeds.
+    async fn runtime_credential_published(
+        &self,
+        _deployment_id: &str,
+        _purpose: serde_json::Value,
+        _credential: RuntimeCapability,
+    ) -> Result<()> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential publication is unavailable".into(),
+                resource_id: None,
+            },
+        ))
+    }
+
+    async fn runtime_credential(
+        &self,
+        _deployment_id: &str,
+        _purpose: serde_json::Value,
+    ) -> Result<RuntimeCapability> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential issuance is unavailable".into(),
+                resource_id: None,
+            },
+        ))
+    }
+
+    async fn runtime_registry_pull_credential(
+        &self,
+        _deployment_id: &str,
+    ) -> Result<Option<RuntimeCapability>> {
+        Ok(None)
+    }
+
+    /// The digest of `repository:reference` in the registry at `registry_origin`,
+    /// read with the runtime registry pull token.
+    async fn resolve_registry_manifest_digest(
+        &self,
+        registry_origin: &str,
+        repository: &str,
+        reference: &str,
+        token: &str,
+    ) -> Result<String> {
+        crate::registry_digest::fetch_manifest_digest(registry_origin, repository, reference, token)
+            .await
+    }
+
     /// Setup authority available to this runtime without a separate setup handoff.
     fn runtime_setup_authority(
         &self,
@@ -540,10 +625,19 @@ pub trait PlatformServiceProvider: Send + Sync {
 ///
 /// For cloud platforms, creates HTTP API clients on demand.
 /// For local platform, stores reference to the local bindings provider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DefaultPlatformServiceProvider {
+    runtime_registry_credentials: Option<Arc<dyn RuntimeRegistryCredentialProvider>>,
     #[cfg(feature = "local")]
     local_bindings: Option<Arc<alien_local::LocalBindingsProvider>>,
+}
+
+impl std::fmt::Debug for DefaultPlatformServiceProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DefaultPlatformServiceProvider")
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for DefaultPlatformServiceProvider {
@@ -551,11 +645,20 @@ impl Default for DefaultPlatformServiceProvider {
         Self {
             #[cfg(feature = "local")]
             local_bindings: None,
+            runtime_registry_credentials: None,
         }
     }
 }
 
 impl DefaultPlatformServiceProvider {
+    pub fn with_runtime_registry_credentials(
+        mut self,
+        provider: Arc<dyn RuntimeRegistryCredentialProvider>,
+    ) -> Self {
+        self.runtime_registry_credentials = Some(provider);
+        self
+    }
+
     /// Creates a new service provider with local bindings provider.
     ///
     /// This is used for the local platform to enable controllers to access
@@ -564,12 +667,57 @@ impl DefaultPlatformServiceProvider {
     pub fn with_local_bindings(local_bindings: Arc<alien_local::LocalBindingsProvider>) -> Self {
         Self {
             local_bindings: Some(local_bindings),
+            runtime_registry_credentials: None,
         }
     }
 }
 
 #[async_trait::async_trait]
 impl PlatformServiceProvider for DefaultPlatformServiceProvider {
+    async fn runtime_credential_published(
+        &self,
+        deployment_id: &str,
+        purpose: serde_json::Value,
+        credential: RuntimeCapability,
+    ) -> Result<()> {
+        let provider = self.runtime_registry_credentials.as_ref().ok_or_else(|| {
+            alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential publication is unavailable".into(),
+                resource_id: None,
+            })
+        })?;
+        provider
+            .runtime_credential_published(deployment_id, purpose, credential)
+            .await
+    }
+
+    async fn runtime_credential(
+        &self,
+        deployment_id: &str,
+        purpose: serde_json::Value,
+    ) -> Result<RuntimeCapability> {
+        let provider = self.runtime_registry_credentials.as_ref().ok_or_else(|| {
+            alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
+                message: "Runtime credential issuance is unavailable".into(),
+                resource_id: None,
+            })
+        })?;
+        provider.runtime_credential(deployment_id, purpose).await
+    }
+
+    async fn runtime_registry_pull_credential(
+        &self,
+        deployment_id: &str,
+    ) -> Result<Option<RuntimeCapability>> {
+        match &self.runtime_registry_credentials {
+            Some(provider) => provider
+                .registry_pull_credential(deployment_id)
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
     fn runtime_setup_authority(
         &self,
         platform: alien_core::Platform,

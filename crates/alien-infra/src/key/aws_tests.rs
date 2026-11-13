@@ -383,6 +383,7 @@ async fn teardown_after_a_key_failed_to_create_drops_the_key() {
             key_arn: KEY_ARN.to_string(),
         },
         wrapping_key_id: KEY_ARN.to_string(),
+        disk_encryption_set_id: None,
     }));
     imported_key
         .set_internal_controller(Some(Box::new(AwsKeyController {

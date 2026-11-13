@@ -39,7 +39,7 @@ pub use project_store::{ProjectRecord, ProjectStore};
 pub use release_channel_store::{
     DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,
 };
-pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
+pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore, StoredChart};
 pub use server_bindings::ServerBindings;
 pub use telemetry_backend::{TelemetryBackend, TelemetryCaller, TelemetrySignal};
 pub use token_store::{CreateTokenParams, TokenRecord, TokenStore};

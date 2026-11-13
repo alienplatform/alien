@@ -17,7 +17,8 @@ use crate::error::{ErrorData, Result};
 /// Returns `Ok(Some(subject))` if a valid token was provided,
 /// `Ok(None)` if no token was provided (for optional-auth endpoints),
 /// a 503 `AUTHENTICATION_UNAVAILABLE` error if the validator could not check
-/// the token right now, or a 401 `UNAUTHORIZED` error if the token is invalid.
+/// the token right now, or a 401 `UNAUTHORIZED` error if the token is invalid
+/// (see [`validation_error`] for the 4xx errors a validator may show).
 pub async fn extract_auth(state: &AppState, headers: &HeaderMap) -> Result<Option<Subject>> {
     state
         .auth_validator
@@ -28,8 +29,30 @@ pub async fn extract_auth(state: &AppState, headers: &HeaderMap) -> Result<Optio
 
 /// Map an [`crate::traits::AuthValidator`] error to the response error,
 /// following the validator contract: retryable means "could not verify".
+///
+/// A refusal is a 401, unless the validator marks it safe to show
+/// (`internal == false`) and gives it another 4xx status, such as a 409 that
+/// tells an old client to upgrade. That error is returned with its code and
+/// message, so the caller learns why its credential is refused.
 pub fn validation_error(error: AlienError) -> AlienError<ErrorData> {
     if !error.retryable {
+        let shown_status = error
+            .http_status_code
+            .filter(|status| (400..500).contains(status) && *status != 401);
+        if let (false, Some(status)) = (error.internal, shown_status) {
+            return AlienError {
+                code: error.code,
+                message: error.message,
+                context: error.context,
+                hint: error.hint,
+                retryable: false,
+                internal: false,
+                http_status_code: Some(status),
+                source: None,
+                human_layer_presentation: error.human_layer_presentation,
+                error: None,
+            };
+        }
         return ErrorData::unauthorized(error.message);
     }
     // The validator's error can describe internals (a database, an upstream

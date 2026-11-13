@@ -23,12 +23,15 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::sandbox::kubernetes::capability_secret_name;
-use crate::sandbox::kubernetes_broker::claim_session_for_deployment;
+use crate::sandbox::kubernetes_broker::{
+    find_or_create_session_for_deployment, SessionRequestError,
+};
 use alien_error::Context;
 use alien_k8s_clients::kubernetes::pods::PodApi;
 use alien_k8s_clients::kubernetes::secrets::SecretsApi;
 use alien_k8s_clients::kubernetes::token_reviews::{
-    authenticated_user, is_service_account_in, review_for, TokenReviewsApi,
+    authenticated_for_audience, authenticated_user, is_service_account_in, review_for,
+    review_for_audience, TokenReviewsApi,
 };
 
 /// What the broker needs to serve one deployment's sandboxes.
@@ -121,6 +124,22 @@ pub struct ClaimRequest {
     pub sandbox_id: String,
     /// Session id the pod will carry
     pub session_id: String,
+    /// Tenant the session is created for; recorded on the pod
+    #[serde(default)]
+    pub tenant_key: Option<String>,
+    /// How long the session may live from the claim, bounded by the sandbox's declared lifetime
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+/// Query of a claim. `setup=pending` says the caller will set the session up (its egress
+/// policy) and report it with `/ready`. A query rather than a body field so that a caller built
+/// for this broker still works against one that predates it, which ignores what it does not know.
+#[derive(Debug, Default, Deserialize)]
+pub struct ClaimQuery {
+    /// `pending` when the creator reports its setup afterwards
+    #[serde(default)]
+    pub setup: Option<String>,
 }
 
 /// What the application needs to reach its session.
@@ -137,6 +156,40 @@ pub struct ClaimResponse {
     pub capability: String,
     /// Unix seconds after which the capability is void
     pub expires_at: i64,
+    /// Unix seconds at which the session was created
+    pub created_at: i64,
+    /// Generation recorded on the pod
+    pub generation: u64,
+    /// Tenant key the session was created for
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant_key: Option<String>,
+    /// Whether this request created the session
+    pub created: bool,
+    /// Unix seconds at which the session ends; absent when it has no lifetime
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<i64>,
+    /// Whether the creator is still setting the session up; a caller that finds the session
+    /// waits for this to clear. Absent when false, so older callers see the body they know.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub setup_pending: bool,
+}
+
+impl From<crate::sandbox::kubernetes_broker::ClaimedSession> for ClaimResponse {
+    fn from(claimed: crate::sandbox::kubernetes_broker::ClaimedSession) -> Self {
+        Self {
+            agent_session_id: claimed.agent_session_id,
+            session_id: claimed.session_id,
+            endpoint: claimed.endpoint,
+            capability: claimed.capability,
+            expires_at: claimed.expires_at,
+            created_at: claimed.created_at,
+            generation: claimed.generation,
+            tenant_key: claimed.tenant_key,
+            created: claimed.created,
+            deadline: claimed.deadline,
+            setup_pending: claimed.setup_pending,
+        }
+    }
 }
 
 impl BrokerState {
@@ -192,15 +245,26 @@ pub fn broker_router_with_authorization(
 ) -> Router {
     Router::new()
         .route("/v1/sandbox/sessions", post(claim))
+        .route("/v1/sandbox/{sandbox}/sessions", axum::routing::get(list))
         .route(
             "/v1/sandbox/{sandbox}/sessions/{session}",
-            axum::routing::delete(release),
+            axum::routing::get(reattach).delete(release),
+        )
+        .route(
+            "/v1/sandbox/{sandbox}/sessions/{session}/preview",
+            post(preview),
+        )
+        .route(
+            "/v1/sandbox/{sandbox}/sessions/{session}/ready",
+            post(setup_done),
         )
         .with_state(BrokerRouteState {
             broker: state,
             authorization,
         })
 }
+
+use crate::sandbox::kubernetes_broker_token::BROKER_AUDIENCE;
 
 /// Verifies the caller is a ServiceAccount owned by this deployment.
 ///
@@ -215,12 +279,26 @@ async fn authorize(
         .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
-    let verdict = state
+    // A token projected for the broker's own audience is what linking workloads get from now on.
+    // A workload started before that (or before an upgrade) still holds the ServiceAccount token
+    // the kubelet mounts by default, so a token that is not for the broker's audience is reviewed
+    // once more with the API server's default audience and accepted if it names a ServiceAccount
+    // of this deployment, as it was before the projected token existed. The ServiceAccount
+    // allow-list below applies to both. Rolling a workload moves it to the projected token.
+    let mut verdict = state
         .broker
         .token_reviews
-        .create_token_review(&review_for(token))
+        .create_token_review(&review_for_audience(token, BROKER_AUDIENCE))
         .await
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if !authenticated_for_audience(&verdict, BROKER_AUDIENCE) {
+        verdict = state
+            .broker
+            .token_reviews
+            .create_token_review(&review_for(token))
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    }
 
     // A rejected token comes back 200 with `authenticated: false`, so the verdict is read rather
     // than the status code.
@@ -252,11 +330,12 @@ async fn authorize(
 async fn claim(
     State(state): State<BrokerRouteState>,
     headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<ClaimQuery>,
     Json(request): Json<ClaimRequest>,
 ) -> Result<Json<ClaimResponse>, StatusCode> {
     let authorization = authorize(&state, &headers).await?;
 
-    let claimed = claim_session_for_deployment(
+    let claimed = find_or_create_session_for_deployment(
         &state.broker.pods,
         &state.broker.secrets,
         &request.sandbox_id,
@@ -266,18 +345,144 @@ async fn claim(
         chrono::Utc::now().timestamp(),
         &authorization.deployment_label_key,
         &authorization.deployment_label_value,
+        request.tenant_key.as_deref(),
+        request.timeout_ms.map(|ms| ms.div_ceil(1000)),
+        query.setup.as_deref() == Some("pending"),
     )
     .await
-    // Retryable rather than fatal: an empty pool refills on the controller's next health tick,
-    // and 503 is what tells a caller to wait rather than to give up.
+    .map_err(|error| match error {
+        SessionRequestError::TenantMismatch => StatusCode::CONFLICT,
+        // The caller asked for more than the sandbox declares; retrying cannot change that.
+        SessionRequestError::LifetimeTooLong(_) => StatusCode::BAD_REQUEST,
+        // Retryable rather than fatal: a cold create can outlast a request and 503 is what tells
+        // a caller to wait rather than to give up.
+        SessionRequestError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+    })?;
+
+    Ok(Json(claimed.into()))
+}
+
+/// The creator reports that it finished setting the session up (or ended it).
+async fn setup_done(
+    State(state): State<BrokerRouteState>,
+    headers: HeaderMap,
+    Path((sandbox_id, session)): Path<(String, String)>,
+) -> Result<StatusCode, StatusCode> {
+    let authorization = authorize(&state, &headers).await?;
+    crate::sandbox::kubernetes_broker::finish_session_setup_for_deployment(
+        &state.broker.secrets,
+        &state.broker.namespace,
+        &sandbox_id,
+        &session,
+        &capability_secret_name(&sandbox_id),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Returns a session claimed earlier, by this process or another, with a fresh capability.
+async fn reattach(
+    State(state): State<BrokerRouteState>,
+    headers: HeaderMap,
+    Path((sandbox_id, session)): Path<(String, String)>,
+) -> Result<Json<ClaimResponse>, StatusCode> {
+    let authorization = authorize(&state, &headers).await?;
+
+    let claimed = crate::sandbox::kubernetes_broker::reattach_session_for_deployment(
+        &state.broker.pods,
+        &state.broker.secrets,
+        &sandbox_id,
+        &state.broker.namespace,
+        &session,
+        &capability_secret_name(&sandbox_id),
+        chrono::Utc::now().timestamp(),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+    )
+    .await
+    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(claimed.into()))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionList {
+    session_ids: Vec<String>,
+}
+
+/// Lists the claimed sessions of a sandbox that belong to the caller's deployment.
+async fn list(
+    State(state): State<BrokerRouteState>,
+    headers: HeaderMap,
+    Path(sandbox_id): Path<String>,
+) -> Result<Json<SessionList>, StatusCode> {
+    let authorization = authorize(&state, &headers).await?;
+
+    let session_ids = crate::sandbox::kubernetes_broker::list_sessions_for_deployment(
+        &state.broker.pods,
+        &state.broker.secrets,
+        &sandbox_id,
+        &state.broker.namespace,
+        &capability_secret_name(&sandbox_id),
+        chrono::Utc::now().timestamp(),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+    )
+    .await
     .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
-    Ok(Json(ClaimResponse {
-        agent_session_id: claimed.agent_session_id,
-        session_id: claimed.session_id,
-        endpoint: claimed.endpoint,
-        capability: claimed.capability,
-        expires_at: claimed.expires_at,
+    Ok(Json(SessionList { session_ids }))
+}
+
+#[derive(Debug, Deserialize)]
+struct PreviewRequest {
+    port: u16,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewResponse {
+    endpoint: String,
+    capability: String,
+    expires_at: i64,
+}
+
+/// Mints a preview capability for one declared port of a session of the caller's deployment.
+async fn preview(
+    State(state): State<BrokerRouteState>,
+    headers: HeaderMap,
+    Path((sandbox_id, session)): Path<(String, String)>,
+    Json(request): Json<PreviewRequest>,
+) -> Result<Json<PreviewResponse>, StatusCode> {
+    use crate::sandbox::kubernetes_broker::PreviewError;
+    let authorization = authorize(&state, &headers).await?;
+    let grant = crate::sandbox::kubernetes_broker::preview_session_for_deployment(
+        &state.broker.pods,
+        &state.broker.secrets,
+        &sandbox_id,
+        &state.broker.namespace,
+        &session,
+        &capability_secret_name(&sandbox_id),
+        chrono::Utc::now().timestamp(),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+        request.port,
+    )
+    .await
+    .map_err(|error| match error {
+        PreviewError::PortNotDeclared => StatusCode::FORBIDDEN,
+        PreviewError::NotFound => StatusCode::NOT_FOUND,
+        PreviewError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+    })?;
+    Ok(Json(PreviewResponse {
+        endpoint: grant.endpoint,
+        capability: grant.capability,
+        expires_at: grant.expires_at,
     }))
 }
 
@@ -329,6 +534,7 @@ mod tests {
     fn verdict(authenticated: bool, username: &str) -> TokenReview {
         TokenReview {
             status: Some(TokenReviewStatus {
+                audiences: authenticated.then(|| vec![BROKER_AUDIENCE.to_string()]),
                 authenticated: Some(authenticated),
                 user: Some(UserInfo {
                     username: Some(username.to_string()),
@@ -427,6 +633,89 @@ mod tests {
             capability_secret_name(&request.sandbox_id),
             "alien-sandbox-agent-capability"
         );
+    }
+
+    /// The review must name the broker's audience, and only a verdict that matched it is
+    /// accepted. Without an audience the API server checks the token against its own, so the
+    /// ServiceAccount token every pod has mounted would be what callers send the broker, and a
+    /// credential for the API server itself.
+    #[tokio::test]
+    async fn the_token_review_names_the_brokers_audience() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        let mut reviews = MockTokenReviewsApi::new();
+        reviews
+            .expect_create_token_review()
+            .returning(move |review| {
+                recorded.lock().unwrap().push(review.spec.audiences.clone());
+                Ok(verdict(
+                    true,
+                    "system:serviceaccount:alien-sandbox-sbx:worker",
+                ))
+            });
+        authorize(&state_with(reviews), &bearer("projected"))
+            .await
+            .expect("a token projected for the broker is accepted");
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            [Some(vec![BROKER_AUDIENCE.to_string()])],
+            "one review, for the broker's audience alone"
+        );
+    }
+
+    /// A workload started before the projected token existed still sends the ServiceAccount token
+    /// the kubelet mounts. The API server rejects it for the broker's audience, so the broker
+    /// reviews it once more with the default audience and accepts it for a deployment account.
+    #[tokio::test]
+    async fn a_default_audience_token_is_accepted_until_the_workload_is_rolled() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        let mut reviews = MockTokenReviewsApi::new();
+        reviews
+            .expect_create_token_review()
+            .returning(move |review| {
+                recorded.lock().unwrap().push(review.spec.audiences.clone());
+                let mut answer = verdict(true, "system:serviceaccount:alien-sandbox-sbx:worker");
+                // Whatever the audience asked, the API server matched only its own.
+                answer.status.as_mut().unwrap().audiences =
+                    Some(vec!["https://kubernetes.default.svc".to_string()]);
+                Ok(answer)
+            });
+        authorize(&state_with(reviews), &bearer("default"))
+            .await
+            .expect("the default token of a deployment account is still accepted");
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            [Some(vec![BROKER_AUDIENCE.to_string()]), None],
+            "the broker's audience first, then the default"
+        );
+    }
+
+    /// The fallback does not widen who may call: a token that is neither is refused, and a default
+    /// token of a ServiceAccount outside the deployment is still refused by the allow-list.
+    #[tokio::test]
+    async fn a_token_the_cluster_rejects_is_refused_on_both_reviews() {
+        let mut reviews = MockTokenReviewsApi::new();
+        reviews
+            .expect_create_token_review()
+            .times(2)
+            .returning(|_| Ok(verdict(false, "")));
+        let error = authorize(&state_with(reviews), &bearer("garbage"))
+            .await
+            .expect_err("an unauthenticated token is refused");
+        assert_eq!(error, StatusCode::UNAUTHORIZED);
+
+        let mut reviews = MockTokenReviewsApi::new();
+        reviews.expect_create_token_review().returning(|_| {
+            Ok(verdict(
+                true,
+                "system:serviceaccount:alien-sandbox-sbx:someone-else",
+            ))
+        });
+        let error = authorize(&state_with(reviews), &bearer("default"))
+            .await
+            .expect_err("a ServiceAccount outside the deployment is refused");
+        assert_eq!(error, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -551,9 +840,12 @@ mod tests {
         let error = claim(
             State(scoped_state(pods, secrets, reviews)),
             bearer("release-a"),
+            axum::extract::Query(ClaimQuery::default()),
             Json(ClaimRequest {
                 sandbox_id: "sbx".to_string(),
                 session_id: "session".to_string(),
+                tenant_key: None,
+                timeout_ms: None,
             }),
         )
         .await

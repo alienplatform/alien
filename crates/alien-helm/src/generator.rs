@@ -46,12 +46,21 @@ pub struct HelmOptions<'a> {
     pub chart_name: String,
 }
 
+/// How the Operator authenticates to its manager.
+#[derive(Debug, Clone, Copy)]
+pub enum ManagementCredential<'a> {
+    /// A deployment token, kept in the release Secret.
+    Token(&'a str),
+    /// A one-use enrollment code. The Operator exchanges it for its own key.
+    EnrollmentCode { code: &'a str, audience: &'a str },
+}
+
 /// Inputs for rendering `values.yaml` from registered setup state.
 pub struct ManagerFetchHelmValuesOptions<'a> {
     pub deployment_id: &'a str,
     pub deployment_name: &'a str,
     pub manager_url: &'a str,
-    pub deployment_token: &'a str,
+    pub credential: ManagementCredential<'a>,
     pub runtime_encryption_key: &'a str,
     pub stack: &'a Stack,
     pub stack_state: &'a alien_core::StackState,
@@ -369,6 +378,14 @@ fn generate_helm_chart_internal(
             })
             .or_insert(notes);
     }
+
+    files
+        .entry("templates/NOTES.txt".to_string())
+        .and_modify(|existing| {
+            existing.push('\n');
+            existing.push_str(&management_url_notes_tpl());
+        })
+        .or_insert_with(management_url_notes_tpl);
 
     files.insert(
         "templates/_infrastructure.tpl".into(),
@@ -1474,6 +1491,15 @@ spec:
 /// The Secret name carries the deployment's resource prefix, which the chart
 /// does not know, so the notes give the vault key and point to the deployment
 /// status for the full name.
+fn management_url_notes_tpl() -> String {
+    r#"{{- $managementUrl := include "deployment.managementUrl" . }}
+{{- if and $managementUrl (not (hasPrefix "https://" (lower $managementUrl))) }}
+WARNING: the management URL {{ $managementUrl }} is not https. The Operator sends its deployment token to it in clear text. Set management.url (or management.defaultUrl) to the manager's https:// address.
+{{- end }}
+"#
+    .to_string()
+}
+
 fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
     // Manager-served charts use the original release stack, before preflights.
     // Its input definitions describe possible slots; deployment status determines
@@ -2247,10 +2273,16 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     let mut yaml = String::new();
 
     yaml.push_str("management:\n");
-    yaml.push_str(&format!(
-        "  token: {}\n",
-        yaml_string(options.deployment_token)
-    ));
+    match options.credential {
+        ManagementCredential::Token(token) => {
+            yaml.push_str(&format!("  token: {}\n", yaml_string(token)));
+        }
+        ManagementCredential::EnrollmentCode { code, audience } => {
+            yaml.push_str("  token: ''\n");
+            yaml.push_str(&format!("  enrollmentCode: {}\n", yaml_string(code)));
+            yaml.push_str(&format!("  audience: {}\n", yaml_string(audience)));
+        }
+    }
     yaml.push_str(&format!(
         "  name: {}\n",
         yaml_string(options.deployment_name)
@@ -3827,10 +3859,11 @@ impl ChartAnalysis {
             if let Some(container) = entry.config.downcast_ref::<Container>() {
                 fail_if_container_source_remains(resource_id, container)?;
                 if container.egress.is_some() {
-                    analysis.extra_templates.insert(
-                        "sandbox-cni-probe.yaml".into(),
-                        crate::emitters::sandbox_cni::template(),
-                    );
+                    // A sandbox's own probe (which names the sandbox RuntimeClass) wins.
+                    analysis
+                        .extra_templates
+                        .entry("sandbox-cni-probe.yaml".into())
+                        .or_insert_with(|| crate::emitters::sandbox_cni::template(false));
                 }
                 if let Some(endpoint) = container.public_endpoints.first() {
                     analysis.services.push(ServiceValue {
@@ -3851,8 +3884,12 @@ impl ChartAnalysis {
             }
 
             // Frozen resources contribute operator-local infrastructure bindings; live
-            // (workload) resources do not — they ARE the workload.
-            if entry.lifecycle != ResourceLifecycle::Frozen {
+            // (workload) resources do not — they ARE the workload. A sandbox is the exception:
+            // its NetworkPolicy, broker RBAC, RuntimeClass helper and CNI probe belong to the chart
+            // whichever lifecycle it has (the Operator creates the pods, the chart owns the rules
+            // that confine them), and the deployment template refers to the helper unconditionally.
+            let is_sandbox = entry.config.downcast_ref::<alien_core::Sandbox>().is_some();
+            if entry.lifecycle != ResourceLifecycle::Frozen && !is_sandbox {
                 continue;
             }
 
@@ -4017,10 +4054,18 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   existingSecret:
     name: ""
     tokenKey: sync-token
+  # One-hour, one-use code that enrolls the Operator for a registered
+  # deployment, instead of token. The Operator then keeps its own key, which
+  # it replaces every day. Requires deploymentId, audience and persistence.
+  enrollmentCode: ""
+  # The manager audience returned with the enrollment code.
+  audience: ""
   name: ""
   # Resolved management endpoint captured when this package was built.
   defaultUrl: ""
-  # Override the captured or installed endpoint when routing changes.
+  # Override the captured or installed endpoint when routing changes. The Operator sends its
+  # deployment token to this URL: use https. An http URL still works; the Operator and
+  # NOTES.txt warn about it.
   url: ""
   # Leave unset to create a deployment from the bootstrap token.
   deploymentId: null
@@ -4040,7 +4085,9 @@ runtime:
     # the manager this chart connects to).
     pullWithManagementToken: false
     # Follow the Operator image the manager targets, so upgrades need no helm
-    # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    # upgrade. The Deployment is Recreate: the running pod stops before the
+    # new one starts. Set false when you deliver upgrades yourself (Argo CD,
+    # Flux, Renovate): the Operator then changes only with the chart version.
     selfUpdate: true
   # Pull secrets for the Operator and for the application's workloads (added
   # to their ServiceAccounts), for images in a registry that needs credentials.
@@ -4133,12 +4180,31 @@ runtime:
   pdb:
     enabled: false
     minAvailable: 1
+  # Off by default. When enabled, `mode: open` (the default) keeps the Operator Pod
+  # reachable and unrestricted; `mode: restricted` limits it. Restricted ingress allows Pods in the release
+  # namespace to reach the Operator API port (log collectors, linked workloads). Egress
+  # allows DNS, the TCP ports in egress.ports and the port of management.url when it names
+  # one. The defaults are HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the
+  # Kubernetes API server on clusters that expose it there). Add the ports of your bindings
+  # (a database 5432, a cache 6379) to egress.ports, or other rules to extraRules.
   networkPolicy:
     enabled: false
+    mode: open
+    # The cluster's DNS. Set clusterIPs to the DNS Service address (`kubectl -n kube-system
+    # get svc kube-dns`), and the node-local DNS address if the cluster has one: on EKS Auto
+    # Mode and with node-local DNS the resolver is not a Pod you can select.
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      clusterIPs: []
     ingress:
       enabled: true
+      extraRules: []
     egress:
       enabled: true
+      ports: [443, 6443]
+      extraRules: []
   cleanup:
     onUninstall:
       enabled: true
@@ -4254,6 +4320,31 @@ ephemeralStorage:
   nodeSelector: {}
 "#,
     );
+    if analysis.sandbox_broker {
+        yaml.push_str(
+            r#"
+# Where sandbox sessions run. The sandbox runtime is the cluster's own vendor runtime; the
+# Operator only checks that the class exists and is sandboxed.
+sandbox:
+  # RuntimeClass every sandbox pod uses. Empty picks it from the Kubernetes version: EKS uses
+  # `isolated-sandbox` (AWS Nitro Sandboxes), GKE uses `gvisor`. Set it on any other cluster
+  # (AKS: `kata-vm-isolation`; on-premises: the gVisor or Kata class your administrator installed).
+  runtimeClassName: ""
+  # Extra scheduling for sandbox pods, applied on top of what the RuntimeClass itself sets.
+  nodeSelector: {}
+  tolerations: []
+  # Idle pods kept ready so a create starts in seconds. A create never fails because the pool is
+  # empty: it starts a pod on demand, which takes as long as the node and image pull need.
+  warmPoolSize: 2
+  # The nameserver address(es) pods get in /etc/resolv.conf (the kubelet's clusterDNS). Required
+  # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
+  # these addresses and nothing else on private ranges. Find it with:
+  #   kubectl run dns-probe --rm -i --restart=Never --image=busybox -- grep nameserver /etc/resolv.conf
+  # (The .10 address of the cluster's service range, e.g. 10.100.0.10 or 172.20.0.10; EKS Auto Mode has no kube-dns Service.)
+  clusterDNS: []
+"#,
+        );
+    }
     yaml.push_str("\n# Frozen databases. An infrastructure binding overrides the corresponding database.\npostgres: ");
     yaml.push_str(
         &serde_json::to_string(&analysis.postgres)
@@ -4730,6 +4821,40 @@ fn append_services(yaml: &mut String, analysis: &ChartAnalysis) {
 }
 
 fn values_schema_json(stack: &Stack) -> Result<String> {
+    let schema = values_schema_with_inputs_json(stack)?;
+    if !stack
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>().is_some())
+    {
+        return Ok(schema);
+    }
+    let mut schema: serde_json::Value = serde_json::from_str(&schema).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
+            reason: "failed to parse built-in Helm values schema".to_string(),
+        },
+    )?;
+    schema["properties"]["sandbox"] = serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "runtimeClassName": { "type": "string" },
+            "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+            "tolerations": { "type": "array" },
+            "warmPoolSize": { "type": "integer", "minimum": 0 },
+            "clusterDNS": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$" }
+            }
+        }
+    });
+    serde_json::to_string_pretty(&schema)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize Helm values schema".to_string(),
+        })
+}
+
+fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
     let base = r##"{
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
@@ -4762,6 +4887,8 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "tokenKey": { "type": "string", "minLength": 1 }
           }
         },
+        "enrollmentCode": { "type": "string" },
+        "audience": { "type": "string" },
         "name": { "type": "string" },
         "url": { "type": "string" },
         "defaultUrl": { "type": "string" },
@@ -4770,6 +4897,19 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
         "updates": { "type": "string", "enum": ["auto", "approval-required"] },
         "telemetry": { "type": "string", "enum": ["auto", "approval-required", "off"] },
         "healthChecks": { "type": "string", "enum": ["on", "off"] }
+      },
+      "if": {
+        "required": ["enrollmentCode"],
+        "properties": { "enrollmentCode": { "minLength": 1 } }
+      },
+      "then": {
+        "required": ["audience", "deploymentId"],
+        "properties": {
+          "audience": { "minLength": 1 },
+          "deploymentId": { "type": "string", "minLength": 1 },
+          "token": { "enum": [""] },
+          "existingSecret": { "properties": { "name": { "enum": [""] } } }
+        }
       }
     },
     "runtime": {
@@ -4921,15 +5061,32 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean" },
+            "mode": { "type": "string", "enum": ["open", "restricted"] },
+            "dns": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "namespace": { "type": "string" },
+                "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
+                "clusterIPs": { "type": "array", "items": { "type": "string" } }
+              }
+            },
             "ingress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             },
             "egress": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean" } }
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "ports": { "type": "array", "items": { "type": "integer" } },
+                "extraRules": { "type": "array", "items": { "type": "object" } }
+              }
             }
           }
         },
@@ -5755,7 +5912,15 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{- define "deployment.managementSecretTokenKey" -}}
+{{- if .Values.management.enrollmentCode -}}
+enrollment-code
+{{- else -}}
 {{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "deployment.managementCredentialFile" -}}
+{{- ternary "enrollment-code" "sync-token" (not (empty .Values.management.enrollmentCode)) -}}
 {{- end -}}
 
 {{- define "deployment.encryptionSecretName" -}}
@@ -5962,21 +6127,54 @@ roleRef:
     .to_string()
 }
 
-/// Pull credentials for an Operator image served by the manager: the
-/// registry is the image's host and the password is the install token.
+/// Pull credentials for an Operator image served by the manager. The
+/// registry is the image's host. A token install pulls with its token. An
+/// enrollment install first pulls with its one-hour code; once enrolled the
+/// operator keeps this Secret filled with its own pull credential, which
+/// outlives the code. An upgrade keeps that credential unless the code
+/// changed, so a new code can recover an operator whose credential expired.
 fn registry_secret_tpl() -> String {
-    r#"{{- if and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+    r#"{{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
+{{- /* An enrolled Operator upgraded with no code and no token keeps the pull
+Secret it already has; the Operator keeps refreshing it. */ -}}
+{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
-{{- $auth := printf "%s:%s" (default "deployment" .Values.management.name) .Values.management.token | b64enc }}
+{{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
+{{- $user := default "deployment" .Values.management.name }}
+{{- $codeHash := "" }}
+{{- $config := "" }}
+{{- if .Values.management.token }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
+{{- else if not .Values.management.enrollmentCode }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $codeHash = dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" (default dict $existing) }}
+{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" dict | toJson | b64enc }}
+{{- end }}
+{{- else }}
+{{- $codeHash = .Values.management.enrollmentCode | sha256sum }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- if and $existing (eq (dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" $existing) $codeHash) (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
+{{- else }}
+{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.enrollmentCode | b64enc))) | toJson | b64enc }}
+{{- end }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ include "deployment.fullname" . }}-registry
+  name: {{ $name }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
+  {{- if $codeHash }}
+  annotations:
+    alien.dev/enrollment-code-sha256: {{ $codeHash | quote }}
+  {{- end }}
 type: kubernetes.io/dockerconfigjson
 data:
-  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" $auth)) | toJson | b64enc }}
+  .dockerconfigjson: {{ $config }}
 {{- end }}
 "#
     .to_string()
@@ -6026,7 +6224,14 @@ metadata:
 type: Opaque
 stringData:
   {{- if $createManagementSecret }}
+  {{- if .Values.management.enrollmentCode }}
+  enrollment-code: {{ .Values.management.enrollmentCode | quote }}
+  {{- /* Blank the token an earlier install stored. On upgrade Helm drops the
+  old stringData key, but the Secret keeps its stored value. */}}
+  sync-token: ""
+  {{- else }}
   sync-token: {{ .Values.management.token | quote }}
+  {{- end }}
   {{- end }}
   {{- if $createEncryptionSecret }}
   encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
@@ -6806,6 +7011,24 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         "            - name: {}\n              value: {{{{ printf \"http://%s.%s.svc:%d\" (include \"deployment.fullname\" .) .Release.Namespace (int .Values.runtime.api.port) | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_BROKER_URL
     );
+    let placement = format!(
+        "            - name: {}\n              value: {{{{ include \"deployment.sandboxRuntimeClassName\" . | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default dict .Values.sandbox.nodeSelector) | quote }}}}\n            - name: {}\n              value: {{{{ toJson (default list .Values.sandbox.tolerations) | quote }}}}\n            - name: {}\n              value: {{{{ ternary 2 .Values.sandbox.warmPoolSize (kindIs \"invalid\" .Values.sandbox.warmPoolSize) | int | toString | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS,
+        alien_core::ENV_ALIEN_SANDBOX_NODE_SELECTOR,
+        alien_core::ENV_ALIEN_SANDBOX_TOLERATIONS,
+        alien_core::ENV_ALIEN_SANDBOX_WARM_POOL_SIZE
+    );
+    let dns = format!(
+        "            - name: {}\n              value: {{{{ join \",\" (default list (dig \"clusterDNS\" (list) (default dict .Values.sandbox))) | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS
+    );
+    // The Operator's own pod address: a sandbox pod proves its NetworkPolicy is enforced by
+    // finding this address unreachable. `$(VAR)` expands an env var defined earlier in the list.
+    let operator_address = format!(
+        "            - name: ALIEN_OPERATOR_POD_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.podIP\n            - name: {}\n              value: {{{{ printf \"$(ALIEN_OPERATOR_POD_IP):%d\" (int .Values.runtime.api.port) | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS
+    );
+    let broker = format!("{broker}{placement}{dns}{operator_address}");
     assert!(
         template.contains(anchor),
         "the operator Deployment template sets OTLP_HOST"
@@ -6845,7 +7068,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret) | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret "enrollmentCode" .Values.management.enrollmentCode) | sha256sum | quote }}
         checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
         {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
         checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
@@ -6858,7 +7081,7 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) .Values.management.token }}
+      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
       {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
@@ -6988,9 +7211,25 @@ spec:
             {{- end }}
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
+            - name: OPERATOR_DATA_PERSISTENT
+              value: {{ .Values.runtime.data.persistence.enabled | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
+            {{- if .Values.management.enrollmentCode }}
+            - name: OPERATOR_ENROLLMENT_CODE_FILE
+              value: /etc/deployment/secrets/enrollment-code
+            - name: ALIEN_MANAGER_AUDIENCE
+              value: {{ .Values.management.audience | quote }}
+            {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+            {{- end }}
+            {{- else if or .Values.management.token .Values.management.existingSecret.name }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
+            {{- else if and .Release.IsUpgrade (dig "pullWithManagementToken" false .Values.runtime.image) }}
+            - name: OPERATOR_REGISTRY_SECRET
+              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+            {{- end }}
             {{- end }}
             - name: OPERATOR_ENCRYPTION_KEY_FILE
               value: /etc/deployment/secrets/encryption-key
@@ -7076,8 +7315,8 @@ spec:
               readOnly: true
             {{- end }}
             - name: management-token
-              mountPath: /etc/deployment/secrets/sync-token
-              subPath: sync-token
+              mountPath: /etc/deployment/secrets/{{ include "deployment.managementCredentialFile" . }}
+              subPath: {{ include "deployment.managementCredentialFile" . }}
               readOnly: true
             - name: encryption-key
               mountPath: /etc/deployment/secrets/encryption-key
@@ -7121,7 +7360,7 @@ spec:
             secretName: {{ include "deployment.managementSecretName" . }}
             items:
               - key: {{ include "deployment.managementSecretTokenKey" . }}
-                path: sync-token
+                path: {{ include "deployment.managementCredentialFile" . }}
             defaultMode: 384
         - name: encryption-key
           secret:
@@ -7518,11 +7757,94 @@ spec:
     {{- end }}
   {{- if .Values.runtime.networkPolicy.ingress.enabled }}
   ingress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Pods of this release namespace: log collectors and linked workloads.
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.runtime.api.port }}
+    {{- with .Values.runtime.networkPolicy.ingress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
+{{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+    # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
+    # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
+        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
+        - ipBlock:
+            cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
+        {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The manager, the image registry, cloud APIs and the Kubernetes API server, then the
+    # ports the bindings use (a database, a cache) and the manager's own port.
+    {{- $ports := list }}
+    {{- range (.Values.runtime.networkPolicy.egress.ports | default list) }}{{- $ports = append $ports (int .) }}{{- end }}
+    {{- $managerUrl := urlParse (default "" (include "deployment.managementUrl" .)) }}
+    {{- $managerPort := regexFind ":[0-9]+$" (default "" $managerUrl.host) }}
+    {{- if $managerPort }}{{- $ports = append $ports (trimPrefix ":" $managerPort | int) }}
+    {{- else if eq $managerUrl.scheme "http" }}{{- $ports = append $ports 80 }}
+    {{- else if eq $managerUrl.scheme "https" }}{{- $ports = append $ports 443 }}{{- end }}
+    {{- if $ports }}
+    - ports:
+        {{- range $ports | uniq }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "gcp" }}
+    # GKE: the Operator's cloud credentials come from the metadata server
+    # (metadata.google.internal, 169.254.169.254:80; 169.254.169.252:988 and 127.0.0.1:988
+    # with the Workload Identity metadata server on dataplane v1).
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - protocol: TCP
+          port: 80
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.252/32
+        - ipBlock:
+            cidr: 127.0.0.1/32
+      ports:
+        - protocol: TCP
+          port: 988
+    {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "aws" }}
+    # EKS Pod Identity: the Operator's cloud credentials come from the Pod Identity agent
+    # on the node (AWS_CONTAINER_CREDENTIALS_FULL_URI, 169.254.170.23:80, fd00:ec2::23 on IPv6).
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+        - ipBlock:
+            cidr: fd00:ec2::23/128
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
+    {{- with .Values.runtime.networkPolicy.egress.extraRules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- else }}
     - {}
+    {{- end }}
   {{- end }}
 {{- end }}
 "#
@@ -10080,6 +10402,508 @@ mod tests {
             .assert_ok("helm template external-bindings initialize path");
     }
 
+    /// A chart served by the manager pulls the Operator image through the
+    /// manager. The pod must name a pull Secret the chart really creates, for
+    /// the manager's host, in token and in enrollment mode.
+    #[test]
+    fn manager_served_chart_pulls_the_operator_with_a_secret_it_creates() {
+        use base64::Engine as _;
+        let registry = HelmRegistry::built_in();
+        let chart = crate::package::apply_package_defaults(
+            generate_helm_chart(
+                &sample_stack(),
+                HelmOptions {
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    chart_name: "sample-stack".to_string(),
+                },
+            )
+            .expect("chart"),
+            &crate::package::PackageDefaults {
+                operator_image: Some(crate::package::OperatorImageDefault {
+                    repository: "manager.example.test/alien-operator",
+                    tag: "v1",
+                }),
+                registry_pull_secret: true,
+                ..Default::default()
+            },
+        )
+        .expect("package defaults");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        for (credential, password) in [
+            (
+                ManagementCredential::Token("ax_deploy_example"),
+                "ax_deploy_example",
+            ),
+            (
+                ManagementCredential::EnrollmentCode {
+                    code: "ax_enroll_example",
+                    audience: "https://manager.example.test",
+                },
+                "ax_enroll_example",
+            ),
+        ] {
+            let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+                deployment_id: "dep_example",
+                deployment_name: "prod",
+                manager_url: "https://manager.example.test",
+                credential,
+                runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+                stack: &sample_stack(),
+                stack_state: &stack_state,
+                stack_settings: &StackSettings::default(),
+                base_platform: None,
+                region: None,
+                gcp_project_id: None,
+                azure_location: None,
+            })
+            .expect("values should render");
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values.as_str()));
+            rendered.assert_ok("manager-served chart");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let secrets = docs_by_kind(&docs, "Secret");
+            let operator = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .find(|deployment| {
+                    deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                        == Some("operator")
+                })
+                .expect("Operator Deployment");
+            let pod = &operator["spec"]["template"]["spec"];
+            assert!(pod["containers"][0]["image"]
+                .as_str()
+                .unwrap()
+                .starts_with("manager.example.test/alien-operator:"));
+            let names: Vec<&str> = pod["imagePullSecrets"]
+                .as_sequence()
+                .unwrap_or_else(|| panic!("{password}: the Operator pod names no pull Secret"))
+                .iter()
+                .map(|entry| entry["name"].as_str().unwrap())
+                .collect();
+            assert!(!names.is_empty(), "{password}: no pull Secret");
+            for name in names {
+                let secret = secrets
+                    .iter()
+                    .find(|secret| secret["metadata"]["name"].as_str() == Some(name))
+                    .unwrap_or_else(|| panic!("{password}: pull Secret {name} is not rendered"));
+                assert_eq!(
+                    secret["type"].as_str(),
+                    Some("kubernetes.io/dockerconfigjson")
+                );
+                let engine = base64::engine::general_purpose::STANDARD;
+                let config: serde_json::Value = serde_json::from_slice(
+                    &engine
+                        .decode(secret["data"][".dockerconfigjson"].as_str().unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                let auth = engine
+                    .decode(
+                        config["auths"]["manager.example.test"]["auth"]
+                            .as_str()
+                            .unwrap(),
+                    )
+                    .unwrap();
+                assert_eq!(String::from_utf8(auth).unwrap(), format!("prod:{password}"));
+            }
+        }
+    }
+
+    /// A new installation with no enrollment code, token or existing Secret
+    /// would start an Operator with no credential and crash-loop until Helm
+    /// times out. The chart refuses it, and says why. An upgrade, or an
+    /// installation with a credential, still renders.
+    #[test]
+    fn a_new_installation_without_a_credential_is_refused() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let enrolled = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_example",
+            deployment_name: "prod",
+            manager_url: "https://manager.example.test",
+            credential: ManagementCredential::EnrollmentCode {
+                code: "ax_enroll_example",
+                audience: "https://manager.example.test",
+            },
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: None,
+            region: None,
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("enrolled values should render");
+        let without_code = enrolled.replace(
+            "  enrollmentCode: 'ax_enroll_example'\n",
+            "  enrollmentCode: ''\n",
+        );
+        assert_ne!(without_code, enrolled, "the values carried the code");
+
+        // New installation, nothing to authenticate with: refused.
+        let refused = crate::test_utils::helm_template(&chart.files, Some(without_code.as_str()));
+        assert!(
+            refused
+                .stderr
+                .contains("This is a new installation, and no enrollment code or token was given."),
+            "{}",
+            refused.stderr
+        );
+
+        // With a code, with a token, and as an upgrade, it renders.
+        crate::test_utils::helm_template(&chart.files, Some(enrolled.as_str()))
+            .assert_ok("new installation with a code");
+        let with_token = without_code.replace("  token: ''", "  token: 'ax_deploy_example'");
+        assert_ne!(with_token, without_code);
+        crate::test_utils::helm_template(&chart.files, Some(with_token.as_str()))
+            .assert_ok("new installation with a token");
+        crate::test_utils::helm_template_as_upgrade(&chart.files, Some(without_code.as_str()))
+            .assert_ok("upgrade without a code");
+    }
+
+    /// An enrolled Operator upgraded with no code and no token keeps pulling
+    /// its image through the pull Secret it already has. The chart must keep
+    /// rendering that Secret and the Pod's reference to it, or the new Pod
+    /// cannot pull on a node that has not cached the image.
+    #[test]
+    fn an_upgrade_without_a_code_keeps_the_registry_pull_secret() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let enrolled = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_example",
+            deployment_name: "prod",
+            manager_url: "https://manager.example.test",
+            credential: ManagementCredential::EnrollmentCode {
+                code: "ax_enroll_example",
+                audience: "https://manager.example.test",
+            },
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: None,
+            region: None,
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("enrolled values should render");
+        let with_pull = |values: &str| {
+            if values.contains("\n  image:\n") {
+                values.replacen(
+                    "\n  image:\n",
+                    "\n  image:\n    pullWithManagementToken: true\n",
+                    1,
+                )
+            } else {
+                values.replacen(
+                    "\nruntime:\n",
+                    "\nruntime:\n  image:\n    pullWithManagementToken: true\n",
+                    1,
+                )
+            }
+        };
+        let install = with_pull(&enrolled);
+        let upgrade = with_pull(&enrolled.replace(
+            "  enrollmentCode: 'ax_enroll_example'\n",
+            "  enrollmentCode: ''\n",
+        ));
+        assert_ne!(install, upgrade);
+
+        let registry_secret = |rendered: &crate::test_utils::LinterRun| {
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let secret = docs_by_kind(&docs, "Secret").into_iter().any(|secret| {
+                secret["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-registry"))
+            });
+            let operator = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .find(|deployment| {
+                    deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                        == Some("operator")
+                })
+                .expect("Operator Deployment")
+                .clone();
+            let pod = &operator["spec"]["template"]["spec"];
+            let referenced = pod["imagePullSecrets"]
+                .as_sequence()
+                .is_some_and(|secrets| {
+                    secrets.iter().any(|secret| {
+                        secret["name"]
+                            .as_str()
+                            .is_some_and(|name| name.ends_with("-registry"))
+                    })
+                });
+            let env_names: Vec<String> = pod["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .filter_map(|variable| variable["name"].as_str().map(str::to_string))
+                .collect();
+            (
+                secret,
+                referenced,
+                env_names.contains(&"OPERATOR_REGISTRY_SECRET".to_string()),
+            )
+        };
+        let first = crate::test_utils::helm_template(&chart.files, Some(install.as_str()));
+        first.assert_ok("install with a code");
+        assert_eq!(registry_secret(&first), (true, true, true));
+        let upgraded =
+            crate::test_utils::helm_template_as_upgrade(&chart.files, Some(upgrade.as_str()));
+        upgraded.assert_ok("upgrade without a code");
+        assert_eq!(
+            registry_secret(&upgraded),
+            (true, true, true),
+            "the pull Secret, the Pod reference and the Operator's Secret setting stay"
+        );
+    }
+
+    /// The Operator enrolls itself only where its daily key survives a Pod
+    /// replacement, so the chart tells it whether its data directory persists.
+    #[test]
+    fn the_operator_is_told_whether_its_data_directory_persists() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let values = |persistence: &str| {
+            format!(
+                "management:\n  token: ax_deploy_example\n  deploymentId: dep_example\nruntime:\n  data:\n    persistence:\n      enabled: {persistence}\n"
+            )
+        };
+        for (persistence, expected) in [("true", "true"), ("false", "false")] {
+            let values = values(persistence);
+            let rendered = crate::test_utils::helm_template(&chart.files, Some(values.as_str()));
+            rendered.assert_ok("operator values");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let operator = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .find(|deployment| {
+                    deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                        == Some("operator")
+                })
+                .expect("Operator Deployment");
+            let env: std::collections::HashMap<&str, &str> = operator["spec"]["template"]["spec"]
+                ["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .filter_map(|variable| {
+                    Some((variable["name"].as_str()?, variable["value"].as_str()?))
+                })
+                .collect();
+            assert_eq!(
+                env.get("OPERATOR_DATA_PERSISTENT"),
+                Some(&expected),
+                "persistence {persistence}"
+            );
+        }
+    }
+
+    /// An upgrade of an enrolled Operator carries no enrollment code and no
+    /// token. The Operator then runs on the daily key stored in its runtime
+    /// volume, so the chart must not point it at a credential file that holds
+    /// nothing: the Operator refuses to start on an empty token file.
+    #[test]
+    fn an_upgrade_without_a_code_or_token_points_the_operator_at_no_credential_file() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let enrolled = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_example",
+            deployment_name: "prod",
+            manager_url: "https://manager.example.test",
+            credential: ManagementCredential::EnrollmentCode {
+                code: "ax_enroll_example",
+                audience: "https://manager.example.test",
+            },
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: None,
+            region: None,
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("enrolled values should render");
+        let upgrade = enrolled.replace(
+            "  enrollmentCode: 'ax_enroll_example'\n",
+            "  enrollmentCode: ''\n",
+        );
+        assert_ne!(upgrade, enrolled, "the values carried the code");
+        let rendered =
+            crate::test_utils::helm_template_as_upgrade(&chart.files, Some(upgrade.as_str()));
+        rendered.assert_ok("upgrade without a code");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let operator = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                    == Some("operator")
+            })
+            .expect("Operator Deployment");
+        let env: Vec<&str> = operator["spec"]["template"]["spec"]["containers"][0]["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter_map(|variable| variable["name"].as_str())
+            .collect();
+        assert!(!env.contains(&"SYNC_TOKEN_FILE"), "{env:?}");
+        assert!(!env.contains(&"OPERATOR_ENROLLMENT_CODE_FILE"), "{env:?}");
+    }
+
+    #[test]
+    fn enrollment_code_replaces_the_management_token() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart");
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+        let enrolled = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_example",
+            deployment_name: "prod",
+            manager_url: "https://manager.example.test",
+            credential: ManagementCredential::EnrollmentCode {
+                code: "ax_enroll_example",
+                audience: "https://manager.example.test",
+            },
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: None,
+            region: None,
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("enrolled values should render");
+        let enrolled = enrolled.as_str();
+        let rendered = crate::test_utils::helm_template(&chart.files, Some(enrolled));
+        rendered.assert_ok("enrolled chart");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let secret = docs_by_kind(&docs, "Secret")
+            .into_iter()
+            .find(|secret| secret["stringData"]["encryption-key"].is_string())
+            .expect("release Secret");
+        assert_eq!(
+            secret["stringData"]["enrollment-code"].as_str(),
+            Some("ax_enroll_example")
+        );
+        // An upgrade from a token install must not leave the token stored.
+        assert_eq!(secret["stringData"]["sync-token"].as_str(), Some(""));
+        let operator = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["spec"]["template"]["spec"]["containers"][0]["name"].as_str()
+                    == Some("operator")
+            })
+            .expect("Operator Deployment");
+        let container = &operator["spec"]["template"]["spec"]["containers"][0];
+        let env: std::collections::HashMap<&str, &str> = container["env"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter_map(|variable| Some((variable["name"].as_str()?, variable["value"].as_str()?)))
+            .collect();
+        assert_eq!(
+            env.get("OPERATOR_ENROLLMENT_CODE_FILE"),
+            Some(&"/etc/deployment/secrets/enrollment-code")
+        );
+        assert_eq!(
+            env.get("ALIEN_MANAGER_AUDIENCE"),
+            Some(&"https://manager.example.test")
+        );
+        assert_eq!(env.get("DEPLOYMENT_ID"), Some(&"dep_example"));
+        assert!(!env.contains_key("SYNC_TOKEN_FILE"));
+        let mount = container["volumeMounts"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|mount| mount["name"].as_str() == Some("management-token"))
+            .unwrap();
+        assert_eq!(
+            mount["mountPath"].as_str(),
+            Some("/etc/deployment/secrets/enrollment-code")
+        );
+        let volume = operator["spec"]["template"]["spec"]["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|volume| volume["name"].as_str() == Some("management-token"))
+            .unwrap();
+        assert_eq!(
+            volume["secret"]["items"][0]["key"].as_str(),
+            Some("enrollment-code")
+        );
+        assert_eq!(
+            volume["secret"]["items"][0]["path"].as_str(),
+            Some("enrollment-code")
+        );
+
+        // A code needs its audience and deployment, never a token beside it,
+        // and persistent storage for the daily key it becomes.
+        for refused in [
+            enrolled.replace("  audience: 'https://manager.example.test'\n", ""),
+            enrolled.replace("deploymentId: 'dep_example'", "deploymentId: null"),
+            enrolled.replace("  token: ''", "  token: 'ax_deploy_example'"),
+            enrolled.replace(
+                "runtime:\n",
+                "runtime:\n  data:\n    persistence:\n      enabled: false\n",
+            ),
+        ] {
+            assert!(
+                !crate::test_utils::helm_template(&chart.files, Some(&refused)).is_ok(),
+                "accepted {refused}"
+            );
+        }
+    }
+
     #[test]
     fn cleanup_hooks_pull_with_the_install_pull_secrets() {
         // A site whose registry needs a password installs with a pull Secret;
@@ -10221,7 +11045,7 @@ runtime:
 
         let (pod_2, file_2) =
             rendered_operator_pod_and_release_file(&packaged("rel_2", "sha256:abc"));
-        let env: std::collections::BTreeMap<String, String> = pod_2["spec"]["containers"][0]["env"]
+        let env: crate::test_utils::LinterFiles = pod_2["spec"]["containers"][0]["env"]
             .as_array()
             .unwrap()
             .iter()
@@ -10748,6 +11572,198 @@ infrastructureExistingSecret: customer-bindings
             "{}",
             rendered.stderr
         );
+    }
+
+    fn sample_chart_files() -> crate::test_utils::LinterFiles {
+        let registry = HelmRegistry::built_in();
+        generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample".to_string(),
+            },
+        )
+        .expect("chart")
+        .files
+    }
+
+    fn network_policy_of(files: &crate::test_utils::LinterFiles, extra: &str) -> serde_yaml::Value {
+        use serde::Deserialize;
+        let values = format!(
+            "management:\n  token: test-credential\n  url: https://manager.example.test\nruntime:\n  networkPolicy:\n    enabled: true\n{extra}"
+        );
+        let rendered = crate::test_utils::helm_template(files, Some(&values));
+        rendered.assert_ok("network policy");
+        let documents: Vec<serde_yaml::Value> =
+            serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|document| serde_yaml::Value::deserialize(document).unwrap())
+                .collect();
+        documents
+            .into_iter()
+            .find(|document| document["kind"] == "NetworkPolicy")
+            .expect("the chart renders a NetworkPolicy")
+    }
+
+    #[test]
+    fn an_http_management_url_still_installs_and_is_warned_about_in_the_notes() {
+        let files = sample_chart_files();
+        let values = |url: &str| {
+            format!("management:\n  token: test-credential\n  url: {url}\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n")
+        };
+        let http = values("http://manager.example.test:8080");
+        // The chart never fails on the scheme: existing installs and GitOps renders keep working.
+        crate::test_utils::helm_template(&files, Some(&http)).assert_ok("http url install");
+        let notes = crate::test_utils::helm_render_notes(&files, &http, "shop", "apps");
+        notes.assert_ok("http url notes");
+        assert!(notes.stdout.contains("is not https"), "{}", notes.stdout);
+        assert!(
+            notes.stdout.contains("http://manager.example.test:8080"),
+            "{}",
+            notes.stdout
+        );
+
+        let https = values("https://manager.example.test");
+        let notes = crate::test_utils::helm_render_notes(&files, &https, "shop", "apps");
+        notes.assert_ok("https url notes");
+        assert!(!notes.stdout.contains("not https"), "{}", notes.stdout);
+    }
+
+    #[test]
+    fn the_operator_network_policy_stays_open_unless_restricted_is_chosen() {
+        let files = sample_chart_files();
+        let allow_all = serde_yaml::from_str::<serde_yaml::Value>("[{}]").unwrap();
+        // Today's behavior, unchanged: an existing `enabled: true` install keeps allow-all.
+        let open = network_policy_of(&files, "");
+        assert_eq!(open["spec"]["ingress"], allow_all);
+        assert_eq!(open["spec"]["egress"], allow_all);
+        assert_eq!(network_policy_of(&files, "    mode: open\n"), open);
+
+        let restricted = network_policy_of(&files, "    mode: restricted\n");
+        for direction in ["ingress", "egress"] {
+            for rule in restricted["spec"][direction].as_sequence().unwrap() {
+                assert!(
+                    !rule.as_mapping().unwrap().is_empty(),
+                    "{direction} allows everything"
+                );
+            }
+        }
+        assert_eq!(restricted["spec"]["ingress"][0]["ports"][0]["port"], 8080);
+        let ports: Vec<u64> = restricted["spec"]["egress"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .flat_map(|rule| rule["ports"].as_sequence().unwrap().iter())
+            .map(|port| port["port"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ports, [53, 53, 443, 6443]);
+
+        // DNS names the DNS Pods, plus the DNS address on clusters without one.
+        let dns = network_policy_of(
+            &files,
+            "    mode: restricted\n    dns:\n      clusterIPs: [\"172.20.0.10\"]\n",
+        );
+        assert_eq!(
+            dns["spec"]["egress"][0]["to"][0]["podSelector"]["matchLabels"]["k8s-app"],
+            "kube-dns"
+        );
+        assert_eq!(
+            dns["spec"]["egress"][0]["to"][1]["ipBlock"]["cidr"],
+            "172.20.0.10/32"
+        );
+
+        // Binding ports and extra rules come from values.
+        let extra = network_policy_of(
+            &files,
+            "    mode: restricted\n    egress:\n      ports: [443, 5432]\n      extraRules:\n        - ports:\n            - protocol: TCP\n              port: 6379\n",
+        );
+        let egress = extra["spec"]["egress"].as_sequence().unwrap();
+        assert_eq!(egress[1]["ports"][1]["port"], 5432);
+        assert_eq!(egress.last().unwrap()["ports"][0]["port"], 6379);
+
+        // An unknown mode is refused by the schema.
+        let bad = crate::test_utils::helm_template(
+            &files,
+            Some("management:\n  token: test-credential\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: strict\n"),
+        );
+        assert!(!bad.is_ok());
+    }
+
+    #[test]
+    fn a_restricted_policy_infers_the_manager_port_and_never_emits_an_empty_port_rule() {
+        let files = sample_chart_files();
+        let egress_ports = |url: &str, extra: &str| -> Vec<Vec<u64>> {
+            let values = format!(
+                "management:\n  token: test-credential\n  url: {url}\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n{extra}"
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("restricted policy");
+            let policy = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|d| serde_yaml::Value::deserialize(d).unwrap())
+                .find(|d| d["kind"] == "NetworkPolicy")
+                .unwrap();
+            policy["spec"]["egress"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|rule| {
+                    assert!(
+                        !rule.as_mapping().unwrap().is_empty(),
+                        "an empty rule allows everything"
+                    );
+                    rule["ports"]
+                        .as_sequence()
+                        .map(|p| p.iter().map(|x| x["port"].as_u64().unwrap()).collect())
+                        .unwrap_or_default()
+                })
+                .collect()
+        };
+        // An http URL without a port needs port 80.
+        let http = egress_ports("http://manager.example.test", "");
+        assert!(http.iter().flatten().any(|p| *p == 80), "{http:?}");
+        // Clearing the port list with an https URL still reaches the manager on 443.
+        let https = egress_ports(
+            "https://manager.example.test",
+            "    egress:\n      ports: []\n",
+        );
+        assert!(https.iter().flatten().any(|p| *p == 443), "{https:?}");
+        // An explicit port is used as written, and no rule has an empty ports list.
+        let explicit = egress_ports(
+            "https://manager.example.test:9443",
+            "    egress:\n      ports: []\n",
+        );
+        assert_eq!(explicit.last().unwrap(), &vec![9443]);
+    }
+
+    #[test]
+    fn a_restricted_aws_policy_allows_the_pod_identity_agent_and_nothing_else_open() {
+        let files = sample_chart_files();
+        let policy = |platform: &str| {
+            let values = format!(
+                "management:\n  token: test-credential\n  url: https://manager.example.test\nbasePlatform: {platform}\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n"
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("restricted aws policy");
+            let found = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|d| serde_yaml::Value::deserialize(d).unwrap())
+                .find(|d| d["kind"] == "NetworkPolicy")
+                .unwrap();
+            found
+        };
+        let aws = policy("aws");
+        let rules = aws["spec"]["egress"].as_sequence().unwrap();
+        for rule in rules {
+            assert!(!rule.as_mapping().unwrap().is_empty());
+        }
+        let agent = rules
+            .iter()
+            .find(|r| r["to"][0]["ipBlock"]["cidr"] == "169.254.170.23/32")
+            .expect("pod identity rule");
+        assert_eq!(agent["to"][1]["ipBlock"]["cidr"], "fd00:ec2::23/128");
+        assert_eq!(agent["ports"][0]["port"], 80);
+        // Other platforms get no Pod Identity rule.
+        let gcp = serde_yaml::to_string(&policy("gcp")).unwrap();
+        assert!(!gcp.contains("169.254.170.23"));
     }
 
     #[test]
@@ -12689,7 +13705,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
@@ -12725,7 +13741,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: "replace-me-with-a-stable-64-character-encryption-secret",
             stack: &sample_stack(),
             stack_state: &stack_state,
@@ -12769,7 +13785,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &stack,
             stack_state: &stack_state,
@@ -12820,7 +13836,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
@@ -12889,7 +13905,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
-            deployment_token: "token",
+            credential: ManagementCredential::Token("token"),
             runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,

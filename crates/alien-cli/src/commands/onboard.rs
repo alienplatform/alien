@@ -1832,6 +1832,8 @@ struct HelmInstall {
     /// A container of the stack has a public endpoint, so the install needs an
     /// exposure choice.
     public_endpoints: bool,
+    /// The stack has a sandbox, so the install names the cluster's sandboxed RuntimeClass.
+    sandbox: bool,
 }
 
 impl HelmInstall {
@@ -1870,6 +1872,9 @@ impl HelmInstall {
                     .downcast_ref::<alien_core::Container>()
                     .is_some_and(|container| !container.public_endpoints.is_empty())
             }),
+            sandbox: stack
+                .resources()
+                .any(|(_, entry)| entry.config.resource_type().as_ref() == "sandbox"),
         }
     }
 
@@ -1922,6 +1927,15 @@ impl HelmInstall {
 
     fn values_example(&self) -> String {
         let mut yaml = String::new();
+        if self.sandbox {
+            // Argo CD renders without cluster access, so the chart cannot pick the class from
+            // the Kubernetes version there; naming it also keeps Helm and GitOps renders equal.
+            yaml.push_str(
+                "sandbox:\n  # The sandboxed RuntimeClass of this cluster: isolated-sandbox on EKS,\n  \
+                 # gvisor on GKE, the cluster's Kata RuntimeClass on AKS or on-premises.\n  \
+                 runtimeClassName: <runtime-class>\n",
+            );
+        }
         if self.public_endpoints {
             yaml.push_str(
                 "stackSettings:\n  kubernetes:\n    exposure:\n      \

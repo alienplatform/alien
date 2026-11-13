@@ -205,6 +205,15 @@ struct AgentSyncWireRequest {
     /// setting values. Opaque to OSS beyond forwarding it.
     #[serde(default)]
     operations_config: Option<alien_core::OperationsConfig>,
+    /// The Operator runs a settled release but lost its config (it cleared
+    /// it in token mode, then enrolled). Answered with the current release.
+    #[serde(default)]
+    installed_config_missing: bool,
+    /// The Operator rewrote the pull Secret its Deployment references from
+    /// its own registry pull credential. Sent on every sync while that holds.
+    /// The manager keeps the deployment token until it sees this.
+    #[serde(default)]
+    pull_secret_refreshed: bool,
     /// The setup the installed chart carries. An observation the manager may
     /// act on under its own rules; never a grant.
     #[serde(default)]
@@ -521,17 +530,29 @@ async fn acquire(
         credential_resolver: state.credential_resolver.as_ref(),
         bindings_provider: &state.bindings_provider,
         target_bindings_providers: &state.target_bindings_providers,
+        commands_keys: Some(crate::auth::commands_key::CommandsKeyStores::from_state(
+            &state,
+        )),
     };
     let mut deployments = Vec::with_capacity(acquire_result.deployments.len());
     for acquired in &acquire_result.deployments {
-        match acquired_deployment_response(
+        let response = acquired_deployment_response(
             state.release_store.as_ref(),
             state.values.as_deref(),
             &sources,
             acquired,
         )
         .await
-        {
+        .and_then(|mut deployment| {
+            if subject.role == crate::auth::Role::OperatorSync {
+                deployment.deployment["deploymentToken"] = serde_json::Value::Null;
+                if let Some(config) = deployment.deployment.get_mut("deploymentConfig") {
+                    remove_legacy_runtime_credentials(config, &state.config.base_url())?;
+                }
+            }
+            Ok(deployment)
+        });
+        match response {
             Ok(deployment) => deployments.push(deployment),
             Err(error) => {
                 // The caller never learns it holds these leases, so give them
@@ -559,6 +580,53 @@ async fn acquire(
         not_acquired: acquire_result.not_acquired,
     })
     .into_response()
+}
+
+/// Bounded operators receive endpoints and external monitoring configuration, never
+/// a legacy deployment bearer or a manager monitoring bearer to persist.
+fn remove_legacy_runtime_credentials(
+    config: &mut serde_json::Value,
+    audience: &str,
+) -> Result<(), AlienError> {
+    if config
+        .pointer("/computeBackend/clusters")
+        .is_some_and(|clusters| {
+            !clusters.is_null()
+                && clusters
+                    .as_object()
+                    .is_none_or(|clusters| !clusters.is_empty())
+        })
+    {
+        return Err(ErrorData::forbidden(
+            "Bounded operators do not support external compute clusters",
+        )
+        .into_generic());
+    }
+    let Some(config) = config.as_object_mut() else {
+        return Ok(());
+    };
+    config.insert("deploymentToken".into(), serde_json::Value::Null);
+    config.insert("runtimeIdentityAudience".into(), audience.into());
+    let manager_origin = reqwest::Url::parse(audience).ok().map(|url| url.origin());
+    if let Some(monitoring) = config
+        .get_mut("monitoring")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (endpoint, authorization) in [
+            ("logsEndpoint", "logsAuthHeader"),
+            ("metricsEndpoint", "metricsAuthHeader"),
+        ] {
+            let same_origin = monitoring
+                .get(endpoint)
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| reqwest::Url::parse(value).ok())
+                .is_some_and(|url| Some(url.origin()) == manager_origin);
+            if same_origin {
+                monitoring.insert(authorization.into(), "".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Keeps the values this manager holds for `deployment` out of a state that a
@@ -862,6 +930,7 @@ async fn reconcile(
             application: None,
             dynamic_containers: None,
             operations_config: None,
+            deployment_token_revocable: false,
             generated_slots,
         },
     )
@@ -1162,7 +1231,38 @@ pub(in crate::routes) mod tests {
     ///
     /// Returns the response and every reconcile the store received.
     async fn sync_operator_without_claim(record: DeploymentRecord) -> (Value, Vec<ReconcileData>) {
-        sync_operator_with_targets(record, None, None).await
+        sync_operator_without_claim_reporting(record, false).await
+    }
+
+    async fn sync_operator_without_claim_reporting(
+        record: DeploymentRecord,
+        installed_config_missing: bool,
+    ) -> (Value, Vec<ReconcileData>) {
+        sync_operator_with_reconciled_image(record, installed_config_missing, None).await
+    }
+
+    /// Like [`sync_operator_without_claim_reporting`], where the store's
+    /// reconcile answers with `reconciled_image` as the Operator's target image.
+    async fn sync_operator_with_reconciled_image(
+        record: DeploymentRecord,
+        installed_config_missing: bool,
+        reconciled_image: Option<&str>,
+    ) -> (Value, Vec<ReconcileData>) {
+        let (response, reconciled, _) = sync_operator_full(
+            record,
+            None,
+            None,
+            Stack::new("app".to_string()).build(),
+            None,
+            false,
+            SyncReport {
+                installed_config_missing,
+                reconciled_image: reconciled_image.map(str::to_owned),
+                status: None,
+            },
+        )
+        .await;
+        (response, reconciled)
     }
 
     /// Like [`sync_operator_without_claim`], with the control plane answering
@@ -1227,6 +1327,46 @@ pub(in crate::routes) mod tests {
         Vec<ReconcileData>,
         Vec<Vec<crate::values::ValueMeta>>,
     ) {
+        sync_operator_full(
+            record,
+            targets,
+            values,
+            stack,
+            stack_state,
+            release_gone,
+            SyncReport::default(),
+        )
+        .await
+    }
+
+    /// What the Operator reports, and the image the control plane answers with.
+    #[derive(Default)]
+    struct SyncReport {
+        installed_config_missing: bool,
+        reconciled_image: Option<String>,
+        /// The status the Operator reports; `running` when unset. Any other
+        /// status reports the release as the target it is applying.
+        status: Option<&'static str>,
+    }
+
+    async fn sync_operator_full(
+        record: DeploymentRecord,
+        targets: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
+        values: Option<Arc<crate::values::ValueStore>>,
+        stack: Stack,
+        stack_state: Option<Value>,
+        release_gone: bool,
+        report: SyncReport,
+    ) -> (
+        Value,
+        Vec<ReconcileData>,
+        Vec<Vec<crate::values::ValueMeta>>,
+    ) {
+        let SyncReport {
+            installed_config_missing,
+            reconciled_image,
+            status,
+        } = report;
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
             SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
@@ -1270,6 +1410,7 @@ pub(in crate::routes) mod tests {
         let received = reconciled.clone();
         let reconciled_record = record.clone();
         let outcome_targets = targets.clone();
+        let request_image = reconciled_image.clone();
         // These tests are about the report, not where a settled deployment goes next.
         store
             .expect_retarget_settled_deployment()
@@ -1280,6 +1421,7 @@ pub(in crate::routes) mod tests {
                 record: reconciled_record.clone(),
                 target_operations_bundle_set: None,
                 target_dynamic_containers: outcome_targets.clone(),
+                target_operator_image: reconciled_image.clone(),
             })
         });
         let generated = Arc::new(Mutex::new(Vec::new()));
@@ -1299,6 +1441,7 @@ pub(in crate::routes) mod tests {
                     record: reconciled_record.clone(),
                     target_operations_bundle_set: None,
                     target_dynamic_containers: targets.clone(),
+                    target_operator_image: request_image.clone(),
                 })
             });
 
@@ -1326,6 +1469,13 @@ pub(in crate::routes) mod tests {
             "currentRelease": { "releaseId": "rel_target", "stack": { "id": "app", "resources": {} } },
             "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         });
+        if let Some(status) = status {
+            body["currentState"]["status"] = json!(status);
+            body["currentState"]["targetRelease"] = body["currentState"]["currentRelease"].clone();
+        }
+        if installed_config_missing {
+            body["installedConfigMissing"] = json!(true);
+        }
         if let Some(stack_state) = stack_state {
             body["currentState"]["stackState"] = stack_state;
         }
@@ -1554,6 +1704,7 @@ pub(in crate::routes) mod tests {
                 record: reconciled_record.clone(),
                 target_operations_bundle_set: None,
                 target_dynamic_containers: None,
+                target_operator_image: None,
             })
         });
         let gave_back = released.clone();
@@ -1836,6 +1987,1221 @@ pub(in crate::routes) mod tests {
             DeploymentStatus::Running,
         );
         assert!(state.error.is_none());
+    }
+
+    const TOKEN_ENROLLMENT_ADMIN: &str = "ax_admin_for_enrollment";
+    const TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN: &str = "ax_deploy_before_enrollment";
+    const TOKEN_ENROLLMENT_GROUP_TOKEN: &str = "ax_group_for_enrollment";
+
+    /// A manager with the real router, the real standalone identity store and
+    /// two real tokens: a deployment token for `dep_test`, and an admin token.
+    struct TokenEnrollment {
+        _temp: tempfile::TempDir,
+        db: Arc<SqliteDatabase>,
+        state: AppState,
+        verifier: Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier>,
+        credentials: Arc<crate::auth::runtime_capability::RuntimeCredentials>,
+        identity: Arc<crate::stores::sqlite::SqliteRuntimeIdentityStore>,
+        stored: Arc<Mutex<DeploymentRecord>>,
+        /// The `deployment_token_revocable` value of every sync that reached
+        /// the store as a reconcile request, in order.
+        revocable_reports: Arc<Mutex<Vec<bool>>>,
+    }
+
+    impl TokenEnrollment {
+        async fn new() -> Self {
+            use crate::auth::runtime_capability::{RuntimeAuthValidator, RuntimeCredentials};
+            use crate::auth::standalone_identity::StandaloneRuntimeIdentity;
+            use crate::providers::token_db_validator::TokenDbValidator;
+            use crate::stores::sqlite::SqliteRuntimeIdentityStore;
+            use crate::traits::token_store::{CreateTokenParams, TokenStore, TokenType};
+
+            let temp = tempfile::tempdir().expect("test directory");
+            let db = Arc::new(
+                SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                    .await
+                    .expect("database"),
+            );
+            let tokens = Arc::new(SqliteTokenStore::new(db.clone()));
+            for (token_type, bearer, deployment_id) in [
+                (
+                    TokenType::Deployment,
+                    TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN,
+                    Some("dep_test".to_string()),
+                ),
+                (TokenType::Admin, TOKEN_ENROLLMENT_ADMIN, None),
+            ] {
+                tokens
+                    .create_token(CreateTokenParams {
+                        token_type,
+                        key_prefix: bearer[..12].to_string(),
+                        key_hash: crate::ids::sha256_hash(bearer),
+                        deployment_group_id: deployment_id.as_ref().map(|_| "dg_test".into()),
+                        deployment_id,
+                    })
+                    .await
+                    .expect("token");
+            }
+
+            tokens
+                .create_token(CreateTokenParams {
+                    token_type: TokenType::DeploymentGroup,
+                    key_prefix: TOKEN_ENROLLMENT_GROUP_TOKEN[..12].to_string(),
+                    key_hash: crate::ids::sha256_hash(TOKEN_ENROLLMENT_GROUP_TOKEN),
+                    deployment_group_id: Some("dg_test".into()),
+                    deployment_id: None,
+                })
+                .await
+                .expect("group token");
+
+            let stored = Arc::new(Mutex::new(deployment_record_with_state("running", None)));
+            let revocable_reports = Arc::new(Mutex::new(Vec::new()));
+            let mut store = MockDeploymentStore::new();
+            store.expect_requires_execution_claims().return_const(false);
+            let current = stored.clone();
+            // Any deployment of the group answers with the same record under
+            // the id asked for, so siblings can be told apart by key.
+            store.expect_get_deployment().returning(move |_, id| {
+                let mut record = current.lock().unwrap().clone();
+                record.id = id.to_string();
+                Ok(Some(record))
+            });
+            let apply = |current: &Mutex<DeploymentRecord>, data: ReconcileData| {
+                let mut record = current.lock().unwrap().clone();
+                record.status = serde_json::to_value(data.state.status)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                *current.lock().unwrap() = record.clone();
+                Ok(ReconcileOutcome {
+                    record,
+                    target_operations_bundle_set: None,
+                    target_dynamic_containers: None,
+                    target_operator_image: None,
+                })
+            };
+            let current = stored.clone();
+            store
+                .expect_reconcile()
+                .returning(move |_, data| apply(&current, data));
+            // A sync that carries a receipt reaches the store as a request.
+            let current = stored.clone();
+            let received = revocable_reports.clone();
+            store
+                .expect_reconcile_request()
+                .returning(move |_, request| {
+                    received
+                        .lock()
+                        .unwrap()
+                        .push(request.deployment_token_revocable());
+                    let (data, _) = request.into_parts();
+                    apply(&current, data)
+                });
+            let store: Arc<dyn crate::traits::DeploymentStore> = Arc::new(store);
+            let resolver = Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf()));
+            let identity = Arc::new(SqliteRuntimeIdentityStore::new(db.clone()));
+            let verifier: Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier> =
+                Arc::new(
+                    StandaloneRuntimeIdentity::new(
+                        identity.clone(),
+                        store.clone(),
+                        resolver.clone(),
+                    )
+                    .unwrap(),
+                );
+            let mut state = test_app_state(
+                temp.path(),
+                store,
+                Arc::new(SqliteReleaseStore::new(db.clone())),
+                resolver,
+                db.clone(),
+            )
+            .await;
+            let credentials =
+                Arc::new(RuntimeCredentials::new("https://manager.test".into(), [9; 32]).unwrap());
+            state.config = Arc::new(crate::config::ManagerConfig {
+                response_signing_key: b"token-enrollment-signing-key".to_vec(),
+                ..(*state.config).clone()
+            });
+            state.token_store = tokens.clone();
+            state.auth_validator = Arc::new(RuntimeAuthValidator::new(
+                credentials.clone(),
+                Arc::new(TokenDbValidator::new(tokens)),
+            ));
+            Self {
+                _temp: temp,
+                db,
+                state,
+                verifier,
+                credentials,
+                identity,
+                stored,
+                revocable_reports,
+            }
+        }
+
+        fn identity_router(&self) -> axum::Router {
+            crate::auth::identity_exchange::router(self.credentials.clone(), self.verifier.clone())
+                .with_state(self.state.clone())
+        }
+
+        async fn post(
+            router: axum::Router,
+            uri: &str,
+            bearer: Option<&str>,
+            body: Value,
+        ) -> (StatusCode, Value) {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json");
+            if let Some(bearer) = bearer {
+                request = request.header("authorization", format!("Bearer {bearer}"));
+            }
+            let response = router
+                .oneshot(request.body(Body::from(body.to_string())).expect("request"))
+                .await
+                .expect("response");
+            let status = response.status();
+            let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+            (
+                status,
+                serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+            )
+        }
+
+        /// `POST /v1/deployments/dep_test/enrollment-code` with `bearer`.
+        async fn enrollment_code(&self, bearer: &str) -> (StatusCode, Value) {
+            self.enrollment_code_for("dep_test", bearer).await
+        }
+
+        async fn enrollment_code_for(
+            &self,
+            deployment_id: &str,
+            bearer: &str,
+        ) -> (StatusCode, Value) {
+            Self::post(
+                self.identity_router(),
+                &format!("/v1/deployments/{deployment_id}/enrollment-code"),
+                Some(bearer),
+                Value::Null,
+            )
+            .await
+        }
+
+        /// `POST /v1/identity/enroll`: the operator enrolls `key` with `code`.
+        async fn enroll(&self, code: &str, key: &str) -> StatusCode {
+            Self::post(
+                self.identity_router(),
+                "/v1/identity/enroll",
+                None,
+                json!({ "code": code, "initialKeyHash": crate::ids::sha256_hash(key) }),
+            )
+            .await
+            .0
+        }
+
+        async fn mint(&self, bearer: &str) -> String {
+            let (status, issued) = self.enrollment_code(bearer).await;
+            assert_eq!(status, StatusCode::OK, "{issued}");
+            issued["code"].as_str().expect("code").to_owned()
+        }
+
+        async fn key_is_current(&self, key: &str) -> bool {
+            self.key_is_current_for("dep_test", key).await
+        }
+
+        async fn key_is_current_for(&self, deployment_id: &str, key: &str) -> bool {
+            self.identity
+                .verify_key(deployment_id, key, Utc::now())
+                .await
+                .unwrap()
+                .is_some()
+        }
+
+        /// Warn-level entries the manager shows for the deployment.
+        async fn refusals(&self) -> Vec<crate::dev::LogEntry> {
+            self.state
+                .log_buffer
+                .get_entries(Some("dep_test"), usize::MAX)
+                .await
+                .into_iter()
+                .filter(|entry| {
+                    entry.severity == "WARN"
+                        && entry
+                            .attributes
+                            .contains(&("event".to_owned(), "enrollment-code-refused".to_owned()))
+                })
+                .collect()
+        }
+
+        /// A capability for the enrolled operator, as the exchange issues it.
+        fn operator_capability(&self) -> String {
+            use crate::auth::runtime_capability::{RuntimeGrant, RuntimePurpose};
+            self.credentials
+                .issue(
+                    RuntimeGrant {
+                        workspace_id: "default".into(),
+                        project_id: "default".into(),
+                        deployment_id: "dep_test".into(),
+                        component_id: "operator".into(),
+                        purpose: RuntimePurpose::OperatorSync,
+                    },
+                    Utc::now() + chrono::Duration::hours(1),
+                )
+                .unwrap()
+                .token
+        }
+
+        /// Make a release whose command-enabled Containers are `(id, marked)`
+        /// (`marked`: built with a receiver that reads the capability file) the
+        /// deployment's current release.
+        async fn run_release_with_receivers(&self, receivers: &[(&str, bool)]) {
+            let release_id = self.create_release_with_receivers(receivers).await;
+            self.stored.lock().unwrap().current_release_id = Some(release_id);
+        }
+
+        /// A release whose command-enabled Containers are `(id, marked)`.
+        async fn create_release_with_receivers(&self, receivers: &[(&str, bool)]) -> String {
+            let mut stack = Stack::new("app".to_string());
+            for (id, marked) in receivers {
+                let container = alien_core::Container::new((*id).to_string())
+                    .code(alien_core::ContainerCode::Image {
+                        image: "app:latest".to_string(),
+                    })
+                    .cpu(alien_core::ResourceSpec {
+                        min: "0.5".to_string(),
+                        desired: "1".to_string(),
+                    })
+                    .memory(alien_core::ResourceSpec {
+                        min: "512Mi".to_string(),
+                        desired: "1Gi".to_string(),
+                    })
+                    .port(8080)
+                    .permissions("execution".to_string())
+                    .commands_enabled(true)
+                    .commands_capability_file(*marked)
+                    .build();
+                stack = stack.add(container, alien_core::ResourceLifecycle::Live);
+            }
+            let release = self
+                .state
+                .release_store
+                .create_release(
+                    &crate::auth::Subject::system(),
+                    CreateReleaseParams {
+                        project_id: "default".to_string(),
+                        stacks: HashMap::from([(Platform::Kubernetes, stack.build())]),
+                        git_commit_sha: None,
+                        git_commit_ref: None,
+                        git_commit_message: None,
+                    },
+                )
+                .await
+                .expect("release");
+            release.id
+        }
+
+        /// Issue the deployment's commands key the way a pull target does.
+        async fn issue_commands_key(&self) -> String {
+            crate::auth::commands_key::ensure(&self.state, "dep_test", &["old-api".to_string()])
+                .await
+                .expect("commands key")
+        }
+
+        async fn commands_key_is_accepted(&self) -> bool {
+            crate::auth::commands_key::exists(&self.state, "dep_test")
+                .await
+                .unwrap()
+        }
+
+        /// A release with no stack for the deployment's platform.
+        async fn create_stackless_release(&self) -> String {
+            self.state
+                .release_store
+                .create_release(
+                    &crate::auth::Subject::system(),
+                    CreateReleaseParams {
+                        project_id: "default".to_string(),
+                        stacks: HashMap::new(),
+                        git_commit_sha: None,
+                        git_commit_ref: None,
+                        git_commit_message: None,
+                    },
+                )
+                .await
+                .expect("release")
+                .id
+        }
+
+        /// `POST /v1/sync` as `bearer`, reporting the deployment running.
+        async fn sync(&self, bearer: &str) -> StatusCode {
+            self.sync_reporting(bearer, false).await
+        }
+
+        /// The same, with the Operator reporting that its pull Secret holds
+        /// its own credential.
+        async fn sync_with_refreshed_pull_secret(&self, bearer: &str) -> StatusCode {
+            self.sync_reporting(bearer, true).await
+        }
+
+        async fn sync_reporting(&self, bearer: &str, pull_secret_refreshed: bool) -> StatusCode {
+            self.sync_reporting_release(bearer, pull_secret_refreshed, None)
+                .await
+        }
+
+        /// The same, with the Operator naming the release it runs.
+        async fn sync_reporting_release(
+            &self,
+            bearer: &str,
+            pull_secret_refreshed: bool,
+            running_release_id: Option<&str>,
+        ) -> StatusCode {
+            let mut body = json!({
+                "deploymentId": "dep_test",
+                "maxSupportedDeploymentProtocolVersion":
+                    alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
+                "currentState": {
+                    "platform": "kubernetes",
+                    "status": "running",
+                    "protocolVersion": CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                },
+            });
+            if pull_secret_refreshed {
+                body["pullSecretRefreshed"] = json!(true);
+            }
+            if let Some(release_id) = running_release_id {
+                body["currentState"]["currentRelease"] = json!({
+                    "releaseId": release_id,
+                    "stack": Stack::new("app".to_string()).build(),
+                });
+            }
+            let response = super::router()
+                .with_state(self.state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/sync")
+                        .header("authorization", format!("Bearer {bearer}"))
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .expect("request"),
+                )
+                .await
+                .expect("sync response");
+            let status = response.status();
+            if status == StatusCode::BAD_REQUEST {
+                let body = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+                panic!("{}", String::from_utf8_lossy(&body));
+            }
+            status
+        }
+    }
+
+    /// An Operator on a deployment token (a self-updated old install) asks
+    /// for an enrollment code with that token and enrolls with it. The token
+    /// keeps working until the first rollout the enrolled Operator finishes.
+    /// Then every workload uses capability files and it is revoked, and it
+    /// can no longer get a code.
+    #[tokio::test]
+    async fn the_deployment_token_is_revoked_after_the_first_enrolled_rollout() {
+        let manager = TokenEnrollment::new().await;
+        let old_token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
+
+        // The old token gets a one-use code for its own deployment, and the
+        // code enrolls the Operator's key for that deployment.
+        let (status, issued) = manager.enrollment_code(old_token).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+        assert_eq!(issued["deploymentId"], "dep_test");
+        assert_eq!(issued["managerAudience"], "https://manager.test");
+        assert_eq!(
+            manager
+                .enroll(issued["code"].as_str().expect("code"), "ax_day_v1_operator")
+                .await,
+            StatusCode::OK
+        );
+        assert!(manager.key_is_current("ax_day_v1_operator").await);
+        let operator = manager.operator_capability();
+
+        // Enrolled, but the workloads still run the revision from before.
+        // Health refreshes do not end the token.
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        manager.stored.lock().unwrap().status = "refresh-failed".into();
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync(old_token).await, StatusCode::OK);
+
+        // The enrolled Operator finishes a rollout and reports that its pull
+        // Secret no longer holds the token.
+        manager.stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(manager.sync(old_token).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(
+            manager.enrollment_code(old_token).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    /// Once the real Operator has enrolled, a copy of the deployment token
+    /// cannot get a code that replaces its key. The refusal shows in the
+    /// deployment's logs. An administrator's code still re-enrolls.
+    #[tokio::test]
+    async fn a_deployment_token_cannot_mint_a_code_once_the_operator_has_a_key() {
+        let manager = TokenEnrollment::new().await;
+        let token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
+
+        let code = manager.mint(token).await;
+        assert_eq!(
+            manager.enroll(&code, "ax_day_v1_real").await,
+            StatusCode::OK
+        );
+        assert!(manager.refusals().await.is_empty());
+
+        let (status, refused) = manager.enrollment_code(token).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+        assert_eq!(refused["code"], "ENROLLMENT_KEY_EXISTS", "{refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("administrator")),
+            "{refused}"
+        );
+        assert!(manager.key_is_current("ax_day_v1_real").await);
+        let refusals = manager.refusals().await;
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+        assert!(refusals[0]
+            .attributes
+            .contains(&("stage".to_owned(), "issue".to_owned())));
+
+        // The administrator can always enroll the Operator again.
+        let admin_code = manager.mint(TOKEN_ENROLLMENT_ADMIN).await;
+        assert_eq!(
+            manager.enroll(&admin_code, "ax_day_v1_replacement").await,
+            StatusCode::OK
+        );
+        assert!(manager.key_is_current("ax_day_v1_replacement").await);
+        assert!(!manager.key_is_current("ax_day_v1_real").await);
+        assert_eq!(
+            manager.refusals().await.len(),
+            1,
+            "an admin code is not a refusal"
+        );
+    }
+
+    /// A setup-link token covers every deployment of its group. Once a
+    /// deployment's operator holds a key it cannot be used to get a code that
+    /// replaces that key; before that it can, and an administrator always can.
+    #[tokio::test]
+    async fn a_group_token_cannot_mint_a_code_once_the_operator_has_a_key() {
+        let manager = TokenEnrollment::new().await;
+        let group = TOKEN_ENROLLMENT_GROUP_TOKEN;
+        let sibling = "dep_sibling";
+
+        // Before the sibling enrolled, the group token gets a code.
+        let (status, issued) = manager.enrollment_code_for(sibling, group).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+        assert_eq!(
+            manager
+                .enroll(issued["code"].as_str().expect("code"), "ax_day_v1_sibling")
+                .await,
+            StatusCode::OK
+        );
+        assert!(
+            manager
+                .key_is_current_for(sibling, "ax_day_v1_sibling")
+                .await
+        );
+
+        // After it enrolled, the group token is refused and the key is kept.
+        let (status, refused) = manager.enrollment_code_for(sibling, group).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+        assert_eq!(refused["code"], "ENROLLMENT_KEY_EXISTS", "{refused}");
+        assert!(refused.get("deploymentCode").is_none());
+        assert!(
+            manager
+                .key_is_current_for(sibling, "ax_day_v1_sibling")
+                .await
+        );
+
+        // An administrator can still enroll the operator again.
+        let (status, issued) = manager
+            .enrollment_code_for(sibling, TOKEN_ENROLLMENT_ADMIN)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+    }
+
+    /// Sets when the deployment's operator key expires. Keys last 24 hours, so
+    /// this also sets when it was last rotated.
+    async fn set_key_expiry(manager: &TokenEnrollment, deployment_id: &str, expires_at: i64) {
+        let conn = manager.db.conn().lock().await;
+        conn.execute(
+            "UPDATE runtime_daily_keys SET expires_at = ?1 WHERE deployment_id = ?2",
+            (expires_at, deployment_id.to_owned()),
+        )
+        .await
+        .unwrap();
+    }
+
+    /// A group credential can replace an operator key only when the key has
+    /// not been rotated within the live window, and never when the key time
+    /// cannot be read.
+    #[tokio::test]
+    async fn a_group_token_can_replace_only_a_key_that_is_not_live() {
+        let manager = TokenEnrollment::new().await;
+        let group = TOKEN_ENROLLMENT_GROUP_TOKEN;
+        let sibling = "dep_sibling";
+        let code = manager.mint(TOKEN_ENROLLMENT_ADMIN).await;
+        assert_eq!(manager.enroll(&code, "ax_day_v1_old").await, StatusCode::OK);
+
+        // Rotated within the window, even just before it ends: refused.
+        let now = Utc::now().timestamp();
+        let day = 24 * 3600;
+        for hours_ago in [0, 24] {
+            set_key_expiry(&manager, "dep_test", now + day - hours_ago * 3600).await;
+            let (status, refused) = manager.enrollment_code(group).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{hours_ago}h: {refused}");
+            assert_eq!(refused["code"], "ENROLLMENT_KEY_EXISTS");
+        }
+
+        // An unreadable key time counts as live.
+        set_key_expiry(&manager, "dep_test", i64::MAX).await;
+        let (status, refused) = manager.enrollment_code(group).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+
+        // Rotated more than 25 hours ago: the group credential gets a code
+        // that replaces the key.
+        set_key_expiry(&manager, "dep_test", now + day - 26 * 3600).await;
+        let (status, issued) = manager.enrollment_code(group).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+        assert_eq!(
+            manager
+                .enroll(issued["code"].as_str().expect("code"), "ax_day_v1_new")
+                .await,
+            StatusCode::OK
+        );
+        assert!(
+            manager
+                .key_is_current_for("dep_test", "ax_day_v1_new")
+                .await
+        );
+        assert!(
+            !manager
+                .key_is_current_for("dep_test", "ax_day_v1_old")
+                .await
+        );
+
+        // The sibling in the group never enrolled, and the group credential
+        // still gets its first code.
+        let (status, issued) = manager.enrollment_code_for(sibling, group).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+    }
+
+    /// An administrator gets a code whatever the key's age.
+    #[tokio::test]
+    async fn an_admin_token_gets_a_code_while_the_key_is_live() {
+        let manager = TokenEnrollment::new().await;
+        let code = manager.mint(TOKEN_ENROLLMENT_ADMIN).await;
+        assert_eq!(
+            manager.enroll(&code, "ax_day_v1_live").await,
+            StatusCode::OK
+        );
+        let (status, issued) = manager.enrollment_code(TOKEN_ENROLLMENT_ADMIN).await;
+        assert_eq!(status, StatusCode::OK, "{issued}");
+    }
+
+    /// A token-made code that is still unused when the deployment has a key
+    /// must not replace the key. (A new enrollment normally deletes the
+    /// deployment's other unused codes; this is the state that must stay
+    /// harmless if one is left over.) The real key keeps working, and the
+    /// refusal shows in the deployment's logs.
+    #[tokio::test]
+    async fn a_token_made_code_left_over_from_before_enrollment_cannot_replace_the_key() {
+        let manager = TokenEnrollment::new().await;
+        let code = manager.mint(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await;
+        assert_eq!(
+            manager.enroll(&code, "ax_day_v1_real").await,
+            StatusCode::OK
+        );
+
+        let (leftover, _, hash) = crate::ids::generate_token("ax_enroll_");
+        manager
+            .db
+            .conn()
+            .lock()
+            .await
+            .execute(
+                "INSERT INTO runtime_enrollment_codes \
+                 (code_hash, deployment_id, expires_at, from_token) VALUES (?1, 'dep_test', ?2, 1)",
+                (hash, (Utc::now() + chrono::Duration::hours(1)).timestamp()),
+            )
+            .await
+            .expect("leftover token-made code");
+
+        assert_eq!(
+            manager.enroll(&leftover, "ax_day_v1_copier").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(manager.key_is_current("ax_day_v1_real").await);
+        assert!(!manager.key_is_current("ax_day_v1_copier").await);
+        let refusals = manager.refusals().await;
+        assert_eq!(refusals.len(), 1, "{refusals:?}");
+        assert!(refusals[0]
+            .attributes
+            .contains(&("stage".to_owned(), "redeem".to_owned())));
+        // The operator on its real key still syncs.
+        assert_eq!(
+            manager.sync(&manager.operator_capability()).await,
+            StatusCode::OK
+        );
+    }
+
+    /// The rollout that revokes the deployment token also retires the
+    /// deployment's unused token-made codes, but not an admin's code.
+    #[tokio::test]
+    async fn revoking_the_deployment_token_retires_its_unused_codes() {
+        let manager = TokenEnrollment::new().await;
+        let token_code = manager.mint(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await;
+        let admin_code = manager.mint(TOKEN_ENROLLMENT_ADMIN).await;
+        let operator = manager.operator_capability();
+
+        manager.stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            manager.sync(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await,
+            StatusCode::UNAUTHORIZED,
+            "the rollout revoked the token"
+        );
+
+        assert_eq!(
+            manager.enroll(&token_code, "ax_day_v1_late").await,
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(!manager.key_is_current("ax_day_v1_late").await);
+        assert_eq!(
+            manager.enroll(&admin_code, "ax_day_v1_admin").await,
+            StatusCode::OK
+        );
+    }
+
+    /// The pull Secret of an Operator installed with the deployment token
+    /// still holds that token. Revoking it first would leave the Operator pod
+    /// unable to pull its image on a new node, so the token stays until the
+    /// Operator reports that it rewrote the Secret, even when that report
+    /// comes after the rollout, or after the manager restarted.
+    #[tokio::test]
+    async fn the_deployment_token_is_kept_until_the_operator_reports_its_pull_secret() {
+        let manager = TokenEnrollment::new().await;
+        let old_token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
+        let operator = manager.operator_capability();
+
+        // The rollout finishes, and the Operator has not reported.
+        manager.stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync(old_token).await, StatusCode::OK);
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync(old_token).await, StatusCode::OK);
+        assert!(manager
+            .state
+            .kv
+            .exists(&super::token_hold_key("dep_test"))
+            .await
+            .unwrap());
+
+        // The report on a later sync, with no rollout in it, revokes.
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(manager.sync(old_token).await, StatusCode::UNAUTHORIZED);
+        assert!(!manager
+            .state
+            .kv
+            .exists(&super::token_hold_key("dep_test"))
+            .await
+            .unwrap());
+    }
+
+    /// The Operator's pull-Secret report reaches the deployment store with the
+    /// reconcile as `deployment_token_revocable`, so a store that revokes the
+    /// deployment's tokens elsewhere waits for it too. A sync without the
+    /// report does not send one.
+    #[tokio::test]
+    async fn a_refreshed_pull_secret_tells_the_store_the_token_is_revocable() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert!(manager.revocable_reports.lock().unwrap().is_empty());
+
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(*manager.revocable_reports.lock().unwrap(), vec![true]);
+    }
+
+    /// A report alone does not end the token. Workloads deployed before the
+    /// Operator enrolled may still use it until the first rollout is done.
+    #[tokio::test]
+    async fn the_pull_secret_report_does_not_revoke_before_the_first_rollout() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            manager.sync(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN).await,
+            StatusCode::OK
+        );
+    }
+
+    /// A receiver built before capability files cannot start without a
+    /// credential in `ALIEN_COMMANDS_TOKEN`, but that credential is not the
+    /// deployment token. The deployment token ends once the Operator reports
+    /// its pull Secret, whatever receivers the release has.
+    #[tokio::test]
+    async fn the_deployment_token_does_not_wait_for_an_unmarked_receiver() {
+        let manager = TokenEnrollment::new().await;
+        let old_token = TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN;
+        let operator = manager.operator_capability();
+        manager
+            .run_release_with_receivers(&[("old-api", false), ("new-api", true)])
+            .await;
+
+        manager.stored.lock().unwrap().status = "update-pending".into();
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert_eq!(manager.sync(old_token).await, StatusCode::UNAUTHORIZED);
+        assert_eq!(*manager.revocable_reports.lock().unwrap(), vec![true]);
+        assert!(!manager
+            .state
+            .kv
+            .exists(&super::token_hold_key("dep_test"))
+            .await
+            .unwrap());
+    }
+
+    /// An enrolled Operator holds a session credential it must not give to
+    /// workloads, so the manager hands a receiver built before capability
+    /// files the deployment's commands-only key. A marked receiver gets none,
+    /// and every target carries the same key.
+    #[tokio::test]
+    async fn the_pull_target_carries_the_commands_key_only_for_unmarked_receivers() {
+        let manager = TokenEnrollment::new().await;
+        manager
+            .run_release_with_receivers(&[("old-api", false), ("new-api", true)])
+            .await;
+        let release_id = manager
+            .stored
+            .lock()
+            .unwrap()
+            .current_release_id
+            .clone()
+            .expect("release");
+        let release = manager
+            .state
+            .release_store
+            .get_release(&crate::auth::Subject::system(), &release_id)
+            .await
+            .unwrap()
+            .expect("stored release");
+        let mut deployment = manager.stored.lock().unwrap().clone();
+        deployment.deployment_token = Some(TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN.to_string());
+
+        let mut handed_out = Vec::new();
+        for _ in 0..2 {
+            // The Operator asked with its own capability, not the deployment token.
+            let target = super::build_pull_target(
+                &manager.state,
+                &deployment,
+                release.clone(),
+                None,
+                Some(manager.operator_capability()),
+                true,
+            )
+            .await
+            .unwrap_or_else(|_| panic!("pull target"));
+            let tokens: Vec<_> = target
+                .config
+                .environment_variables
+                .variables
+                .iter()
+                .filter(|variable| variable.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN)
+                .map(|variable| (variable.target_resources.clone(), variable.value.clone()))
+                .collect();
+            assert_eq!(tokens.len(), 1, "{tokens:?}");
+            assert_eq!(tokens[0].0, Some(vec!["old-api".to_string()]));
+            handed_out.push(tokens[0].1.clone());
+        }
+        let key = handed_out[0].clone();
+        assert_eq!(handed_out[1], key, "every target carries the same key");
+        assert!(key.starts_with("ax_cmds_"), "{key}");
+        assert_ne!(key, TOKEN_ENROLLMENT_DEPLOYMENT_TOKEN);
+
+        // The vendor sees the long-lived credential once, naming the receiver.
+        let warnings: Vec<_> = manager
+            .state
+            .log_buffer
+            .get_entries(Some("dep_test"), usize::MAX)
+            .await
+            .into_iter()
+            .filter(|entry| {
+                entry
+                    .attributes
+                    .contains(&("event".to_owned(), "legacy-command-receivers".to_owned()))
+            })
+            .collect();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(warnings[0].severity, "WARN");
+        assert!(warnings[0].body.contains("old-api"), "{}", warnings[0].body);
+        assert!(
+            !warnings[0].body.contains("new-api"),
+            "{}",
+            warnings[0].body
+        );
+        assert!(!warnings[0].body.contains(&key));
+
+        // It is a real credential, but it syncs nothing.
+        assert_eq!(manager.sync(&key).await, StatusCode::FORBIDDEN);
+        let issued = manager.state.token_store.list_tokens().await.unwrap();
+        assert_eq!(
+            issued
+                .iter()
+                .filter(|token| token.token_type
+                    == crate::traits::token_store::TokenType::CommandsReceiver
+                    && token.deployment_id.as_deref() == Some("dep_test"))
+                .count(),
+            1
+        );
+    }
+
+    /// The key ends when neither the current release nor the one being rolled
+    /// out has a receiver built before capability files.
+    #[tokio::test]
+    async fn the_commands_key_is_revoked_once_no_release_has_an_unmarked_receiver() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        manager
+            .run_release_with_receivers(&[("old-api", false)])
+            .await;
+        let key = manager.issue_commands_key().await;
+
+        // A deployment that never redeploys keeps its key, sync after sync.
+        for _ in 0..2 {
+            assert_eq!(
+                manager.sync_with_refreshed_pull_secret(&operator).await,
+                StatusCode::OK
+            );
+            assert!(manager.commands_key_is_accepted().await);
+        }
+
+        manager
+            .run_release_with_receivers(&[("old-api", true)])
+            .await;
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert!(!manager.commands_key_is_accepted().await);
+        assert_eq!(manager.sync(&key).await, StatusCode::UNAUTHORIZED);
+    }
+
+    /// A revoked commands key never comes back: a later release with an
+    /// unmarked receiver gets a different key, and the old one stays refused.
+    #[tokio::test]
+    async fn a_revoked_commands_key_is_not_issued_again() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        manager
+            .run_release_with_receivers(&[("old-api", false)])
+            .await;
+        let old_key = manager.issue_commands_key().await;
+
+        manager
+            .run_release_with_receivers(&[("old-api", true)])
+            .await;
+        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert!(!manager.commands_key_is_accepted().await);
+
+        manager
+            .run_release_with_receivers(&[("old-api", false)])
+            .await;
+        let new_key = manager.issue_commands_key().await;
+
+        assert_ne!(new_key, old_key, "a revoked key must not be derived again");
+        assert_eq!(manager.sync(&old_key).await, StatusCode::UNAUTHORIZED);
+        assert!(manager.commands_key_is_accepted().await);
+        assert_ne!(manager.sync(&new_key).await, StatusCode::UNAUTHORIZED);
+    }
+
+    /// The Operator names the release it runs, but the manager knows which
+    /// release it assigned. A report of an older, fully marked release, or of a
+    /// release with no stack, does not end the commands key while the
+    /// manager's own current release has an unmarked receiver.
+    #[tokio::test]
+    async fn a_reported_release_does_not_decide_whether_the_commands_key_is_revoked() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        let older_marked = manager
+            .create_release_with_receivers(&[("old-api", true)])
+            .await;
+        let stackless = manager.create_stackless_release().await;
+        manager
+            .run_release_with_receivers(&[("old-api", false)])
+            .await;
+        manager.issue_commands_key().await;
+
+        for reported in [older_marked, stackless] {
+            manager.stored.lock().unwrap().status = "update-pending".into();
+            assert_eq!(
+                manager
+                    .sync_reporting_release(&operator, true, Some(&reported))
+                    .await,
+                StatusCode::OK
+            );
+            assert!(
+                manager.commands_key_is_accepted().await,
+                "reported release {reported} must not revoke the key"
+            );
+        }
+    }
+
+    /// Mid-rollout the current release is fully marked, but the release being
+    /// rolled out adds an unmarked receiver. The key stays until neither has one.
+    #[tokio::test]
+    async fn the_commands_key_is_kept_while_the_release_being_rolled_out_has_an_unmarked_receiver()
+    {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        manager
+            .run_release_with_receivers(&[("old-api", true)])
+            .await;
+        let incoming = manager
+            .create_release_with_receivers(&[("old-api", true), ("new-api", false)])
+            .await;
+        manager.issue_commands_key().await;
+        manager.stored.lock().unwrap().desired_release_id = Some(incoming);
+        manager.stored.lock().unwrap().status = "update-pending".into();
+
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert!(manager.commands_key_is_accepted().await);
+    }
+
+    /// A release of another project is not one the deployment runs, so the key
+    /// stays even when that release is fully marked.
+    #[tokio::test]
+    async fn the_commands_key_is_kept_when_the_release_belongs_to_another_project() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        let foreign = manager
+            .state
+            .release_store
+            .create_release(
+                &crate::auth::Subject::system(),
+                CreateReleaseParams {
+                    project_id: "other_project".to_string(),
+                    stacks: HashMap::from([(
+                        Platform::Kubernetes,
+                        Stack::new("app".into()).build(),
+                    )]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                },
+            )
+            .await
+            .expect("release")
+            .id;
+        manager.stored.lock().unwrap().current_release_id = Some(foreign);
+        manager.issue_commands_key().await;
+
+        assert_eq!(
+            manager.sync_with_refreshed_pull_secret(&operator).await,
+            StatusCode::OK
+        );
+        assert!(manager.commands_key_is_accepted().await);
+    }
+
+    /// Without a signing key the manager cannot derive the key, and it must
+    /// not hand out a guessable one: the receiver gets no credential and fails
+    /// to start with a named cause.
+    #[tokio::test]
+    async fn a_manager_without_a_signing_key_hands_out_no_commands_key() {
+        let mut manager = TokenEnrollment::new().await;
+        manager.state.config = Arc::new(crate::config::ManagerConfig {
+            response_signing_key: Vec::new(),
+            ..(*manager.state.config).clone()
+        });
+        manager
+            .run_release_with_receivers(&[("old-api", false)])
+            .await;
+        let release_id = manager
+            .stored
+            .lock()
+            .unwrap()
+            .current_release_id
+            .clone()
+            .expect("release");
+        let release = manager
+            .state
+            .release_store
+            .get_release(&crate::auth::Subject::system(), &release_id)
+            .await
+            .unwrap()
+            .expect("stored release");
+        let deployment = manager.stored.lock().unwrap().clone();
+
+        let target = super::build_pull_target(
+            &manager.state,
+            &deployment,
+            release,
+            None,
+            Some(manager.operator_capability()),
+            true,
+        )
+        .await
+        .unwrap_or_else(|_| panic!("pull target"));
+        assert!(target
+            .config
+            .environment_variables
+            .variables
+            .iter()
+            .all(|variable| variable.name != alien_core::ENV_ALIEN_COMMANDS_TOKEN));
+        assert!(!manager.commands_key_is_accepted().await);
+    }
+
+    /// A release the manager cannot read could hold an unmarked receiver, so
+    /// the key stays, and the warning names the deployment.
+    #[tokio::test]
+    async fn the_commands_key_is_kept_when_the_current_release_cannot_be_read() {
+        #[derive(Clone, Default)]
+        struct Captured(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        manager.stored.lock().unwrap().current_release_id = Some("rel_gone".into());
+        manager.stored.lock().unwrap().status = "update-pending".into();
+        manager.issue_commands_key().await;
+
+        let captured = Captured::default();
+        let writer = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let status = manager.sync_with_refreshed_pull_secret(&operator).await;
+        drop(guard);
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(manager.commands_key_is_accepted().await);
+        let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.contains("Release not found; keeping the commands key")
+                && logs.contains("dep_test"),
+            "{logs}"
+        );
+    }
+
+    /// An Operator that cleared its config in token mode and then enrolled
+    /// asks for it. The manager sends the running release again, and only then.
+    #[tokio::test]
+    async fn an_operator_without_its_installed_config_gets_the_running_release() {
+        let record =
+            pull_record_in_cluster("running", alien_core::KubernetesClusterOwnership::Existing);
+        let (response, _) = sync_operator_without_claim_reporting(record.clone(), false).await;
+        assert!(response.get("target").is_none(), "{response}");
+
+        let (response, _) = sync_operator_without_claim_reporting(record, true).await;
+        let target = response.get("target").expect("the running release again");
+        let current = response["currentState"]["currentRelease"]["releaseId"].clone();
+        assert!(current.is_string(), "{response}");
+        assert_eq!(target["releaseInfo"]["releaseId"], current, "{response}");
+
+        let mut updating = pull_record_in_cluster(
+            "update-failed",
+            alien_core::KubernetesClusterOwnership::Existing,
+        );
+        updating.desired_release_id = Some("rel_target".to_string());
+        let (response, _) = sync_operator_without_claim_reporting(updating, true).await;
+        assert!(response.get("target").is_none(), "{response}");
+    }
+
+    /// A new Operator pod can start while its predecessor was applying the
+    /// install-time target, whose config holds no commands key. It reports the
+    /// update as pending and asks for its config. The manager has no work of
+    /// its own to send, so it sends the release it runs again.
+    #[tokio::test]
+    async fn an_operator_stuck_applying_a_config_it_cannot_use_gets_its_release_again() {
+        let mut record = pull_record_in_cluster(
+            "update-pending",
+            alien_core::KubernetesClusterOwnership::Existing,
+        );
+        record.desired_release_id = None;
+        let (response, _, _) = sync_operator_full(
+            record,
+            None,
+            None,
+            Stack::new("app".to_string()).build(),
+            None,
+            false,
+            SyncReport {
+                installed_config_missing: true,
+                status: Some("update-pending"),
+                ..SyncReport::default()
+            },
+        )
+        .await;
+        let target = response
+            .get("target")
+            .unwrap_or_else(|| panic!("the release again: {response}"));
+        let current = response["currentState"]["currentRelease"]["releaseId"].clone();
+        assert!(current.is_string(), "{response}");
+        assert_eq!(target["releaseInfo"]["releaseId"], current, "{response}");
+    }
+
+    /// A manager that serves no charts names no Operator image itself. The
+    /// image its store reports for the deployment reaches the Operator, and a
+    /// store that reports none sends none.
+    #[tokio::test]
+    async fn a_manager_without_charts_sends_the_image_its_store_reports() {
+        let record =
+            pull_record_in_cluster("running", alien_core::KubernetesClusterOwnership::Existing);
+
+        let (response, _) = sync_operator_with_reconciled_image(
+            record.clone(),
+            false,
+            Some("registry.example.com/operator:2.0.0"),
+        )
+        .await;
+        assert_eq!(
+            response["targetOperatorImage"], "registry.example.com/operator:2.0.0",
+            "{response}"
+        );
+
+        let (response, _) = sync_operator_with_reconciled_image(record, false, None).await;
+        assert!(response.get("targetOperatorImage").is_none(), "{response}");
     }
 
     fn dynamic_container(name: &str) -> alien_core::sync::TargetDynamicContainer {
@@ -3007,6 +4373,7 @@ pub(in crate::routes) mod tests {
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            runtime_identity_audience: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),
@@ -3159,9 +4526,12 @@ pub(in crate::routes) mod tests {
             .await
             .expect("database"),
         );
+        let token_store = crate::stores::sqlite::SqliteTokenStore::new(db.clone());
+        let log_buffer = crate::dev::LogBuffer::new();
         let release_store = crate::stores::sqlite::SqliteReleaseStore::new(db);
         let manager_config = crate::config::ManagerConfig {
             base_url: Some("https://manager.example.test".to_string()),
+            response_signing_key: b"acquire-signing-key".to_vec(),
             ..Default::default()
         };
         let credential_resolver = crate::providers::local_credentials::LocalCredentialResolver::new(
@@ -3172,6 +4542,11 @@ pub(in crate::routes) mod tests {
             credential_resolver: &credential_resolver,
             bindings_provider: &None,
             target_bindings_providers: &HashMap::new(),
+            commands_keys: Some(crate::auth::commands_key::CommandsKeyStores {
+                signing_key: &manager_config.response_signing_key,
+                token_store: &token_store,
+                log_buffer: &log_buffer,
+            }),
         };
 
         let response = acquired_deployment_response(
@@ -3266,6 +4641,7 @@ pub(in crate::routes) mod tests {
             credential_resolver: &credential_resolver,
             bindings_provider: &None,
             target_bindings_providers: &HashMap::new(),
+            commands_keys: None,
         };
         let acquired = crate::traits::deployment_store::AcquiredDeployment {
             deployment: record,
@@ -3506,6 +4882,7 @@ struct AgentReportExtras {
     application: Option<ObservedApplicationReport>,
     dynamic_containers: Option<Vec<alien_core::sync::DynamicContainerReport>>,
     operations_config: Option<alien_core::OperationsConfig>,
+    deployment_token_revocable: bool,
     generated_slots: Vec<crate::values::ValueMeta>,
 }
 
@@ -3541,12 +4918,14 @@ async fn persist_agent_report(
         application,
         dynamic_containers,
         operations_config,
+        deployment_token_revocable,
         generated_slots,
     } = extras;
     if operator_image.is_none()
         && application.is_none()
         && dynamic_containers.is_none()
         && operations_config.is_none()
+        && !deployment_token_revocable
         && generated_slots.is_empty()
     {
         return store.reconcile(subject, data).await;
@@ -3564,7 +4943,14 @@ async fn persist_agent_report(
     if let Some(config) = operations_config {
         request = request.operations_config(config);
     }
-    store.reconcile_request(subject, request.build()).await
+    store
+        .reconcile_request(
+            subject,
+            request
+                .deployment_token_revocable(deployment_token_revocable)
+                .build(),
+        )
+        .await
 }
 
 /// A completed receipt grants no authority to replay a report or take new work.
@@ -3628,6 +5014,8 @@ async fn agent_sync(
         application,
         dynamic_containers,
         operations_config,
+        installed_config_missing,
+        pull_secret_refreshed,
         installed_setup,
     }): Json<AgentSyncWireRequest>,
 ) -> Response {
@@ -3682,9 +5070,27 @@ async fn agent_sync(
         .unwrap_or(1)
         .min(alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION);
     if deployment.required_deployment_protocol_version() > supported_protocol {
-        return ErrorData::bad_request(
-            "This deployment requires a newer deployment protocol. Update the deployment actor or manager before retrying.",
-        ).into_response();
+        // The sync is refused, but the deployment still records which Operator
+        // version is stuck so the CLI can show it.
+        if let Some(operator_version) = req.operator_version.as_deref() {
+            if let Err(e) = state
+                .deployment_store
+                .record_operator_version(&subject, &req.deployment_id, operator_version)
+                .await
+            {
+                tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to record the Operator version of a rejected sync");
+            }
+        }
+        // An Operator that reports its version is told which Operator and chart
+        // version to move to; other actors keep the generic text.
+        let message = match (&state.charts, req.operator_version.as_deref()) {
+            (Some(charts), Some(operator_version)) => format!(
+                "This deployment requires a newer deployment protocol. {}",
+                charts.operator_upgrade_message(Some(operator_version))
+            ),
+            _ => "This deployment requires a newer deployment protocol. Update the deployment actor or manager before retrying.".to_string(),
+        };
+        return ErrorData::bad_request(message).into_response();
     }
     if let Some(reported) = req.current_state.as_ref() {
         let version = reported
@@ -3760,6 +5166,7 @@ async fn agent_sync(
     let mut reported_claim_is_terminal = false;
     let mut target_operations_bundle_set = None;
     let mut target_dynamic_containers = None;
+    let mut reconciled_operator_image = None;
     // A target-bearing row without an echoed claim belongs to work the agent
     // has not accepted yet. Do not let its idle state acknowledge that target.
     let reported_state_owns_target =
@@ -3826,6 +5233,7 @@ async fn agent_sync(
                         Ok(slots) => slots,
                         Err(response) => return response,
                     };
+                    let deployment_token_revocable = pull_secret_refreshed;
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: req.session.clone(),
@@ -3848,6 +5256,7 @@ async fn agent_sync(
                             application: application.clone(),
                             dynamic_containers: dynamic_containers.clone(),
                             operations_config: operations_config.clone(),
+                            deployment_token_revocable,
                             generated_slots,
                         },
                     )
@@ -3874,8 +5283,19 @@ async fn agent_sync(
                             tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
                         }
                         Ok(outcome) => {
+                            settle_deployment_token(
+                                &state,
+                                &req.deployment_id,
+                                &subject,
+                                &deployment,
+                                &outcome.record,
+                                deployment_token_revocable,
+                            )
+                            .await;
+                            settle_commands_key(&state, &deployment).await;
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
                             target_dynamic_containers = outcome.target_dynamic_containers;
+                            reconciled_operator_image = outcome.target_operator_image;
                             if let Err(error) =
                                 crate::registry_access::cleanup_deleted_registry_access(
                                     state.deployment_store.as_ref(),
@@ -4004,8 +5424,17 @@ async fn agent_sync(
         requires_execution_claims,
         execution_claim.is_some() && (!report_has_claim || reported_claim_is_terminal),
     );
-    let target = if may_deliver_target {
-        let release = if let Some(release_id) = deployment_target_release_id(&deployment) {
+    // An Operator that lost the config of its release, or holds one without
+    // the commands key its receivers need, gets that release again.
+    let resend_installed =
+        !may_deliver_target && installed_config_missing && release_to_resend(&deployment).is_some();
+    let target = if may_deliver_target || resend_installed {
+        let release_id = if resend_installed {
+            release_to_resend(&deployment)
+        } else {
+            deployment_target_release_id(&deployment)
+        };
+        let release = if let Some(release_id) = release_id {
             let system = crate::auth::Subject::system();
             match state.release_store.get_release(&system, release_id).await {
                 Ok(Some(r)) => Some(r),
@@ -4123,6 +5552,7 @@ async fn agent_sync(
                         Ok(slots) => slots,
                         Err(response) => return response,
                     };
+                    let deployment_token_revocable = pull_secret_refreshed;
                     let reconcile_data = ReconcileData {
                         deployment_id: req.deployment_id.clone(),
                         session: "agent-sync".to_string(),
@@ -4145,6 +5575,7 @@ async fn agent_sync(
                             application: application.clone(),
                             dynamic_containers: dynamic_containers.clone(),
                             operations_config: operations_config.clone(),
+                            deployment_token_revocable,
                             generated_slots,
                         },
                     )
@@ -4161,6 +5592,7 @@ async fn agent_sync(
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
                             target_dynamic_containers = outcome.target_dynamic_containers;
+                            reconciled_operator_image = outcome.target_operator_image;
                         }
                     }
                 }
@@ -4214,7 +5646,19 @@ async fn agent_sync(
         execution_claim,
         current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
-            Ok(v) => v,
+            Ok(mut value) => {
+                if subject.role == crate::auth::Role::OperatorSync {
+                    if let Some(config) = value.as_mut().and_then(|target| target.get_mut("config"))
+                    {
+                        if let Err(error) =
+                            remove_legacy_runtime_credentials(config, &state.config.base_url())
+                        {
+                            return error.into_response();
+                        }
+                    }
+                }
+                value
+            }
             Err(e) => {
                 tracing::warn!("Failed to serialize target deployment: {e}");
                 return ErrorData::internal("Failed to serialize target deployment")
@@ -4225,10 +5669,13 @@ async fn agent_sync(
         target_operations_bundle_set,
         target_dynamic_containers,
         tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
+        // Charts this manager serves name the image. A manager without charts
+        // uses the one its store reported for this deployment.
         target_operator_image: state
             .charts
             .as_ref()
-            .map(|charts| charts.deployed_operator_image(&state.config.base_url())),
+            .map(|charts| charts.deployed_operator_image(&state.config.base_url()))
+            .or(reconciled_operator_image),
     })
     .into_response()
 }
@@ -4401,7 +5848,8 @@ pub(crate) async fn build_pull_target(
     .await
     .map_err(|e| e.into_response())?;
 
-    let env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment) {
+    let mut env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment)
+    {
         Ok(variables) => variables,
         Err(error) => {
             return Err(ErrorData::bad_request(format!(
@@ -4411,6 +5859,28 @@ pub(crate) async fn build_pull_target(
             .into_response())
         }
     };
+    // A command receiver built before capability files cannot read the
+    // capability file, so it starts only with `ALIEN_COMMANDS_TOKEN`. An
+    // enrolled Operator holds a short-lived session credential that must not
+    // reach workloads, and the deployment token ends after the first rollout.
+    // Those receivers get the deployment's commands-only key, which does
+    // nothing but lease and answer the deployment's commands. The manager
+    // revokes it once no release of the deployment has such a receiver.
+    let unmarked_receivers = stack.command_receivers_without_capability_file();
+    if !unmarked_receivers.is_empty() {
+        if let Some(key) =
+            crate::auth::commands_key::ensure(state, &deployment.id, &unmarked_receivers).await
+        {
+            env_vars.extend(unmarked_receivers.into_iter().map(|resource_id| {
+                EnvironmentVariable {
+                    name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                    value: key.clone(),
+                    var_type: alien_core::EnvironmentVariableType::Secret,
+                    target_resources: Some(vec![resource_id]),
+                }
+            }));
+        }
+    }
 
     // Records loaded for sync always carry stack settings; in a
     // handler, answer with a 500 rather than panic-dropping the
@@ -4847,6 +6317,219 @@ fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {
         deployment_status_from_record(&deployment.status),
         Some(DeploymentStatus::Running)
     )
+}
+
+/// An enrolled Operator reported the end of a rollout. Every workload now
+/// runs a revision it built with capability files, so nothing needs the
+/// deployment token to run its workloads any more. A refresh (from Running or
+/// RefreshFailed) is not a rollout: workloads deployed before enrollment may
+/// still use it.
+fn rollout_by_enrolled_operator_finished(
+    subject: &crate::auth::Subject,
+    before: &DeploymentRecord,
+    after: &DeploymentRecord,
+) -> bool {
+    matches!(subject.role, crate::auth::Role::OperatorSync)
+        && crate::auth::runtime_capability::is_runtime_capability(&subject.bearer_token)
+        && !matches!(before.status.as_str(), "running" | "refresh-failed")
+        && after.status == "running"
+}
+
+/// Durable mark that an enrolled Operator's first rollout finished while its
+/// deployment token waits for the pull-Secret report. A running Operator
+/// repeats the report on every sync, so the report itself needs no storage.
+fn token_hold_key(deployment_id: &str) -> String {
+    format!("deployment-token-held:{deployment_id}")
+}
+
+/// Whether the releases the manager itself assigned to the deployment, the
+/// current one and the one being rolled out, have a command-enabled Container
+/// or Daemon that `alien build` did not record as reading the capability file.
+/// Such a receiver starts only with `ALIEN_COMMANDS_TOKEN`, so the
+/// deployment's commands key must outlive it.
+///
+/// The gate never reads the release an Operator reports: whoever holds the
+/// Operator's credential could report an older, fully marked release to end
+/// the key early. A release that cannot be read, belongs to another project
+/// or has no stack for the deployment's platform counts as having one. A
+/// deployment with no release has no receiver.
+async fn command_receivers_need_commands_key(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+) -> bool {
+    let system = crate::auth::Subject::system();
+    let current = deployment.current_release_id.as_deref();
+    let desired = deployment
+        .desired_release_id
+        .as_deref()
+        .filter(|desired| Some(*desired) != current);
+    for release_id in current.into_iter().chain(desired) {
+        let release = match state.release_store.get_release(&system, release_id).await {
+            Ok(Some(release)) => release,
+            Ok(None) => {
+                tracing::warn!(deployment_id = %deployment.id, %release_id, "Release not found; keeping the commands key");
+                return true;
+            }
+            Err(error) => {
+                tracing::warn!(deployment_id = %deployment.id, %release_id, %error, "Cannot read the release; keeping the commands key");
+                return true;
+            }
+        };
+        if release.project_id != deployment.project_id {
+            tracing::warn!(deployment_id = %deployment.id, %release_id, "Release belongs to another project; keeping the commands key");
+            return true;
+        }
+        let Some(stack) = release
+            .stacks
+            .get(&release_stack_platform(deployment.platform))
+        else {
+            tracing::warn!(deployment_id = %deployment.id, %release_id, "Release has no stack for the deployment's platform; keeping the commands key");
+            return true;
+        };
+        let unmarked = stack.command_receivers_without_capability_file();
+        if !unmarked.is_empty() {
+            tracing::debug!(
+                deployment_id = %deployment.id,
+                %release_id,
+                resources = ?unmarked,
+                "Command receivers built before capability files still need the commands key"
+            );
+            return true;
+        }
+    }
+    false
+}
+
+/// Revoke the deployment's commands key once its current and desired releases
+/// have no command receiver built before capability files. Revoking does not
+/// stop a receiver that is running: a running receiver is in one of those
+/// releases, and none of them needs the key. A deployment that never
+/// issued the key costs one store lookup per sync.
+async fn settle_commands_key(state: &AppState, deployment: &DeploymentRecord) {
+    match crate::auth::commands_key::exists(state, &deployment.id).await {
+        Ok(false) => return,
+        Ok(true) => {}
+        Err(error) => {
+            tracing::warn!(deployment_id = %deployment.id, %error, "Cannot look up the commands key");
+            return;
+        }
+    }
+    if !command_receivers_need_commands_key(state, deployment).await {
+        crate::auth::commands_key::revoke(state, &deployment.id).await;
+    }
+}
+
+/// Revoke the deployment token once the enrolled Operator's first rollout is
+/// done and it has reported that its pull Secret holds its own credential. A
+/// Secret that still holds the token would stop the Operator pod from pulling
+/// its image on a new node, so the token stays until the report arrives. A
+/// command receiver built before capability files starts only with the token,
+/// so `deployment_token_revocable` here is already false while the current
+/// release has one. An Operator that never reports keeps its token; that is logged
+/// once, with the deployment id. Neither case fails the sync.
+async fn settle_deployment_token(
+    state: &AppState,
+    deployment_id: &str,
+    subject: &crate::auth::Subject,
+    before: &DeploymentRecord,
+    after: &DeploymentRecord,
+    deployment_token_revocable: bool,
+) {
+    if !matches!(subject.role, crate::auth::Role::OperatorSync)
+        || !crate::auth::runtime_capability::is_runtime_capability(&subject.bearer_token)
+    {
+        return;
+    }
+    let key = token_hold_key(deployment_id);
+    let rolled_out = rollout_by_enrolled_operator_finished(subject, before, after);
+    if !deployment_token_revocable {
+        if rolled_out {
+            if let Err(error) = state
+                .kv
+                .put(
+                    &key,
+                    chrono::Utc::now().timestamp().to_string().into_bytes(),
+                    None,
+                )
+                .await
+            {
+                tracing::error!(%deployment_id, %error, "Cannot record the held deployment token");
+            }
+            tracing::warn!(
+                %deployment_id,
+                "Kept the deployment token: the Operator has not reported a refreshed pull Secret"
+            );
+        }
+        return;
+    }
+    let held = rolled_out
+        || match state.kv.exists(&key).await {
+            Ok(held) => held,
+            Err(error) => {
+                tracing::warn!(%deployment_id, %error, "Cannot read the held deployment token mark");
+                false
+            }
+        };
+    if held && revoke_deployment_tokens(state, deployment_id).await {
+        if let Err(error) = state.kv.delete(&key, None).await {
+            tracing::warn!(%deployment_id, %error, "Cannot clear the held deployment token mark");
+        }
+    }
+}
+
+/// Delete the deployment's long-lived tokens. A failure is logged, returns
+/// `false` and is retried on the next sync that reports the pull Secret; it
+/// never fails the sync. Deleting a deployment token also retires the unused
+/// enrollment codes made from it, in the same transaction (see
+/// `SqliteTokenStore::delete_token`).
+async fn revoke_deployment_tokens(state: &AppState, deployment_id: &str) -> bool {
+    let tokens = match state.token_store.list_tokens().await {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            tracing::warn!(%deployment_id, %error, "Cannot list deployment tokens to revoke");
+            return false;
+        }
+    };
+    let mut revoked_all = true;
+    for token in tokens.into_iter().filter(|token| {
+        token.token_type == crate::traits::token_store::TokenType::Deployment
+            && token.deployment_id.as_deref() == Some(deployment_id)
+    }) {
+        match state.token_store.delete_token(&token.id).await {
+            Ok(()) => tracing::info!(
+                %deployment_id,
+                key_prefix = %token.key_prefix,
+                "Revoked the deployment token after the first rollout of the enrolled Operator"
+            ),
+            Err(error) => {
+                revoked_all = false;
+                tracing::warn!(%deployment_id, %error, "Cannot revoke a deployment token")
+            }
+        }
+    }
+    revoked_all
+}
+
+/// The release a deployment runs, when no other work is pending. An Operator
+/// that restarted while applying that release (`UpdatePending`, `Updating`)
+/// asks for it again like a settled one does: its saved config is the one it
+/// cannot use.
+fn release_to_resend(deployment: &DeploymentRecord) -> Option<&str> {
+    let current = deployment.current_release_id.as_deref()?;
+    let holds_release = matches!(
+        deployment_status_from_record(&deployment.status),
+        Some(
+            DeploymentStatus::Running
+                | DeploymentStatus::RefreshFailed
+                | DeploymentStatus::UpdatePending
+                | DeploymentStatus::Updating
+        )
+    );
+    let no_other_target = deployment
+        .desired_release_id
+        .as_deref()
+        .is_none_or(|desired| desired == current);
+    (holds_release && no_other_target).then_some(current)
 }
 
 fn may_deliver_agent_target(

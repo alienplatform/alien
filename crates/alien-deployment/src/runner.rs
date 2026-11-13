@@ -540,7 +540,20 @@ async fn run_step_loop_body(
         // Capture step metadata before overwriting state.
         let update_heartbeat = step_result.update_heartbeat;
         let suggested_delay_ms = step_result.suggested_delay_ms;
-        let heartbeats = step_result.heartbeats.clone();
+        let mut heartbeats = step_result.heartbeats.clone();
+        if let Some(metadata) = step_result.state.runtime_metadata.as_ref() {
+            let stack = step_result
+                .state
+                .target_release
+                .as_ref()
+                .or(step_result.state.current_release.as_ref())
+                .map(|release| &release.stack);
+            crate::ai_access_check::apply_checks(
+                &mut heartbeats,
+                &metadata.ai_access_checks,
+                stack,
+            );
+        }
         let observed_inventory_batches = step_result.observed_inventory_batches.clone();
 
         // A rejected/cancelled protocol checkpoint must leave the caller's old
@@ -2133,6 +2146,7 @@ mod tests {
 
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
+            runtime_identity_audience: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
             input_values: Default::default(),

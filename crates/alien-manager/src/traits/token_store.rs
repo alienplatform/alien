@@ -14,6 +14,10 @@ pub enum TokenType {
     /// Sends requests through deployment tunnels and nothing else. Scoped
     /// to one deployment group when `deployment_group_id` is set.
     Tunnel,
+    /// Leases and answers commands for one deployment and nothing else. Held by
+    /// command receivers built before capability files; see
+    /// `Role::CommandsReceiver`.
+    CommandsReceiver,
 }
 
 impl std::fmt::Display for TokenType {
@@ -23,6 +27,7 @@ impl std::fmt::Display for TokenType {
             TokenType::DeploymentGroup => write!(f, "deployment-group"),
             TokenType::Deployment => write!(f, "deployment"),
             TokenType::Tunnel => write!(f, "tunnel"),
+            TokenType::CommandsReceiver => write!(f, "commands-receiver"),
         }
     }
 }
@@ -35,6 +40,7 @@ impl TokenType {
             TokenType::DeploymentGroup => "ax_dg_",
             TokenType::Deployment => "ax_deploy_",
             TokenType::Tunnel => "ax_tunnel_",
+            TokenType::CommandsReceiver => "ax_cmds_",
         }
     }
 }
@@ -64,6 +70,8 @@ pub struct CreateTokenParams {
 /// Persistence for API tokens with SHA-256 hashed storage.
 #[async_trait]
 pub trait TokenStore: Send + Sync {
+    /// Create a token. Commands-receiver tokens are refused: they go through
+    /// [`TokenStore::create_commands_key`], which checks the key generation.
     async fn create_token(&self, params: CreateTokenParams) -> Result<TokenRecord, AlienError>;
 
     /// Look up a token by its SHA-256 hash.
@@ -74,4 +82,29 @@ pub trait TokenStore: Send + Sync {
 
     /// List all tokens (returns key_prefix for identification, never key_hash).
     async fn list_tokens(&self) -> Result<Vec<TokenRecord>, AlienError>;
+
+    /// The deployment's commands-key generation. It starts at 0 and only grows.
+    async fn commands_key_generation(&self, deployment_id: &str) -> Result<u64, AlienError>;
+
+    /// Store a commands key of `deployment_id` only while the deployment's
+    /// commands-key generation is still `generation`, the one the key was
+    /// derived at. The check and the insert are one atomic step, so a key of a
+    /// generation that a revocation has passed is never stored.
+    ///
+    /// Returns `Ok(None)`, storing nothing, when the generation has moved on;
+    /// the caller derives the key again at the new generation. Returns the new
+    /// record otherwise. `create_token` refuses commands-receiver tokens, so
+    /// this is the only way to store one.
+    async fn create_commands_key(
+        &self,
+        deployment_id: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        generation: u64,
+    ) -> Result<Option<TokenRecord>, AlienError>;
+
+    /// Delete every commands key of the deployment and move its generation
+    /// forward, in one step. The commands key is derived from the generation,
+    /// so a revoked key is never issued again.
+    async fn revoke_commands_keys(&self, deployment_id: &str) -> Result<(), AlienError>;
 }

@@ -6019,6 +6019,20 @@ pub struct Disk {
     /// Type of resource (always "compute#disk").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+
+    /// The customer-managed key that encrypts the disk. Compute accepts it only at create.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_encryption_key: Option<CustomerEncryptionKey>,
+}
+
+/// A customer-managed Cloud KMS key for a disk.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/disks (CustomerEncryptionKey)
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomerEncryptionKey {
+    /// The full Cloud KMS crypto key (or version) resource name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kms_key_name: Option<String>,
 }
 
 /// Disk status.

@@ -33,6 +33,7 @@ get "code"(){
                 return ContainerCodeSchema.describe("Specifies the source of the container's executable code.")
               },
 "command": z.array(z.string()).describe("Command to override image default").nullish(),
+"commandsCapabilityFile": z.optional(z.boolean().describe("Set by `alien build` when the container's command receiver reads its\ncredential from `ALIEN_COMMANDS_CAPABILITY_FILE`. Absent means the\nreceiver may be older, so a deployer that rotates credentials keeps\nthe long-lived `ALIEN_COMMANDS_TOKEN` for it. Build output replaces any\nvalue written in the stack definition.")),
 "commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the container can receive remote commands via the Commands protocol.\nWhen enabled, an app-owned command receiver can lease pending commands\nfor this Container and execute registered handlers.")),
 get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.")

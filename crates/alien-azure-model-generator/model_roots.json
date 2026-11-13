@@ -173,6 +173,7 @@
     "Event",
     "GenerateCredentialsParameters",
     "GenerateCredentialsResult",
+    "ImportImageParameters",
     "ImportSource",
     "PackageType",
     "Policies",

@@ -9,6 +9,23 @@ pub const ENV_OPERATOR_BASE_PLATFORM: &str = "OPERATOR_BASE_PLATFORM";
 /// on the operator from the Service it renders in front of the operator, which serves the
 /// broker; the Sandbox controller publishes it in the sandbox binding.
 pub const ENV_ALIEN_SANDBOX_BROKER_URL: &str = "ALIEN_SANDBOX_BROKER_URL";
+/// The nameserver addresses (comma separated IPv4) the chart admits on port 53 for sandbox pods,
+/// from `sandbox.clusterDNS`; the chart admits only these on port 53 for allow-egress sandbox
+/// pods. The Operator compares them with its own `/etc/resolv.conf` and refuses new
+/// allow-egress sessions when they differ (running sessions stay).
+pub const ENV_ALIEN_SANDBOX_CLUSTER_DNS: &str = "ALIEN_SANDBOX_CLUSTER_DNS";
+/// RuntimeClass the chart chose for sandbox pods (`sandbox.runtimeClassName`, or the cluster's
+/// vendor class when unset). The Operator only checks it; it never picks one.
+/// `ip:port` of the Operator pod itself, set by the chart from the downward API. A sandbox pod's
+/// NetworkPolicy must refuse it, which is how a pod proves its policy is in force.
+pub const ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS: &str = "ALIEN_SANDBOX_OPERATOR_ADDRESS";
+pub const ENV_ALIEN_SANDBOX_RUNTIME_CLASS: &str = "ALIEN_SANDBOX_RUNTIME_CLASS";
+/// Idle sandbox pods the Operator keeps ready (`sandbox.warmPoolSize`).
+pub const ENV_ALIEN_SANDBOX_WARM_POOL_SIZE: &str = "ALIEN_SANDBOX_WARM_POOL_SIZE";
+/// JSON object of node labels sandbox pods must match (`sandbox.nodeSelector`).
+pub const ENV_ALIEN_SANDBOX_NODE_SELECTOR: &str = "ALIEN_SANDBOX_NODE_SELECTOR";
+/// JSON array of tolerations for sandbox pods (`sandbox.tolerations`).
+pub const ENV_ALIEN_SANDBOX_TOLERATIONS: &str = "ALIEN_SANDBOX_TOLERATIONS";
 /// JSON object mapping workload priority levels (`critical`, `high`, `normal`, `low`) to
 /// Kubernetes PriorityClass names. The Helm chart sets it on the operator only when the
 /// cluster administrator mapped at least one level.
@@ -34,6 +51,15 @@ pub const ENV_ALIEN_COMMANDS_TOKEN: &str = "ALIEN_COMMANDS_TOKEN";
 /// file after an unauthorized response so controllers can rotate credentials
 /// without restarting the workload.
 pub const ENV_ALIEN_COMMANDS_TOKEN_FILE: &str = "ALIEN_COMMANDS_TOKEN_FILE";
+/// File holding a short-lived command credential as `{"token","expiresAt"}`,
+/// written and refreshed by the host or operator that runs the workload.
+pub const ENV_ALIEN_COMMANDS_CAPABILITY_FILE: &str = "ALIEN_COMMANDS_CAPABILITY_FILE";
+/// Where a Container or Daemon on a machine with a runtime identity finds its
+/// command credential (`ALIEN_COMMANDS_CAPABILITY_FILE`). The machine writes it.
+pub const HOST_COMMANDS_CAPABILITY_FILE: &str = "/var/run/alien-runtime/commands.json";
+/// The same credential as plain text (`ALIEN_COMMANDS_TOKEN_FILE`), for
+/// receivers that read only a token file.
+pub const HOST_COMMANDS_TOKEN_FILE: &str = "/var/run/alien-runtime/commands.token";
 /// Lease duration requested by app-owned command receivers, in seconds.
 pub const ENV_ALIEN_COMMANDS_LEASE_SECONDS: &str = "ALIEN_COMMANDS_LEASE_SECONDS";
 /// Maximum command leases requested by an app-owned receiver per poll.
@@ -492,6 +518,11 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | "ALIEN_DEPLOYMENT_SERVICE_ACCOUNT"
                 | ENV_ALIEN_DEPLOYMENT_TOKEN
                 | ENV_ALIEN_MANAGER_URL
+                | "ALIEN_IDENTITY_PROVIDER"
+                | "ALIEN_MANAGER_AUDIENCE"
+                | "ALIEN_SESSION_FILE"
+                | ENV_ALIEN_COMMANDS_CAPABILITY_FILE
+                | "ALIEN_TELEMETRY_CAPABILITY_FILE"
                 | ENV_ALIEN_RESOURCE_ID
                 | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
                 | ENV_ALIEN_RUNTIME_SECRETS
