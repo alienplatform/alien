@@ -332,6 +332,8 @@ async fn move_current_release(fixture: &Fixture, stack: Stack) {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -653,6 +655,8 @@ async fn a_data_resolve_is_refused_while_the_desired_release_publishes_a_sandbox
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -865,4 +869,119 @@ async fn azure_token_failures_preserve_cached_lease_retryability_through_binding
             response.delete_async().await;
         }
     }
+}
+
+async fn post_create_sandbox(
+    fixture: &Fixture,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let router = alien_manager::routes::sandbox_create::router().with_state(fixture.state.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/bindings/sandboxes/create")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, "Bearer unused")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// The create route takes the deployment, the sandbox and its environment, and nothing else:
+/// every other part of the sandbox is rebuilt from the signed release, so a field that tried to
+/// choose one is refused before anything is looked up.
+#[tokio::test]
+async fn the_sandbox_create_route_takes_only_what_a_caller_may_choose() {
+    let (fixture, _) = fixture().await;
+    current_release_adds_a_remote_sandbox(&fixture).await;
+    let sandbox = with_subject(
+        &fixture,
+        remote_bindings_subject(
+            &fixture,
+            alien_manager::auth::RemoteBindingGrant::Sandbox,
+            Some("box"),
+        ),
+    );
+    for extra in [
+        (
+            "egressPolicy",
+            serde_json::json!({"defaultAction": "Allow"}),
+        ),
+        ("diskImageId", serde_json::json!("img")),
+        ("cpu", serde_json::json!("64000m")),
+        ("labels", serde_json::json!({"a": "b"})),
+        ("body", serde_json::json!({})),
+    ] {
+        let mut body = serde_json::json!({
+            "deploymentId": fixture.deployment_a,
+            "resourceId": "box",
+            "env": {"A": "b"},
+        });
+        body[extra.0] = extra.1;
+        let (status, json) = post_create_sandbox(&sandbox, body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{} accepted: {json:#}",
+            extra.0
+        );
+    }
+}
+
+/// Only a protected Azure install creates through the manager; every other deployment's remote
+/// callers create sandboxes with their own credentials, so the route is not a way around them.
+#[tokio::test]
+async fn the_sandbox_create_route_refuses_a_deployment_that_is_not_a_protected_azure_install() {
+    let (fixture, calls) = fixture().await;
+    current_release_adds_a_remote_sandbox(&fixture).await;
+    state_keeps_a_sandbox(
+        &fixture,
+        serde_json::json!({
+            "service": "sandbox-aws",
+            "imageArn": "arn:aws:lambda:us-east-1:210987654321:microvm-image:box",
+            "imageVersion": "3",
+            "region": "us-east-1",
+            "allowEgress": true,
+        }),
+    )
+    .await;
+    let sandbox = with_subject(
+        &fixture,
+        remote_bindings_subject(
+            &fixture,
+            alien_manager::auth::RemoteBindingGrant::Sandbox,
+            Some("box"),
+        ),
+    );
+    let (status, json) = post_create_sandbox(
+        &sandbox,
+        serde_json::json!({"deploymentId": fixture.deployment_a, "resourceId": "box"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "no credentials were resolved"
+    );
+
+    let other = with_subject(
+        &fixture,
+        remote_bindings_subject(
+            &fixture,
+            alien_manager::auth::RemoteBindingGrant::Sandbox,
+            Some("other"),
+        ),
+    );
+    let (status, _) = post_create_sandbox(
+        &other,
+        serde_json::json!({"deploymentId": fixture.deployment_a, "resourceId": "box"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

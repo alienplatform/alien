@@ -647,6 +647,18 @@ impl TestWorkerController {
                 suggested_delay: Some(Duration::from_millis(POLL_DELAY_MS)),
             });
         }
+        // A rollout that waits on something outside Alien, in a state that opted in to
+        // being interrupted by a newer config.
+        if target_func
+            .environment
+            .get("SIMULATE_UPDATE_EXTERNAL_WAIT")
+            .is_some_and(|value| value == "true")
+        {
+            return Ok(HandlerAction::Continue {
+                state: UpdateExternalWait,
+                suggested_delay: Some(Duration::from_millis(POLL_DELAY_MS)),
+            });
+        }
         let identifier = self.identifier.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: target_func.id.clone(),
@@ -679,6 +691,35 @@ impl TestWorkerController {
                 suggested_delay: Some(Duration::from_millis(POLL_DELAY_MS)),
             })
         }
+    }
+
+    #[handler(
+        state = UpdateExternalWait,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+        interruptible = true,
+    )]
+    async fn update_external_wait(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let target_func = ctx.desired_resource_config::<Worker>()?;
+        // Waits until the waited-on thing is done, which here is the flag going away.
+        if target_func
+            .environment
+            .get("SIMULATE_UPDATE_EXTERNAL_WAIT")
+            .is_some_and(|value| value == "true")
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: Some(1000),
+                suggested_delay: Some(Duration::from_millis(POLL_DELAY_MS)),
+            });
+        }
+        self.update_config_poll_count = 0;
+        Ok(HandlerAction::Continue {
+            state: UpdateConfigPolling,
+            suggested_delay: Some(Duration::from_millis(POLL_DELAY_MS)),
+        })
     }
 
     #[handler(

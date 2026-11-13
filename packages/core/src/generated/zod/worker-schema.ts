@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ContainerSecuritySchema } from "./container-security-schema.js";
 import { ReadinessProbeSchema } from "./readiness-probe-schema.js";
 import { ResourceRefSchema } from "./resource-ref-schema.js";
 import { WorkerCodeSchema } from "./worker-code-schema.js";
@@ -35,6 +36,9 @@ get "readinessProbe"(){
                 return z.union([ReadinessProbeSchema, z.null()]).optional()
               },
 "runtimeIdentityExchange": z.optional(z.boolean().describe("Set by `alien build` when the Worker image was built on a runtime that\nexchanges its cloud identity for telemetry credentials. Absent means the\nimage may be older and still reads `ALIEN_RUNTIME_SECRETS`, so a deployer\nin identity mode keeps providing them. Build output replaces any value\nwritten in the stack definition.")),
+get "security"(){
+                return z.union([ContainerSecuritySchema, z.null()]).optional()
+              },
 "timeoutSeconds": z.optional(z.int().min(1).max(3600).default(180).describe("Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 180")),
 get "triggers"(){
                 return z.array(WorkerTriggerSchema.describe("Defines what triggers a worker execution.")).describe("List of triggers that define what events automatically invoke this worker.\nIf empty, the worker is only invokable directly via HTTP calls or platform-specific invocation APIs.\nWhen configured, the worker will be automatically invoked when any of the specified trigger conditions are met.")

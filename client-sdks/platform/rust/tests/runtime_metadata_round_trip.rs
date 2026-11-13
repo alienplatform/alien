@@ -139,6 +139,7 @@ fn deployment_round_trip(source: RuntimeMetadata) -> RuntimeMetadata {
         "purpose": "application",
         "stackSettings": {},
         "releaseChannel": "stable",
+        "protected": false,
         "retryRequested": false,
         "createdAt": "2026-10-06T00:00:00Z",
         "updatedAt": "2026-10-06T00:00:00Z",
@@ -229,6 +230,7 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         registry_access: Some(RegistryAccess {
             repositories: vec!["repo".to_string()],
             service_types: vec!["lambda".to_string()],
+            verifier: Some("verifier".to_string()),
         }),
         setup_scaffolding: [(
             "worker".to_string(),
@@ -262,6 +264,8 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         version: Some("1.0.0".to_string()),
         description: Some("release".to_string()),
         stack,
+        signed: None,
+        signer_lists: Vec::new(),
     };
     DeploymentState {
         status: DeploymentStatus::Updating,

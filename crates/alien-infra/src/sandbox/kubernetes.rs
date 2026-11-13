@@ -671,7 +671,7 @@ async fn replenish_warm_pool(
         super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
     else {
         return Ok(WarmPool {
-            idle: idle.items.len(),
+            idle: without_terminating(idle.items).len(),
             created,
         });
     };
@@ -919,7 +919,17 @@ fn template_hash(pod: &k8s_openapi::api::core::v1::Pod) -> String {
         .collect()
 }
 
+/// Drops pods that are being deleted. A deleted pod keeps its idle label until its grace period
+/// ends, but it will never serve a session, so it must not count toward the warm pool.
+pub(crate) fn without_terminating(
+    mut pods: Vec<k8s_openapi::api::core::v1::Pod>,
+) -> Vec<k8s_openapi::api::core::v1::Pod> {
+    pods.retain(|pod| pod.metadata.deletion_timestamp.is_none());
+    pods
+}
+
 /// Splits idle pods into those built from a template other than `current` and those built from it.
+/// Pods that are being deleted are in neither.
 pub(crate) fn split_idle_pods(
     idle: Vec<k8s_openapi::api::core::v1::Pod>,
     current: &str,
@@ -929,7 +939,7 @@ pub(crate) fn split_idle_pods(
 ) {
     let mut stale = Vec::new();
     let mut fresh = Vec::new();
-    for pod in idle {
+    for pod in without_terminating(idle) {
         let built_from = pod
             .metadata
             .annotations
@@ -1167,13 +1177,57 @@ async fn list_session_pods(
             resource_id: Some(sandbox_id.to_string()),
         })?;
 
-    Ok(pods.items.len())
+    Ok(count_session_pods(pods.items))
+}
+
+/// Pods being deleted are not sessions: they would count as active once the idle pool leaves
+/// them out.
+fn count_session_pods(pods: Vec<k8s_openapi::api::core::v1::Pod>) -> usize {
+    without_terminating(pods).len()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use k8s_openapi::api::core::v1::Pod;
+
+    /// A deleted pod keeps its idle label until its grace period ends. It must not count toward
+    /// the pool, or a pool of terminating pods would never be refilled.
+    #[test]
+    fn pods_being_deleted_do_not_count_as_idle() {
+        let mut dying = idle_with_hash("dying", Some("h"));
+        dying.metadata.deletion_timestamp = Some(
+            k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()),
+        );
+        let live = idle_with_hash("live", Some("h"));
+
+        let available = without_terminating(vec![dying.clone(), live]);
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].metadata.name.as_deref(), Some("live"));
+        assert_eq!(pool_deficit(2, available.len()), 1);
+        assert_eq!(
+            pool_deficit(2, without_terminating(vec![dying.clone()]).len()),
+            2
+        );
+        // Neither retired as stale nor counted as fresh.
+        let (stale, fresh) = split_idle_pods(vec![dying], "h");
+        assert!(stale.is_empty() && fresh.is_empty());
+    }
+
+    /// Two terminating idle pods and no sessions must report zero active sessions.
+    #[test]
+    fn terminating_idle_pods_are_not_active_sessions() {
+        let dying = |name: &str| {
+            let mut pod = idle_with_hash(name, Some("h"));
+            pod.metadata.deletion_timestamp = Some(
+                k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(chrono::Utc::now()),
+            );
+            pod
+        };
+        let pods = vec![dying("a"), dying("b")];
+        let idle = without_terminating(pods.clone()).len();
+        assert_eq!(count_session_pods(pods).saturating_sub(idle), 0);
+    }
 
     fn idle_with_hash(name: &str, hash: Option<&str>) -> Pod {
         let mut pod = Pod::default();

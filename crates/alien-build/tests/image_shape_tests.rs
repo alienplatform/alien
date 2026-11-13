@@ -263,6 +263,7 @@ async fn typescript_source_image_shapes_per_compute_type() {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
 
     build_stack(stack, &settings)
@@ -627,6 +628,7 @@ async fn a_sandbox_base_is_built_for_its_backend_architecture() {
             debug_mode: false,
             rebuild: true,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         build_stack(stack, &settings)
@@ -730,6 +732,7 @@ async fn container_build_uses_compute_pool_targets() {
                 debug_mode: false,
                 rebuild: true,
                 pull_base_images: false,
+                require_pinned_base_images: false,
             };
 
             build_stack(stack.clone(), &settings)
@@ -843,6 +846,7 @@ async fn container_build_preserves_base_platform_defaults() {
             debug_mode: false,
             rebuild: true,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         build_stack(stack.clone(), &settings)

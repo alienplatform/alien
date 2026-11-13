@@ -453,9 +453,10 @@ impl SandboxCapabilities {
             reconnect: true,
             // No Alien process runs inside the sandbox to own a command between two calls.
             jobs: false,
-            // Not claimed: the agent-mode client does not drive the agent's interactive routes
-            // yet, and the platform's own exec takes no stdin.
-            interactive_commands: false,
+            // Through the in-sandbox agent: the client streams `/v1/interactive` over the
+            // sandbox's authenticated port. A session without the agent (the platform's own exec
+            // takes no stdin) reports false from `session_capabilities`.
+            interactive_commands: true,
             // A sandbox port carries a URL and an auth config, and the auth config offers two
             // things: anonymous, or Entra ID with an allowlist of human email addresses.
             // Neither is a credential scoped to a port for a fixed time, which is what a

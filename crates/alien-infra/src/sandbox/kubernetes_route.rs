@@ -332,8 +332,10 @@ async fn claim(
     headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<ClaimQuery>,
     Json(request): Json<ClaimRequest>,
-) -> Result<Json<ClaimResponse>, StatusCode> {
-    let authorization = authorize(&state, &headers).await?;
+) -> Result<Json<ClaimResponse>, (StatusCode, String)> {
+    let authorization = authorize(&state, &headers)
+        .await
+        .map_err(|status| (status, String::new()))?;
 
     let claimed = find_or_create_session_for_deployment(
         &state.broker.pods,
@@ -350,16 +352,22 @@ async fn claim(
         query.setup.as_deref() == Some("pending"),
     )
     .await
-    .map_err(|error| match error {
-        SessionRequestError::TenantMismatch => StatusCode::CONFLICT,
-        // The caller asked for more than the sandbox declares; retrying cannot change that.
-        SessionRequestError::LifetimeTooLong(_) => StatusCode::BAD_REQUEST,
-        // Retryable rather than fatal: a cold create can outlast a request and 503 is what tells
-        // a caller to wait rather than to give up.
-        SessionRequestError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-    })?;
+    .map_err(claim_error_response)?;
 
     Ok(Json(claimed.into()))
+}
+
+/// The status and body a failed claim is answered with.
+fn claim_error_response(error: SessionRequestError) -> (StatusCode, String) {
+    match error {
+        SessionRequestError::TenantMismatch => (StatusCode::CONFLICT, String::new()),
+        // The caller asked for more than the sandbox declares; retrying cannot change that.
+        SessionRequestError::LifetimeTooLong(_) => (StatusCode::BAD_REQUEST, String::new()),
+        // Retryable rather than fatal: a cold create can outlast a request and 503 is what tells
+        // a caller to wait rather than to give up. The text says why the pod did not start.
+        SessionRequestError::NotReady(message) => (StatusCode::SERVICE_UNAVAILABLE, message),
+        SessionRequestError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, String::new()),
+    }
 }
 
 /// The creator reports that it finished setting the session up (or ended it).
@@ -821,6 +829,16 @@ mod tests {
         .expect("the exact generated ServiceAccount name is authorized");
     }
 
+    #[test]
+    fn a_pod_that_did_not_start_is_answered_with_its_explanation() {
+        let (status, body) =
+            claim_error_response(SessionRequestError::NotReady("explained".to_string()));
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body, "explained");
+        let (status, body) = claim_error_response(SessionRequestError::TenantMismatch);
+        assert_eq!((status, body.as_str()), (StatusCode::CONFLICT, ""));
+    }
+
     #[tokio::test]
     async fn release_a_cannot_claim_release_b_sandbox_in_a_shared_namespace() {
         let mut pods = MockPodApi::new();
@@ -850,7 +868,7 @@ mod tests {
         )
         .await
         .expect_err("a foreign deployment Secret must not authorize a claim");
-        assert_eq!(error, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]

@@ -284,11 +284,11 @@ pub struct SyncRequest {
     /// Signals that this Operator persists and echoes execution claims.
     #[serde(default)]
     pub supports_execution_claims: bool,
-    /// Signals that this Operator understands container tunnels. Older
-    /// Operators reject stacks that declare one, so the manager leaves
-    /// tunnels out of their targets.
+    /// Signals that this Operator reads the `security` profile settings
+    /// (`unrestricted`, `writablePaths`, optional ids). Absent for older
+    /// Operators, which reject a target that uses them.
     #[serde(default)]
-    pub supports_tunnels: bool,
+    pub supports_pod_security: bool,
     /// Exact update claim returned by the previous sync response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_claim: Option<SyncExecutionClaim>,
@@ -549,14 +549,15 @@ pub struct SyncResponse {
     /// not support this protocol; Some(empty) means remove owned containers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_dynamic_containers: Option<Vec<TargetDynamicContainer>>,
-    /// Base URL the Operator opens tunnel connections to. None means the
-    /// manager does not accept tunnels, so the Operator never dials.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tunnel_url: Option<String>,
     /// Operator image the manager wants this Operator to run. Operators that
     /// manage their own workload update to it; None means no opinion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_operator_image: Option<String>,
+    /// This deployment's newest signed `config/v1`, on every sync. A
+    /// protected Operator applies its installed release again when it is
+    /// newer than the config it last applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<crate::SignedStatement>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -574,6 +575,11 @@ pub struct TargetDeployment {
     pub release_info: ReleaseInfo,
     /// Full deployment configuration (settings, env vars, etc.).
     pub config: DeploymentConfig,
+    /// This deployment's newest signed `config/v1`: the developer's input
+    /// values and env, for a protected deployment that takes them only from
+    /// a signed statement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<crate::SignedStatement>,
 }
 
 #[cfg(test)]
@@ -586,7 +592,7 @@ mod tests {
             deployment_id: "dep_abc123".to_string(),
             session: "operator-test".to_string(),
             supports_execution_claims: true,
-            supports_tunnels: true,
+            supports_pod_security: true,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -628,13 +634,13 @@ mod tests {
     #[test]
     fn test_sync_response_empty() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
-            tunnel_url: None,
             target_operator_image: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
@@ -647,13 +653,13 @@ mod tests {
     #[test]
     fn test_sync_response_roundtrip_no_target() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
-            tunnel_url: None,
             target_operator_image: None,
         };
         let serialized = serde_json::to_string(&resp).unwrap();
@@ -743,13 +749,13 @@ mod tests {
         assert!(!state.has_desired());
 
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: Some(state),
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: None,
-            tunnel_url: None,
             target_operator_image: None,
         };
 
@@ -800,7 +806,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
-            supports_tunnels: false,
+            supports_pod_security: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -838,7 +844,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
-            supports_tunnels: false,
+            supports_pod_security: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -917,7 +923,7 @@ mod tests {
             deployment_id: "dep_1".to_string(),
             session: String::new(),
             supports_execution_claims: false,
-            supports_tunnels: false,
+            supports_pod_security: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -969,6 +975,7 @@ mod tests {
     #[test]
     fn test_sync_response_target_operations_bundle_set_roundtrip() {
         let resp = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
@@ -983,7 +990,6 @@ mod tests {
                 }],
             }),
             target_dynamic_containers: None,
-            tunnel_url: None,
             target_operator_image: None,
         };
 
@@ -1017,13 +1023,13 @@ mod tests {
         assert!(old_manager_response.target_dynamic_containers.is_none());
 
         let empty_target = SyncResponse {
+            signed_config: None,
             execution_claim: None,
             current_state: None,
             target: None,
             commands_url: None,
             target_operations_bundle_set: None,
             target_dynamic_containers: Some(vec![]),
-            tunnel_url: None,
             target_operator_image: None,
         };
         let json = serde_json::to_value(&empty_target).unwrap();

@@ -17,11 +17,11 @@ use futures::stream::{self, BoxStream};
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{checked_env_name, guard_for, Bounded, TimeoutReport};
 use crate::traits::{
-    Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
+    Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart, PreviewCapability,
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
-    CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
+    egress_policy, CreateSandbox, EgressPolicy, SandboxDataPlaneApi, ALLOW, DENY, FULL_INSPECTION,
 };
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
@@ -55,6 +55,19 @@ pub struct AzureSandbox {
     cpu: String,
     memory: String,
     disk: Option<String>,
+    /// Where creates go on a protected install: the install's verifier, through the manager,
+    /// because the caller's own role cannot create sandboxes.
+    create_route: Option<std::sync::Arc<dyn SandboxCreateRoute>>,
+}
+
+/// Creates a sandbox for a caller whose own identity may not: the request carries only the
+/// environment, and whoever receives it builds everything else from the signed release.
+#[async_trait]
+pub trait SandboxCreateRoute: std::fmt::Debug + Send + Sync {
+    async fn create(
+        &self,
+        environment: &BTreeMap<String, String>,
+    ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>;
 }
 
 impl AzureSandbox {
@@ -83,7 +96,55 @@ impl AzureSandbox {
             cpu,
             memory,
             disk,
+            create_route: None,
         }
+    }
+
+    /// Send creates through `route` instead of the data plane.
+    pub fn with_create_route(mut self, route: std::sync::Arc<dyn SandboxCreateRoute>) -> Self {
+        self.create_route = Some(route);
+        self
+    }
+
+    /// The disk image reference and create body of a sandbox with `environment`, exactly as
+    /// `create` sends them, for a caller that hands them to the verifier instead. Only the
+    /// environment is the caller's; everything else comes from the binding. The verifier
+    /// rebuilds the same body from the signed release and refuses any difference.
+    pub async fn verified_create(
+        &self,
+        environment: BTreeMap<String, String>,
+    ) -> Result<(String, serde_json::Value)> {
+        checked_sandbox_env(CREATE, &environment)?;
+        if self.egress_manager.is_some() {
+            return Err(self.unsupported(
+                CREATE,
+                "a gateway egress policy has no signed form the verifier can check",
+            ));
+        }
+        let mut labels = BTreeMap::new();
+        if self.agent {
+            labels.insert(
+                agent::TRANSPORT_LABEL.into(),
+                agent::TRANSPORT_VERSION.into(),
+            );
+        }
+        let request = CreateSandbox {
+            disk_image: self.disk_image.clone(),
+            disk_image_id: self.disk_image_id().await?,
+            cpu: self.cpu.clone(),
+            memory: self.memory.clone(),
+            disk: self.disk.clone(),
+            environment,
+            labels,
+            egress: self.native_policy(),
+            customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
+                .then(|| "default".to_string()),
+            idle_pause_seconds: self.idle_pause_seconds,
+        };
+        Ok((
+            self.disk_image.clone(),
+            alien_azure_clients::azure::sandbox_data_plane::create_body(&request),
+        ))
     }
 
     /// The built disk image a sandbox starts from, or `None` to send the value as a catalog name,
@@ -325,6 +386,7 @@ impl Sandbox for AzureSandbox {
     fn capabilities(&self) -> SandboxCapabilities {
         let mut capabilities = SandboxCapabilities::azure();
         capabilities.jobs = self.agent;
+        capabilities.interactive_commands = self.agent;
         capabilities.supervisor_isolation = self.agent;
         capabilities
     }
@@ -335,6 +397,7 @@ impl Sandbox for AzureSandbox {
             .await?;
         let mut capabilities = SandboxCapabilities::azure();
         capabilities.jobs = agent;
+        capabilities.interactive_commands = agent;
         capabilities.supervisor_isolation = agent;
         Ok(capabilities)
     }
@@ -367,23 +430,32 @@ impl Sandbox for AzureSandbox {
             labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
         }
         let asked = self.native_policy();
-        let disk_image_id = self.disk_image_id().await?;
-        let identity = self.prepare_identity(&mut request.env, &mut labels).await?;
-        let sandbox = self
-            .create_from_image(CreateSandbox {
-                disk_image: self.disk_image.clone(),
-                disk_image_id,
-                cpu: self.cpu.clone(),
-                memory: self.memory.clone(),
-                disk: self.disk.clone(),
-                environment: request.env,
-                labels,
-                egress: asked.clone(),
-                customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
-                    .then(|| "default".to_string()),
-                idle_pause_seconds: self.idle_pause_seconds,
-            })
-            .await?;
+        let (sandbox, identity) = if let Some(route) = &self.create_route {
+            let sandbox = route
+                .create(&request.env)
+                .await
+                .map_err(|error| Self::failed(CREATE, error))?;
+            (sandbox, None)
+        } else {
+            let disk_image_id = self.disk_image_id().await?;
+            let identity = self.prepare_identity(&mut request.env, &mut labels).await?;
+            let sandbox = self
+                .create_from_image(CreateSandbox {
+                    disk_image: self.disk_image.clone(),
+                    disk_image_id,
+                    cpu: self.cpu.clone(),
+                    memory: self.memory.clone(),
+                    disk: self.disk.clone(),
+                    environment: request.env,
+                    labels,
+                    egress: asked.clone(),
+                    customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
+                        .then(|| "default".to_string()),
+                    idle_pause_seconds: self.idle_pause_seconds,
+                })
+                .await?;
+            (sandbox, identity)
+        };
 
         // The caller's requested id is not authoritative: Azure allocates the id, and returning
         // the requested one would hand back a handle that addresses nothing. Checked because
@@ -785,6 +857,42 @@ impl Sandbox for AzureSandbox {
             "sandbox.snapshot",
             "this client sends no snapshot request, and nothing owns the artifact once taken",
         ))
+    }
+
+    async fn run_interactive(
+        &self,
+        sandbox_id: &str,
+        request: RunCommandRequest,
+    ) -> Result<InteractiveCommand> {
+        Self::checked_sandbox_id(RUN_INTERACTIVE, sandbox_id)?;
+        if request.timeout.is_zero() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.runInteractive".to_string(),
+                reason: "a command must carry a non-zero timeout".to_string(),
+            }));
+        }
+        // Starts untrusted code like `run_command`, so it re-reads the policy the same way.
+        let record = self.judged_sandbox(RUN_INTERACTIVE, sandbox_id).await?;
+        if !agent::uses_agent(&record)? {
+            return Err(self.unsupported(
+                RUN_INTERACTIVE,
+                "this sandbox was created without the agent, and the platform's exec takes no stdin",
+            ));
+        }
+        // The start request must never be replayed: it may have launched the command. So the
+        // cached credential is proven first with the idempotent activation, which refreshes a
+        // route another process invalidated (a resumed boot has a new token) before binding.
+        let activation = super::agent_protocol::AgentTransport::request(
+            self,
+            sandbox_id,
+            reqwest::Method::POST,
+            "/v1/activate",
+        )
+        .await?;
+        super::agent_protocol::AgentTransport::send(self, sandbox_id, activation, "sandbox.activate")
+            .await?;
+        let agent = self.bound_agent(sandbox_id).await?;
+        super::interactive::run_interactive(agent, request).await
     }
 
     async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
@@ -1467,46 +1575,6 @@ fn checked_path(operation: &str, path: &str) -> Result<String> {
     Ok(relative.to_string())
 }
 
-/// The policy a declared mode is created with.
-///
-/// `Full` inspection is what makes a `Deny` default mean no outbound access: under `Partial`,
-/// `Legacy` and `None`, non-HTTP traffic is allowed through whatever the default action says, so
-/// the sandbox would carry a `deny` label and a live network. `allow` sends no policy at all —
-/// the data plane's default is already open, and `Full` there would block the non-HTTP traffic
-/// `allow` promises.
-fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
-    let bounded = |host_rules| {
-        Some(EgressPolicy {
-            default_action: DENY.to_string(),
-            unmodelled: Default::default(),
-            rules: Vec::new(),
-            host_rules,
-            traffic_inspection: Some(FULL_INSPECTION.to_string()),
-        })
-    };
-
-    match egress {
-        SandboxEgress::Allow | SandboxEgress::Internet => None,
-        // Written as a rule as well as a default, because Microsoft documents `Partial`
-        // inspection as evaluating only traffic a rule matches and never states that `Full`
-        // differs. A policy holding no rule at all is the one shape where "deny" could mean
-        // nothing, and this is one rule to be out of it.
-        SandboxEgress::None => bounded(vec![EgressHostRule {
-            pattern: EVERY_HOST.to_string(),
-            action: DENY.to_string(),
-        }]),
-        SandboxEgress::AllowDomains { domains } => bounded(
-            domains
-                .iter()
-                .map(|domain| EgressHostRule {
-                    pattern: domain.clone(),
-                    action: ALLOW.to_string(),
-                })
-                .collect(),
-        ),
-    }
-}
-
 /// Whether the sandbox is running the policy it was created with.
 ///
 /// Not equality — the data plane may return the policy normalised, and failing every create over a
@@ -1609,15 +1677,6 @@ fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
     }
 }
 
-/// The data plane's own words for the two actions and the one inspection mode that blocks
-/// non-HTTP traffic.
-const DENY: &str = "Deny";
-const ALLOW: &str = "Allow";
-const FULL_INSPECTION: &str = "Full";
-
-/// The host pattern that matches everything, so `deny` is a rule rather than only a default.
-const EVERY_HOST: &str = "*";
-
 /// Longest sandbox id this client will put in a data-plane URL.
 ///
 /// A bound on what a caller hands back rather than on what Azure mints: the ids seen in practice
@@ -1630,6 +1689,7 @@ const MAX_SANDBOX_ID: usize = 63;
 /// sandbox. The binding exposes no list, and the controller's lifetime reaper runs only for
 /// gateway groups, so the first one has no id-holder and nothing to reap it.
 const RUN_COMMAND: &str = "sandbox.runCommand";
+const RUN_INTERACTIVE: &str = "sandbox.runInteractive";
 const CREATE: &str = "sandbox.create";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
 
@@ -1683,6 +1743,7 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_azure_clients::azure::sandbox_data_plane::EgressHostRule;
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
     use alien_azure_clients::azure::sandbox_data_plane::{DiskImage, DiskImageStatus};
@@ -1831,6 +1892,89 @@ mod tests {
             .create(CreateSandboxRequest::default())
             .await
             .expect("create succeeds");
+    }
+
+    #[derive(Debug)]
+    struct Route(std::sync::Mutex<Vec<BTreeMap<String, String>>>);
+
+    #[async_trait]
+    impl SandboxCreateRoute for Route {
+        async fn create(
+            &self,
+            environment: &BTreeMap<String, String>,
+        ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>
+        {
+            self.0.lock().unwrap().push(environment.clone());
+            Ok(running("routed", None))
+        }
+    }
+
+    /// A routed create never reaches the data plane, and what the verifier is asked for is the
+    /// body the provider would have sent itself, so the two cannot drift apart.
+    #[tokio::test]
+    async fn a_routed_create_sends_the_body_the_provider_would_have_sent() {
+        let env = BTreeMap::from([("A".to_string(), "b".to_string())]);
+
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut direct = MockSandboxDataPlaneApi::new();
+        let capture = sent.clone();
+        direct
+            .expect_create_sandbox()
+            .times(1)
+            .returning(move |_, request| {
+                *capture.lock().unwrap() = Some(request);
+                Ok(running("s1", None))
+            });
+        settles_running(&mut direct, None);
+        let sandbox = AzureSandbox::new(
+            std::sync::Arc::new(direct),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            Some(300),
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        );
+        let (base, body) = sandbox.verified_create(env.clone()).await.expect("body");
+        sandbox
+            .create(CreateSandboxRequest {
+                env: env.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect("create");
+        let request = sent.lock().unwrap().clone().expect("a create was sent");
+        assert_eq!(base, "ubuntu");
+        assert_eq!(
+            body,
+            alien_azure_clients::azure::sandbox_data_plane::create_body(&request)
+        );
+
+        let route = std::sync::Arc::new(Route(Default::default()));
+        // No create expectation: a create that reached the data plane would panic.
+        let mut routed_client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut routed_client, None);
+        let routed = AzureSandbox::new(
+            std::sync::Arc::new(routed_client),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            None,
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        )
+        .with_create_route(route.clone());
+        let created = routed
+            .create(CreateSandboxRequest {
+                env: env.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect("routed create");
+        assert_eq!(created.sandbox_id, "routed");
+        assert_eq!(*route.0.lock().unwrap(), vec![env]);
     }
 
     fn disk_image(id: &str, label: &str, state: &str) -> DiskImage {
@@ -4830,9 +4974,15 @@ mod tests {
         let platform =
             SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a backend");
 
+        // The platform row says what the agent image can do; a provider that has not selected
+        // the agent transport reports the interactive commands it cannot serve as false.
+        let without_agent = SandboxCapabilities {
+            interactive_commands: false,
+            ..platform
+        };
         assert_eq!(
             sandbox_with(MockSandboxDataPlaneApi::new()).capabilities(),
-            platform
+            without_agent
         );
 
         let listed = AzureSandbox::new(
@@ -4847,7 +4997,7 @@ mod tests {
         );
         assert_eq!(
             listed.capabilities(),
-            platform,
+            without_agent,
             "the declaration is not the row"
         );
         assert!(

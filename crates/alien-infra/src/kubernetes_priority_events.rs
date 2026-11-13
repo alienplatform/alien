@@ -42,7 +42,10 @@ pub(crate) fn priority_failure_from_events(
         .filter(|event| {
             event.reason.as_deref() == Some("FailedCreate")
                 && event.involved_object.name.as_deref() == Some(workload_name)
-                && event.message.as_deref().is_some_and(|m| m.contains(&needle))
+                && event
+                    .message
+                    .as_deref()
+                    .is_some_and(|m| m.contains(&needle))
         })
         .max_by_key(|event| event.last_timestamp.as_ref().map(|t| t.0))
         .and_then(|event| event.message.as_deref())
@@ -75,10 +78,20 @@ mod tests {
         assert!(hint.contains("acme-critical"), "{hint}");
         assert!(hint.contains("workloadPriority"), "{hint}");
         // An event about a class that is no longer the mapped one is ignored.
-        assert_eq!(priority_failure_from_events(&events, "db", "other-class"), None);
-        assert_eq!(priority_failure_from_events(&events[..1], "db", "acme-critical"), None);
         assert_eq!(
-            priority_failure_from_events(&[event("FailedCreate", "db", "quota exceeded")], "db", "acme-critical"),
+            priority_failure_from_events(&events, "db", "other-class"),
+            None
+        );
+        assert_eq!(
+            priority_failure_from_events(&events[..1], "db", "acme-critical"),
+            None
+        );
+        assert_eq!(
+            priority_failure_from_events(
+                &[event("FailedCreate", "db", "quota exceeded")],
+                "db",
+                "acme-critical"
+            ),
             None
         );
     }

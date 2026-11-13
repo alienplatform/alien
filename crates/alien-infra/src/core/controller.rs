@@ -795,6 +795,15 @@ pub trait ResourceController: Send + Sync + Debug {
         false
     }
 
+    /// Whether the current state only waits on something outside Alien (a poll with nothing
+    /// to undo), so a newer target can take over the resource now instead of after the wait
+    /// ends. Set with `interruptible = true` on a handler. Off by default: every other state
+    /// finishes with the config it started with. An interruptible state can always be
+    /// re-entered through the update flow.
+    fn is_interruptible(&self) -> bool {
+        false
+    }
+
     /// Whether this controller has the setup inputs for a runtime-owned resource.
     /// Inputs remain valid when setup resumes with unfinished runtime work. A built
     /// setup-owned resource must return false even while waiting for configuration;
@@ -1263,6 +1272,9 @@ fn deserialize_controller_by_tag(
         // AWS OpenSearch controllers
         #[cfg(feature = "aws")]
         "AwsOpenSearchController" => deser!(crate::open_search::AwsOpenSearchController),
+
+        // The install's verifier, the same controller on every cloud
+        "SigningVerifierController" => deser!(crate::signing_verifier::SigningVerifierController),
 
         // Azure infra requirement controllers
         #[cfg(feature = "azure")]
@@ -1746,6 +1758,24 @@ mod tests {
         let err = validate_controller_state_value(&value, Some("resource-a"))
             .expect_err("malformed controller state version should be incompatible");
         assert_eq!(err.code, "INCOMPATIBLE_CONTROLLER_STATE");
+    }
+
+    // A registration imports the install's verifier with this controller's state; the manager must
+    // read it back, or every update of a protected install fails before it starts.
+    #[test]
+    fn signing_verifier_controller_state_round_trips() {
+        let mut controller = crate::signing_verifier::SigningVerifierController::default();
+        controller.name = Some("acme-prod-verifier".to_string());
+
+        let value = serialize_controller(&controller).expect("controller serializes");
+        let restored =
+            deserialize_controller(value).expect("SigningVerifierController must deserialize");
+        assert_eq!(restored.controller_type(), "SigningVerifierController");
+        let restored = restored
+            .as_any()
+            .downcast_ref::<crate::signing_verifier::SigningVerifierController>()
+            .expect("restored controller is a SigningVerifierController");
+        assert_eq!(restored.name.as_deref(), Some("acme-prod-verifier"));
     }
 
     // Guards deserializer registration for the in-tree Local Postgres controller; cloud controllers

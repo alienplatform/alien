@@ -1086,7 +1086,7 @@ mod tests {
             .memory(alien_core::ResourceSpec { min: "64Mi".to_string(), desired: "64Mi".to_string() })
             .code(ContainerCode::Image { image: "busybox:1.37.0".to_string() })
             .command(vec!["sh".to_string(), "-c".to_string(), "mkdir -p /tmp/web; echo ready > /tmp/web/health; exec busybox httpd -f -p 8080 -h /tmp/web".to_string()])
-            .health_check(alien_core::HealthCheck { path: "/health".to_string(), port: Some(8080), method: "GET".to_string(), timeout_seconds: 1, failure_threshold: 5 })
+            .health_check(alien_core::HealthCheck { path: "/health".to_string(), port: Some(8080), method: "GET".to_string(), timeout_seconds: 1, failure_threshold: 5, startup_timeout_seconds: None })
             .build();
         let client = alien_core::ClientConfig::Local {
             state_directory: directory.path().to_string_lossy().into_owned(),

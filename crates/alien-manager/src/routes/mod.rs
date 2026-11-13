@@ -20,7 +20,6 @@ pub mod stack;
 pub mod sync;
 pub mod telemetry;
 pub mod tokens;
-pub mod tunnel;
 pub mod values;
 pub mod vault;
 pub mod whoami;
@@ -31,6 +30,8 @@ pub mod whoami;
 pub mod airgap;
 pub mod auth;
 pub mod channels;
+pub mod sandbox_create;
+pub mod signing;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -89,13 +90,13 @@ pub struct AppState {
     /// [`alien_infra::ImporterRegistry::built_in`], so the per-request path
     /// is a `Arc` clone and a hash-map lookup.
     pub import_registry: Arc<alien_infra::ImporterRegistry>,
-    /// Open tunnel connections. `None` when tunnels are not enabled; the
-    /// tunnel routes are mounted only when this is `Some`.
-    pub tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts at `/v2/charts/...`.
     pub charts: Option<Arc<charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
     pub release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signer lists, pending changes and signed config; `None` turns the
+    /// signing routes off.
+    pub signing: Option<Arc<dyn crate::traits::SigningStore>>,
     /// Signs air-gapped bundles. `None` when this manager doesn't sign them.
     pub bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     /// Where bundles' charts and Operator images come from, for managers
@@ -199,6 +200,8 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(values::router())
         .merge(airgap::router())
         .merge(channels::router())
+        .merge(sandbox_create::router())
+        .merge(signing::router())
         // Deployments
         .merge(deployments::router())
         // Releases
@@ -236,9 +239,6 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
     }
     if options.include_initialize {
         router = router.merge(sync::initialize_router());
-    }
-    if state.tunnels.is_some() {
-        router = router.merge(tunnel::router());
     }
 
     router.with_state(state)

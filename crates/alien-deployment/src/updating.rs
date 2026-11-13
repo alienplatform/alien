@@ -6,7 +6,7 @@ use alien_core::{
     ResourceLifecycle, ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_infra::{RunningResourcePolicy, StackExecutor};
+use alien_infra::{RunningResourcePolicy, StackExecutor, StackResourceStateExt};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
@@ -72,6 +72,31 @@ async fn untouched_heartbeats(
     };
     *stack_state = observation.state;
     observation.heartbeats
+}
+
+/// Whether the update is held only by resources waiting in a state their controller marked
+/// interruptible. True needs at least one such resource and no other resource in progress:
+/// a create, a delete or an update in any other state finishes with the config it started with.
+fn update_waits_only_in_interruptible_states(stack_state: &StackState) -> bool {
+    let mut interruptible = 0;
+    for resource in stack_state.resources.values() {
+        match resource.status {
+            ResourceStatus::Updating => {
+                let waits = resource
+                    .get_internal_controller()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|controller| controller.is_interruptible());
+                if !waits {
+                    return false;
+                }
+                interruptible += 1;
+            }
+            ResourceStatus::Provisioning | ResourceStatus::Deleting => return false,
+            _ => {}
+        }
+    }
+    interruptible > 0
 }
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -328,20 +353,20 @@ pub async fn handle_update_pending(
         .and_then(|release| release.release_id.as_deref());
 
     // Run deployment-time preflights: compatibility checks + mutations + runtime checks
-    // Store the mutated stack to use for the actual update and for future compatibility checks
-    let recorded_setup_update_authorization = current
+    // Store the mutated stack to use for the actual update and for future compatibility checks.
+    // The setup update authority is bound to the setup it was prepared for (the installed and
+    // target setup digests the preflights compare), not to the release that recorded it: a newer
+    // release needing the same setup may use it after that release's apply failed.
+    let setup_update_authorization = current
         .runtime_metadata
         .as_ref()
         .and_then(|metadata| metadata.setup_update_authorization.as_ref());
-    let setup_update_authorization = recorded_setup_update_authorization
-        .filter(|authorization| Some(authorization.release_id.as_str()) == target_release_id);
     info!(
-        authorization_present = recorded_setup_update_authorization.is_some(),
-        authorization_release_id = recorded_setup_update_authorization
+        authorization_present = setup_update_authorization.is_some(),
+        authorization_release_id = setup_update_authorization
             .map(|authorization| authorization.release_id.as_str()),
         target_release_id,
-        kept_for_target_release = setup_update_authorization.is_some(),
-        "setup update authorization release filter"
+        "setup update authorization recorded for the update"
     );
     let (mutated_stack, _deployment_summary, setup_update_authorized) = runner
         .run_deployment_time_preflights(
@@ -475,11 +500,12 @@ fn refuse_changes_requiring_setup(
 /// Note: Stack settings are updated during UpdatePending phase and should not change mid-update.
 pub async fn handle_updating(
     current: DeploymentState,
-    config: DeploymentConfig,
+    mut config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling Updating status");
+    config.release_statements = crate::helpers::release_statements(current.target_release.as_ref());
 
     // Clone current first before moving any fields
     let mut next = current.clone();
@@ -517,6 +543,40 @@ pub async fn handle_updating(
                 runtime_metadata.pending_prepared_stack = None;
                 runtime_metadata.pending_prepared_release_id = None;
                 runtime_metadata.resources_waiting_for_secrets.clear();
+                next.status = DeploymentStatus::UpdatePending;
+                next.error = None;
+                next.stack_state = Some(stack_state);
+                next.runtime_metadata = Some(runtime_metadata);
+                return Ok(DeploymentStepResult {
+                    state: next,
+                    suggested_delay_ms: None,
+                    update_heartbeat: false,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                });
+            }
+        }
+    }
+
+    // A newer target while every in-progress resource only waits in a state its controller
+    // marked interruptible: prepare the newer target now, as a superseded failure does, and
+    // let the executor re-enter those resources with the new config. Any other in-progress
+    // resource finishes first, as before. This includes a promote back to the current release.
+    if current.status == DeploymentStatus::Updating {
+        let waiting_release_id = runtime_metadata.pending_prepared_release_id.as_ref();
+        let target_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_ref());
+        if let (Some(waiting), Some(target)) = (waiting_release_id, target_release_id) {
+            if waiting != target && update_waits_only_in_interruptible_states(&stack_state) {
+                info!(
+                    waiting_release_id = %waiting,
+                    target_release_id = %target,
+                    "A newer release arrived while the update waits in an interruptible state; preparing it"
+                );
+                runtime_metadata.pending_prepared_stack = None;
+                runtime_metadata.pending_prepared_release_id = None;
                 next.status = DeploymentStatus::UpdatePending;
                 next.error = None;
                 next.stack_state = Some(stack_state);
@@ -800,6 +860,8 @@ pub async fn handle_updating(
                         message: "Pending prepared stack not found in runtime metadata".to_string(),
                     })
                 })?,
+                signed: None,
+                signer_lists: Vec::new(),
             });
             next.status = DeploymentStatus::UpdatePending;
             next.runtime_metadata = Some(runtime_metadata);
@@ -1112,6 +1174,8 @@ mod tests {
             version: None,
             description: None,
             stack,
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let current = DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -1276,6 +1340,8 @@ mod tests {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
+                signer_lists: Vec::new(),
             }
         }
 

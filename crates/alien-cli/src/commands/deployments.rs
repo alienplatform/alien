@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -1302,9 +1303,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             if ctx.is_standalone() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
-                    message: "This manager issues each deployment's token when it registers. \
-                              For a backend that calls deployments, create a scoped token with \
-                              `alien tokens create --tunnel`."
+                    message: "This manager issues each deployment's token when it registers."
                         .to_string(),
                 }));
             }
@@ -1366,9 +1365,14 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             clear,
             yes,
             json,
+            ..
         } => {
-            let variables =
-                build_environment_variables(env, secret, env_targeted, secret_targeted)?;
+            let variables = build_environment_variables(
+                env.clone(),
+                secret.clone(),
+                env_targeted.clone(),
+                secret_targeted.clone(),
+            )?;
             if variables.is_empty() && !clear {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "env".to_string(),
@@ -1381,6 +1385,19 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             )?;
             let target =
                 resolve_platform_target(&ctx, &id, json, "Environment variable changes").await?;
+            if let Some(install) = protected_install(&ctx, &target).await? {
+                if !secret.is_empty() || !env_targeted.is_empty() || !secret_targeted.is_empty() {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "env".to_string(),
+                        message: "This deployment is protected: it takes only plain --env values, signed by you. Deployer secrets are set by the customer with `inputs set`.".to_string(),
+                    }));
+                }
+                // Replaces the whole env set, as without protection; the
+                // signed inputs stay as they are.
+                let env: BTreeMap<String, String> =
+                    parse_pairs(&env, "env", "KEY=VALUE")?.into_iter().collect();
+                return sign_config(&ctx, &target, &install, json, |body| body.env = env).await;
+            }
             deployment_actions::set_environment_variables_task(
                 &target.client,
                 &target.workspace,
@@ -1408,11 +1425,37 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             secret_input_files,
             clear,
             json,
+            ..
         } => {
             // Read files first, so a wrong path fails before any API call.
             let secret_input_files =
                 deployment_actions::read_secret_input_files(&secret_input_files)?;
             let target = resolve_platform_target(&ctx, &id, json, "Stack input changes").await?;
+            if let Some(install) = protected_install(&ctx, &target).await? {
+                if !secret_inputs.is_empty() || !secret_input_files.is_empty() {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "input".to_string(),
+                        message: "This deployment is protected: it takes only --input and --clear, signed by you. Deployer secrets are set by the customer with `inputs set`.".to_string(),
+                    }));
+                }
+                let inputs = parse_pairs(&inputs, "input", "ID=VALUE")?;
+                if inputs.is_empty() && clear.is_empty() {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "input".to_string(),
+                        message: "Pass at least one --input ID=VALUE or --clear ID.".to_string(),
+                    }));
+                }
+                if let Some((id, _)) = inputs.iter().find(|(id, _)| clear.contains(id)) {
+                    return Err(AlienError::new(ErrorData::ValidationError {
+                        field: "input".to_string(),
+                        message: format!("Input '{id}' is both set and cleared."),
+                    }));
+                }
+                return sign_config(&ctx, &target, &install, json, |body| {
+                    change_signed_inputs(body, inputs, &clear)
+                })
+                .await;
+            }
             deployment_actions::set_inputs_task(
                 &target.client,
                 &target.workspace,
@@ -1523,6 +1566,160 @@ struct PlatformTarget {
     workspace: String,
     client: alien_platform_api::Client,
     deployment: DeploymentDetailResponse,
+}
+
+/// `KEY=VALUE` pairs.
+fn parse_pairs(pairs: &[String], field: &str, form: &str) -> Result<Vec<(String, String)>> {
+    pairs
+        .iter()
+        .map(|pair| {
+            parse_env_var(pair).ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: field.to_string(),
+                    message: format!("'{pair}' is not {form}"),
+                })
+            })
+        })
+        .collect()
+}
+
+/// `set-inputs` on a protected deployment: `inputs` (`ID`, raw value) set
+/// over the signed ones, and the `clear` ids dropped from the signed config
+/// so the install uses the input's default. The signed env stays as it is.
+fn change_signed_inputs(
+    body: &mut alien_signing::ConfigBody,
+    inputs: Vec<(String, String)>,
+    clear: &[String],
+) {
+    for id in clear {
+        body.inputs.remove(id);
+    }
+    body.inputs.extend(inputs.into_iter().map(|(id, value)| {
+        let value = serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
+        (id, value)
+    }));
+}
+
+/// The install id of a protected deployment, or `None` when it isn't
+/// protected. The id is derived from what the deployment reports about its
+/// cloud; it is not trusted: an install that derives another id from its
+/// own identity refuses the statement.
+async fn protected_install(
+    ctx: &ExecutionMode,
+    target: &PlatformTarget,
+) -> Result<Option<ProtectedInstall>> {
+    let query = vec![("workspace".to_string(), target.workspace.clone())];
+    let deployment = crate::signing::api::get_json(
+        ctx,
+        &format!("/v1/deployments/{}", target.deployment.id.as_str()),
+        &query,
+    )
+    .await?;
+    if deployment["protected"].as_bool() != Some(true) {
+        return Ok(None);
+    }
+    Ok(Some(ProtectedInstall {
+        id: crate::signing::install_id(&deployment)?,
+        deployment,
+    }))
+}
+
+/// A protected deployment, as the server reports it.
+struct ProtectedInstall {
+    /// The install id derived from what the deployment reports.
+    id: alien_signing::InstallId,
+    /// The deployment as `GET /v1/deployments/{id}` returned it.
+    deployment: serde_json::Value,
+}
+
+/// The release a config signed now is applied with: the one the deployment
+/// is moving to, or the one it runs. Returns its id and the statement
+/// signed for the deployment's platform, unchecked.
+async fn release_for_config(
+    ctx: &ExecutionMode,
+    target: &PlatformTarget,
+    deployment: &serde_json::Value,
+) -> Result<(String, alien_signing::SignedStatement)> {
+    let id = target.deployment.id.as_str();
+    let refused = |message: String| {
+        AlienError::new(ErrorData::SigningFailed {
+            message: format!("{message}. Nothing was signed."),
+        })
+    };
+    let release_id = ["desiredReleaseId", "currentReleaseId"]
+        .iter()
+        .find_map(|field| deployment[*field].as_str())
+        .ok_or_else(|| {
+            refused(format!(
+                "Deployment {id} has no release yet, so there is nothing to check a config against"
+            ))
+        })?;
+    let platform = deployment["platform"]
+        .as_str()
+        .ok_or_else(|| refused(format!("Deployment {id} doesn't report its platform")))?;
+    let query = vec![("workspace".to_string(), target.workspace.clone())];
+    let release =
+        crate::signing::api::get_json(ctx, &format!("/v1/releases/{release_id}"), &query).await?;
+    let statement = release["signedStacks"][platform].clone();
+    if statement.is_null() {
+        return Err(refused(format!(
+            "Release {release_id} carries no signed stack for {platform}"
+        )));
+    }
+    let statement = serde_json::from_value(statement)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Release {release_id} carries a statement that doesn't parse"),
+            url: None,
+        })?;
+    Ok((release_id.to_string(), statement))
+}
+
+/// Sign the deployment's next `config/v1` statement: its latest signed
+/// config, checked here, with `change`
+/// applied. The signer list is verified
+/// from the fingerprint in `.alien/signing.json` first, and the result is
+/// checked against the deployment's signed release. The statement replaces
+/// the deployment's previous signed config.
+async fn sign_config(
+    ctx: &ExecutionMode,
+    target: &PlatformTarget,
+    install: &ProtectedInstall,
+    json: bool,
+    change: impl FnOnce(&mut alien_signing::ConfigBody),
+) -> Result<()> {
+    let deployment = target.deployment.id.to_string();
+    let api = crate::signing::api::SigningApi::from_context(ctx).await?;
+    let (chain, signer) =
+        crate::signing::project_signer(&api, alien_signing::Role::Release).await?;
+    let stored = api.config_statements(&deployment).await?;
+    let now = chrono::Utc::now();
+    let (release_id, release) = release_for_config(ctx, target, &install.deployment).await?;
+    let install = &install.id;
+    let mut body =
+        crate::signing::latest_config(&chain, install, &stored, now)?.unwrap_or_default();
+    change(&mut body);
+    crate::signing::check_config_for_release(&chain, &release_id, &release, &body, now)?;
+    let envelope =
+        crate::signing::envelope(alien_signing::Kind::Config, &chain, Some(install), body);
+    if let Some(gesture) = signer.gesture() {
+        eprintln!("  {gesture} to sign the config for {install} ▸");
+    }
+    let statement = crate::signing::sign_envelope(&envelope, &signer)?;
+    api.publish_config(&deployment, &statement).await?;
+    if json {
+        return crate::output::print_json(&serde_json::json!({
+            "deploymentId": deployment,
+            "install": install.to_string(),
+            "sequence": envelope.sequence,
+            "signer": signer.id(),
+        }));
+    }
+    println!(
+        "✓ Config signed by {} for {install} · delivered to deployment {deployment}",
+        signer.id()
+    );
+    Ok(())
 }
 
 async fn resolve_platform_target(
@@ -1763,6 +1960,7 @@ async fn machines_inventory_task(
         "Network",
         "Peers",
         "Machine agent",
+        "Plan check",
     ]);
     for machine in &response.machines {
         let network = machine
@@ -1800,9 +1998,14 @@ async fn machines_inventory_task(
             network.into(),
             peers.into(),
             version.into(),
+            plan_check_cell(machine).into(),
         ]);
     }
     print_table(table);
+
+    for line in plan_refusal_lines(&response.machines) {
+        println!("{line}");
+    }
 
     for machine in response
         .machines
@@ -1825,6 +2028,30 @@ async fn machines_inventory_task(
     }
 
     Ok(())
+}
+
+/// What a protected machine last said about the plan it checked: `refused`, `accepted`, or `—`
+/// for a machine that doesn't verify releases or hasn't reported a check.
+fn plan_check_cell(machine: &alien_platform_api::types::DeploymentMachine) -> &'static str {
+    match machine.plan_check.as_ref() {
+        None => "—",
+        Some(check) if check.refusal.is_some() => "refused",
+        Some(_) => "accepted",
+    }
+}
+
+/// One line per machine that refused its last plan, with the reason it gave.
+fn plan_refusal_lines(machines: &[alien_platform_api::types::DeploymentMachine]) -> Vec<String> {
+    machines
+        .iter()
+        .filter_map(|machine| {
+            let refusal = machine.plan_check.as_ref()?.refusal.as_ref()?;
+            Some(format!(
+                "{} refused its plan: {}",
+                machine.machine_id, refusal
+            ))
+        })
+        .collect()
 }
 
 fn machine_network_rank(machine: &alien_platform_api::types::DeploymentMachine) -> u8 {
@@ -1883,6 +2110,50 @@ mod machines_inventory_tests {
         assert_eq!(
             network_health_rank(Some(DeploymentMachineNetworkHealth::Healthy)),
             0
+        );
+    }
+
+    fn machine(plan_check: serde_json::Value) -> alien_platform_api::types::DeploymentMachine {
+        let mut machine = serde_json::json!({
+            "machineId": "m-1",
+            "clusterResourceId": "machines",
+            "status": "healthy",
+            "capacityGroup": "general",
+            "zone": "us-east-1a",
+            "cpu": { "allocated": 1.0, "systemReserve": 0.5, "total": 4.0 },
+            "memory": { "allocated": 1.0, "systemReserve": 0.5, "total": 8.0 },
+            "drainBlockers": [],
+            "drainForce": false,
+            "lastHeartbeat": "2026-11-08T12:00:00.000Z",
+            "localOverrides": [],
+            "replicaCount": 0,
+        });
+        if !plan_check.is_null() {
+            machine["planCheck"] = plan_check;
+        }
+        serde_json::from_value(machine).expect("a machine as the platform API returns it")
+    }
+
+    #[test]
+    fn machine_inventory_shows_why_a_machine_refused_its_plan() {
+        let refused = machine(serde_json::json!({
+            "observedAt": "2026-11-08T12:00:00.000Z",
+            "refusal": "the plan names an image the release did not sign",
+        }));
+        let accepted = machine(serde_json::json!({ "observedAt": "2026-11-08T12:00:00.000Z" }));
+        let unreported = machine(serde_json::Value::Null);
+
+        assert_eq!(plan_check_cell(&refused), "refused");
+        assert_eq!(plan_check_cell(&accepted), "accepted");
+        assert_eq!(plan_check_cell(&unreported), "—");
+        assert_eq!(
+            plan_refusal_lines(&[refused.clone(), accepted, unreported]),
+            ["m-1 refused its plan: the plan names an image the release did not sign"]
+        );
+        let json = serde_json::to_value(&refused).expect("machine serializes");
+        assert_eq!(
+            json["planCheck"]["refusal"],
+            "the plan names an image the release did not sign"
         );
     }
 
@@ -3976,6 +4247,8 @@ async fn create_deployment_task(
 
     let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
         airgapped: None,
+        // Setup reports signing settings; a deployment created here has none.
+        signing: None,
         quota_warning_overrides: Vec::new(),
         endpoint_access: network_args
             .endpoint_access
@@ -4485,6 +4758,62 @@ mod operator_cell_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_an_input_the_new_release_dropped_unblocks_the_signed_config() {
+        // The signed config sets `region` and `tier`; the release the
+        // deployment moves to declares only `region`, so the install would
+        // refuse every update while `tier` stays.
+        let mut body = alien_signing::ConfigBody {
+            env: [("LOG_LEVEL".to_string(), "debug".to_string())].into(),
+            inputs: [
+                ("region".to_string(), serde_json::json!("us")),
+                ("tier".to_string(), serde_json::json!("gold")),
+            ]
+            .into(),
+            ..Default::default()
+        };
+        let release = alien_signing::ReleaseBody {
+            platform: "gcp".to_string(),
+            channel: "production".to_string(),
+            workloads: Vec::new(),
+            configurable: alien_signing::release::Configurable {
+                env: vec!["LOG_LEVEL".to_string()],
+                inputs: vec!["region".to_string()],
+            },
+            components: Default::default(),
+            setup: Default::default(),
+            stack: None,
+        };
+        body.check(&release)
+            .expect_err("a dropped input in the config is refused");
+
+        change_signed_inputs(
+            &mut body,
+            vec![("region".to_string(), "eu".to_string())],
+            &["tier".to_string(), "never-set".to_string()],
+        );
+
+        assert_eq!(
+            body.inputs,
+            [("region".to_string(), serde_json::json!("eu"))].into()
+        );
+        assert_eq!(body.env["LOG_LEVEL"], "debug", "the signed env is kept");
+        body.check(&release)
+            .expect("with the input cleared the release accepts the config");
+
+        // Values are read as JSON when they parse, as text otherwise.
+        change_signed_inputs(
+            &mut body,
+            vec![
+                ("count".to_string(), "3".to_string()),
+                ("name".to_string(), "acme".to_string()),
+            ],
+            &[],
+        );
+        assert_eq!(body.inputs["count"], serde_json::json!(3));
+        assert_eq!(body.inputs["name"], serde_json::json!("acme"));
+    }
 
     fn failed_cli_first_install() -> serde_json::Value {
         serde_json::json!({

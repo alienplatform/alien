@@ -36,7 +36,7 @@ pub(super) async fn build_worker_deployment(
 
     // Determine the container image
     let image = match &config.code {
-        WorkerCode::Image { image } => image.clone(),
+        WorkerCode::Image { image } => ctx.deployment_config.workload_image(image),
         WorkerCode::Source { .. } => {
             // For source code, we would need to get the built image from Build resource
             return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -62,8 +62,11 @@ pub(super) async fn build_worker_deployment(
     // pod manifest.
     let env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
 
+    let security = crate::core::pod_security(&config.id, config.security.as_ref(), &[])?;
     let container = Container {
         name: WORKER_CONTAINER_NAME.to_string(),
+        security_context: security.container,
+        volume_mounts: (!security.mounts.is_empty()).then_some(security.mounts),
         image: Some(image),
         ports: Some(vec![ContainerPort {
             container_port: 8080,
@@ -108,11 +111,10 @@ pub(super) async fn build_worker_deployment(
         ..Default::default()
     };
 
-    let image_pull_secrets = image_pull_secret_name.map(|name| {
-        vec![LocalObjectReference {
-            name: name.to_string(),
-        }]
-    });
+    let image_pull_secrets = crate::kubernetes_registry::workload_pull_secrets(
+        ctx.deployment_config,
+        image_pull_secret_name,
+    );
     let pod_annotations = pod_template_annotations(env_secret_plan, &config.environment)?;
 
     // Source images share the stack build target. Workers do not select a
@@ -127,6 +129,8 @@ pub(super) async fn build_worker_deployment(
     let mut pod_spec = PodSpec {
         node_selector,
         service_account_name: Some(service_account_name.to_string()),
+        security_context: security.pod,
+        volumes: (!security.volumes.is_empty()).then_some(security.volumes),
         containers: vec![container],
         restart_policy: Some("Always".to_string()),
         image_pull_secrets,

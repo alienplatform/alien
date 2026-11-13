@@ -295,8 +295,13 @@ pub async fn step(
                 .await?
         }
         DeploymentStatus::Provisioning => {
-            provisioning::handle_provisioning(current, config, client_config, service_provider)
-                .await?
+            Box::pin(provisioning::handle_provisioning(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::WaitingForMachines | DeploymentStatus::WaitingForSecrets => {
             // A prepared target identifies an update. Initial setup can already have
@@ -306,34 +311,68 @@ pub async fn step(
                 .as_ref()
                 .is_some_and(|metadata| metadata.pending_prepared_stack.is_some());
             if has_pending_target {
-                updating::handle_updating(current, config, client_config, service_provider).await?
+                Box::pin(updating::handle_updating(
+                    current,
+                    config,
+                    client_config,
+                    service_provider,
+                ))
+                .await?
             } else {
-                provisioning::handle_provisioning(current, config, client_config, service_provider)
-                    .await?
+                Box::pin(provisioning::handle_provisioning(
+                    current,
+                    config,
+                    client_config,
+                    service_provider,
+                ))
+                .await?
             }
         }
         DeploymentStatus::Running => {
-            running::handle_running(current, config, client_config, service_provider).await?
+            Box::pin(running::handle_running(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::UpdatePending => {
-            updating::handle_update_pending(
+            Box::pin(updating::handle_update_pending(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::Updating => {
-            updating::handle_updating(current, config, client_config, service_provider).await?
+            Box::pin(updating::handle_updating(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::DeletePending => {
-            deleting::handle_delete_pending(current, config, client_config, service_provider)
-                .await?
+            Box::pin(deleting::handle_delete_pending(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::Deleting => {
-            deleting::handle_deleting(current, config, client_config, service_provider).await?
+            Box::pin(deleting::handle_deleting(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::TeardownRequired => deleting::handle_teardown_required(current).await?,
         // Failed states - retry failed resources and transition back to active status

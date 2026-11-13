@@ -138,6 +138,54 @@ impl DeploymentPrerequisiteCheck for KubernetesBaseDomainCheck {
     }
 }
 
+/// A lone Azure sandbox stack has no resource group to live in when pushed directly.
+///
+/// Azure sandbox groups are created by the setup package. A direct push adds a resource group
+/// only for the other resource types, so a stack whose only Azure resources are sandboxes would
+/// never start setup. Once setup has created the sandbox, its state is present and this passes.
+pub struct AzureSandboxGroupFromSetupCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for AzureSandboxGroupFromSetupCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("AZURE_SANDBOX_GROUP_FROM_SETUP")
+    }
+
+    fn description(&self) -> &'static str {
+        "Azure sandbox groups come from the setup package"
+    }
+
+    fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        state.platform == Platform::Azure
+            && !stack.resources().any(|(_, entry)| {
+                entry.config.resource_type() == alien_core::AzureResourceGroup::RESOURCE_TYPE
+            })
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let missing: Vec<&str> = stack
+            .resources()
+            .filter(|(id, entry)| {
+                entry.config.downcast_ref::<alien_core::Sandbox>().is_some()
+                    && !state.resources.contains_key(id.as_str())
+            })
+            .map(|(id, _)| id.as_str())
+            .collect();
+        if missing.is_empty() {
+            return Ok(CheckResult::success());
+        }
+        Ok(CheckResult::failed(vec![format!(
+            "Azure sandbox group(s) {} would have no resource group: a stack whose only Azure resources are sandboxes cannot be pushed directly. Sandbox groups come from the setup package; deploy it through setup, or add another Azure resource.",
+            missing.join(", ")
+        )]))
+    }
+}
+
 /// The internet declaration requires a prepared gateway; legacy paths stay unchanged.
 pub struct SandboxEgressGatewayCheck;
 
@@ -697,6 +745,57 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsRequiredCheck {
     }
 }
 
+pub struct ControllerAvailableCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for ControllerAvailableCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("RESOURCE_NOT_SUPPORTED")
+    }
+
+    fn description(&self) -> &'static str {
+        "Every resource has a controller or an external-binding path on the target platform"
+    }
+
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> bool {
+        // Kubernetes is the one target whose controller list is complete in
+        // this repository, and only without a cloud behind the cluster.
+        stack_state.platform == Platform::Kubernetes && config.base_platform.is_none()
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let mut result = CheckResult::success();
+        for (id, entry) in stack.resources() {
+            let resource_type = entry.config.resource_type();
+            let kind = resource_type.as_ref();
+            if crate::controller_available::KUBERNETES_CONTROLLER_TYPES.contains(&kind)
+                || crate::controller_available::EXTERNAL_BINDING_TYPES.contains(&kind)
+            {
+                continue;
+            }
+            result.add_error(format!(
+                "Resource '{id}' is a {kind}, which a {platform} deployment without a cloud \
+                 behind the cluster can't create: nothing here manages it. Install through \
+                 your cloud's Terraform module for a managed cluster (EKS, GKE or AKS), which \
+                 creates it, or remove '{id}' from the stack. A resource type that accepts an \
+                 external binding can instead be pointed at existing infrastructure with one.",
+                platform = stack_state.platform
+            ));
+        }
+        Ok(result)
+    }
+}
+
 /// Validates that a resource running without Alien control still has a binding.
 ///
 /// Adoption is what records a resource Running with no controller state, on create and on
@@ -796,13 +895,9 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
         config: &DeploymentConfig,
     ) -> bool {
         !external_binding_required_types(stack_state.platform).is_empty()
-            || config
-                .external_bindings
-                .0
-                .values()
-                .any(|binding| {
-                    postgres_password_is_reference(binding) || redis_password_is_reference(binding)
-                })
+            || config.external_bindings.0.values().any(|binding| {
+                postgres_password_is_reference(binding) || redis_password_is_reference(binding)
+            })
     }
 
     async fn check(
@@ -937,8 +1032,12 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
+            release_statements: None,
+            signed_config: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
             management_config: None,
@@ -1027,6 +1126,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_key_on_plain_kubernetes_is_refused_before_setup() {
+        let stack = Stack::new("keyed".into())
+            .add(
+                Storage::new("data".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Key::new("secrets-key".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = stack_state(Platform::Kubernetes);
+        let mut config = deployment_config();
+        let check = ControllerAvailableCheck;
+        assert!(check.should_run(&stack, &state, &config));
+        let result = check.check(&stack, &state, &config).await.unwrap();
+        assert!(!result.success, "{result:?}");
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("secrets-key"),
+            "{:?}",
+            result.errors
+        );
+
+        // A cloud behind the cluster (EKS, GKE, AKS) supplies the controller.
+        config.base_platform = Some(Platform::Aws);
+        assert!(!check.should_run(&stack, &state, &config));
+        // Other platforms have their own controllers.
+        config.base_platform = None;
+        assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
+    }
+
+    #[tokio::test]
     async fn redis_needs_an_external_binding_on_kubernetes_and_machines() {
         let stack = Stack::new("cache-stack".into())
             .add(
@@ -1041,10 +1173,17 @@ mod tests {
                 .check(&stack, &state, &config)
                 .await
                 .unwrap();
-            assert!(!result.success, "{platform:?} must require a binding for Redis");
+            assert!(
+                !result.success,
+                "{platform:?} must require a binding for Redis"
+            );
         }
         // A cloud platform provisions its own server.
-        assert!(!ExternalBindingsRequiredCheck.should_run(&stack, &stack_state(Platform::Aws), &config));
+        assert!(!ExternalBindingsRequiredCheck.should_run(
+            &stack,
+            &stack_state(Platform::Aws),
+            &config
+        ));
     }
 
     #[tokio::test]
@@ -1419,6 +1558,7 @@ mod tests {
                         method: "GET".to_string(),
                         timeout_seconds: 1,
                         failure_threshold: 3,
+                        startup_timeout_seconds: None,
                     })
                     .build(),
             ),
@@ -1856,7 +1996,7 @@ mod tests {
     /// Alien cannot update or adopt such a resource once the binding is gone, so the release
     /// is refused rather than left resolving a target nobody declared.
     #[tokio::test]
-    async fn a_release_that_drops_an_adopted_binding_is_refused() {
+    async fn a_release_without_an_adopted_binding_is_refused() {
         let mut resources = IndexMap::new();
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);
@@ -1903,7 +2043,7 @@ mod tests {
     /// A store bound without remote access carries neither params nor outputs, so the
     /// binding is the only record that it was adopted.
     #[tokio::test]
-    async fn a_release_that_drops_a_binding_carrying_no_state_is_refused() {
+    async fn a_release_without_a_stateless_binding_is_refused() {
         let mut resources = IndexMap::new();
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);
@@ -2187,5 +2327,59 @@ mod tests {
         assert!(errors.contains("api*extra"));
         assert!(errors.contains("MISS_WILDCARD"));
         assert!(errors.contains("worker-*"));
+    }
+
+    #[tokio::test]
+    async fn a_lone_azure_sandbox_pushed_directly_is_refused_until_setup_created_it() {
+        let sandbox = alien_core::Sandbox::new("boxes".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "example.azurecr.io/box:1".into(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test".into())
+            .add(sandbox.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let config = deployment_config();
+        let check = AzureSandboxGroupFromSetupCheck;
+        assert_eq!(check.code(), Some("AZURE_SANDBOX_GROUP_FROM_SETUP"));
+
+        let state = stack_state(Platform::Azure);
+        assert!(check.should_run(&stack, &state, &config));
+        let refused = check.check(&stack, &state, &config).await.unwrap();
+        assert!(!refused.success);
+        assert!(refused.errors[0].contains("setup package"));
+        assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
+
+        // Setup created the group: the sandbox is in state, so updates pass.
+        let mut state = stack_state(Platform::Azure);
+        state.resources.insert(
+            "boxes".to_string(),
+            alien_core::StackResourceState::new_pending(
+                alien_core::Sandbox::RESOURCE_TYPE.to_string(),
+                Resource::new(sandbox),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        assert!(check.check(&stack, &state, &config).await.unwrap().success);
+
+        // Another Azure resource makes the direct push add a resource group.
+        let with_storage = Stack::new("test".into())
+            .add(
+                Storage::new("uploads".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        assert!(!check.should_run(&with_storage, &stack_state(Platform::Azure), &config));
     }
 }

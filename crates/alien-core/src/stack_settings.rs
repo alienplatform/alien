@@ -5,7 +5,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::{KubernetesCloudReference, KubernetesClusterOwnership};
+use crate::{ErrorData, KubernetesCloudReference, KubernetesClusterOwnership, Result};
+use alien_error::AlienError;
+use alien_signing::SigningSettings;
 
 /// AWS management configuration extracted from stack settings
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -974,6 +976,171 @@ pub struct StackSettings {
     /// Required for Kubernetes platform, optional for cloud platforms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_bindings: Option<crate::ExternalBindings>,
+
+    /// Release signing for this install. When set, setup writes the signing settings
+    /// (the fingerprint, the install's prefix and the channel) where only setup can change
+    /// them, and the install's enforcers run only what the vendor signed. Setup alone writes
+    /// them: changing this later does not change what an install already pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing: Option<StackSigning>,
+}
+
+/// The 12-digit AWS account that publishes the machine images protected installs boot, if this
+/// build has one. The CLI release workflow writes it into `machine-image-publisher-aws.txt`
+/// before building, so every build of a release renders the same setup; source builds have none.
+pub fn machine_image_publisher_aws() -> Option<&'static str> {
+    let account = include_str!("../machine-image-publisher-aws.txt").trim();
+    (account.len() == 12 && account.bytes().all(|byte| byte.is_ascii_digit())).then_some(account)
+}
+
+/// The GCP project that publishes the machine images protected installs boot
+/// (`projects/<project>/global/images/<name>`), if this build has one. The CLI release
+/// workflow writes it into `machine-image-publisher-gcp.txt`; source builds have none.
+pub fn machine_image_publisher_gcp() -> Option<&'static str> {
+    let project = include_str!("../machine-image-publisher-gcp.txt").trim();
+    (!project.is_empty()
+        && project.len() <= 30
+        && project
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'))
+    .then_some(project)
+}
+
+/// The public name of the Azure community gallery that publishes the machine images
+/// protected installs boot (`/CommunityGalleries/<name>/Images/...`), if this build has one.
+/// The CLI release workflow writes it into `machine-image-publisher-azure.txt`; source builds
+/// have none.
+pub fn machine_image_publisher_azure() -> Option<&'static str> {
+    let gallery = include_str!("../machine-image-publisher-azure.txt").trim();
+    (!gallery.is_empty()
+        && gallery.len() <= 100
+        && gallery
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+    .then_some(gallery)
+}
+
+/// The oldest machine image protected installs boot: an image the cloud records as created
+/// before this is refused even from the publisher, so a fixed image replaces every older one.
+/// The CLI release workflow writes it (RFC 3339) into `machine-image-minimum-created.txt` with
+/// the publisher; a build without it launches no machines on protected installs.
+pub fn machine_image_minimum_created() -> Option<chrono::DateTime<chrono::Utc>> {
+    let text = include_str!("../machine-image-minimum-created.txt").trim();
+    chrono::DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|time| time.with_timezone(&chrono::Utc))
+}
+
+/// The AWS verifier image protected setups run, as `<repository>@sha256:<64 hex>` in the
+/// publisher's registry, if this build has one. The CLI release workflow writes it into
+/// `verifier-image-aws.txt` with the publisher; setups run
+/// `<publisher>.dkr.ecr.<region>.amazonaws.com/<repository>@<digest>`.
+pub fn verifier_image_aws() -> Option<&'static str> {
+    let image = include_str!("../verifier-image-aws.txt").trim();
+    is_pinned_image(image).then_some(image)
+}
+
+/// The GCP verifier image protected setups run on Cloud Run, as
+/// `<registry host>/<repository>@sha256:<64 hex>`, if this build has one. The CLI release
+/// workflow writes it into `verifier-image-gcp.txt`.
+pub fn verifier_image_gcp() -> Option<&'static str> {
+    let image = include_str!("../verifier-image-gcp.txt").trim();
+    is_pinned_image(image).then_some(image)
+}
+
+/// The Azure verifier image protected setups run as a Container App, as
+/// `<registry host>/<repository>@sha256:<64 hex>` in a registry that serves it without
+/// credentials, if this build has one. The CLI release workflow writes it into
+/// `verifier-image-azure.txt`.
+pub fn verifier_image_azure() -> Option<&'static str> {
+    let image = include_str!("../verifier-image-azure.txt").trim();
+    is_pinned_image(image).then_some(image)
+}
+
+/// Whether `image` is `<repository>@sha256:<64 lowercase hex>` with a plain repository path.
+pub fn is_pinned_image(image: &str) -> bool {
+    let Some((repository, hex)) = image.split_once("@sha256:") else {
+        return false;
+    };
+    !repository.is_empty()
+        && repository
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'/'))
+        && hex.len() == 64
+        && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Digest (`sha256:<64 hex>`) of the Operator image protected charts run, if this build has
+/// one. The CLI release workflow writes it into `operator-digest.txt` with the other pins; it
+/// is the `operator` digest a signed release names in `components`.
+pub fn operator_digest() -> Option<&'static str> {
+    let digest = include_str!("../operator-digest.txt").trim();
+    let hex = digest.strip_prefix("sha256:")?;
+    (hex.len() == 64 && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+        .then_some(digest)
+}
+
+/// Values a protected setup pins that come with the CLI build, not with the stack: the account
+/// whose machine images machines may boot and the verifier image of each cloud. Renders that a release
+/// records use [`SetupPins::compiled_in`], so every build of one release renders the same
+/// bytes; tests pin their own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SetupPins {
+    /// 12-digit AWS account that publishes machine images and the verifier image.
+    pub aws_publisher: Option<String>,
+    /// AWS verifier image, `<repository>@sha256:<64 hex>` in the publisher's registry.
+    pub aws_verifier_image: Option<String>,
+    /// GCP verifier image, `<registry host>/<repository>@sha256:<64 hex>`.
+    pub gcp_verifier_image: Option<String>,
+    /// Azure verifier image, `<registry host>/<repository>@sha256:<64 hex>`.
+    pub azure_verifier_image: Option<String>,
+    /// `sha256:<64 hex>` of the Operator image protected charts run.
+    pub operator_digest: Option<String>,
+}
+
+impl SetupPins {
+    /// The pins this build was released with; empty for source builds.
+    pub fn compiled_in() -> Self {
+        Self {
+            aws_publisher: machine_image_publisher_aws().map(str::to_string),
+            aws_verifier_image: verifier_image_aws().map(str::to_string),
+            gcp_verifier_image: verifier_image_gcp().map(str::to_string),
+            azure_verifier_image: verifier_image_azure().map(str::to_string),
+            operator_digest: operator_digest().map(str::to_string),
+        }
+    }
+}
+
+/// What setup pins for a protected install.
+///
+/// Take the values from the vendor's install guide or signed release, not from the
+/// control plane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StackSigning {
+    /// `SHA256:<64 hex>` fingerprint of the vendor's signer list version 1.
+    pub fingerprint: String,
+    /// Release channel the install follows, such as `production`.
+    pub channel: String,
+}
+
+impl StackSigning {
+    /// The settings setup writes for the install whose resource prefix is `prefix`, checked
+    /// the way enforcers check them when they read them.
+    pub fn settings(&self, prefix: &str) -> Result<SigningSettings> {
+        let settings = SigningSettings {
+            fingerprint: self.fingerprint.clone(),
+            prefix: prefix.to_string(),
+            channel: self.channel.clone(),
+        };
+        settings.validate().map_err(|error| {
+            AlienError::new(ErrorData::SigningSettingsInvalid {
+                reason: error.message,
+            })
+        })?;
+        Ok(settings)
+    }
 }
 
 /// Whether setup remains a separate administrator operation.

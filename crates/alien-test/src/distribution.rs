@@ -1116,6 +1116,8 @@ async fn apply_render_mutations_with_management_config(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         runtime_identity_audience: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,
@@ -1147,6 +1149,8 @@ async fn apply_render_mutations_with_management_config(
         volume_restores: Vec::new(),
         value_slots: Vec::new(),
         deletion_policy: Default::default(),
+        release_statements: None,
+        signed_config: None,
     };
 
     runner
@@ -1174,6 +1178,8 @@ async fn create_release(
             git_metadata: None,
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
         })
         .send()
         .await
@@ -1247,6 +1253,7 @@ async fn run_cloudformation_aws(
     let template = alien_cloudformation::generate_cloudformation_template_with_profile(
         &prepared.rendered_stack,
         alien_cloudformation::CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack: &prepared.built_stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
@@ -1455,6 +1462,7 @@ async fn run_cloudformation_k8s(
         let template = alien_cloudformation::generate_cloudformation_template(
             &cloudformation_stack,
             alien_cloudformation::CloudFormationOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 registry: &registry,
                 source_stack: &cloudformation_stack,
                 target: alien_cloudformation::CloudFormationTarget::Eks,
@@ -2147,6 +2155,8 @@ async fn apply_terraform_and_import(
         &terraform_stack,
         target,
         alien_terraform::TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings,
@@ -2405,6 +2415,8 @@ async fn terraform_kubernetes_stack_for_target(
 
     let stack_state = StackState::new(Platform::Kubernetes);
     let config = DeploymentConfig {
+        image_registry: None,
+        image_pull_secrets: Vec::new(),
         runtime_identity_audience: None,
         // Rendering precedes installation reservation; setup supplies the scope.
         gcp_federation_scope: None,
@@ -2436,6 +2448,8 @@ async fn terraform_kubernetes_stack_for_target(
         volume_restores: Vec::new(),
         value_slots: Vec::new(),
         deletion_policy: Default::default(),
+        release_statements: None,
+        signed_config: None,
     };
 
     runner
@@ -2974,6 +2988,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
                 | TestApp::ByoAi
                 | TestApp::AutomaticSetup
                 | TestApp::StorageNotifications
+                | TestApp::SandboxRemote
         )
         && matches!(
             ctx.platform,
@@ -4347,6 +4362,8 @@ mod tests {
                 &stack,
                 target,
                 alien_terraform::TerraformOptions {
+                    setup_identity: None,
+                    pins: alien_core::SetupPins::compiled_in(),
                     display_name: None,
                     registry: &registry,
                     stack_settings: StackSettings::default(),
@@ -5037,6 +5054,8 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Eks,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,
@@ -5136,6 +5155,8 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Eks,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,
@@ -5199,6 +5220,8 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,
@@ -5240,6 +5263,8 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,
@@ -5388,6 +5413,8 @@ resource "terraform_data" "gate_keeper" {}
             &rendered_stack,
             alien_terraform::TerraformTarget::Azure,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings,

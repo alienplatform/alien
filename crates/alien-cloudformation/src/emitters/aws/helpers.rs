@@ -95,6 +95,49 @@ pub(crate) fn chunk_managed_policy_statements(
         .collect())
 }
 
+/// Sid of the statement that refuses the management role writes under `/signed/`. It was added
+/// after installs existed, so it is placed after packing (see [`append_statements`]) and the
+/// statements an install already has stay in the documents they are in.
+pub(crate) const SIGNING_SETTINGS_DENY_SID: &str = "OnlySetupChangesSigningSettings";
+
+/// Splits out the statements named `sid`: (the others, the named ones), in order.
+pub(crate) fn take_statements_with_sid(
+    statements: Vec<CfExpression>,
+    sid: &str,
+) -> (Vec<CfExpression>, Vec<CfExpression>) {
+    statements.into_iter().partition(|statement| {
+        !matches!(statement, CfExpression::Object(object)
+            if object.get("Sid") == Some(&CfExpression::from(sid)))
+    })
+}
+
+/// Adds `statements` after the packed `documents` without moving anything in them: onto the
+/// last document while it stays below the size limit, otherwise as a document of their own.
+pub(crate) fn append_statements(
+    mut documents: Vec<CfExpression>,
+    statements: Vec<CfExpression>,
+) -> Result<Vec<CfExpression>> {
+    if statements.is_empty() {
+        return Ok(documents);
+    }
+    let existing = match documents.last() {
+        Some(CfExpression::Object(document)) => match document.get("Statement") {
+            Some(CfExpression::List(existing)) => existing.clone(),
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    let mut combined = existing;
+    combined.extend(statements.iter().cloned());
+    if !documents.is_empty() && managed_policy_document_size(&combined)? <= MAX_MANAGED_POLICY_BYTES
+    {
+        *documents.last_mut().expect("not empty") = managed_policy_document(combined);
+    } else {
+        documents.push(managed_policy_document(statements));
+    }
+    Ok(documents)
+}
+
 /// Merges statements that differ only in their actions: same effect, same resources and same
 /// conditions. A statement allows or denies each of its actions on each resource under its
 /// conditions independently, so one statement with the union of the actions means exactly what
@@ -508,6 +551,16 @@ pub fn availability_zone_names(ctx: &EmitContext<'_>) -> CfExpression {
     ])
 }
 
+/// Whether the template withholds `use-default` from `NetworkMode`, so setup always names subnets:
+/// a restricted sandbox's connector needs them, and so does a protected stack's verifier, which
+/// launches machines only into subnets setup fixes. CloudFormation can't resolve the account
+/// default VPC's subnets, so a protected stack with machines in it would deploy, then have every
+/// machine launch refused.
+pub(crate) fn network_mode_names_subnets(stack: &alien_core::Stack) -> bool {
+    alien_core::restricts_network_mode(stack, false)
+        || alien_core::verifier_launches_machines(stack)
+}
+
 /// The created resource when this stack builds the VPC, otherwise the bring-your-own parameter.
 ///
 /// The innermost branch exists only for use-default. A stack that cannot offer that mode collapses
@@ -517,16 +570,15 @@ fn created_or_provided(
     created: CfExpression,
     provided: CfExpression,
 ) -> CfExpression {
-    let otherwise =
-        if ctx.targets_kubernetes || alien_core::restricts_network_mode(ctx.stack, false) {
-            provided
-        } else {
-            CfExpression::if_(
-                CONDITION_NETWORK_MODE_USE_EXISTING,
-                provided,
-                CfExpression::no_value(),
-            )
-        };
+    let otherwise = if ctx.targets_kubernetes || network_mode_names_subnets(ctx.stack) {
+        provided
+    } else {
+        CfExpression::if_(
+            CONDITION_NETWORK_MODE_USE_EXISTING,
+            provided,
+            CfExpression::no_value(),
+        )
+    };
     CfExpression::if_(CONDITION_NETWORK_MODE_CREATE, created, otherwise)
 }
 
@@ -852,6 +904,43 @@ mod tests {
             resolved_statements,
             *resolved["Statement"].as_array().unwrap()
         );
+    }
+
+    /// An added statement leaves the packed documents as they are: it joins the last one, or
+    /// gets a document of its own when that is full.
+    #[test]
+    fn an_appended_statement_never_moves_packed_statements() {
+        let deny = CfExpression::object([
+            ("Sid", CfExpression::from(SIGNING_SETTINGS_DENY_SID)),
+            ("Effect", CfExpression::from("Deny")),
+        ]);
+        let heavy: Vec<CfExpression> = (0..5)
+            .map(|index| prefix_heavy_statement(index, 17))
+            .collect();
+
+        let roomy = vec![
+            managed_policy_document(vec![heavy[0].clone()]),
+            managed_policy_document(vec![heavy[1].clone()]),
+        ];
+        let appended = append_statements(roomy.clone(), vec![deny.clone()]).unwrap();
+        assert_eq!(appended.len(), 2);
+        assert_eq!(appended[0], roomy[0]);
+        assert_eq!(
+            appended[1],
+            managed_policy_document(vec![heavy[1].clone(), deny.clone()])
+        );
+
+        let full = vec![managed_policy_document(heavy.clone())];
+        let appended = append_statements(full.clone(), vec![deny.clone()]).unwrap();
+        assert_eq!(appended.len(), 2);
+        assert_eq!(appended[0], full[0]);
+        assert_eq!(appended[1], managed_policy_document(vec![deny.clone()]));
+
+        let (others, denies) = take_statements_with_sid(
+            vec![deny.clone(), heavy[0].clone()],
+            SIGNING_SETTINGS_DENY_SID,
+        );
+        assert_eq!((others, denies), (vec![heavy[0].clone()], vec![deny]));
     }
 
     #[test]
@@ -1270,4 +1359,26 @@ pub(crate) fn prefixed_permission_refs(
         }
     }
     refs
+}
+
+/// A JSON value as a CloudFormation expression whose strings with `${...}` are `Fn::Sub`.
+pub fn sub_json(value: JsonValue) -> CfExpression {
+    match value {
+        JsonValue::String(text) if text.contains("${") => CfExpression::sub(text),
+        JsonValue::String(text) => CfExpression::from(text),
+        JsonValue::Array(values) => CfExpression::list(values.into_iter().map(sub_json)),
+        JsonValue::Object(values) => CfExpression::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, sub_json(value)))
+                .collect(),
+        ),
+        JsonValue::Bool(value) => CfExpression::from(value),
+        JsonValue::Number(number) => match (number.as_i64(), number.as_f64()) {
+            (Some(integer), _) => CfExpression::Integer(integer),
+            (None, Some(float)) => CfExpression::Number(float),
+            (None, None) => CfExpression::String(number.to_string()),
+        },
+        JsonValue::Null => CfExpression::Null,
+    }
 }

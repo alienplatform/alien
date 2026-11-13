@@ -57,6 +57,11 @@ pub fn register(registry: &mut ImporterRegistry) {
             AwsRemoteStackManagementImporter,
         )
         .register(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Aws,
+            crate::signing_verifier::SigningVerifierImporter,
+        )
+        .register(
             RemoteBindings::RESOURCE_TYPE,
             Platform::Aws,
             AwsRemoteBindingsImporter,

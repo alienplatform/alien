@@ -8,6 +8,7 @@ use std::{collections::HashMap, time::Duration};
 use tracing::{debug, info, warn};
 
 use crate::core::linked_bindings;
+use crate::core::verifier;
 use crate::core::EnvironmentVariableBuilder;
 
 use crate::core::aws_tag_scoped::{
@@ -58,6 +59,19 @@ use alien_macros::controller;
 use alien_permissions::aws_resource_policies::aws_prefixed_resource_name;
 use chrono::Utc;
 use uuid::Uuid;
+
+/// The verifier write that gives function `name` the reserved concurrency `limit`, or none.
+fn concurrency_write(name: &str, limit: Option<u32>) -> verifier::CloudWrite {
+    match limit {
+        Some(limit) => verifier::CloudWrite::PutFunctionConcurrency {
+            function_name: name.to_string(),
+            reserved_concurrent_executions: limit,
+        },
+        None => verifier::CloudWrite::DeleteFunctionConcurrency {
+            function_name: name.to_string(),
+        },
+    }
+}
 
 /// A reservation race has the same quota identity as the early account check.
 fn lambda_concurrency_error(error: AlienError<CloudClientErrorData>, region: &str) -> AlienError {
@@ -276,6 +290,114 @@ fn replace_lambda_notification_config(
 }
 
 impl AwsWorkerController {
+    /// Point a schedule rule at the worker's function. On a protected install the verifier checks
+    /// the target against the signed stack and sets it.
+    async fn put_schedule_target(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_id: &str,
+        rule_name: &str,
+        function_arn: &str,
+    ) -> Result<()> {
+        let targets = vec![EventBridgeTarget {
+            id: "1".to_string(),
+            arn: function_arn.to_string(),
+        }];
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, worker_id)? {
+            let aws_cfg = ctx.get_aws_config()?;
+            let lambda = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+            let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+            let targets = serde_json::to_value(&targets).into_alien_error().context(
+                ErrorData::CloudPlatformError {
+                    message: "The schedule targets do not serialize".to_string(),
+                    resource_id: Some(worker_id.to_string()),
+                },
+            )?;
+            crate::core::verifier::apply_resource_write(
+                &verifier,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                worker_id,
+                vec![crate::core::verifier::ResourceWrite::PutScheduleTargets {
+                    rule: rule_name.to_string(),
+                    targets,
+                }],
+            )
+            .await?;
+            return Ok(());
+        }
+        let aws_cfg = ctx.get_aws_config()?;
+        ctx.service_provider
+            .get_aws_eventbridge_client(aws_cfg)
+            .await?
+            .put_targets(PutTargetsRequest {
+                rule: rule_name.to_string(),
+                targets,
+            })
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to add target to EventBridge rule '{}'", rule_name),
+                resource_id: Some(worker_id.to_string()),
+            })?;
+        Ok(())
+    }
+
+    /// Write a bucket's notification document for this worker's storage trigger. On a protected
+    /// install the verifier checks it against the signed stack and sends it unchanged.
+    async fn put_storage_trigger_notification(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        worker_id: &str,
+        storage_id: &str,
+        bucket: &str,
+        document: &NotificationConfiguration,
+        bucket_may_be_gone: bool,
+    ) -> Result<()> {
+        let aws_cfg = ctx.get_aws_config()?;
+        let lambda = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, worker_id)? {
+            let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+            let configuration = serde_json::to_value(document).into_alien_error().context(
+                ErrorData::CloudPlatformError {
+                    message: "The bucket notification document does not serialize".to_string(),
+                    resource_id: Some(worker_id.to_string()),
+                },
+            )?;
+            crate::core::verifier::apply_resource_write(
+                &verifier,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                worker_id,
+                vec![
+                    crate::core::verifier::ResourceWrite::PutWorkerBucketNotification {
+                        storage: storage_id.to_string(),
+                        bucket: bucket.to_string(),
+                        configuration,
+                    },
+                ],
+            )
+            .await?;
+            return Ok(());
+        }
+        ctx.service_provider
+            .get_aws_s3_client(aws_cfg)
+            .await?
+            .put_bucket_notification_configuration(bucket, document)
+            .await
+            .or_else(|error| {
+                if bucket_may_be_gone && is_remote_not_found(&error) {
+                    Ok(())
+                } else {
+                    Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to put notification configuration for bucket '{bucket}'"
+                        ),
+                        resource_id: Some(worker_id.to_string()),
+                    }))
+                }
+            })
+    }
+
     /// Remove exactly this Worker's entry, preserving all other destinations and filters.
     /// Repeated calls after a lost response are harmless; failures retain ownership.
     async fn remove_storage_notification(
@@ -330,14 +452,15 @@ impl AwsWorkerController {
                     .lambda_function_configurations
                     .retain(|entry| entry.id.as_deref() != Some(statement_id.as_str()));
                 if config.lambda_function_configurations.len() != count {
-                    match client.put_bucket_notification_configuration(bucket, &config).await {
-                        Ok(()) => {}
-                        Err(error) if is_remote_not_found(&error) => {}
-                        Err(error) => return Err(error.context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to remove notification '{statement_id}' from bucket '{bucket}'"),
-                            resource_id: Some(worker.id.clone()),
-                        })),
-                    }
+                    self.put_storage_trigger_notification(
+                        ctx,
+                        &worker.id,
+                        &storage.id,
+                        bucket,
+                        &config,
+                        true,
+                    )
+                    .await?;
                 }
             }
             Err(error) if is_remote_not_found(&error) => {}
@@ -491,7 +614,7 @@ impl AwsWorkerController {
                 self.certificate_id = domain_info.certificate_id;
                 self.certificate_arn = domain_info.certificate_arn;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
-                if self.url.is_none() {
+                if self.url.is_none() && !verifier::is_protected(ctx) {
                     self.url = config
                         .configured_primary_public_url(
                             ctx.deployment_config.public_endpoints.as_ref(),
@@ -643,6 +766,10 @@ impl AwsWorkerController {
 
 #[controller]
 pub struct AwsWorkerController {
+    /// On a protected install, the digest of the signed release and config the verifier last applied to
+    /// this worker; a step carrying other ones updates the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_config: Option<String>,
     pub(crate) arn: Option<String>,
     pub(crate) url: Option<String>,
     /// The logical AWS Lambda worker name (stack prefix + id). Stored to expose in outputs.
@@ -946,11 +1073,13 @@ impl AwsWorkerController {
                     self.domain_name = Some(domain_info.fqdn.clone());
 
                     // Check for URL override in deployment config, otherwise use domain FQDN
-                    self.url = cfg
-                        .configured_primary_public_url(
-                            ctx.deployment_config.public_endpoints.as_ref(),
-                        )
-                        .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                    if !verifier::is_protected(ctx) {
+                        self.url = cfg
+                            .configured_primary_public_url(
+                                ctx.deployment_config.public_endpoints.as_ref(),
+                            )
+                            .or_else(|| Some(format!("https://{}", domain_info.fqdn)));
+                    }
                 }
                 None => {
                     // Standalone mode: no domain metadata available.
@@ -1011,6 +1140,36 @@ impl AwsWorkerController {
             .architectures(vec!["arm64".to_string()])
             .maybe_vpc_config(vpc_config)
             .build();
+
+        // On a protected install management may not create the function: the verifier checks
+        // this very request against the signed release and sends it.
+        if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
+            let write = verifier::CloudWrite::CreateFunction(verifier::CloudWrite::body(&request)?);
+            self.arn = match self
+                .write_through_verifier(ctx, statements, &cfg.id, &aws_worker_name, vec![write])
+                .await
+            {
+                Ok(written) => written.answers[0]["functionArn"]
+                    .as_str()
+                    .map(str::to_string),
+                // Our own earlier call may have created it before its answer was lost: that
+                // function carries this create's token.
+                Err(error) => match client.get_function(&aws_worker_name).await {
+                    Ok(existing) if carries_tags(existing.tags.as_ref(), &function_tags) => {
+                        info!(name=%aws_worker_name, "Function already exists and carries this create's token; adopting it");
+                        existing.configuration.function_arn
+                    }
+                    _ => return Err(error),
+                },
+            };
+            self.applied_config = verifier::statements_digest(ctx)?;
+            self.worker_name = Some(aws_worker_name);
+            self.wait_for_lambda_started_at = None;
+            return Ok(HandlerAction::Continue {
+                state: CreateWaitForActive,
+                suggested_delay: Some(Duration::from_secs(3)),
+            });
+        }
 
         let function_arn = match client.create_function(request).await {
             Ok(response) => response.function_arn,
@@ -1477,13 +1636,6 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         if self.stage_name.is_some() {
-            if self.fqdn.is_some() {
-                return Ok(HandlerAction::Continue {
-                    state: CreatingApiDomain,
-                    suggested_delay: Some(Duration::from_secs(1)),
-                });
-            }
-
             let aws_cfg = ctx.get_aws_config()?;
             let api_id = self.api_id.clone().ok_or_else(|| {
                 AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -1491,10 +1643,19 @@ impl AwsWorkerController {
                     resource_id: Some(worker_config.id.clone()),
                 })
             })?;
-            self.url = Some(format!(
-                "https://{}.execute-api.{}.amazonaws.com",
-                api_id, aws_cfg.region
-            ));
+            if self.fqdn.is_some() {
+                return Ok(HandlerAction::Continue {
+                    state: CreatingApiDomain,
+                    suggested_delay: Some(Duration::from_secs(1)),
+                });
+            }
+
+            if !verifier::is_protected(ctx) {
+                self.url = Some(format!(
+                    "https://{}.execute-api.{}.amazonaws.com",
+                    api_id, aws_cfg.region
+                ));
+            }
             return Ok(HandlerAction::Continue {
                 state: AddingApiGatewayPermission,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -1550,7 +1711,9 @@ impl AwsWorkerController {
                 url=%default_url,
                 "Using API Gateway default endpoint (no custom domain)"
             );
-            self.url = Some(default_url);
+            if !verifier::is_protected(ctx) {
+                self.url = Some(default_url);
+            }
             Ok(HandlerAction::Continue {
                 state: AddingApiGatewayPermission,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -2031,10 +2194,12 @@ impl AwsWorkerController {
         } else {
             // Standalone mode: the REST default endpoint serves under /{stage},
             // unlike the V2 `$default` stage which serves at the domain root.
-            self.url = Some(format!(
-                "https://{}.execute-api.{}.amazonaws.com/prod",
-                rest_api_id, aws_cfg.region
-            ));
+            if !verifier::is_protected(ctx) {
+                self.url = Some(format!(
+                    "https://{}.execute-api.{}.amazonaws.com/prod",
+                    rest_api_id, aws_cfg.region
+                ));
+            }
             Ok(HandlerAction::Continue {
                 state: AddingApiGatewayPermission,
                 suggested_delay: Some(Duration::from_secs(1)),
@@ -2255,14 +2420,30 @@ impl AwsWorkerController {
                 aws_cfg.region, aws_cfg.account_id
             ))
             .build();
-
-        client
-            .add_permission(&aws_worker_name, request)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to add API Gateway permission".to_string(),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        // On a protected install the verifier checks this grant against the signed stack and
+        // adds it.
+        if let Some(statements) = verifier::protected_statements(ctx, &worker_config.id)? {
+            let write = verifier::CloudWrite::AddPermission {
+                function_name: aws_worker_name.clone(),
+                request: verifier::CloudWrite::body(&request)?,
+            };
+            self.write_through_verifier(
+                ctx,
+                statements,
+                &worker_config.id,
+                &aws_worker_name,
+                vec![write],
+            )
+            .await?;
+        } else {
+            client
+                .add_permission(&aws_worker_name, request)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to add API Gateway permission".to_string(),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+        }
 
         if self.fqdn.is_some() {
             if self.uses_custom_domain {
@@ -2422,7 +2603,7 @@ impl AwsWorkerController {
 
         // Skip this step if the worker doesn't have public ingress
         // For private workers, the initial env vars already have complete self-binding
-        // (no URL to add later)
+        // (no URL to add later).
         if config.public_endpoints.is_empty() {
             info!(worker=%config.id, "Skipping env var update - no public URL to add");
             return Ok(HandlerAction::Continue {
@@ -2491,14 +2672,24 @@ impl AwsWorkerController {
             })
         })?;
 
-        client
-            .update_function_configuration(arn, request)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to update Lambda worker configuration with self-binding"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        // On a protected install the verifier checks this very request and sends it.
+        if let Some(statements) = verifier::protected_statements(ctx, &config.id)? {
+            let write = verifier::CloudWrite::UpdateFunctionConfiguration {
+                function_name: aws_worker_name.clone(),
+                request: verifier::CloudWrite::body(&request)?,
+            };
+            self.write_through_verifier(ctx, statements, &config.id, &aws_worker_name, vec![write])
+                .await?;
+        } else {
+            client
+                .update_function_configuration(arn, request)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to update Lambda worker configuration with self-binding"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
+        }
 
         info!(worker=%config.id, "Successfully updated environment variables with complete self-binding");
 
@@ -2575,34 +2766,52 @@ impl AwsWorkerController {
 
                 // Add Lambda permission for S3 to invoke this worker
                 let statement_id = format!("{}-s3-{}", worker_name, storage_ref.id);
-                let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                 let permission_request = AddPermissionRequest::builder()
                     .statement_id(statement_id.clone())
                     .action("lambda:InvokeFunction".to_string())
                     .principal("s3.amazonaws.com".to_string())
                     .source_arn(format!("arn:aws:s3:::{}", bucket_name))
+                    .source_account(ctx.get_aws_config()?.account_id.clone())
                     .build();
+                // On a protected install the verifier checks this grant against the signed stack
+                // and adds it.
+                if let Some(statements) = verifier::protected_statements(ctx, &config.id)? {
+                    let write = verifier::CloudWrite::AddPermission {
+                        function_name: worker_name.to_string(),
+                        request: verifier::CloudWrite::body(&permission_request)?,
+                    };
+                    self.write_through_verifier(
+                        ctx,
+                        statements,
+                        &config.id,
+                        worker_name,
+                        vec![write],
+                    )
+                    .await?;
+                } else {
+                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
-                match lambda_client
-                    .add_permission(worker_name, permission_request)
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) if is_remote_resource_conflict(&e) => {
-                        info!(
-                            worker=%config.id,
-                            statement_id=%statement_id,
-                            "S3 invoke permission already exists; treating as created"
-                        );
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add S3 invoke permission for storage '{}'",
-                                storage_ref.id
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
+                    match lambda_client
+                        .add_permission(worker_name, permission_request)
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) if is_remote_resource_conflict(&e) => {
+                            info!(
+                                worker=%config.id,
+                                statement_id=%statement_id,
+                                "S3 invoke permission already exists; treating as created"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to add S3 invoke permission for storage '{}'",
+                                    storage_ref.id
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            }));
+                        }
                     }
                 }
 
@@ -2620,14 +2829,7 @@ impl AwsWorkerController {
                     })?;
 
                 // Map alien event types to S3 event types
-                let s3_events: Vec<String> = events
-                    .iter()
-                    .map(|e| match e.as_str() {
-                        "created" => "s3:ObjectCreated:*".to_string(),
-                        "deleted" => "s3:ObjectRemoved:*".to_string(),
-                        other => format!("s3:{}", other),
-                    })
-                    .collect();
+                let s3_events = alien_core::storage_notifications::aws_trigger_events(events);
 
                 replace_lambda_notification_config(
                     &mut notification_config,
@@ -2639,16 +2841,15 @@ impl AwsWorkerController {
                     },
                 );
 
-                s3_client
-                    .put_bucket_notification_configuration(bucket_name, &notification_config)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to put notification configuration for bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                self.put_storage_trigger_notification(
+                    ctx,
+                    &config.id,
+                    &storage_ref.id,
+                    bucket_name,
+                    &notification_config,
+                    false,
+                )
+                .await?;
 
                 if !self.s3_permission_statement_ids.contains(&statement_id) {
                     self.s3_permission_statement_ids.push(statement_id.clone());
@@ -2736,54 +2937,57 @@ impl AwsWorkerController {
 
                 // Add Lambda permission for EventBridge
                 let statement_id = format!("{}-eb-{}", worker_name, index);
-                let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                 let permission_request = AddPermissionRequest::builder()
                     .statement_id(statement_id.clone())
                     .action("lambda:InvokeFunction".to_string())
                     .principal("events.amazonaws.com".to_string())
                     .source_arn(rule_arn)
                     .build();
+                // On a protected install the verifier checks this grant against the signed stack
+                // and adds it.
+                if let Some(statements) = verifier::protected_statements(ctx, &config.id)? {
+                    let write = verifier::CloudWrite::AddPermission {
+                        function_name: worker_name.to_string(),
+                        request: verifier::CloudWrite::body(&permission_request)?,
+                    };
+                    self.write_through_verifier(
+                        ctx,
+                        statements,
+                        &config.id,
+                        worker_name,
+                        vec![write],
+                    )
+                    .await?;
+                } else {
+                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
 
-                match lambda_client
-                    .add_permission(worker_name, permission_request)
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) if is_remote_resource_conflict(&e) => {
-                        info!(
-                            worker=%config.id,
-                            statement_id=%statement_id,
-                            "EventBridge invoke permission already exists; treating as created"
-                        );
-                    }
-                    Err(e) => {
-                        return Err(e.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add EventBridge invoke permission for rule '{}'",
-                                rule_name
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        }));
+                    match lambda_client
+                        .add_permission(worker_name, permission_request)
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(e) if is_remote_resource_conflict(&e) => {
+                            info!(
+                                worker=%config.id,
+                                statement_id=%statement_id,
+                                "EventBridge invoke permission already exists; treating as created"
+                            );
+                        }
+                        Err(e) => {
+                            return Err(e.context(ErrorData::CloudPlatformError {
+                                message: format!(
+                                    "Failed to add EventBridge invoke permission for rule '{}'",
+                                    rule_name
+                                ),
+                                resource_id: Some(config.id.clone()),
+                            }));
+                        }
                     }
                 }
 
                 // Add Lambda as the target of the rule
-                eventbridge_client
-                    .put_targets(PutTargetsRequest {
-                        rule: rule_name.clone(),
-                        targets: vec![EventBridgeTarget {
-                            id: "1".to_string(),
-                            arn: function_arn.to_string(),
-                        }],
-                    })
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to add target to EventBridge rule '{}'",
-                            rule_name
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    })?;
+                self.put_schedule_target(ctx, &config.id, &rule_name, function_arn)
+                    .await?;
 
                 if !self
                     .eventbridge_permission_statement_ids
@@ -2822,7 +3026,17 @@ impl AwsWorkerController {
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &config.id);
 
-        if let Some(limit) = config.concurrency_limit {
+        if let (Some(limit), Some(statements)) = (
+            config.concurrency_limit,
+            verifier::protected_statements(ctx, &config.id)?,
+        ) {
+            let write = verifier::CloudWrite::PutFunctionConcurrency {
+                function_name: aws_worker_name.clone(),
+                reserved_concurrent_executions: limit,
+            };
+            self.write_through_verifier(ctx, statements, &config.id, &aws_worker_name, vec![write])
+                .await?;
+        } else if let Some(limit) = config.concurrency_limit {
             info!(worker=%config.id, limit=%limit, "Setting reserved concurrency on worker");
             client
                 .put_function_concurrency(&aws_worker_name, limit)
@@ -2904,7 +3118,11 @@ impl AwsWorkerController {
         // updated: a sandbox promoting a rebuilt image version after this worker rendered, or a
         // re-registration. Compare the bindings rendered now with the ones Lambda runs, and
         // refresh only when they differ.
-        if binding_check_due(&aws_worker_name, Utc::now()) {
+        // On a protected install the verifier renders the bindings; what it wrote is checked
+        // against the signed release, not against management's rendering.
+        if ctx.deployment_config.stack_settings.signing.is_none()
+            && binding_check_due(&aws_worker_name, Utc::now())
+        {
             if let Some(expected) = self.linked_binding_environment(ctx, &worker_config).await? {
                 // The comparison is optional to the heartbeat: a throttled or failed read skips
                 // it until the next window instead of failing a healthy worker.
@@ -3087,32 +3305,16 @@ impl AwsWorkerController {
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         self.ensure_batch_queue_visibility(ctx, &current_config, false)
             .await?;
+        // On a protected install the code goes to the verifier with the rest of the update, in
+        // one request (UpdateConfigStart).
+        let protected = verifier::protected_statements(ctx, &current_config.id)?.is_some();
         let code_changed = current_config.code != previous_config.code;
 
         // UpdateCodeStart only handles code updates if needed
-        if code_changed {
+        if code_changed && !protected {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-
-            let image_uri = match &current_config.code {
-                alien_core::WorkerCode::Image { image } => image.clone(),
-                alien_core::WorkerCode::Source { .. } => {
-                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                        message: "Worker is configured with source code for update, but only pre-built images are supported".to_string(),
-                        resource_id: Some(current_config.id.clone()),
-                    }));
-                }
-            };
-
-            // Resolve proxy URIs to native ECR URIs.
-            let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
-                alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
-                    .unwrap_or(image_uri)
-            } else {
-                image_uri
-            };
-
-            let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
+            let image_uri = Self::function_image_uri(ctx, &current_config)?;
 
             let request = UpdateFunctionCodeRequest::builder()
                 .image_uri(image_uri)
@@ -3193,7 +3395,9 @@ impl AwsWorkerController {
         let previous_config = ctx.previous_resource_config::<Worker>()?;
         self.ensure_batch_queue_visibility(ctx, &current_config, false)
             .await?;
-        let config_changed = current_config.permissions != previous_config.permissions
+        // On a protected install a newly signed config changes the env too.
+        let config_changed = verifier::statements_changed(ctx, self.applied_config.as_deref())?
+            || current_config.permissions != previous_config.permissions
             || current_config.memory_mb != previous_config.memory_mb
             || current_config.timeout_seconds != previous_config.timeout_seconds
             || current_config.environment != previous_config.environment
@@ -3207,7 +3411,7 @@ impl AwsWorkerController {
 
         // An update whose own configuration is unchanged (new code, or a dependency's update)
         // still re-renders the linked bindings: they may have moved since this worker rendered.
-        if !config_changed {
+        let needs_configuration = if !config_changed {
             let bindings_drifted = match self
                 .linked_binding_environment(ctx, &current_config)
                 .await?
@@ -3237,90 +3441,89 @@ impl AwsWorkerController {
                     }))
                 }
             };
-            if !bindings_drifted {
-                self.wait_for_lambda_started_at = None;
-                return Ok(HandlerAction::Continue {
-                    state: UpdateConfigWaitForActive,
-                    suggested_delay: None,
-                });
+            if bindings_drifted {
+                info!(
+                    worker = %current_config.id,
+                    reason = "linked binding drift",
+                    "Re-rendering the worker's linked bindings during its update"
+                );
             }
-            info!(
-                worker = %current_config.id,
-                reason = "linked binding drift",
-                "Re-rendering the worker's linked bindings during its update"
-            );
-        }
-
-        // Get the ServiceAccount for this worker's permission profile
-        let service_account_id = format!("{}-sa", current_config.get_permissions());
-        let service_account_ref = ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.to_string(),
-        );
-
-        // Get the ServiceAccount's role ARN
-        let service_account_state = ctx
-            .require_dependency::<crate::service_account::AwsServiceAccountController>(
-                &service_account_ref,
-            )?;
-
-        let role_arn = service_account_state
-            .role_arn
-            .as_deref()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: current_config.id().to_string(),
-                    dependency_id: service_account_id.to_string(),
-                })
-            })?
-            .to_string();
-
-        let final_env_vars = self
-            .prepare_environment_variables(
-                &current_config.environment,
-                &current_config.links,
-                ctx,
-                &aws_worker_name,
+            bindings_drifted
+        } else {
+            true
+        };
+        let request = if needs_configuration {
+            Some(
+                self.configuration_update(ctx, &current_config, &aws_worker_name)
+                    .await?,
             )
-            .await?;
-
-        let lambda_environment = if !final_env_vars.is_empty() {
-            Some(Environment::builder().variables(final_env_vars).build())
         } else {
             None
         };
 
-        // Get VPC configuration if a Network resource exists
-        let vpc_config = linked_containers::vpc_config(ctx, self.get_vpc_config(ctx)?).await?;
-
-        let request = UpdateFunctionConfigurationRequest::builder()
-            .role(role_arn)
-            .timeout(current_config.timeout_seconds as i32)
-            .memory_size(current_config.memory_mb as i32)
-            .maybe_environment(lambda_environment)
-            .maybe_vpc_config(vpc_config)
-            .build();
-
-        let arn = self.arn.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "Worker ARN not available for config update".to_string(),
-                resource_id: Some(current_config.id.clone()),
-            })
-        })?;
-
-        client
-            .update_function_configuration(arn, request)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to update Lambda worker configuration".to_string(),
-                resource_id: Some(current_config.id.clone()),
+        // On a protected install all of the update's writes go to the verifier in one request,
+        // which it checks in full before it sends any: a refusal leaves the function on the
+        // previous release's code and configuration alike.
+        if let Some(statements) = verifier::protected_statements(ctx, &current_config.id)? {
+            let mut writes = Vec::new();
+            if current_config.code != previous_config.code {
+                // A published version would carry the new image with the previous release's
+                // configuration until the write after this one lands.
+                let code = UpdateFunctionCodeRequest::builder()
+                    .image_uri(Self::function_image_uri(ctx, &current_config)?)
+                    .publish(false)
+                    .build();
+                writes.push(verifier::CloudWrite::UpdateFunctionCode {
+                    function_name: aws_worker_name.clone(),
+                    request: verifier::CloudWrite::body(&code)?,
+                });
+            }
+            if let Some(request) = &request {
+                writes.push(verifier::CloudWrite::UpdateFunctionConfiguration {
+                    function_name: aws_worker_name.clone(),
+                    request: verifier::CloudWrite::body(request)?,
+                });
+            }
+            if current_config.concurrency_limit != previous_config.concurrency_limit {
+                writes.push(concurrency_write(
+                    &aws_worker_name,
+                    current_config.concurrency_limit,
+                ));
+            }
+            if !writes.is_empty() {
+                self.write_through_verifier(
+                    ctx,
+                    statements,
+                    &current_config.id,
+                    &aws_worker_name,
+                    writes,
+                )
+                .await?;
+            }
+            if request.is_some() {
+                self.applied_config = verifier::statements_digest(ctx)?;
+            }
+        } else if let Some(request) = request {
+            let arn = self.arn.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Worker ARN not available for config update".to_string(),
+                    resource_id: Some(current_config.id.clone()),
+                })
             })?;
+            client
+                .update_function_configuration(arn, request)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to update Lambda worker configuration".to_string(),
+                    resource_id: Some(current_config.id.clone()),
+                })?;
+        }
 
         // Always transition to wait state - linear flow
         self.wait_for_lambda_started_at = None;
         Ok(HandlerAction::Continue {
             state: UpdateConfigWaitForActive,
-            suggested_delay: Some(Duration::from_secs(3)),
+            suggested_delay: needs_configuration.then(|| Duration::from_secs(3)),
         })
     }
 
@@ -4261,34 +4464,56 @@ impl AwsWorkerController {
                         })?;
 
                     let statement_id = format!("{}-s3-{}", worker_name, storage_ref.id);
-                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+
                     let permission_request = AddPermissionRequest::builder()
                         .statement_id(statement_id.clone())
                         .action("lambda:InvokeFunction".to_string())
                         .principal("s3.amazonaws.com".to_string())
                         .source_arn(format!("arn:aws:s3:::{}", bucket_name))
+                        .source_account(ctx.get_aws_config()?.account_id.clone())
                         .build();
-
-                    match lambda_client
-                        .add_permission(worker_name, permission_request)
-                        .await
+                    // On a protected install the verifier checks this grant against the signed stack
+                    // and adds it.
+                    if let Some(statements) =
+                        verifier::protected_statements(ctx, &current_config.id)?
                     {
-                        Ok(_) => {}
-                        Err(e) if is_remote_resource_conflict(&e) => {
-                            info!(
-                                worker=%current_config.id,
-                                statement_id=%statement_id,
-                                "S3 invoke permission already exists; treating as created"
-                            );
-                        }
-                        Err(e) => {
-                            return Err(e.context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to add S3 invoke permission for storage '{}'",
-                                    storage_ref.id
-                                ),
-                                resource_id: Some(current_config.id.clone()),
-                            }));
+                        let write = verifier::CloudWrite::AddPermission {
+                            function_name: worker_name.to_string(),
+                            request: verifier::CloudWrite::body(&permission_request)?,
+                        };
+                        self.write_through_verifier(
+                            ctx,
+                            statements,
+                            &current_config.id,
+                            worker_name,
+                            vec![write],
+                        )
+                        .await?;
+                    } else {
+                        let lambda_client =
+                            ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+
+                        match lambda_client
+                            .add_permission(worker_name, permission_request)
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) if is_remote_resource_conflict(&e) => {
+                                info!(
+                                    worker=%current_config.id,
+                                    statement_id=%statement_id,
+                                    "S3 invoke permission already exists; treating as created"
+                                );
+                            }
+                            Err(e) => {
+                                return Err(e.context(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to add S3 invoke permission for storage '{}'",
+                                        storage_ref.id
+                                    ),
+                                    resource_id: Some(current_config.id.clone()),
+                                }));
+                            }
                         }
                     }
 
@@ -4304,14 +4529,7 @@ impl AwsWorkerController {
                             resource_id: Some(current_config.id.clone()),
                         })?;
 
-                    let s3_events: Vec<String> = events
-                        .iter()
-                        .map(|e| match e.as_str() {
-                            "created" => "s3:ObjectCreated:*".to_string(),
-                            "deleted" => "s3:ObjectRemoved:*".to_string(),
-                            other => format!("s3:{}", other),
-                        })
-                        .collect();
+                    let s3_events = alien_core::storage_notifications::aws_trigger_events(events);
 
                     replace_lambda_notification_config(
                         &mut notification_config,
@@ -4323,16 +4541,15 @@ impl AwsWorkerController {
                         },
                     );
 
-                    s3_client
-                        .put_bucket_notification_configuration(bucket_name, &notification_config)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to put notification configuration for bucket '{}'",
-                                bucket_name
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    self.put_storage_trigger_notification(
+                        ctx,
+                        &current_config.id,
+                        &storage_ref.id,
+                        bucket_name,
+                        &notification_config,
+                        false,
+                    )
+                    .await?;
 
                     if !self.s3_permission_statement_ids.contains(&statement_id) {
                         self.s3_permission_statement_ids.push(statement_id);
@@ -4382,53 +4599,59 @@ impl AwsWorkerController {
                     }
                     let rule_arn = rule_response.rule_arn.unwrap_or_default();
                     let statement_id = format!("{}-eb-{}", worker_name, index);
-                    let lambda_client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
                     let permission_request = AddPermissionRequest::builder()
                         .statement_id(statement_id.clone())
                         .action("lambda:InvokeFunction".to_string())
                         .principal("events.amazonaws.com".to_string())
                         .source_arn(rule_arn)
                         .build();
-
-                    match lambda_client
-                        .add_permission(worker_name, permission_request)
-                        .await
+                    // On a protected install the verifier checks this grant against the signed stack
+                    // and adds it.
+                    if let Some(statements) =
+                        verifier::protected_statements(ctx, &current_config.id)?
                     {
-                        Ok(_) => {}
-                        Err(e) if is_remote_resource_conflict(&e) => {
-                            info!(
-                                worker=%current_config.id,
-                                statement_id=%statement_id,
-                                "EventBridge invoke permission already exists; treating as created"
-                            );
-                        }
-                        Err(e) => {
-                            return Err(e.context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to add EventBridge invoke permission for rule '{}'",
-                                    rule_name
-                                ),
-                                resource_id: Some(current_config.id.clone()),
-                            }));
+                        let write = verifier::CloudWrite::AddPermission {
+                            function_name: worker_name.to_string(),
+                            request: verifier::CloudWrite::body(&permission_request)?,
+                        };
+                        self.write_through_verifier(
+                            ctx,
+                            statements,
+                            &current_config.id,
+                            worker_name,
+                            vec![write],
+                        )
+                        .await?;
+                    } else {
+                        let lambda_client =
+                            ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
+
+                        match lambda_client
+                            .add_permission(worker_name, permission_request)
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(e) if is_remote_resource_conflict(&e) => {
+                                info!(
+                                    worker=%current_config.id,
+                                    statement_id=%statement_id,
+                                    "EventBridge invoke permission already exists; treating as created"
+                                );
+                            }
+                            Err(e) => {
+                                return Err(e.context(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Failed to add EventBridge invoke permission for rule '{}'",
+                                        rule_name
+                                    ),
+                                    resource_id: Some(current_config.id.clone()),
+                                }));
+                            }
                         }
                     }
 
-                    eventbridge_client
-                        .put_targets(PutTargetsRequest {
-                            rule: rule_name.clone(),
-                            targets: vec![EventBridgeTarget {
-                                id: "1".to_string(),
-                                arn: function_arn.to_string(),
-                            }],
-                        })
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to add target to EventBridge rule '{}'",
-                                rule_name
-                            ),
-                            resource_id: Some(current_config.id.clone()),
-                        })?;
+                    self.put_schedule_target(ctx, &current_config.id, &rule_name, function_arn)
+                        .await?;
 
                     if !self
                         .eventbridge_permission_statement_ids
@@ -4463,7 +4686,11 @@ impl AwsWorkerController {
         let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &config.id);
 
-        if config.concurrency_limit != prev_config.concurrency_limit {
+        // On a protected install the concurrency went to the verifier with the code and
+        // configuration (UpdateConfigStart).
+        if verifier::protected_statements(ctx, &config.id)?.is_some() {
+            debug!(worker=%config.id, "Concurrency was part of the verifier's update");
+        } else if config.concurrency_limit != prev_config.concurrency_limit {
             match config.concurrency_limit {
                 Some(limit) => {
                     info!(worker=%config.id, limit=%limit, "Updating reserved concurrency on worker");
@@ -4774,6 +5001,15 @@ impl AwsWorkerController {
         // (Lambda permissions are removed when the worker is deleted)
         self.eventbridge_permission_statement_ids.clear();
 
+        // A protected install's functions change only through its verifier, which deletes
+        // them as they are. Lambda then releases the function's ENIs itself, which takes longer
+        // than a detach before the delete; WaitingForVpcEnisReleased waits for that.
+        if verifier::is_protected(ctx) {
+            return Ok(HandlerAction::Continue {
+                state: DeletingWorker,
+                suggested_delay: None,
+            });
+        }
         // Detach the Lambda from the VPC before deleting it. AWS otherwise
         // keeps Lambda-managed ENIs around after function deletion, which can
         // block Terraform/CloudFormation from deleting customer-owned subnets.
@@ -4908,6 +5144,17 @@ impl AwsWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let aws_worker_name = get_aws_worker_name(ctx.resource_prefix, &worker_config.id);
         info!(name=%aws_worker_name, "Deleting worker itself: {}", aws_worker_name);
+
+        if verifier::is_protected(ctx) {
+            let verifier = verifier::LambdaVerifier::new(client, ctx.resource_prefix);
+            let deleted =
+                verifier::delete_workload(&verifier, &worker_config.id, &aws_worker_name).await?;
+            info!(name=%aws_worker_name, existed=deleted.existed, "The verifier deleted the function, waiting until it is gone");
+            return Ok(HandlerAction::Continue {
+                state: DeleteWaitForNotFound,
+                suggested_delay: None,
+            });
+        }
 
         let outcome = delete_tag_scoped(
             client.delete_function(&aws_worker_name, None).await,
@@ -5231,6 +5478,10 @@ impl AwsWorkerController {
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        verifier::statements_changed(ctx, self.applied_config.as_deref())
+    }
 
     #[handler(
         state = RefreshFailed,
@@ -5659,21 +5910,48 @@ impl AwsWorkerController {
                 if batch.is_none() && !was_batched {
                     return Ok(uuid);
                 }
-                lambda_client
-                    .update_event_source_mapping(
-                        &uuid,
-                        alien_aws_clients::lambda::UpdateEventSourceMappingRequest::builder()
-                            .batch_size(batch_size)
-                            .maximum_batching_window_in_seconds(window)
-                            .function_response_types(response_types)
-                            .scaling_config(scaling)
-                            .build(),
+                let update = alien_aws_clients::lambda::UpdateEventSourceMappingRequest::builder()
+                    .batch_size(batch_size)
+                    .maximum_batching_window_in_seconds(window)
+                    .function_response_types(response_types)
+                    .scaling_config(scaling)
+                    .build();
+                if let Some(release) =
+                    crate::core::verifier::protected_statements(ctx, &worker_config.id)?
+                {
+                    let verifier = crate::core::verifier::LambdaVerifier::new(
+                        lambda_client.clone(),
+                        ctx.resource_prefix,
+                    );
+                    crate::core::verifier::apply_resource_write(
+                        &verifier,
+                        release,
+                        ctx.deployment_config.signed_config.as_ref(),
+                        &worker_config.id,
+                        vec![
+                            crate::core::verifier::ResourceWrite::UpdateEventSourceMapping {
+                                uuid: uuid.clone(),
+                                request: serde_json::to_value(&update).into_alien_error().context(
+                                    ErrorData::CloudPlatformError {
+                                        message:
+                                            "The event source mapping request does not serialize"
+                                                .to_string(),
+                                        resource_id: Some(worker_config.id.clone()),
+                                    },
+                                )?,
+                            },
+                        ],
                     )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: "Failed to reconcile queue event source mapping".to_string(),
-                        resource_id: Some(worker_config.id.clone()),
-                    })?;
+                    .await?;
+                } else {
+                    lambda_client
+                        .update_event_source_mapping(&uuid, update)
+                        .await
+                        .context(ErrorData::CloudPlatformError {
+                            message: "Failed to reconcile queue event source mapping".to_string(),
+                            resource_id: Some(worker_config.id.clone()),
+                        })?;
+                }
                 info!(
                     worker=%worker_config.id,
                     queue_arn=%queue_arn,
@@ -5693,6 +5971,47 @@ impl AwsWorkerController {
             .maybe_scaling_config(batch.map(|_| scaling))
             .enabled(true)
             .build();
+
+        // On a protected install which queue feeds the function is the verifier's to set: it
+        // checks the mapping against the signed stack and sends this very request.
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, &worker_config.id)?
+        {
+            let verifier = crate::core::verifier::LambdaVerifier::new(
+                lambda_client.clone(),
+                ctx.resource_prefix,
+            );
+            let written = crate::core::verifier::apply_resource_write(
+                &verifier,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                &worker_config.id,
+                vec![
+                    crate::core::verifier::ResourceWrite::CreateEventSourceMapping {
+                        request: serde_json::to_value(&request).into_alien_error().context(
+                            ErrorData::CloudPlatformError {
+                                message: "The event source mapping request does not serialize"
+                                    .to_string(),
+                                resource_id: Some(worker_config.id.clone()),
+                            },
+                        )?,
+                    },
+                ],
+            )
+            .await?;
+            let uuid = written.answers[0]["uuid"]
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudPlatformError {
+                        message: "Queue event source mapping response has no UUID".to_string(),
+                        resource_id: Some(worker_config.id.clone()),
+                    })
+                })?;
+            if !self.event_source_mappings.contains(&uuid) {
+                self.event_source_mappings.push(uuid.clone());
+            }
+            return Ok(uuid);
+        }
 
         let response = match lambda_client.create_event_source_mapping(request).await {
             Ok(response) => response,
@@ -5893,6 +6212,122 @@ impl AwsWorkerController {
         .map(|rendered| rendered.variables))
     }
 
+    /// The image the function pulls in this install: the configured image, with a proxy URI
+    /// resolved to the native ECR one and the ECR region matched to the function's.
+    fn function_image_uri(ctx: &ResourceControllerContext<'_>, config: &Worker) -> Result<String> {
+        let image_uri = match &config.code {
+            alien_core::WorkerCode::Image { image } => image.clone(),
+            alien_core::WorkerCode::Source { .. } => {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Worker is configured with source code for update, but only pre-built images are supported".to_string(),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        };
+        let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
+            alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
+                .unwrap_or(image_uri)
+        } else {
+            image_uri
+        };
+        Ok(Self::rewrite_ecr_region_if_needed(
+            &image_uri,
+            &ctx.get_aws_config()?.region,
+        ))
+    }
+
+    /// The UpdateFunctionConfiguration an update of `current_config` sends for its function
+    /// `aws_worker_name`.
+    async fn configuration_update(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        current_config: &Worker,
+        aws_worker_name: &str,
+    ) -> Result<UpdateFunctionConfigurationRequest> {
+        // Get the ServiceAccount for this worker's permission profile
+        let service_account_id = format!("{}-sa", current_config.get_permissions());
+        let service_account_ref = ResourceRef::new(
+            alien_core::ServiceAccount::RESOURCE_TYPE,
+            service_account_id.to_string(),
+        );
+
+        // Get the ServiceAccount's role ARN
+        let service_account_state = ctx
+            .require_dependency::<crate::service_account::AwsServiceAccountController>(
+                &service_account_ref,
+            )?;
+
+        let role_arn = service_account_state
+            .role_arn
+            .as_deref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: current_config.id().to_string(),
+                    dependency_id: service_account_id.to_string(),
+                })
+            })?
+            .to_string();
+
+        let final_env_vars = self
+            .prepare_environment_variables(
+                &current_config.environment,
+                &current_config.links,
+                ctx,
+                aws_worker_name,
+            )
+            .await?;
+
+        let lambda_environment = if !final_env_vars.is_empty() {
+            Some(Environment::builder().variables(final_env_vars).build())
+        } else {
+            None
+        };
+
+        // Get VPC configuration if a Network resource exists
+        let vpc_config = linked_containers::vpc_config(ctx, self.get_vpc_config(ctx)?).await?;
+
+        Ok(UpdateFunctionConfigurationRequest::builder()
+            .role(role_arn)
+            .timeout(current_config.timeout_seconds as i32)
+            .memory_size(current_config.memory_mb as i32)
+            .maybe_environment(lambda_environment)
+            .maybe_vpc_config(vpc_config)
+            .build())
+    }
+
+    /// Hands `writes`, the Lambda requests this controller built for `worker`'s function
+    /// `function` for one release, to the install's verifier, which checks them all against
+    /// the signed release before it sends any, and sends them unchanged, in order.
+    async fn write_through_verifier(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        statements: &alien_core::ReleaseStatements,
+        worker: &str,
+        function: &str,
+        writes: Vec<verifier::CloudWrite>,
+    ) -> Result<verifier::Written> {
+        let lambda = ctx
+            .service_provider
+            .get_aws_lambda_client(ctx.get_aws_config()?)
+            .await?;
+        let verifier = verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+        let written = verifier::apply_write(
+            &verifier,
+            statements,
+            ctx.deployment_config.signed_config.as_ref(),
+            worker,
+            writes,
+            function,
+        )
+        .await?;
+        info!(
+            worker = %worker,
+            release = written.release,
+            "The verifier applied the controller's write"
+        );
+        Ok(written)
+    }
+
     async fn prepare_environment_variables(
         &self,
         initial_env: &HashMap<String, String>,
@@ -5919,6 +6354,8 @@ impl AwsWorkerController {
             .add_linked_resources(&runtime_links, ctx, worker_name_for_error_logging)
             .await?
             .add_self_worker_binding(&worker_config.id, self_binding_params.as_ref())?
+            .add_signed_values(ctx, &worker_config.id)
+            .await?
             .build();
 
         Ok(env_vars)
@@ -5928,6 +6365,7 @@ impl AwsWorkerController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(worker_name: &str) -> Self {
         Self {
+            applied_config: None,
             state: AwsWorkerState::Ready,
             arn: Some(format!(
                 "arn:aws:lambda:us-east-1:123456789012:function:{}",
@@ -6067,6 +6505,9 @@ mod tests {
 
     use crate::core::aws_tag_scoped::logs_access_denied;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::verifier_test_support::{
+        run_write, signed_release, signed_telemetry_config, CHANNEL,
+    };
     use crate::core::{
         serialize_controller, MockPlatformServiceProvider, ResourceController, StackExecutor,
     };
@@ -6076,7 +6517,9 @@ mod tests {
         fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock, AwsWorkerController,
         AwsWorkerState,
     };
+    use alien_aws_clients::lambda::InvokeResponse;
     use alien_core::standard_resource_tags;
+    use alien_core::StackSigning;
 
     #[tokio::test]
     async fn queue_rollout_updates_private_runtime_environment_on_batch_only_changes() {
@@ -11908,5 +12351,868 @@ mod tests {
                 ]
             );
         }
+    }
+
+    // ─────────────── PROTECTED INSTALL TESTS ───────────────────────
+
+    const PROTECTED_WORKER: &str = "api";
+    const PROTECTED_WORKER_NAME: &str = "test-api";
+
+    fn pinned_image(digest_byte: char) -> String {
+        format!(
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/api@sha256:{}",
+            digest_byte.to_string().repeat(64)
+        )
+    }
+
+    fn pinned_worker(digest_byte: char, memory_mb: u32) -> Worker {
+        Worker::new(PROTECTED_WORKER.to_string())
+            .code(WorkerCode::Image {
+                image: pinned_image(digest_byte),
+            })
+            .permissions("default-profile".to_string())
+            .memory_mb(memory_mb)
+            .build()
+    }
+
+    fn protected_settings() -> StackSettings {
+        StackSettings {
+            signing: Some(StackSigning {
+                fingerprint: crate::core::verifier_test_support::settings("test").fingerprint,
+                channel: CHANNEL.to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Steps `controller` once, as a worker with a public endpoint, on a protected install or
+    /// not, and returns what it recorded.
+    async fn step_public_worker(
+        controller: AwsWorkerController,
+        protected: bool,
+        provider: Arc<MockPlatformServiceProvider>,
+    ) -> AwsWorkerController {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(function_public_ingress())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .stack_settings(if protected {
+                protected_settings()
+            } else {
+                StackSettings::default()
+            })
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("the step succeeds");
+        executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone()
+    }
+
+    /// The gateway address a worker shows: on an unprotected install the API's default endpoint,
+    /// on a protected one none, because the verifier can't tell the install's API from one the
+    /// control plane made, and an address it can't check isn't passed on.
+    #[rstest]
+    #[case::http_api(false, "https://abc123.execute-api.us-east-1.amazonaws.com")]
+    #[case::rest_api(true, "https://abc123.execute-api.us-east-1.amazonaws.com/prod")]
+    #[tokio::test]
+    async fn a_protected_worker_shows_no_gateway_address(
+        #[case] rest: bool,
+        #[case] gateway: &str,
+    ) {
+        let controller = if rest {
+            AwsWorkerController {
+                state: AwsWorkerState::CreatingRestDeployment,
+                rest_api_id: Some("abc123".to_string()),
+                rest_deployment_id: Some("dep-1".to_string()),
+                stage_name: Some("prod".to_string()),
+                ..Default::default()
+            }
+        } else {
+            AwsWorkerController {
+                state: AwsWorkerState::CreatingApiStage,
+                api_id: Some("abc123".to_string()),
+                stage_name: Some("$default".to_string()),
+                ..Default::default()
+            }
+        };
+        let provider = || {
+            if rest {
+                let mut provider = MockPlatformServiceProvider::new();
+                let mut rest_api = MockApiGatewayApi::new();
+                rest_api.expect_tag_resource().returning(|_, _| Ok(()));
+                let rest_api = Arc::new(rest_api);
+                provider
+                    .expect_get_aws_apigateway_client()
+                    .returning(move |_| Ok(rest_api.clone()));
+                Arc::new(provider)
+            } else {
+                setup_mock_service_provider(Arc::new(MockLambdaApi::new()), None, None)
+            }
+        };
+        let unprotected = step_public_worker(controller.clone(), false, provider()).await;
+        assert_eq!(unprotected.url.as_deref(), Some(gateway));
+        let protected = step_public_worker(controller, true, provider()).await;
+        assert_eq!(protected.url, None);
+    }
+
+    /// Lambda on a protected install: reads succeed, and invoking the verifier records the
+    /// request and answers with `answer` (see [`answer_to`]). No write has an expectation, so a
+    /// write fails the test.
+    fn protected_lambda(
+        invocations: Arc<Mutex<Vec<(String, Vec<u8>)>>>,
+        answer: InvokeResponse,
+    ) -> Arc<MockLambdaApi> {
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Ok(create_successful_function_response(PROTECTED_WORKER_NAME)));
+        lambda.expect_invoke().returning(move |request| {
+            let read: serde_json::Value = serde_json::from_slice(&request.payload).unwrap();
+            if read.get("readDeployerInputs").is_some() {
+                // The install's store holds no input value; not a write, so not recorded.
+                return Ok(invoke_answer(None, serde_json::json!({"inputs": {}})));
+            }
+            invocations
+                .lock()
+                .unwrap()
+                .push((request.function_name.clone(), request.payload.clone()));
+            Ok(answer_to(&answer, &request.payload))
+        });
+        Arc::new(lambda)
+    }
+
+    /// `answer` to the `applyWrite` in `payload`: a refusal as it is; a written answer
+    /// (see [`written`]) with its one `answer` given for each of the request's writes.
+    fn answer_to(answer: &InvokeResponse, payload: &[u8]) -> InvokeResponse {
+        if answer.function_error.is_some() {
+            return answer.clone();
+        }
+        let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        let writes = request["applyWrite"]["writes"]
+            .as_array()
+            .or_else(|| request["applyResourceWrite"]["writes"].as_array())
+            .unwrap()
+            .len();
+        let mut body: serde_json::Value = serde_json::from_slice(&answer.payload).unwrap();
+        let one = body.as_object_mut().unwrap().remove("answer").unwrap();
+        body["answers"] = serde_json::json!(vec![one; writes]);
+        InvokeResponse {
+            payload: serde_json::to_vec(&body).unwrap(),
+            ..answer.clone()
+        }
+    }
+
+    fn invoke_answer(function_error: Option<&str>, payload: serde_json::Value) -> InvokeResponse {
+        InvokeResponse {
+            status_code: 200,
+            function_error: function_error.map(str::to_string),
+            log_result: None,
+            payload: serde_json::to_vec(&payload).unwrap(),
+            executed_version: None,
+        }
+    }
+
+    async fn protected_update(
+        answer: InvokeResponse,
+    ) -> (
+        SingleControllerExecutor,
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(String, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        let to = pinned_worker('2', 512);
+        protected_update_to(to.clone(), to, None, answer).await
+    }
+
+    /// The protected worker updated to the signed `authored` worker, which the deployment
+    /// hands the controller as `deployed`, with the signed `config`.
+    async fn protected_update_to(
+        authored: Worker,
+        deployed: Worker,
+        config: Option<alien_core::SignedStatement>,
+        answer: InvokeResponse,
+    ) -> (
+        SingleControllerExecutor,
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(String, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        let from = pinned_worker('1', 256);
+        let release = signed_release(
+            Platform::Aws,
+            &Stack::new("test".to_string())
+                .add(authored, ResourceLifecycle::Live)
+                .build(),
+            2,
+        );
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(from)
+            .controller(AwsWorkerController {
+                // A private worker has no address; the fixture's function URL is not one Lambda gives it.
+                url: None,
+                ..AwsWorkerController::mock_ready(PROTECTED_WORKER_NAME)
+            })
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(
+                protected_lambda(invocations.clone(), answer),
+                None,
+                None,
+            ))
+            .with_test_dependencies()
+            .with_dependency(setup_role(), setup_role_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .signed_release(release.clone(), config)
+            .build()
+            .await
+            .unwrap();
+        executor.update(deployed).unwrap();
+        let result = executor.run_until_terminal().await;
+        let invocations = invocations.lock().unwrap().clone();
+        (executor, result, invocations, release)
+    }
+
+    /// Env the deployment holds beside the signed release (set in the dashboard before the
+    /// install was protected) never reaches a protected worker: the controller builds its env
+    /// from what the release signs, and the verifier's tables accept the request.
+    #[tokio::test]
+    async fn a_protected_function_gets_no_env_the_release_doesnt_sign() {
+        let authored = pinned_worker('2', 512);
+        let mut deployed = authored.clone();
+        deployed
+            .environment
+            .insert("V8_PROBE".to_string(), "1".to_string());
+        let (_, result, invocations, _) =
+            protected_update_to(authored, deployed, None, written("Update")).await;
+
+        result.expect("the update completes through the verifier");
+        assert_eq!(invocations.len(), 1);
+        let request: serde_json::Value = serde_json::from_slice(&invocations[0].1).unwrap();
+        let env = request["applyWrite"]["writes"][1]["updateFunctionConfiguration"]["request"]
+            ["Environment"]["Variables"]
+            .as_object()
+            .expect("the configuration update carries the env")
+            .clone();
+        assert!(!env.contains_key("V8_PROBE"), "{env:?}");
+        assert!(env.contains_key("ALIEN_TRANSPORT"), "{env:?}");
+        let (answer, _) = run_write(aws_install(), "test", None, &invocations[0].1).await;
+        answer.expect("the verifier's tables accept the controller's request");
+    }
+
+    /// On a protected install management may not write the function: the update hands the
+    /// verifier the UpdateFunctionCode, UpdateFunctionConfiguration and concurrency it built,
+    /// with the signed release, in one request, so a refusal of any leaves the function on the
+    /// previous release's code and configuration alike. The verifier's tables accept them all.
+    #[tokio::test]
+    async fn a_protected_update_goes_through_the_verifier_and_never_writes_the_function() {
+        let mut to = pinned_worker('2', 512);
+        to.concurrency_limit = Some(5);
+        let (executor, result, invocations, release) =
+            protected_update_to(to.clone(), to, None, written("Update")).await;
+
+        result.expect("the update completes through the verifier");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            invocations.len(),
+            1,
+            "one verifier call updates the function"
+        );
+        let (function, payload) = &invocations[0];
+        assert_eq!(function, "test-verifier");
+        let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+        let writes = request["applyWrite"]["writes"].as_array().unwrap();
+        assert_eq!(
+            writes
+                .iter()
+                .map(|write| write.as_object().unwrap().keys().next().unwrap().as_str())
+                .collect::<Vec<_>>(),
+            [
+                "updateFunctionCode",
+                "updateFunctionConfiguration",
+                "putFunctionConcurrency"
+            ]
+        );
+        assert_eq!(
+            request["applyWrite"]["release"],
+            serde_json::json!(release.release)
+        );
+        assert_eq!(
+            request["applyWrite"]["signerLists"],
+            serde_json::json!(release.signer_lists)
+        );
+        assert_eq!(
+            writes[0]["updateFunctionCode"]["request"]["ImageUri"],
+            serde_json::json!(pinned_image('2'))
+        );
+        assert_eq!(
+            writes[0]["updateFunctionCode"]["request"]["Publish"],
+            serde_json::json!(false),
+            "a version published between the code and configuration writes would run the new image with the old env"
+        );
+        assert_eq!(
+            writes[1]["updateFunctionConfiguration"]["request"]["MemorySize"],
+            serde_json::json!(512)
+        );
+        assert_eq!(
+            writes[2]["putFunctionConcurrency"]["reservedConcurrentExecutions"],
+            serde_json::json!(5)
+        );
+        let (answer, forwarded) = run_write(aws_install(), "test", None, payload).await;
+        answer.expect("the verifier's tables accept the controller's request");
+        assert_eq!(forwarded.len(), 3);
+    }
+
+    /// A worker's env follows the release (the secrets list names the release's digest), so an
+    /// update for another release writes the configuration with the code even when the worker's
+    /// own settings are as they were. Code alone would leave the previous release's env behind.
+    #[tokio::test]
+    async fn a_protected_update_for_a_new_release_writes_the_configuration_with_the_code() {
+        let to = pinned_worker('2', 256);
+        let (executor, result, invocations, _) =
+            protected_update_to(to.clone(), to, None, written("Update")).await;
+
+        result.expect("the update completes through the verifier");
+        assert_eq!(invocations.len(), 1);
+        let request: serde_json::Value = serde_json::from_slice(&invocations[0].1).unwrap();
+        let writes = request["applyWrite"]["writes"].as_array().unwrap();
+        assert_eq!(
+            writes
+                .iter()
+                .map(|write| write.as_object().unwrap().keys().next().unwrap().as_str())
+                .collect::<Vec<_>>(),
+            ["updateFunctionCode", "updateFunctionConfiguration"]
+        );
+        let applied = executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .applied_config
+            .clone()
+            .expect("the update records the statements it applied");
+        assert!(
+            applied.starts_with("sha256:") && applied.contains('+'),
+            "{applied}"
+        );
+    }
+
+    /// The deployment injects its own telemetry env into every worker (its monitoring
+    /// settings). A protected worker sends telemetry only to the signed config's endpoint, and
+    /// none when the config names none, so the verifier accepts the configuration update.
+    #[tokio::test]
+    async fn a_protected_worker_sends_telemetry_only_to_the_signed_endpoint() {
+        const SIGNED_ENDPOINT: &str = "https://telemetry.vendor.example/v1/logs";
+        let authored = pinned_worker('2', 512);
+        let mut deployed = authored.clone();
+        deployed.environment.extend(
+            [
+                (
+                    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+                    "https://manager.example/v1/logs",
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+                    "https://manager.example/v1/metrics",
+                ),
+                ("OTEL_SERVICE_NAME", PROTECTED_WORKER),
+                ("OTEL_RESOURCE_ATTRIBUTES", "alien.deployment_id=dep_1"),
+                (
+                    alien_core::ENV_ALIEN_RUNTIME_SECRETS,
+                    r#"{"otlpLogsAuthHeader":"__alien_runtime_otlp_logs_auth_header","otlpMetricsAuthHeader":"__alien_runtime_otlp_metrics_auth_header","hash":"h"}"#,
+                ),
+            ]
+            .map(|(name, value)| (name.to_string(), value.to_string())),
+        );
+        let telemetry = [
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "OTEL_SERVICE_NAME",
+            "OTEL_RESOURCE_ATTRIBUTES",
+            alien_core::ENV_ALIEN_RUNTIME_SECRETS,
+        ];
+
+        for config in [
+            None,
+            Some(signed_telemetry_config(&aws_install(), SIGNED_ENDPOINT, 1)),
+        ] {
+            let sends = config.is_some();
+            let (_, result, invocations, _) = protected_update_to(
+                authored.clone(),
+                deployed.clone(),
+                config,
+                written("Update"),
+            )
+            .await;
+
+            result.expect("the update completes through the verifier");
+            assert_eq!(invocations.len(), 1);
+            let request: serde_json::Value = serde_json::from_slice(&invocations[0].1).unwrap();
+            let env = request["applyWrite"]["writes"][1]["updateFunctionConfiguration"]["request"]
+                ["Environment"]["Variables"]
+                .as_object()
+                .expect("the configuration update carries the env")
+                .clone();
+            for name in telemetry {
+                assert_eq!(
+                    env.contains_key(name),
+                    sends,
+                    "{name} (config sends: {sends})"
+                );
+            }
+            if sends {
+                assert_eq!(
+                    env["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"],
+                    serde_json::json!(SIGNED_ENDPOINT)
+                );
+                assert_eq!(
+                    env["OTEL_SERVICE_NAME"],
+                    serde_json::json!(PROTECTED_WORKER)
+                );
+            }
+            assert!(!env.contains_key("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"));
+            let (answer, forwarded) =
+                run_write(aws_install(), "test", None, &invocations[0].1).await;
+            answer.expect("the verifier's tables accept the controller's request");
+            assert_eq!(forwarded.len(), 2);
+        }
+    }
+
+    /// A refusal is the deployment's error, with the verifier's reason; nothing else writes.
+    #[tokio::test]
+    async fn a_refused_protected_update_fails_with_the_verifiers_reason() {
+        let refusal = serde_json::json!({
+            "errorType": "VERIFIER_REFUSED",
+            "errorMessage": "Refused: the release was refused: SIGNING_RELEASE_OLDER: the release is older than one this install accepted",
+        });
+        let (_, result, invocations, _) =
+            protected_update(invoke_answer(Some("Unhandled"), refusal)).await;
+
+        let error = result.expect_err("the verifier refused");
+        assert_eq!(invocations.len(), 1);
+        assert!(
+            error_chain_codes(&error).contains(&"RELEASE_REFUSED_BY_VERIFIER".to_string()),
+            "{error:?}"
+        );
+        assert!(!error.retryable, "a refusal does not change on retry");
+        let message = format!("{error}");
+        assert!(
+            message.contains("the release is older than one this install accepted"),
+            "{message}"
+        );
+    }
+
+    /// The install's AWS identity in these tests.
+    fn aws_install() -> alien_signing::InstallId {
+        alien_signing::InstallId::Aws {
+            account: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            prefix: "test".to_string(),
+        }
+    }
+
+    /// The worker's service account as setup creates it: role `<prefix>-<id>`.
+    fn setup_role() -> alien_core::ServiceAccount {
+        alien_core::ServiceAccount::new("default-profile-sa".to_string()).build()
+    }
+
+    fn setup_role_controller() -> crate::service_account::AwsServiceAccountController {
+        crate::service_account::AwsServiceAccountController::mock_ready("test-default-profile-sa")
+    }
+
+    /// The install's `secrets` vault as setup creates it: `<prefix>-secrets`.
+    fn setup_vault() -> alien_core::Vault {
+        alien_core::Vault::new("secrets".to_string()).build()
+    }
+
+    fn setup_vault_controller() -> crate::vault::AwsVaultController {
+        crate::vault::AwsVaultController {
+            state: crate::vault::AwsVaultState::Ready,
+            account_id: Some("123456789012".to_string()),
+            region: Some("us-east-1".to_string()),
+            vault_prefix: Some("test-secrets".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The verifier's answer to an `applyWrite` of `operation` for the protected worker.
+    /// Uninstall on a protected install: the function goes through the verifier in one call,
+    /// with no detach from the VPC before it (UpdateFunctionConfiguration is the verifier's)
+    /// and no delete of its own. Lambda answers that the function is gone once the verifier
+    /// deleted it. No Lambda write has an expectation, so one fails the test.
+    #[tokio::test]
+    async fn a_protected_delete_goes_through_the_verifier_alone() {
+        let invocations = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let mut lambda = MockLambdaApi::new();
+        let seen = invocations.clone();
+        lambda
+            .expect_get_function_configuration()
+            .returning(move |_, _| {
+                if seen.lock().unwrap().is_empty() {
+                    Ok(create_successful_function_response(PROTECTED_WORKER_NAME))
+                } else {
+                    Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceNotFound {
+                            resource_type: "Worker".to_string(),
+                            resource_name: PROTECTED_WORKER_NAME.to_string(),
+                        },
+                    ))
+                }
+            });
+        let record = invocations.clone();
+        lambda.expect_invoke().returning(move |request| {
+            assert_eq!(request.function_name, "test-verifier");
+            record
+                .lock()
+                .unwrap()
+                .push(serde_json::from_slice(&request.payload).unwrap());
+            Ok(invoke_answer(
+                None,
+                serde_json::json!({"deleted": PROTECTED_WORKER_NAME, "existed": true}),
+            ))
+        });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 256))
+            .controller(AwsWorkerController::mock_ready(PROTECTED_WORKER_NAME))
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(lambda), None, None))
+            .with_test_dependencies()
+            .with_dependency(setup_role(), setup_role_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .with_dependency(
+                Network::new("default-network".into())
+                    .settings(NetworkSettings::UseDefault)
+                    .build(),
+                AwsNetworkController::mock_ready("vpc-test", 2),
+            )
+            .stack_settings(protected_settings())
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete completes through the verifier");
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(
+            *invocations.lock().unwrap(),
+            [serde_json::json!({"deleteWorkload": {"workload": PROTECTED_WORKER}})]
+        );
+    }
+
+    fn written(operation: &str) -> InvokeResponse {
+        invoke_answer(
+            None,
+            serde_json::json!({
+                "release": 1,
+                "function": PROTECTED_WORKER_NAME,
+                "operation": operation,
+                "answer": {"functionArn": "arn:aws:lambda:us-east-1:123456789012:function:test-api"},
+            }),
+        )
+    }
+
+    /// `request` with the create attempt's token, which each create draws anew, left out.
+    fn without_create_token(mut request: serde_json::Value) -> serde_json::Value {
+        request["Tags"]
+            .as_object_mut()
+            .expect("the create tags its function")
+            .remove(crate::core::aws_tag_scoped::CREATE_ATTEMPT_TAG)
+            .expect("the create carries its token");
+        request
+    }
+
+    /// v9: a protected install's controller builds the same CreateFunction it builds for an
+    /// unprotected one and hands that request to the verifier instead of Lambda. The protected
+    /// request is byte-equal to the unprotected one (but for the create's own token), and the
+    /// verifier's real field tables accept it.
+    #[tokio::test]
+    async fn a_protected_create_hands_the_verifier_the_unprotected_request() {
+        let worker = pinned_worker('2', 512);
+        let release = signed_release(
+            Platform::Aws,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            1,
+        );
+
+        // Unprotected: the request goes to Lambda.
+        let sent = Arc::new(Mutex::new(None));
+        let mut lambda = MockLambdaApi::new();
+        let recorded = sent.clone();
+        lambda
+            .expect_create_function()
+            .times(1)
+            .returning(move |request| {
+                *recorded.lock().unwrap() = Some(serde_json::to_value(&request).unwrap());
+                Ok(create_successful_function_response(PROTECTED_WORKER_NAME))
+            });
+        lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Ok(create_successful_function_response(PROTECTED_WORKER_NAME)));
+        let mut unprotected = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(lambda), None, None))
+            .with_test_dependencies()
+            .with_dependency(setup_role(), setup_role_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .build()
+            .await
+            .unwrap();
+        unprotected.run_until_terminal().await.unwrap();
+        let unprotected_request = sent.lock().unwrap().clone().expect("Lambda got the create");
+
+        // Protected: the same request goes to the verifier, which alone may send it.
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let mut protected = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(
+                protected_lambda(invocations.clone(), written("CreateFunction")),
+                None,
+                None,
+            ))
+            .with_test_dependencies()
+            .with_dependency(setup_role(), setup_role_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .signed_release(release, None)
+            .build()
+            .await
+            .unwrap();
+        protected.run_until_terminal().await.unwrap();
+
+        assert_eq!(protected.status(), ResourceStatus::Running);
+        let invocations = invocations.lock().unwrap().clone();
+        assert_eq!(
+            invocations.len(),
+            1,
+            "one verifier call creates the function"
+        );
+        assert_eq!(invocations[0].0, "test-verifier");
+        let payload: serde_json::Value = serde_json::from_slice(&invocations[0].1).unwrap();
+        assert_eq!(
+            payload["applyWrite"]["workload"],
+            serde_json::json!(PROTECTED_WORKER)
+        );
+        assert_eq!(
+            without_create_token(payload["applyWrite"]["writes"][0]["createFunction"].clone()),
+            without_create_token(unprotected_request),
+            "the verifier gets the unprotected request"
+        );
+        let state = protected.internal_state::<AwsWorkerController>().unwrap();
+        assert_eq!(
+            state.arn.as_deref(),
+            Some("arn:aws:lambda:us-east-1:123456789012:function:test-api")
+        );
+        let (answer, forwarded) = run_write(aws_install(), "test", None, &invocations[0].1).await;
+        answer.expect("the verifier's tables accept the controller's request");
+        assert_eq!(forwarded.len(), 1);
+    }
+
+    /// On a protected install who may invoke a function and its reserved concurrency are the
+    /// verifier's to write, from the signed stack: the worker's create sends the verifier the
+    /// release, and management never calls AddPermission or PutFunctionConcurrency (the Lambda
+    /// mock has no expectation for either). Management still creates the schedule's rule.
+    #[tokio::test]
+    async fn a_protected_worker_leaves_invoke_grants_and_concurrency_to_the_verifier() {
+        let mut worker = pinned_worker('2', 512);
+        worker.concurrency_limit = Some(5);
+        worker.triggers = vec![alien_core::WorkerTrigger::schedule("0 * * * *")];
+        let release = signed_release(
+            Platform::Aws,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            1,
+        );
+        let invocations = Arc::new(Mutex::new(Vec::new()));
+        let lambda = protected_lambda(invocations.clone(), written("Create"));
+        let rules = Arc::new(Mutex::new(Vec::new()));
+        let mut eventbridge = MockEventBridgeApi::new();
+        let recorded = rules.clone();
+        eventbridge.expect_put_rule().returning(move |request| {
+            recorded.lock().unwrap().push(request.name.clone());
+            Ok(alien_aws_clients::eventbridge::PutRuleResponse {
+                rule_arn: Some(format!(
+                    "arn:aws:events:us-east-1:123456789012:rule/{}",
+                    request.name
+                )),
+            })
+        });
+        eventbridge.expect_put_targets().returning(|_| Ok(()));
+        let eventbridge = Arc::new(eventbridge);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_lambda_client()
+            .returning(move |_| Ok(lambda.clone()));
+        let logs = create_logs_mock_accepting_log_groups();
+        provider
+            .expect_get_aws_logs_client()
+            .returning(move |_| Ok(logs.clone()));
+        provider
+            .expect_get_aws_eventbridge_client()
+            .returning(move |_| Ok(eventbridge.clone()));
+        let iam = create_aws_iam_mock_for_resource_permissions();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .with_dependency(setup_role(), setup_role_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .signed_release(release, None)
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(*rules.lock().unwrap(), ["test-api-cron-0"]);
+        let invocations = invocations.lock().unwrap().clone();
+        let writes: Vec<serde_json::Value> = invocations
+            .iter()
+            .map(|(function, payload)| {
+                assert_eq!(function, "test-verifier");
+                let request = serde_json::from_slice::<serde_json::Value>(payload).unwrap();
+                let writes = request["applyWrite"]["writes"]
+                    .as_array()
+                    .or_else(|| request["applyResourceWrite"]["writes"].as_array())
+                    .unwrap()
+                    .clone();
+                assert_eq!(
+                    writes.len(),
+                    1,
+                    "a create's writes wait on what management makes"
+                );
+                writes[0].clone()
+            })
+            .collect();
+        assert_eq!(
+            writes
+                .iter()
+                .map(|write| write.as_object().unwrap().keys().next().unwrap().as_str())
+                .collect::<Vec<_>>(),
+            [
+                "createFunction",
+                "addPermission",
+                "putScheduleTargets",
+                "putFunctionConcurrency"
+            ],
+            "the verifier creates the function, grants the rule, points it at the function and \
+             sets the concurrency"
+        );
+        for (_, payload) in &invocations {
+            // The resource writes are checked by the verifier's own tests.
+            if payload.windows(17).any(|w| w == b"applyResourceWrit") {
+                continue;
+            }
+            let (answer, forwarded) = run_write(aws_install(), "test", None, payload).await;
+            answer.expect("the verifier's tables accept the controller's request");
+            assert_eq!(forwarded.len(), 1);
+        }
+        let grant = &writes[1]["addPermission"]["request"];
+        assert_eq!(grant["StatementId"], "test-api-eb-0");
+        assert_eq!(
+            grant["SourceArn"], "arn:aws:events:us-east-1:123456789012:rule/test-api-cron-0",
+            "the rule management created may invoke the function"
+        );
+        assert_eq!(
+            writes[3]["putFunctionConcurrency"]["reservedConcurrentExecutions"],
+            5
+        );
+        assert_eq!(writes[2]["putScheduleTargets"]["rule"], "test-api-cron-0");
+    }
+
+    /// A verifier failure that isn't a refusal (a cloud call, a write that raced another) is
+    /// retried, not reported as a refusal.
+    #[tokio::test]
+    async fn a_failed_verifier_call_is_retried_not_refused() {
+        let failure = serde_json::json!({
+            "errorType": "VERIFIER_CLOUD_CALL_FAILED",
+            "errorMessage": "lambda:UpdateFunctionCode test-api failed: Conflict with Function 'test-api': PreconditionFailedException",
+        });
+        let (_, result, invocations, _) =
+            protected_update(invoke_answer(Some("Unhandled"), failure)).await;
+
+        let error = result.expect_err("the verifier failed");
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(error.code, "VERIFIER_FAILED", "{error:?}");
+        assert!(error.retryable);
+        assert!(
+            error.message.contains("VERIFIER_CLOUD_CALL_FAILED"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("PreconditionFailedException"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// Without signing the update writes Lambda itself, exactly as before.
+    #[tokio::test]
+    async fn an_unprotected_update_writes_the_function_and_calls_no_verifier() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let mut lambda = MockLambdaApi::new();
+        lambda
+            .expect_get_function_configuration()
+            .returning(|_, _| Ok(create_successful_function_response(PROTECTED_WORKER_NAME)));
+        let code_calls = calls.clone();
+        lambda
+            .expect_update_function_code()
+            .times(1)
+            .returning(move |_, request| {
+                code_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("UpdateFunctionCode {}", request.image_uri));
+                Ok(create_successful_function_response(PROTECTED_WORKER_NAME))
+            });
+        let config_calls = calls.clone();
+        lambda
+            .expect_update_function_configuration()
+            .times(1)
+            .returning(move |_, request| {
+                config_calls.lock().unwrap().push(format!(
+                    "UpdateFunctionConfiguration {}",
+                    request.memory_size.unwrap_or_default()
+                ));
+                Ok(create_successful_function_response(PROTECTED_WORKER_NAME))
+            });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 256))
+            .controller(AwsWorkerController::mock_ready(PROTECTED_WORKER_NAME))
+            .platform(Platform::Aws)
+            .service_provider(setup_mock_service_provider(Arc::new(lambda), None, None))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.update(pinned_worker('2', 512)).unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![
+                format!("UpdateFunctionCode {}", pinned_image('2')),
+                "UpdateFunctionConfiguration 512".to_string(),
+            ]
+        );
     }
 }

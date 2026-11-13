@@ -3481,6 +3481,8 @@ fn target_release_from_json(
         version: None,
         description: None,
         stack,
+        signed: None,
+        signer_lists: Vec::new(),
     })
 }
 
@@ -4058,6 +4060,7 @@ mod tests {
             "stackSettings": {},
             "releaseChannel": "production",
             "retryRequested": false,
+            "protected": false,
             "createdAt": "2026-01-01T00:00:00Z",
             "updatedAt": "2026-01-01T00:00:00Z",
             "managerId": format!("mgr_{}", "a".repeat(28)),
@@ -5174,6 +5177,8 @@ mod tests {
                     release_id: Some(release_id),
                     version: None,
                     description: None,
+                    signed: None,
+                    signer_lists: Vec::new(),
                 });
                 async move { release }
             })
@@ -6111,6 +6116,8 @@ max = 1
                         serde_json::json!({"id": "installed-stack", "resources": {}}),
                     )
                     .unwrap(),
+                    signed: None,
+                    signer_lists: Vec::new(),
                 }),
                 // The real preparation refuses an installed state with no target.
                 target_release: None,

@@ -7,18 +7,13 @@ use crate::{
     error::{ErrorData, Result},
     queue::aws::AwsQueueController,
 };
-use alien_aws_clients::s3::{
-    FilterRule, NotificationConfiguration, NotificationFilter, QueueConfiguration, S3Api,
-    S3KeyFilter,
-};
+use alien_aws_clients::s3::{NotificationConfiguration, QueueConfiguration, S3Api};
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{
     storage_notifications::{aws_notification_id, aws_notification_id_prefix},
     Storage, StorageNotification,
 };
-use alien_error::{AlienError, ContextError};
-
-const CREATED: &str = "s3:ObjectCreated:*";
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
 fn cloud_error(id: &str, action: &str, bucket: &str) -> ErrorData {
     ErrorData::CloudPlatformError {
@@ -64,26 +59,7 @@ pub(super) fn queue_configuration(
     queue_arn: String,
     id: Option<String>,
 ) -> QueueConfiguration {
-    let filter_rules: Vec<FilterRule> = [
-        ("prefix", &notification.prefix),
-        ("suffix", &notification.suffix),
-    ]
-    .into_iter()
-    .filter_map(|(name, value)| {
-        value.as_ref().map(|value| FilterRule {
-            name: name.into(),
-            value: value.clone(),
-        })
-    })
-    .collect();
-    QueueConfiguration {
-        id,
-        queue_arn,
-        events: vec![CREATED.into()],
-        filter: (!filter_rules.is_empty()).then(|| NotificationFilter {
-            key: S3KeyFilter { filter_rules },
-        }),
-    }
+    QueueConfiguration::for_rule(notification, queue_arn, id)
 }
 
 /// S3 returns filter names as `Prefix`/`Suffix` and may reorder rules and events.
@@ -158,6 +134,17 @@ fn replace_owned(
     true
 }
 
+/// Where a rewritten document goes: straight to S3, or to the verifier of a protected install,
+/// which checks it against the signed stack and sends it unchanged.
+enum Put<'a> {
+    Direct,
+    Verified {
+        verifier: &'a dyn crate::core::verifier::Verifier,
+        release: &'a alien_core::ReleaseStatements,
+        config: Option<&'a alien_core::SignedStatement>,
+    },
+}
+
 /// Make the bucket's owned entries match the declaration (none while deleting).
 pub(super) async fn reconcile(
     ctx: &ResourceControllerContext<'_>,
@@ -174,8 +161,26 @@ pub(super) async fn reconcile(
         .service_provider
         .get_aws_s3_client(ctx.get_aws_config()?)
         .await?;
+    let lambda;
+    let verifier;
+    let put = match crate::core::verifier::protected_statements(ctx, &storage.id)? {
+        Some(release) => {
+            lambda = ctx
+                .service_provider
+                .get_aws_lambda_client(ctx.get_aws_config()?)
+                .await?;
+            verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+            Put::Verified {
+                verifier: &verifier,
+                release,
+                config: ctx.deployment_config.signed_config.as_ref(),
+            }
+        }
+        None => Put::Direct,
+    };
     write_owned(
         s3.as_ref(),
+        &put,
         &Owned {
             prefix: &aws_notification_id_prefix(ctx.resource_prefix, &storage.id),
             setup_rules: &[],
@@ -205,6 +210,7 @@ pub(super) async fn remove_owned(
 ) -> Result<()> {
     write_owned(
         client,
+        &Put::Direct,
         &Owned {
             prefix: &aws_notification_id_prefix(prefix, id),
             setup_rules,
@@ -219,6 +225,7 @@ pub(super) async fn remove_owned(
 
 async fn write_owned(
     client: &dyn S3Api,
+    put: &Put<'_>,
     owner: &Owned<'_>,
     bucket: &str,
     id: &str,
@@ -234,10 +241,33 @@ async fn write_owned(
     if !replace_owned(&mut document, owner, desired) {
         return Ok(());
     }
-    match client
-        .put_bucket_notification_configuration(bucket, &document)
-        .await
-    {
+    let written = match put {
+        Put::Direct => client
+            .put_bucket_notification_configuration(bucket, &document)
+            .await,
+        Put::Verified {
+            verifier,
+            release,
+            config,
+        } => {
+            let configuration = serde_json::to_value(&document)
+                .into_alien_error()
+                .context(cloud_error(id, "Serialize", bucket))?;
+            crate::core::verifier::apply_resource_write(
+                *verifier,
+                release,
+                *config,
+                id,
+                vec![crate::core::verifier::ResourceWrite::PutBucketNotification {
+                    bucket: bucket.to_string(),
+                    configuration,
+                }],
+            )
+            .await?;
+            Ok(())
+        }
+    };
+    match written {
         Ok(()) => Ok(()),
         Err(error) if removing && missing(&error) => Ok(()),
         Err(error) if removing => Err(error.context(ErrorData::CloudPlatformError {
