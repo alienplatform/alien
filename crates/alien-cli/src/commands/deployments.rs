@@ -491,6 +491,8 @@ pub enum DeploymentsCmd {
         json: bool,
     },
     /// Transfer a deployment to another instance of the workspace without replacing its resources
+    // Hidden until the server side of transfers is available.
+    #[command(hide = true)]
     Transfer {
         #[command(subcommand)]
         cmd: crate::commands::deployment_transfer::TransferCmd,
