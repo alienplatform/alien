@@ -909,7 +909,7 @@ rewrite of workload images (alien-core image_rewrite::rewrite_to_site_registry).
 {{- if $mirror -}}
 {{- $parts := splitList "/" $repository -}}
 {{- $first := first $parts -}}
-{{- if and (gt (len $parts) 1) (or (contains "." $first) (contains ":" $first)) -}}
+{{- if and (gt (len $parts) 1) (or (contains "." $first) (contains ":" $first) (eq $first "localhost")) -}}
 {{- $repository = join "/" (rest $parts) -}}
 {{- else if eq (len $parts) 1 -}}
 {{- $repository = printf "library/%s" $repository -}}
