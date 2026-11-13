@@ -4,7 +4,7 @@
 //! region, and fail with a clear error if it is not.
 
 use alien_aws_clients::ecr::{BatchGetImageRequest, EcrApi, ImageIdentifier};
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError};
 
 use crate::error::{ErrorData, Result};
 
@@ -66,13 +66,19 @@ fn identifier(image: &EcrImageRef) -> ImageIdentifier {
     }
 }
 
+/// AWS names a service control policy in the message of an explicit deny.
+fn is_region_policy_denial(lowercase_detail: &str) -> bool {
+    lowercase_detail.contains("service control policy")
+        || lowercase_detail.contains("explicit deny in a service control")
+}
+
 async fn digest_in_region(
     client: &dyn EcrApi,
     image: &EcrImageRef,
     region: &str,
     resource_id: &str,
 ) -> Result<Option<String>> {
-    let response = client
+    let response = match client
         .batch_get_image(BatchGetImageRequest {
             repository_name: image.repository.clone(),
             image_ids: vec![identifier(image)],
@@ -80,13 +86,30 @@ async fn digest_in_region(
             accepted_media_types: None,
         })
         .await
-        .context(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "Cannot read image repository '{}' in {region} to check that the image was replicated",
-                image.repository
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })?;
+    {
+        Ok(response) => response,
+        Err(err) => {
+            let detail = format!("{err:?}").to_ascii_lowercase();
+            let message = if is_region_policy_denial(&detail) {
+                format!(
+                    "An organization policy (service control policy) denies access to {region}, so \
+                     the image repository '{}' cannot be read there. Allow {region} in the \
+                     aws:RequestedRegion condition of the policy, or remove {region} from the \
+                     deployment regions.",
+                    image.repository
+                )
+            } else {
+                format!(
+                    "Cannot read image repository '{}' in {region} to check that the image was replicated",
+                    image.repository
+                )
+            };
+            return Err(err.context(ErrorData::ResourceConfigInvalid {
+                message,
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+    };
     Ok(response
         .images
         .into_iter()
@@ -205,6 +228,41 @@ mod tests {
         .unwrap_err();
         let text = err.to_string();
         assert!(text.contains("us-east-2") && text.contains(DIGEST), "{text}");
+    }
+
+    #[test]
+    fn a_service_control_policy_denial_is_recognised() {
+        assert!(is_region_policy_denial(
+            "user is not authorized ... with an explicit deny in a service control policy"
+        ));
+        assert!(!is_region_policy_denial("accessdeniedexception: no identity-based policy"));
+    }
+
+    #[tokio::test]
+    async fn a_region_denied_by_policy_names_the_region_and_the_policy() {
+        let source = MockEcrApi::new();
+        let mut target = MockEcrApi::new();
+        target.expect_batch_get_image().returning(|_| {
+            Err(alien_client_core::Error::new(
+                alien_client_core::ErrorData::GenericError {
+                    message: "not authorized to perform ecr:BatchGetImage with an explicit deny in a service control policy".into(),
+                },
+            ))
+        });
+        let err = ensure_image_in_region(
+            &format!("{SRC}@{DIGEST}"),
+            "us-east-2",
+            &source,
+            &target,
+            "worker",
+        )
+        .await
+        .unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("us-east-2") && text.contains("service control policy"),
+            "{text}"
+        );
     }
 
     #[tokio::test]
