@@ -595,6 +595,8 @@ impl Sandbox for LocalSandbox {
             headers: BTreeMap::new(),
             allowed_ports: response.allowed_ports,
             expires_in_seconds: 0,
+            caller_authorization_header: "Authorization".to_string(),
+            subprotocols: Vec::new(),
         })
     }
 

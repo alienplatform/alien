@@ -594,6 +594,39 @@ fn eks_managed_cluster_with_remote_management_irsa_is_valid() {
     assert_terraform_valid(&module, "eks_managed_cluster_remote_management_irsa");
 }
 
+/// The module decides the cluster source from `kubernetes_cluster_mode`. A caller that sends no
+/// `kubernetes` advanced settings (the portal sends none) must still register the ownership the
+/// setup policy needs.
+#[test]
+fn kubernetes_module_sends_cluster_ownership_from_the_cluster_mode() {
+    for (target, provider) in [
+        (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
+        (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
+        (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
+    ] {
+        let stack = Stack::new("cluster-ownership".to_string())
+            .add(
+                KubernetesCluster::new("kubernetes".to_string())
+                    .provider(provider)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("default".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let module = render(&stack, target, StackSettings::default());
+        let locals = module.get("locals.tf").expect("locals should render");
+        assert!(
+            locals.contains(
+                r#"cluster = merge(try(local.advanced_settings.kubernetes.cluster, {}), { ownership = var.kubernetes_cluster_mode == "create" ? "managed" : "existing" })"#
+            ),
+            "{target:?} must derive kubernetes.cluster.ownership from kubernetes_cluster_mode:\n{locals}"
+        );
+        assert_terraform_valid(&module, &format!("{target:?} cluster ownership"));
+    }
+}
+
 #[test]
 fn eks_created_network_with_irsa_and_remote_management_is_valid() {
     let stack = Stack::new("eks-created-network-identity".to_string())

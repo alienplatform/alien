@@ -10,6 +10,7 @@ pub mod peer;
 pub mod pid_namespace;
 pub mod policy_canary;
 pub mod preview;
+pub mod preview_capability;
 #[cfg(unix)]
 pub mod privilege;
 pub mod server;

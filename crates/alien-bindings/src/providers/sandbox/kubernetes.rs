@@ -622,7 +622,7 @@ impl KubernetesSandbox {
             return self.failed(
                 "sandbox.create",
                 &format!(
-                    "creating a session for sandbox {session_id} needs sandbox/management in the permission profile of this workload; it was denied reading the deployment's signing key ({})",
+                    "creating a session for sandbox {session_id} needs sandbox/management in the permission profile of this workload, from the first release: a permission profile cannot be changed by a later release once the stack is deployed. It was denied reading the deployment's signing key ({})",
                     error
                 ),
             );
@@ -918,6 +918,8 @@ impl Sandbox for KubernetesSandbox {
             allowed_ports: vec![port],
             expires_in_seconds: u64::try_from(grant.expires_at - chrono::Utc::now().timestamp())
                 .unwrap_or(0),
+            caller_authorization_header: "Authorization".to_string(),
+            subprotocols: Vec::new(),
         })
     }
 
@@ -1190,6 +1192,11 @@ mod tests {
         assert!(
             message.contains("creating a session for sandbox s1 needs sandbox/management in the permission profile"),
             "{message}"
+        );
+        assert!(
+            message.contains("from the first release")
+                && message.contains("cannot be changed by a later release"),
+            "the message says the permission must be there from the first release: {message}"
         );
         assert_eq!(
             released.load(std::sync::atomic::Ordering::SeqCst),

@@ -221,6 +221,12 @@ async fn an_internet_sandbox_setup_template_carries_the_gateway_network() {
         let template = render(&prepared, &source, settings, &description)
             .unwrap_or_else(|error| panic!("{description}: {error}"));
         let yaml = to_yaml(&template).expect("template serializes");
+        // A session reaches the gateway's proxy port only. The admin and peer port 3129 is not
+        // part of any session security group rule.
+        let mut proxy_rules = 0;
+        let document: serde_json::Value = serde_yaml::from_str(&yaml).expect("template parses");
+        collect_ports(&document, &mut proxy_rules);
+        assert!(proxy_rules > 0, "{description}: no gateway proxy rule found");
         cfn_lint(&yaml).assert_ok(&description);
         for (kind, name) in [
             ("resource", "SandboxGatewaySubnet1"),
@@ -769,4 +775,23 @@ async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
             }),
         "the gateway reads its replica secret"
     );
+}
+
+/// Counts rules whose ports start at the proxy port and fails on any that extend past it.
+fn collect_ports(value: &serde_json::Value, rules: &mut usize) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map.get("FromPort").and_then(|port| port.as_i64()) == Some(3128) {
+                *rules += 1;
+                assert_eq!(
+                    map.get("ToPort").and_then(|port| port.as_i64()),
+                    Some(3128),
+                    "a session rule reaches past the proxy port: {map:?}"
+                );
+            }
+            map.values().for_each(|inner| collect_ports(inner, rules));
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|inner| collect_ports(inner, rules)),
+        _ => {}
+    }
 }

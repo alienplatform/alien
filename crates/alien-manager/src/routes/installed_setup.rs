@@ -483,6 +483,11 @@ async fn prepare_target(
             // re-import does; otherwise the rebuilt target would drop a
             // resource the baseline holds and read as a cloud change.
             imported_quota_activation: stack_state.resources.contains_key("enable-cloud-quotas"),
+            // A cluster the setup owns keeps the management identity setup delivered.
+            imported_management_identity:
+                alien_preflights::mutations::remote_stack_management::management_identity_installed(
+                    &stack_state,
+                ),
         },
         &settings,
     )
