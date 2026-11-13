@@ -5874,8 +5874,8 @@ fn helpers_tpl() -> String {
 {{- /*
 Image reference for a repository, tag and optional digest. When global.imageRegistry is set the
 registry host is replaced by it (a path after the host is kept as a prefix), so every image the chart
-runs comes from the site's mirror. A digest wins over the tag. Keep in step with the Operator's
-rewrite of workload images (alien-core image_rewrite::rewrite_to_site_registry).
+runs comes from the site's mirror. A digest wins over the tag. Keep in step with how the Operator rewrites
+workload images to the site registry.
 */ -}}
 {{- define "deployment.image" -}}
 {{- $repository := .repository -}}
