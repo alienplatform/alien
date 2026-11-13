@@ -332,7 +332,11 @@ fn tells_the_platform_it_can_create_keys() {
     let run = run_deploy(&api);
 
     assert!(!run.success, "{}", run.text);
-    assert!(capable.hits() >= 1, "no prepare request carried the capability: {}", run.text);
+    assert!(
+        capable.hits() >= 1,
+        "no prepare request carried the capability: {}",
+        run.text
+    );
 }
 
 #[test]
@@ -352,7 +356,8 @@ fn explains_a_platform_that_cannot_create_keys_yet() {
 
     assert!(!run.success, "{}", run.text);
     assert!(
-        run.text.contains("cannot yet create encryption keys during a CLI setup"),
+        run.text
+            .contains("cannot yet create encryption keys during a CLI setup"),
         "{}",
         run.text
     );

@@ -316,3 +316,64 @@ fn a_listed_value_that_is_not_an_iam_role_arn_fails_the_render() {
         assert_eq!(error.code, "MANAGING_ROLE_ARN_INVALID", "{arn:?}");
     }
 }
+
+/// Changing which managing role a template accepts, as when management moves to another
+/// manager, must not touch a single resource: same logical IDs, same properties (so the same
+/// physical names), same outputs. Only the `ManagingRoleArn` parameter's allowed values differ.
+#[test]
+fn changing_the_allowed_managing_role_changes_only_that_parameter() {
+    const NEW_ROLE: &str = "arn:aws:iam::444455556666:role/instance-management";
+    for registration in registrations() {
+        let render_with = |allowed: Vec<String>| {
+            try_render(
+                &managed_stack(),
+                CloudFormationTarget::Aws,
+                registration.clone(),
+                ManagementTrustOptions {
+                    require_external_id: true,
+                    allowed_managing_role_arns: allowed,
+                },
+            )
+            .expect("template should render")
+        };
+        let old = render_with(vec![CURRENT_ROLE.to_string()]);
+        let new = render_with(vec![NEW_ROLE.to_string()]);
+        let open = render_with(Vec::new());
+
+        for other in [&new, &open] {
+            let ids = |t: &CfTemplate| t.resources.keys().cloned().collect::<Vec<_>>();
+            assert_eq!(ids(&old), ids(other), "logical IDs must not change");
+            assert_eq!(
+                serde_json::to_string(&old.resources).unwrap(),
+                serde_json::to_string(&other.resources).unwrap(),
+                "resource definitions (including physical names) must be byte-identical"
+            );
+            assert_eq!(
+                serde_json::to_string(&old.outputs).unwrap(),
+                serde_json::to_string(&other.outputs).unwrap()
+            );
+            assert_eq!(
+                serde_json::to_string(&old.conditions).unwrap(),
+                serde_json::to_string(&other.conditions).unwrap()
+            );
+            let names = |t: &CfTemplate| t.parameters.keys().cloned().collect::<Vec<_>>();
+            assert_eq!(
+                names(&old),
+                names(other),
+                "no parameter may be added or removed"
+            );
+        }
+        // The one place the roles differ.
+        assert_ne!(
+            serde_json::to_string(&old.parameters[ROLE_ARN]).unwrap(),
+            serde_json::to_string(&new.parameters[ROLE_ARN]).unwrap()
+        );
+        for name in old.parameters.keys().filter(|name| *name != ROLE_ARN) {
+            assert_eq!(
+                serde_json::to_string(&old.parameters[name]).unwrap(),
+                serde_json::to_string(&new.parameters[name]).unwrap(),
+                "parameter {name} must not change"
+            );
+        }
+    }
+}
