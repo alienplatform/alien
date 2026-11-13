@@ -262,8 +262,19 @@ fn replication_resources(
     ctx: &EmitContext<'_>,
     registry: &ArtifactRegistry,
 ) -> Result<Vec<CfResource>> {
-    if registry.replication_regions.is_empty() {
+    let from_input = registry.replication_regions_input.as_deref();
+    if registry.replication_regions.is_empty() && from_input.is_none() {
         return Ok(Vec::new());
+    }
+    if from_input.is_some() && !registry.replication_regions.is_empty() {
+        return Err(alien_error::AlienError::new(
+            alien_core::ErrorData::GenericError {
+                message: format!(
+                    "Artifact registry '{}': set either replicationRegions or a regions input, not both",
+                    registry.id()
+                ),
+            },
+        ));
     }
     for region in &registry.replication_regions {
         let valid = !region.is_empty()
@@ -281,6 +292,31 @@ fn replication_resources(
             ));
         }
     }
+    let destinations = match from_input {
+        Some(input_id) => CfExpression::list((0..=MAX_REPLICATION_REGION_SLOTS).map(|slot| {
+            let region = if slot == MAX_REPLICATION_REGION_SLOTS {
+                CfExpression::from(format!(
+                    "too-many-regions-at-most-{MAX_REPLICATION_REGION_SLOTS}-are-supported"
+                ))
+            } else {
+                replication_slot_region(input_id, slot)
+            };
+            CfExpression::if_(
+                replication_slot_condition(input_id, slot),
+                CfExpression::object([
+                    ("Region", region),
+                    ("RegistryId", CfExpression::ref_("AWS::AccountId")),
+                ]),
+                CfExpression::no_value(),
+            )
+        })),
+        None => CfExpression::list(registry.replication_regions.iter().map(|region| {
+            CfExpression::object([
+                ("Region", CfExpression::from(region.as_str())),
+                ("RegistryId", CfExpression::ref_("AWS::AccountId")),
+            ])
+        })),
+    };
     let logical_id = required_logical_id(ctx)?;
     let mut configuration = CfResource::new(
         format!("{logical_id}Replication"),
@@ -291,15 +327,7 @@ fn replication_resources(
         CfExpression::object([(
             "Rules",
             CfExpression::list([CfExpression::object([
-                (
-                    "Destinations",
-                    CfExpression::list(registry.replication_regions.iter().map(|region| {
-                        CfExpression::object([
-                            ("Region", CfExpression::from(region.as_str())),
-                            ("RegistryId", CfExpression::ref_("AWS::AccountId")),
-                        ])
-                    })),
-                ),
+                ("Destinations", destinations),
                 (
                     "RepositoryFilters",
                     CfExpression::list([CfExpression::object([
@@ -334,10 +362,55 @@ fn replication_resources(
         "LifecyclePolicy".to_string(),
         CfExpression::to_json_string(ecr_lifecycle_policy()),
     );
+    if let Some(input_id) = from_input {
+        // No region answered: write nothing, so an install that leaves the
+        // input empty keeps whatever replication its account already has.
+        configuration.condition = Some(replication_slot_condition(input_id, 0));
+        template.condition = Some(replication_slot_condition(input_id, 0));
+    }
     configuration
         .depends_on
         .push(format!("{logical_id}Repository"));
     // The template must exist before replication creates the first replica.
     configuration.depends_on.push(template.logical_id.clone());
     Ok(vec![configuration, template])
+}
+
+/// Region slots a deployer-provided list can fill. CloudFormation cannot loop
+/// over a parameter, so the template reserves this many destinations. An
+/// eleventh region makes one more destination whose region name is an error
+/// message, so ECR rejects the stack instead of dropping a region silently
+/// (template rules cannot count list members).
+pub(crate) const MAX_REPLICATION_REGION_SLOTS: usize = 10;
+
+pub(crate) fn replication_slot_condition(input_id: &str, slot: usize) -> String {
+    format!(
+        "{}ReplicaRegion{slot}Set",
+        crate::generator::stack_input_parameter_name_for_id(input_id)
+    )
+}
+
+/// The slot's region from the input list. The list is padded with empty
+/// entries first, because `Fn::Select` past the end fails the whole operation
+/// and conditions are evaluated on every create and update.
+pub(crate) fn replication_slot_region(input_id: &str, slot: usize) -> CfExpression {
+    let parameter = crate::generator::stack_input_parameter_name_for_id(input_id);
+    let padding = (0..=MAX_REPLICATION_REGION_SLOTS + 1).map(|_| CfExpression::from(""));
+    let padded = CfExpression::object([(
+        "Fn::Split",
+        CfExpression::list([
+            CfExpression::from(","),
+            CfExpression::join(
+                ",",
+                CfExpression::list(
+                    std::iter::once(CfExpression::join(",", CfExpression::ref_(parameter)))
+                        .chain(padding),
+                ),
+            ),
+        ]),
+    )]);
+    CfExpression::object([(
+        "Fn::Select",
+        CfExpression::list([CfExpression::Integer(slot as i64), padded]),
+    )])
 }

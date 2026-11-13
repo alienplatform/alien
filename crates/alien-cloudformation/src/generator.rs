@@ -502,6 +502,7 @@ pub fn generate_cloudformation_template_with_profile(
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
     }
+    add_replication_region_conditions(&mut template, stack);
     if !access_only {
         add_standard_conditions(
             &mut template,
@@ -2378,6 +2379,31 @@ fn add_custom_domain_certificate_rule(template: &mut CfTemplate) {
             }],
         },
     );
+}
+
+/// One condition per region slot of a registry whose replication regions come
+/// from a deployer input; the registry emitter references them by name.
+fn add_replication_region_conditions(template: &mut CfTemplate, stack: &Stack) {
+    use crate::emitters::aws::artifact_registry::{
+        replication_slot_condition, replication_slot_region, MAX_REPLICATION_REGION_SLOTS,
+    };
+    for (_, entry) in stack.resources() {
+        let Some(registry) = entry.config.downcast_ref::<alien_core::ArtifactRegistry>() else {
+            continue;
+        };
+        let Some(input_id) = registry.replication_regions_input.as_deref() else {
+            continue;
+        };
+        for slot in 0..=MAX_REPLICATION_REGION_SLOTS {
+            template.conditions.insert(
+                replication_slot_condition(input_id, slot),
+                CfExpression::not(CfExpression::equals(
+                    replication_slot_region(input_id, slot),
+                    CfExpression::from(""),
+                )),
+            );
+        }
+    }
 }
 
 fn add_list_parameter_condition(template: &mut CfTemplate, parameter: &str) {

@@ -54,6 +54,96 @@ fn aws_registry_declared_regions_emit_replication_and_a_creation_template() {
     assert!(!rendered.contains("\"RepositoryPolicy\""));
 }
 
+fn input_registry_stack() -> Stack {
+    let mut input = alien_core::StackInputDefinition::deployer_boolean(
+        "deploymentRegions",
+        "Deployment regions",
+        "Regions deployments run in",
+        Some(false),
+    );
+    input.kind = alien_core::StackInputKind::StringList;
+    input.default = Some(alien_core::StackInputDefaultValue::StringList(vec![]));
+    let mut registry = ArtifactRegistry::new("images".to_string()).build();
+    registry.replication_regions_input = Some("deploymentRegions".to_string());
+    Stack::new("app".to_string())
+        .inputs(vec![input])
+        .add(registry, ResourceLifecycle::Frozen)
+        .build()
+}
+
+fn render_template_json(stack: &Stack) -> serde_json::Value {
+    let template = super::helpers::try_render_built_ins(
+        stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "registry replication input",
+    )
+    .expect("template should render");
+    // CI has cfn-lint and must pass; a box without it skips the lint.
+    let yaml = alien_cloudformation::to_yaml(&template).unwrap();
+    let lint = alien_cloudformation::test_utils::cfn_lint(&yaml);
+    if !matches!(lint.status, alien_cloudformation::test_utils::LinterStatus::Skipped(_)) {
+        lint.assert_ok("registry replication input");
+    }
+    serde_json::to_value(&template).unwrap()
+}
+
+#[test]
+fn aws_registry_regions_input_is_read_at_deploy_time_and_empty_writes_nothing() {
+    let template = render_template_json(&input_registry_stack());
+    let resources = &template["Resources"];
+    let configuration = resources
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|r| r["Type"] == "AWS::ECR::ReplicationConfiguration")
+        .expect("replication configuration");
+    // Nothing is written until the deployer answers at least one region.
+    let gate = configuration["Condition"].as_str().unwrap();
+    assert!(gate.ends_with("ReplicaRegion0Set"), "{gate}");
+    assert!(template["Conditions"][gate].is_object());
+    let rendered = configuration.to_string();
+    // The region comes from the parameter, never a literal.
+    assert!(rendered.contains("InputDeploymentRegions"), "{rendered}");
+    assert!(rendered.contains("too-many-regions"), "{rendered}");
+    let template_resource = resources
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|r| r["Type"] == "AWS::ECR::RepositoryCreationTemplate")
+        .unwrap();
+    assert_eq!(template_resource["Condition"], configuration["Condition"]);
+    assert_eq!(
+        template["Parameters"]["InputDeploymentRegions"]["Type"],
+        "CommaDelimitedList"
+    );
+}
+
+#[test]
+fn aws_registry_without_a_regions_input_renders_no_replication_conditions() {
+    let template = render_template_json(&registry_stack(&[]));
+    let conditions = template["Conditions"].to_string();
+    assert!(!conditions.contains("ReplicaRegion"), "{conditions}");
+    assert!(!template.to_string().contains("ReplicationConfiguration"));
+}
+
+#[test]
+fn aws_registry_rejects_regions_and_input_together() {
+    let mut stack = input_registry_stack();
+    let _ = &mut stack;
+    let mut registry = ArtifactRegistry::new("images".to_string()).build();
+    registry.replication_regions_input = Some("deploymentRegions".to_string());
+    registry.replication_regions = vec!["us-east-2".to_string()];
+    let both = Stack::new("app".to_string())
+        .inputs(input_registry_stack().inputs().to_vec())
+        .add(registry, ResourceLifecycle::Frozen)
+        .build();
+    let err = try_render_registry(&both).unwrap_err();
+    assert!(err.contains("not both"), "{err}");
+}
+
 #[test]
 fn aws_registry_rejects_a_region_that_is_not_a_region_name() {
     let err = try_render_registry(&registry_stack(&["us-east-2\"; Fn::Sub"])).unwrap_err();

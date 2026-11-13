@@ -33,6 +33,13 @@ pub struct ArtifactRegistry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[builder(default)]
     pub replication_regions: Vec<String>,
+
+    /// AWS-only: id of a deployer-provided string-list stack input that names the
+    /// regions to replicate to. CloudFormation reads the list at deploy time, so
+    /// the template reserves a fixed number of region slots. Empty answers write
+    /// no replication configuration, so existing installs render unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replication_regions_input: Option<String>,
 }
 
 impl ArtifactRegistry {
