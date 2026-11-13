@@ -22,6 +22,7 @@ pub mod network_required;
 pub mod permission_profiles_exist;
 pub mod permission_sets_exist;
 pub mod public_worker_lifecycle;
+pub mod redis_persistence;
 pub mod resource_enabled_valid;
 pub mod resource_id_pattern;
 pub mod resource_name_length;
@@ -42,7 +43,6 @@ pub mod unique_endpoint_host_labels;
 pub mod unique_resources;
 pub mod valid_resource_dependencies;
 pub mod volume_backups;
-pub mod redis_persistence;
 pub mod worker_memory;
 
 pub use allowed_user_resources::AllowedUserResourcesCheck;
@@ -65,6 +65,7 @@ pub use network_required::{
 pub use permission_profiles_exist::PermissionProfilesExistCheck;
 pub use permission_sets_exist::PermissionSetsExistCheck;
 pub use public_worker_lifecycle::PublicWorkerLifecycleCheck;
+pub use redis_persistence::RedisPersistenceCheck;
 pub use resource_enabled_valid::ResourceEnabledValidCheck;
 pub use resource_id_pattern::ResourceIdPatternCheck;
 pub use resource_name_length::ResourceNameLengthCheck;
@@ -85,7 +86,6 @@ pub use valid_resource_dependencies::{
     validate_stack_dependencies, ValidResourceDependenciesCheck,
 };
 pub use volume_backups::VolumeBackupsCheck;
-pub use redis_persistence::RedisPersistenceCheck;
 pub use worker_memory::WorkerMemoryCheck;
 
 pub mod kubernetes_compute;
