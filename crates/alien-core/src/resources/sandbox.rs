@@ -102,6 +102,10 @@ const AWS_MAX_LIFETIME_SECONDS: u32 = 28_800;
 /// int64, but pod validation caps it at the largest i32.
 const KUBERNETES_MAX_LIFETIME_SECONDS: u32 = i32::MAX as u32;
 
+/// Largest ephemeral storage Agent Platform accepts on a sandbox template (10 GiB). A larger
+/// request is refused when the template is created.
+const GCP_MAX_DISK_BYTES: u128 = 10 * 1024 * 1024 * 1024;
+
 /// Azure's sandbox sizing rule, quoted from the data plane's own refusal of an oversized request:
 /// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
 const AZURE_CPU_STEP_MILLICORES: i64 = 250;
@@ -499,7 +503,8 @@ impl SandboxCapabilities {
             // `:execute` is one request with one answer, capped at about 30 seconds. Input
             // cannot reach a command after its call has answered, so there is no stream to drive.
             interactive_commands: false,
-            // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
+            // The only ingress Alien uses is `:execute`. The edge consumes `Authorization` for its
+            // own credential, so a caller's bearer cannot reach a workload port through it.
             preview: false,
             // `:resume` can return a fresh container while reporting success, so a pause does not
             // keep the sandbox's state.
@@ -509,7 +514,8 @@ impl SandboxCapabilities {
             snapshot: false,
             // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
             domain_egress_rules: false,
-            // A declared `deny` blocks both routed egress and DNS.
+            // A declared `deny` blocks TCP to public addresses, the metadata server and DNS
+            // (measured live on the default network placement).
             egress_deny: true,
             // The declared ceilings are enforced, but by terminating the sandbox on breach rather
             // than by refusing the allocation — a caller reading `true` should expect the sandbox
@@ -932,6 +938,10 @@ impl Sandbox {
             self.azure_sandbox_limits()?;
         }
 
+        if platform == Platform::Gcp {
+            self.gcp_sandbox_limits()?;
+        }
+
         if platform == Platform::Aws {
             // Refused here rather than at emit so a customer sees it while planning, and so both
             // package formats inherit the same answer.
@@ -970,6 +980,34 @@ impl Sandbox {
                 },
             })
         })
+    }
+
+    /// Refuses a disk ceiling above Agent Platform's ephemeral-storage cap, at plan time like
+    /// [`Self::azure_sandbox_limits`], so it is a declaration to fix rather than a failed template.
+    pub fn gcp_sandbox_limits(&self) -> Result<()> {
+        let Some(limits) = self.limits.as_ref() else {
+            return Ok(());
+        };
+        let over_cap =
+            quantity_exceeds_bytes(&limits.disk, GCP_MAX_DISK_BYTES).ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "disk".to_string(),
+                    value: limits.disk.clone(),
+                    reason: "expected a size such as 8Gi".to_string(),
+                })
+            })?;
+        if over_cap {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "disk".to_string(),
+                value: limits.disk.clone(),
+                reason: "GCP Agent Platform caps a sandbox's ephemeral storage at 10Gi; declare \
+                         10Gi or less"
+                    .to_string(),
+            }));
+        }
+        Ok(())
     }
 
     /// Checks the declared ceilings against Azure's sizing rule (the `AZURE_*` constants above).
@@ -1155,11 +1193,37 @@ impl Sandbox {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
         }
 
+        // `internet` needs a gateway-enforced policy that GCP Agent Platform does not have here
+        // yet; it would plan cleanly and then run without one. Refuse it until it is built.
+        if platform == Platform::Gcp && matches!(self.egress, SandboxEgress::Internet) {
+            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                capability: "egress internet: not built or proven on GCP Agent Platform yet; declare egress none".to_string(),
+                platform: platform.to_string(),
+            }));
+        }
+
+        if platform == Platform::Gcp && !self.preview_ports.is_empty() {
+            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                capability:
+                    "preview: not built or proven on GCP Agent Platform yet; remove the preview ports"
+                        .to_string(),
+                platform: platform.to_string(),
+            }));
+        }
+
         if !self.preview_ports.is_empty() {
             capabilities.require(SandboxCapability::Preview, platform)?;
         }
 
         if self.lifecycle.idle_pause_seconds.is_some() {
+            // GCP has no idle policy and Alien does not watch for idleness there, so the plan
+            // says that instead of the generic pause refusal.
+            if platform == Platform::Gcp {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "idle pause policy: the GCP Agent Platform backend has no idle policy and cannot keep a sandbox's state across a pause; remove the idle policy".to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
             capabilities.require(SandboxCapability::PauseResume, platform)?;
         }
 
@@ -1249,6 +1313,37 @@ pub fn quantity_mib(value: &str) -> Option<i64> {
         _ => return None,
     };
     Some((bytes / (1024.0 * 1024.0)) as i64)
+}
+
+/// Whether a size quantity is strictly above `cap_bytes`, compared exactly in integer bytes
+/// (no rounding down first, so `10240.5Mi` is above a 10Gi cap). `None` for an unparsable value.
+fn quantity_exceeds_bytes(value: &str, cap_bytes: u128) -> Option<bool> {
+    let trimmed = value.trim();
+    let digits_end = trimmed
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(trimmed.len());
+    let (number, suffix) = trimmed.split_at(digits_end);
+    let unit: u128 = match suffix {
+        "" => 1,
+        "k" => 1_000,
+        "M" => 1_000_000,
+        "G" => 1_000_000_000,
+        "T" => 1_000_000_000_000,
+        "Ki" => 1 << 10,
+        "Mi" => 1 << 20,
+        "Gi" => 1 << 30,
+        "Ti" => 1 << 40,
+        _ => return None,
+    };
+    let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+    if (whole.is_empty() && fraction.is_empty()) || fraction.contains('.') {
+        return None;
+    }
+    let digits = format!("{whole}{fraction}");
+    let scale = 10u128.checked_pow(u32::try_from(fraction.len()).ok()?)?;
+    let mantissa: u128 = digits.parse().ok()?;
+    // mantissa / scale * unit > cap  <=>  mantissa * unit > cap * scale
+    Some(mantissa.checked_mul(unit)? > cap_bytes.checked_mul(scale)?)
 }
 
 /// A CPU quantity in millicores.
@@ -1750,7 +1845,7 @@ mod tests {
             .limits(SandboxLimits {
                 cpu: "1".to_string(),
                 memory: "2Gi".to_string(),
-                disk: "20Gi".to_string(),
+                disk: "10Gi".to_string(),
                 max_processes: None,
             })
             .egress(egress)
@@ -1764,6 +1859,63 @@ mod tests {
 
     /// A URI with no token must come back whole, because every bundle configured today has none
     /// and emitting one differently would change every existing customer's template.
+    #[test]
+    fn gcp_refuses_internet_egress_at_plan_time_and_still_takes_none() {
+        let refused = sandbox_with(SandboxEgress::Internet, vec![])
+            .validate_for_platform(Platform::Gcp)
+            .unwrap_err();
+        assert!(refused.to_string().contains("egress internet"), "{refused}");
+        sandbox_with(SandboxEgress::None, vec![])
+            .validate_for_platform(Platform::Gcp)
+            .unwrap();
+    }
+
+    /// GCP has no idle policy and nothing in Alien watches for idleness yet, so a declared idle
+    /// policy would plan cleanly and never fire.
+    #[test]
+    fn gcp_refuses_an_idle_pause_policy_at_plan_time_and_still_takes_a_lifetime() {
+        let with_policy = |lifecycle: SandboxLifecyclePolicy| {
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(lifecycle)
+                .build()
+                .validate_for_platform(Platform::Gcp)
+        };
+        let refused = with_policy(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: Some(900),
+        })
+        .expect_err("no idle policy exists on GCP");
+        assert_eq!(refused.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(refused.message.contains("idle"), "{}", refused.message);
+        with_policy(SandboxLifecyclePolicy {
+            max_lifetime_seconds: Some(3600),
+            idle_pause_seconds: None,
+        })
+        .expect("a lifetime is a TTL on GCP");
+    }
+
+    #[test]
+    fn gcp_refuses_preview_ports_at_plan_time() {
+        let error = sandbox_with(SandboxEgress::Deny, vec![8080])
+            .validate_for_platform(Platform::Gcp)
+            .expect_err("preview is refused on GCP");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(
+            error
+                .to_string()
+                .contains("not built or proven on GCP Agent Platform yet"),
+            "{error}"
+        );
+        sandbox_with(SandboxEgress::Deny, vec![])
+            .validate_for_platform(Platform::Gcp)
+            .expect("a sandbox without preview ports is unaffected");
+    }
+
     #[test]
     fn a_uri_without_a_token_is_carried_whole() {
         assert_eq!(
@@ -1946,7 +2098,7 @@ mod tests {
         );
         assert!(
             row.egress_deny,
-            "a declared deny blocks both egress and DNS"
+            "a declared deny blocks TCP, the metadata server and DNS on the default placement"
         );
         assert!(
             row.enforced_limits,
@@ -2183,9 +2335,56 @@ mod tests {
         }
     }
 
+    /// Agent Platform caps a sandbox's ephemeral storage at 10 GiB and refuses a larger request
+    /// when the template is created, long after planning. The declaration is refused here, with
+    /// the cap named, so the author sees a size to change rather than a failed template.
+    #[test]
+    fn gcp_refuses_a_disk_above_its_cap_and_accepts_the_cap() {
+        let with_disk = |disk: &str| {
+            let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
+            sandbox
+                .limits
+                .as_mut()
+                .expect("the fixture declares limits")
+                .disk = disk.to_string();
+            sandbox
+        };
+
+        let error = with_disk("20Gi")
+            .validate_for_platform(Platform::Gcp)
+            .expect_err("20Gi is above the Agent Platform cap");
+        assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
+        let rendered = error.to_string();
+        assert!(rendered.contains("disk"), "names the field: {rendered}");
+        assert!(rendered.contains("10Gi"), "names the cap: {rendered}");
+
+        with_disk("10Gi")
+            .validate_for_platform(Platform::Gcp)
+            .expect("the cap itself is allowed");
+        with_disk("10240Mi")
+            .validate_for_platform(Platform::Gcp)
+            .expect("the cap in MiB is allowed");
+        for over in ["10240.5Mi", "10241Mi", "10.0000001Gi"] {
+            with_disk(over)
+                .validate_for_platform(Platform::Gcp)
+                .expect_err(&format!("{over} is above the cap and must not round down"));
+        }
+        with_disk("8Gi")
+            .validate_for_platform(Platform::Gcp)
+            .expect("the default disk is allowed");
+        with_disk("20Gi")
+            .validate_for_platform(Platform::Kubernetes)
+            .expect("the cap is Agent Platform's, not every backend's");
+    }
+
     #[test]
     fn gcp_accepts_a_sandbox_declaring_enforced_limits() {
-        let sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
+        let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
+        sandbox
+            .limits
+            .as_mut()
+            .expect("the fixture declares limits")
+            .disk = "10Gi".to_string();
         sandbox
             .validate_for_platform(Platform::Gcp)
             .expect("Agent Platform enforces declared ceilings, by terminating on breach");
