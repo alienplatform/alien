@@ -850,7 +850,8 @@ pub fn chart_images(
     // The chart's templates run these too; a pre-install hook needs the probe
     // image before anything else starts.
     if let Some(template) = sandbox_probe {
-        // The template pins it: `"repository" "<repo>" "digest" "sha256:..."`.
+        // The template pins it: `"repository" "<repo>" "digest" "sha256:..."`, or, in
+        // charts from before the probe was templated, `image: <repo>@sha256:...`.
         let mut words = template.split('"');
         let mut image = None;
         while let Some(word) = words.next() {
@@ -861,7 +862,11 @@ pub fn chart_images(
                 break;
             }
         }
-        let (repository, digest) = image.ok_or_else(|| {
+        let literal = template.lines().find_map(|line| {
+            let reference = line.trim().strip_prefix("image:")?.trim().trim_matches('"');
+            reference.split_once('@')
+        });
+        let (repository, digest) = image.or(literal).ok_or_else(|| {
             AlienError::new(invalid("the chart's sandbox probe names no pinned image"))
         })?;
         images.insert(
@@ -884,6 +889,37 @@ pub fn chart_images(
         )));
     }
     Ok(images)
+}
+
+/// Whether the chart's sandbox probe takes its image from `sandbox.cniProbeImage`.
+/// Charts from before that value exist reject it, so install sets it only when true.
+pub fn chart_takes_probe_image(chart: &Path) -> Result<bool> {
+    let file = std::fs::File::open(chart)
+        .into_alien_error()
+        .context(file_failed(format!("opening {}", chart.display())))?;
+    let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    for entry in archive
+        .entries()
+        .into_alien_error()
+        .context(invalid("the chart is not a readable archive"))?
+    {
+        let mut entry = entry
+            .into_alien_error()
+            .context(invalid("the chart is not a readable archive"))?;
+        let path = entry
+            .path()
+            .into_alien_error()
+            .context(invalid("the chart has an unreadable path"))?
+            .into_owned();
+        if path.components().count() == 3 && path.ends_with("templates/sandbox-cni-probe.yaml") {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut text)
+                .into_alien_error()
+                .context(invalid("the chart's sandbox probe is unreadable"))?;
+            return Ok(text.contains("cniProbeImage"));
+        }
+    }
+    Ok(false)
 }
 
 fn invalid(message: &str) -> ErrorData {
@@ -1726,6 +1762,48 @@ mod tests {
             images["template.metricsServer"],
             "registry.k8s.io/metrics-server/metrics-server:v0.8.1"
         );
+        assert!(chart_takes_probe_image(&path).unwrap());
+    }
+
+    /// A chart packaged by the previous Manager writes the probe image literally and
+    /// has no `sandbox.cniProbeImage` value; a new CLI must still bundle from it.
+    #[test]
+    fn chart_images_read_the_previous_literal_probe_image() {
+        let digest = "sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f";
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            for (name, text) in [
+                (
+                    "app/values.yaml",
+                    "runtime:\n  image:\n    repository: registry.example.com/alien-operator\n    tag: 1.2.3\n".to_string(),
+                ),
+                (
+                    "app/templates/sandbox-cni-probe.yaml",
+                    format!("      containers:\n        - name: probe\n          image: docker.io/library/python@{digest}\n"),
+                ),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(text.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder.append_data(&mut header, name, text.as_bytes()).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app-1.0.0.tgz");
+        let mut encoder =
+            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &tar_bytes).unwrap();
+        std::fs::write(&path, encoder.finish().unwrap()).unwrap();
+
+        let images = chart_images(&path, &serde_json::Value::Null, &[]).unwrap();
+        assert_eq!(
+            images["template.sandboxCniProbe"],
+            format!("docker.io/library/python@{digest}")
+        );
+        assert!(!chart_takes_probe_image(&path).unwrap());
     }
 
     #[test]

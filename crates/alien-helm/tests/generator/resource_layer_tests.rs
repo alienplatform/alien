@@ -526,6 +526,20 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     );
     mirrored.assert_ok("mirrored sandbox chart");
     let mirrored_documents = rendered_documents(&mirrored);
+    // An air-gapped install passes the exact reference it bundled (a single-architecture
+    // export pins another digest than the default), and it follows the mirror too.
+    let bundled = super::test_utils::helm_template(
+        &chart.files,
+        Some("global:\n  imageRegistry: mirror.site.internal:5000/alien\nsandbox:\n  cniProbeImage: docker.io/library/python:3.13-slim@sha256:aaaa\n"),
+    );
+    bundled.assert_ok("bundled probe image");
+    assert!(
+        bundled
+            .stdout
+            .contains("mirror.site.internal:5000/alien/library/python@sha256:aaaa"),
+        "the probe runs the bundled digest from the mirror"
+    );
+    assert!(!bundled.stdout.contains("70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"));
     // A pinned Operator digest is the install's choice; self-update to the manager's tag would undo it.
     let self_update_env = |values: &str| -> bool {
         let rendered = super::test_utils::helm_template(&chart.files, Some(values));

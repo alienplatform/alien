@@ -4254,6 +4254,29 @@ async fn helm_upgrade(
             &format!("global.imageRegistry={}", registry.trim_end_matches('/')),
         ]);
     }
+    // The templates' own images: the exact bundled reference, since a single-architecture
+    // export pins another digest than the chart's default.
+    let probe_key = format!("{}sandboxCniProbe", airgap::TEMPLATE_IMAGE_PREFIX);
+    let metrics_key = format!("{}metricsServer", airgap::TEMPLATE_IMAGE_PREFIX);
+    if let Some(image) = record.chart_images.get(&probe_key) {
+        if airgap::chart_takes_probe_image(chart)
+            .context(config_error("checking the chart's sandbox probe"))?
+        {
+            cmd.args([
+                "--set-string",
+                &format!("sandbox.cniProbeImage={}:{}", image.repository, image.tag),
+            ]);
+        }
+    }
+    if let Some(image) = record.chart_images.get(&metrics_key) {
+        cmd.args([
+            "--set-string",
+            &format!(
+                "clusterBootstrap.metricsServer.image={}:{}",
+                image.repository, image.tag
+            ),
+        ]);
+    }
     for (key, image) in record
         .chart_images
         .iter()

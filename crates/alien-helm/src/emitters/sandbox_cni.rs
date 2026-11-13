@@ -53,6 +53,7 @@ pub(crate) fn template(sandbox_class_helper: bool) -> String {
     format!(
         r#"{{{{- $name := printf "%s-sandbox-cni" (include "deployment.fullname" . | trunc 51 | trimSuffix "-") -}}}}
 {{{{- $probeImage := include "deployment.image" (dict "root" . "repository" "{repository}" "digest" "{digest}") -}}}}
+{{{{- with dig "cniProbeImage" "" (default dict .Values.sandbox) }}}}{{{{ $probeImage = include "deployment.mirroredImage" (dict "root" $ "image" .) }}}}{{{{ end -}}}}
 {{{{- $cluster := printf "%s-%s" $name (sha256sum (printf "%s/%s" .Release.Namespace .Release.Name) | trunc 8) -}}}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy

@@ -4329,6 +4329,9 @@ sandbox:
   # Idle pods kept ready so a create starts in seconds. A create never fails because the pool is
   # empty: it starts a pod on demand, which takes as long as the node and image pull need.
   warmPoolSize: 2
+  # Network probe image (repository[:tag][@digest]). Empty uses the pinned default; an air-gapped
+  # install sets it to the copy in its registry mirror.
+  cniProbeImage: ""
   # The nameserver address(es) pods get in /etc/resolv.conf (the kubelet's clusterDNS). Required
   # when a sandbox uses `allow` egress: the sandbox policy admits UDP and TCP port 53 to exactly
   # these addresses and nothing else on private ranges. Find it with:
@@ -4834,6 +4837,7 @@ fn values_schema_json(stack: &Stack) -> Result<String> {
             "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
             "tolerations": { "type": "array" },
             "warmPoolSize": { "type": "integer", "minimum": 0 },
+            "cniProbeImage": { "type": "string" },
             "clusterDNS": {
                 "type": "array",
                 "items": { "type": "string", "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}$" }
