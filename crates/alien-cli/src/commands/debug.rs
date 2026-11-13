@@ -51,8 +51,8 @@ DEPLOYMENT can be a deployment ID (`dep_...`) or `<group>/<name>`.",
     # deployments require an approved access request covering the tool and
     # the namespace or scope you're debugging:
     alien access-requests create --deployment acme/prod \\
-      --debug-tool kubectl --debug-namespace braintrust --duration 30m
-    alien debug acme/prod --access-request ar_123 -- kubectl get pods -n braintrust
+      --debug-tool kubectl --debug-namespace payments --duration 30m
+    alien debug acme/prod --access-request ar_123 -- kubectl get pods -n payments
 
     # Or request access, wait for approval and run in one step:
     alien debug acme/prod --request-access -- aws sts get-caller-identity
@@ -230,7 +230,7 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
             AlienError::new(ErrorData::ValidationError {
                 field: "cmd".to_string(),
                 message: "`--request-access` needs a command to debug, e.g. \
-                    `alien debug acme/prod --request-access -- kubectl get pods -n braintrust`."
+                    `alien debug acme/prod --request-access -- kubectl get pods -n payments`."
                     .to_string(),
             })
         })?;
@@ -1917,33 +1917,33 @@ mod tests {
 
     #[test]
     fn kubectl_namespace_from_args_reads_short_flag_with_space() {
-        let cmd = args(&["kubectl", "get", "pods", "-n", "braintrust"]);
+        let cmd = args(&["kubectl", "get", "pods", "-n", "payments"]);
         assert_eq!(
             kubectl_namespace_from_args(&cmd),
-            Some("braintrust".to_string())
+            Some("payments".to_string())
         );
     }
 
     #[test]
     fn kubectl_namespace_from_args_reads_long_flag_with_space() {
-        let cmd = args(&["kubectl", "get", "pods", "--namespace", "braintrust"]);
+        let cmd = args(&["kubectl", "get", "pods", "--namespace", "payments"]);
         assert_eq!(
             kubectl_namespace_from_args(&cmd),
-            Some("braintrust".to_string())
+            Some("payments".to_string())
         );
     }
 
     #[test]
     fn kubectl_namespace_from_args_reads_equals_forms() {
-        let short = args(&["kubectl", "get", "pods", "-n=braintrust"]);
+        let short = args(&["kubectl", "get", "pods", "-n=payments"]);
         assert_eq!(
             kubectl_namespace_from_args(&short),
-            Some("braintrust".to_string())
+            Some("payments".to_string())
         );
-        let long = args(&["kubectl", "get", "pods", "--namespace=braintrust"]);
+        let long = args(&["kubectl", "get", "pods", "--namespace=payments"]);
         assert_eq!(
             kubectl_namespace_from_args(&long),
-            Some("braintrust".to_string())
+            Some("payments".to_string())
         );
     }
 
