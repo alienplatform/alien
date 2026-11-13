@@ -1215,6 +1215,14 @@ impl Sandbox {
 
         if self.lifecycle.idle_pause_seconds.is_some() {
             capabilities.require(SandboxCapability::PauseResume, platform)?;
+            // GCP pauses and resumes on request, but its platform has no idle policy and Alien
+            // does not watch for idleness there yet.
+            if platform == Platform::Gcp {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "idle pause policy: the GCP Agent Platform backend pauses on request only; remove the idle policy".to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
         }
 
         if self.lifecycle.max_lifetime_seconds.is_some() {
@@ -1827,6 +1835,35 @@ mod tests {
         sandbox_with(SandboxEgress::None, vec![])
             .validate_for_platform(Platform::Gcp)
             .unwrap();
+    }
+
+    /// GCP can pause a sandbox, but the platform has no idle policy and nothing in Alien watches
+    /// for idleness yet, so a declared idle policy would plan cleanly and never fire.
+    #[test]
+    fn gcp_refuses_an_idle_pause_policy_at_plan_time_and_still_takes_a_lifetime() {
+        let with_policy = |lifecycle: SandboxLifecyclePolicy| {
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(lifecycle)
+                .build()
+                .validate_for_platform(Platform::Gcp)
+        };
+        let refused = with_policy(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: Some(900),
+        })
+        .expect_err("no idle policy exists on GCP");
+        assert_eq!(refused.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(refused.message.contains("idle"), "{}", refused.message);
+        with_policy(SandboxLifecyclePolicy {
+            max_lifetime_seconds: Some(3600),
+            idle_pause_seconds: None,
+        })
+        .expect("a lifetime is a TTL on GCP");
     }
 
     #[test]
