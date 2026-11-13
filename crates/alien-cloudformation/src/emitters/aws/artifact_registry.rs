@@ -296,6 +296,18 @@ fn replication_resources(
             ));
         }
     }
+    let conditional = match from_input {
+        Some(input_id) => replication_input_is_conditional(ctx.stack, ctx.platform, input_id)
+            .ok_or_else(|| {
+                alien_error::AlienError::new(alien_core::ErrorData::GenericError {
+                    message: format!(
+                        "Artifact registry '{}': the regions input '{input_id}' is not a deployer-provided input of this template",
+                        registry.id()
+                    ),
+                })
+            })?,
+        None => false,
+    };
     let regions = match from_input {
         Some(input_id) => CfExpression::list((0..=MAX_REPLICATION_REGION_SLOTS).map(|slot| {
             let region = if slot == MAX_REPLICATION_REGION_SLOTS {
@@ -303,7 +315,7 @@ fn replication_resources(
                     "too-many-regions-at-most-{MAX_REPLICATION_REGION_SLOTS}-are-supported"
                 ))
             } else {
-                replication_slot_region(input_id, replication_input_is_conditional(ctx.stack, input_id), slot)
+                replication_slot_region(input_id, conditional, slot)
             };
             if slot == 0 {
                 // The whole resource is conditional on slot 0, so a nested
@@ -486,13 +498,19 @@ pub(crate) fn replication_slot_condition(input_id: &str, slot: usize) -> String 
     )
 }
 
-/// True when the input only applies while another input has a given value. Such an input is
-/// emitted as a plain String parameter (comma separated), not a CommaDelimitedList.
-pub(crate) fn replication_input_is_conditional(stack: &alien_core::Stack, input_id: &str) -> bool {
-    stack
-        .inputs
-        .iter()
-        .any(|input| input.id == input_id && input.when.is_some())
+/// Whether the input is a conditional String parameter (`Some(true)`), a plain list parameter
+/// (`Some(false)`), or not a parameter of this template at all (`None`). It reads the same
+/// filtered input list that builds the parameters, so a controlling input that does not apply
+/// on this platform changes the answer for the parameter and the replication slots together.
+pub(crate) fn replication_input_is_conditional(
+    stack: &alien_core::Stack,
+    platform: alien_core::Platform,
+    input_id: &str,
+) -> Option<bool> {
+    crate::generator::stack_inputs_for_platform(stack, platform)
+        .into_iter()
+        .find(|input| input.id == input_id)
+        .map(|input| input.when.is_some())
 }
 
 /// The slot's region from the input list. The list is padded with empty

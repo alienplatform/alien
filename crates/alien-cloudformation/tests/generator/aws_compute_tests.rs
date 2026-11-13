@@ -709,3 +709,56 @@ fn aws_registry_conditional_regions_input_is_split_from_a_string_and_honors_its_
         "{slot0}"
     );
 }
+
+fn conditional_regions_stack_with_off_platform_controller(equals: bool) -> Stack {
+    let mut stack = input_registry_stack();
+    let mut gate = alien_core::StackInputDefinition::deployer_boolean(
+        "multiRegion",
+        "Multi-region",
+        "Replicate images to other regions",
+        Some(false),
+    );
+    gate.kind = alien_core::StackInputKind::Boolean;
+    // The controlling input exists only on GCP, so on AWS it is not a parameter.
+    gate.platforms = Some(vec![alien_core::Platform::Gcp]);
+    stack.inputs.get_mut(0).unwrap().when = Some(alien_core::StackInputCondition {
+        input: "multiRegion".to_string(),
+        equals,
+    });
+    stack.inputs.insert(0, gate);
+    stack
+}
+
+#[test]
+fn aws_registry_regions_input_whose_controller_is_off_platform_and_false_is_a_plain_list() {
+    // The parameter loses its condition on AWS; the slots must read it as a list and must not
+    // reference a `...Applies` condition that is never defined.
+    let template = render_template_json(&conditional_regions_stack_with_off_platform_controller(false));
+    assert_eq!(
+        template["Parameters"]["InputDeploymentRegions"]["Type"],
+        "CommaDelimitedList"
+    );
+    assert!(template["Conditions"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|name| !name.ends_with("RegionsApplies")));
+    let everything = template.to_string();
+    assert!(!everything.contains("InputDeploymentRegionsApplies"), "{everything}");
+}
+
+#[test]
+fn aws_registry_regions_input_that_is_not_a_parameter_fails_with_a_clear_error() {
+    let stack = conditional_regions_stack_with_off_platform_controller(true);
+    let error = super::helpers::try_render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "registry replication input",
+    )
+    .err()
+    .expect("a regions input that is dropped must not render a template that references it");
+    assert!(format!("{error:?}").contains("not a deployer-provided input"), "{error:?}");
+}

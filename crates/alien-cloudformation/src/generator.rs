@@ -517,7 +517,7 @@ pub fn generate_cloudformation_template_with_profile(
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
     }
-    add_replication_region_conditions(&mut template, stack);
+    add_replication_region_conditions(&mut template, stack, options.target.deployment_platform());
     if !access_only {
         add_standard_conditions(
             &mut template,
@@ -829,7 +829,16 @@ fn stack_inputs_for_cloudformation(
     stack: &Stack,
     target: CloudFormationTarget,
 ) -> Vec<StackInputDefinition> {
-    let platform = target.deployment_platform();
+    stack_inputs_for_platform(stack, target.deployment_platform())
+}
+
+/// The inputs that become template parameters on `platform`, with `when` cleared where the
+/// controlling input does not apply. Everything that reads an input's parameter (the parameter
+/// itself, its conditions, the replication region slots) must start from this one list.
+pub(crate) fn stack_inputs_for_platform(
+    stack: &Stack,
+    platform: alien_core::Platform,
+) -> Vec<StackInputDefinition> {
     stack
         .inputs()
         .iter()
@@ -2708,7 +2717,11 @@ fn add_custom_domain_certificate_rule(template: &mut CfTemplate) {
 
 /// One condition per region slot of a registry whose replication regions come
 /// from a deployer input; the registry emitter references them by name.
-fn add_replication_region_conditions(template: &mut CfTemplate, stack: &Stack) {
+fn add_replication_region_conditions(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    platform: alien_core::Platform,
+) {
     use crate::emitters::aws::artifact_registry::{
         replication_input_is_conditional, replication_slot_condition,
         replication_slot_condition_expression, MAX_REPLICATION_REGION_SLOTS,
@@ -2720,7 +2733,10 @@ fn add_replication_region_conditions(template: &mut CfTemplate, stack: &Stack) {
         let Some(input_id) = registry.replication_regions_input.as_deref() else {
             continue;
         };
-        let conditional = replication_input_is_conditional(stack, input_id);
+        // An input that is not a parameter has no slots; the registry emitter reports it.
+        let Some(conditional) = replication_input_is_conditional(stack, platform, input_id) else {
+            continue;
+        };
         for slot in 0..=MAX_REPLICATION_REGION_SLOTS {
             template.conditions.insert(
                 replication_slot_condition(input_id, slot),
