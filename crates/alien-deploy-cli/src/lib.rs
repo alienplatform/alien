@@ -45,7 +45,7 @@ pub enum Commands {
     Status(StatusArgs),
     /// List tracked deployments
     List(ListArgs),
-    /// Manage the alien-operator background service
+    /// Manage the operator background service
     Operator(OperatorArgs),
     /// Register an externally-provisioned stack (CloudFormation Outputs,
     /// Terraform, …) with a manager.
@@ -292,6 +292,65 @@ mod tests {
         let help = deploy.render_long_help().to_string();
         assert!(help.contains("acmectl deploy"));
         assert!(!help.contains("alien-deploy deploy"));
+    }
+
+    /// Every help text a customer can reach (each subcommand, each argument) in a branded CLI.
+    fn all_help_text(command: &mut Command, out: &mut Vec<String>) {
+        let name = command.get_name().to_string();
+        let help = command.render_long_help().to_string();
+        out.push(format!("{name}\n{help}"));
+        let names: Vec<String> = command
+            .get_subcommands()
+            .map(|sub| sub.get_name().to_string())
+            .collect();
+        for name in names {
+            if let Some(child) = command.find_subcommand_mut(&name) {
+                all_help_text(child, out);
+            }
+        }
+    }
+
+    #[test]
+    fn branded_help_never_shows_the_default_product_name() {
+        let config = DeployCliConfig {
+            token: None,
+            deployment_group_id: None,
+            default_platform: None,
+            api_base_url: None,
+            agent_binary_url: None,
+            machine_bundle_url: None,
+            install_script_url: None,
+            setup_revision: None,
+            token_env_var: None,
+            name: Some("acmectl".to_string()),
+            display_name: Some("Acme Deployment CLI".to_string()),
+        };
+        let mut command = command_with_branding(Some(&config));
+        let mut texts = Vec::new();
+        all_help_text(&mut command, &mut texts);
+        let offending: Vec<String> = texts
+            .iter()
+            .flat_map(|text| text.lines())
+            // Environment variable names and the operator's data directory are existing,
+            // scripted contracts: they stay and are named here.
+            .map(|line| {
+                let mut line = line.replace("~/.alien/operator-data", "");
+                while let Some(start) = line.find("ALIEN_") {
+                    let end = line[start..]
+                        .find(|c: char| !(c.is_ascii_uppercase() || c == '_'))
+                        .map_or(line.len(), |n| start + n);
+                    line.replace_range(start..end, "");
+                }
+                line
+            })
+            .filter(|line| line.to_ascii_lowercase().contains("alien"))
+            .map(|line| line.trim().to_string())
+            .collect();
+        assert!(
+            offending.is_empty(),
+            "branded help mentions the default product name:\n{}",
+            offending.join("\n")
+        );
     }
 
     #[test]

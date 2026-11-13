@@ -11,7 +11,7 @@
 //! per-region endpoint, and the resource group the data-plane path is scoped by.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, data_block, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         azure_resource_role_key_segment, downcast, emit_remote_bindings_role_definitions,
@@ -346,13 +346,27 @@ fn emit_image_management(
                 matches!(reference, alien_core::permissions::PermissionSetReference::Name(name) if name == IMAGES)
             })
         });
-    // No management resource means no remote manager identity: the deploying credentials run the
-    // controller, so there is no member to bind.
-    let Some(management_label) = granted
-        .then(|| remote_stack_management_label(ctx))
-        .flatten()
-    else {
+    if !granted {
         return Ok(());
+    }
+    // With no remote management resource there is no manager identity: the deploying credentials
+    // run the controller, and they are the ones applying this module. Bind that principal, or the
+    // controller's first disk-image listing is refused with a 403.
+    let applier_label = format!("{label}_images_applier");
+    let principal = match remote_stack_management_label(ctx) {
+        Some(management_label) => expr::traversal([
+            "azurerm_user_assigned_identity",
+            management_label,
+            "principal_id",
+        ]),
+        None => {
+            fragment.data_blocks.push(data_block(
+                "azurerm_client_config",
+                &applier_label,
+                Vec::<hcl::structure::Structure>::new(),
+            ));
+            expr::traversal(["data", "azurerm_client_config", applier_label.as_str(), "object_id"])
+        }
     };
     let permission_set = alien_permissions::get_permission_set(IMAGES).ok_or_else(|| {
         AlienError::new(ErrorData::GenericError {
@@ -415,14 +429,7 @@ fn emit_image_management(
                         "role_definition_resource_id",
                     ]),
                 ),
-                attr(
-                    "principal_id",
-                    expr::traversal([
-                        "azurerm_user_assigned_identity",
-                        management_label,
-                        "principal_id",
-                    ]),
-                ),
+                attr("principal_id", principal.clone()),
             ],
         ));
     }

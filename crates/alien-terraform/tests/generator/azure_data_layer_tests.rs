@@ -983,6 +983,35 @@ fn azure_sandbox_image_grant_reaches_the_manager_on_its_own_group_only() {
     assert_terraform_valid(&module, "azure sandbox image grant");
 }
 
+/// A stack with no remote management resource has no manager identity: the deploying
+/// credentials run the controller. Its disk-image grant goes to the principal applying the module,
+/// or the controller's first listing is refused with a 403.
+#[test]
+fn azure_sandbox_image_grant_reaches_the_applier_without_a_management_identity() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .management(alien_core::ManagementPermissions::extend(
+            PermissionProfile::new().resource("agents", ["sandbox/images"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(frozen_sandbox("agents"), ResourceLifecycle::Frozen)
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, contents)| contents.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("data.azurerm_client_config.agents_images_applier.object_id"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("agents_images_0"), "{rendered}");
+    assert_terraform_valid(&module, "azure sandbox image grant to the applier");
+}
+
 const SANDBOX_DATA_PLANE_ROLE_ID: &str = "c24cf47c-5077-412d-a19c-45202126392c";
 
 fn frozen_sandbox(id: &str) -> Sandbox {

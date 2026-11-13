@@ -6,7 +6,7 @@ use alien_core::{
     ResourceLifecycle, ResourceStatus, SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context, ContextError};
-use alien_infra::{RunningResourcePolicy, StackExecutor};
+use alien_infra::{RunningResourcePolicy, StackExecutor, StackResourceStateExt};
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashSet},
@@ -72,6 +72,31 @@ async fn untouched_heartbeats(
     };
     *stack_state = observation.state;
     observation.heartbeats
+}
+
+/// Whether the update is held only by resources waiting in a state their controller marked
+/// interruptible. True needs at least one such resource and no other resource in progress:
+/// a create, a delete or an update in any other state finishes with the config it started with.
+fn update_waits_only_in_interruptible_states(stack_state: &StackState) -> bool {
+    let mut interruptible = 0;
+    for resource in stack_state.resources.values() {
+        match resource.status {
+            ResourceStatus::Updating => {
+                let waits = resource
+                    .get_internal_controller()
+                    .ok()
+                    .flatten()
+                    .is_some_and(|controller| controller.is_interruptible());
+                if !waits {
+                    return false;
+                }
+                interruptible += 1;
+            }
+            ResourceStatus::Provisioning | ResourceStatus::Deleting => return false,
+            _ => {}
+        }
+    }
+    interruptible > 0
 }
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -518,6 +543,40 @@ pub async fn handle_updating(
                 runtime_metadata.pending_prepared_stack = None;
                 runtime_metadata.pending_prepared_release_id = None;
                 runtime_metadata.resources_waiting_for_secrets.clear();
+                next.status = DeploymentStatus::UpdatePending;
+                next.error = None;
+                next.stack_state = Some(stack_state);
+                next.runtime_metadata = Some(runtime_metadata);
+                return Ok(DeploymentStepResult {
+                    state: next,
+                    suggested_delay_ms: None,
+                    update_heartbeat: false,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                });
+            }
+        }
+    }
+
+    // A newer target while every in-progress resource only waits in a state its controller
+    // marked interruptible: prepare the newer target now, as a superseded failure does, and
+    // let the executor re-enter those resources with the new config. Any other in-progress
+    // resource finishes first, as before. This includes a promote back to the current release.
+    if current.status == DeploymentStatus::Updating {
+        let waiting_release_id = runtime_metadata.pending_prepared_release_id.as_ref();
+        let target_release_id = next
+            .target_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_ref());
+        if let (Some(waiting), Some(target)) = (waiting_release_id, target_release_id) {
+            if waiting != target && update_waits_only_in_interruptible_states(&stack_state) {
+                info!(
+                    waiting_release_id = %waiting,
+                    target_release_id = %target,
+                    "A newer release arrived while the update waits in an interruptible state; preparing it"
+                );
+                runtime_metadata.pending_prepared_stack = None;
+                runtime_metadata.pending_prepared_release_id = None;
                 next.status = DeploymentStatus::UpdatePending;
                 next.error = None;
                 next.stack_state = Some(stack_state);

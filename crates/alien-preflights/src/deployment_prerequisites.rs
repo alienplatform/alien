@@ -138,6 +138,54 @@ impl DeploymentPrerequisiteCheck for KubernetesBaseDomainCheck {
     }
 }
 
+/// A lone Azure sandbox stack has no resource group to live in when pushed directly.
+///
+/// Azure sandbox groups are created by the setup package. A direct push adds a resource group
+/// only for the other resource types, so a stack whose only Azure resources are sandboxes would
+/// never start setup. Once setup has created the sandbox, its state is present and this passes.
+pub struct AzureSandboxGroupFromSetupCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for AzureSandboxGroupFromSetupCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("AZURE_SANDBOX_GROUP_FROM_SETUP")
+    }
+
+    fn description(&self) -> &'static str {
+        "Azure sandbox groups come from the setup package"
+    }
+
+    fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        state.platform == Platform::Azure
+            && !stack.resources().any(|(_, entry)| {
+                entry.config.resource_type() == alien_core::AzureResourceGroup::RESOURCE_TYPE
+            })
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let missing: Vec<&str> = stack
+            .resources()
+            .filter(|(id, entry)| {
+                entry.config.downcast_ref::<alien_core::Sandbox>().is_some()
+                    && !state.resources.contains_key(id.as_str())
+            })
+            .map(|(id, _)| id.as_str())
+            .collect();
+        if missing.is_empty() {
+            return Ok(CheckResult::success());
+        }
+        Ok(CheckResult::failed(vec![format!(
+            "Azure sandbox group(s) {} would have no resource group: a stack whose only Azure resources are sandboxes cannot be pushed directly. Sandbox groups come from the setup package; deploy it through setup, or add another Azure resource.",
+            missing.join(", ")
+        )]))
+    }
+}
+
 /// The internet declaration requires a prepared gateway; legacy paths stay unchanged.
 pub struct SandboxEgressGatewayCheck;
 
@@ -1424,6 +1472,7 @@ mod tests {
                         method: "GET".to_string(),
                         timeout_seconds: 1,
                         failure_threshold: 3,
+                        startup_timeout_seconds: None,
                     })
                     .build(),
             ),
@@ -2192,5 +2241,59 @@ mod tests {
         assert!(errors.contains("api*extra"));
         assert!(errors.contains("MISS_WILDCARD"));
         assert!(errors.contains("worker-*"));
+    }
+
+    #[tokio::test]
+    async fn a_lone_azure_sandbox_pushed_directly_is_refused_until_setup_created_it() {
+        let sandbox = alien_core::Sandbox::new("boxes".into())
+            .code(alien_core::SandboxCode::Image {
+                image: "example.azurecr.io/box:1".into(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test".into())
+            .add(sandbox.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let config = deployment_config();
+        let check = AzureSandboxGroupFromSetupCheck;
+        assert_eq!(check.code(), Some("AZURE_SANDBOX_GROUP_FROM_SETUP"));
+
+        let state = stack_state(Platform::Azure);
+        assert!(check.should_run(&stack, &state, &config));
+        let refused = check.check(&stack, &state, &config).await.unwrap();
+        assert!(!refused.success);
+        assert!(refused.errors[0].contains("setup package"));
+        assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
+
+        // Setup created the group: the sandbox is in state, so updates pass.
+        let mut state = stack_state(Platform::Azure);
+        state.resources.insert(
+            "boxes".to_string(),
+            alien_core::StackResourceState::new_pending(
+                alien_core::Sandbox::RESOURCE_TYPE.to_string(),
+                Resource::new(sandbox),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+        assert!(check.check(&stack, &state, &config).await.unwrap().success);
+
+        // Another Azure resource makes the direct push add a resource group.
+        let with_storage = Stack::new("test".into())
+            .add(
+                Storage::new("uploads".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        assert!(!check.should_run(&with_storage, &stack_state(Platform::Azure), &config));
     }
 }

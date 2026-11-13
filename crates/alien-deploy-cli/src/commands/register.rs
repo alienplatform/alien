@@ -35,12 +35,12 @@ const SETUP_REVISION: &str = "SetupRevision";
 #[command(
     about = "Register an externally-provisioned stack with a manager",
     after_help = "EXAMPLES:
-    # Register the outputs of an `alien render --format cloudformation` stack
+    # Register the outputs of a rendered CloudFormation stack
     alien-deploy register \\
         --import cloudformation \\
         --stack-name acme-prod \\
         --region us-east-1 \\
-        --base-url https://api.alien.dev \\
+        --base-url https://api.example.com \\
         --token dg_... \\
         --input region=us-east-1 \\
         --input-json replicas=3
@@ -86,7 +86,7 @@ pub struct RegisterArgs {
     pub manager_url: Option<String>,
 
     /// Platform API URL for hosted registration. Defaults to the URL embedded
-    /// in a packaged CLI, then https://api.alien.dev.
+    /// in a packaged CLI, then the built-in default.
     #[arg(long, env = "ALIEN_BASE_URL")]
     pub base_url: Option<String>,
 

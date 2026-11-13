@@ -46,6 +46,21 @@ impl Connection {
     }
 }
 
+#[async_trait]
+impl crate::providers::sandbox::interactive::BoundAgent for Connection {
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        Connection::request(self, method, path)
+    }
+
+    fn provider(&self) -> &'static str {
+        "azure"
+    }
+}
+
 pub(super) const TRANSPORT_LABEL: &str =
     alien_azure_clients::azure::sandbox_data_plane::AGENT_TRANSPORT_LABEL;
 pub(super) const TRANSPORT_VERSION: &str =
@@ -239,6 +254,25 @@ impl AzureSandbox {
             url,
             token: token.to_owned(),
         })
+    }
+
+    /// The sandbox's connection, fetched and activated the first time and shared with every other
+    /// agent call. An interactive command holds it for as long as it runs, so input is many small
+    /// requests that cost no provider call each.
+    pub(super) async fn bound_agent(
+        &self,
+        sandbox_id: &str,
+    ) -> Result<std::sync::Arc<dyn crate::providers::sandbox::interactive::BoundAgent>> {
+        Self::checked_sandbox_id("sandbox.agent", sandbox_id)?;
+        let slot = self.connection_slot(sandbox_id).await;
+        let mut cached = slot.lock().await;
+        if cached.is_none() {
+            let connection = self.fetch_connection(sandbox_id).await?;
+            self.activate_connection(sandbox_id, &connection).await?;
+            *cached = Some(connection);
+        }
+        let connection = cached.as_ref().ok_or_else(invalid_route)?.clone();
+        Ok(std::sync::Arc::new(connection))
     }
 
     async fn activate_connection(&self, sandbox_id: &str, connection: &Connection) -> Result<()> {
@@ -677,6 +711,206 @@ mod tests {
         assert!(output.next().await.is_none());
         server.abort();
     }
+    fn interactive_provider(url: String, token: String, labels: BTreeMap<String, String>) -> AzureSandbox {
+        let mut native = MockSandboxDataPlaneApi::new();
+        native.expect_execute_shell_command().never();
+        native.expect_get_sandbox().returning(move |_, id| {
+            Ok(AzureRecord {
+                id: id.into(),
+                labels: labels.clone(),
+                vnet_connection_name: None,
+                egress_policy: super::super::egress_policy(&SandboxEgress::None),
+                state: Some("Running".into()),
+            })
+        });
+        native
+            .expect_agent_port_url()
+            .returning(move |_, _, _| Ok(url.clone()));
+        native
+            .expect_read_file()
+            .returning(move |_, _, _| Ok(token.as_bytes().to_vec()));
+        AzureSandbox::new(
+            Arc::new(native),
+            "group".into(),
+            "image".into(),
+            SandboxEgress::None,
+            None,
+            "1000m".into(),
+            "2048Mi".into(),
+            None,
+        )
+    }
+
+    fn interactive_request() -> RunCommandRequest {
+        RunCommandRequest {
+            command: "cat".into(),
+            args: vec![],
+            cwd: None,
+            env: BTreeMap::new(),
+            timeout: Duration::from_secs(5),
+        }
+    }
+
+    #[tokio::test]
+    async fn interactive_commands_stream_and_take_input_over_the_agent_port() {
+        let token = STANDARD.encode([7u8; 32]);
+        let expected = format!("Bearer {token}");
+        let seen_stdin = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let (auth, sink) = (expected.clone(), seen_stdin.clone());
+        let router = Router::new()
+            .route("/v1/activate", post(|| async { axum::http::StatusCode::NO_CONTENT }))
+            .route(
+                "/v1/interactive",
+                post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                    let auth = auth.clone();
+                    async move {
+                        assert_eq!(headers["authorization"], auth);
+                        assert_eq!(body["command"], serde_json::json!(["cat"]));
+                        assert!(body["id"].is_string());
+                        "{\"t\":\"stdout\",\"seq\":0,\"data\":\"b2s=\"}\n{\"t\":\"exit\",\"code\":0,\"truncated\":false}\n"
+                    }
+                }),
+            )
+            .route(
+                "/v1/interactive/stdin",
+                post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                    let (auth, sink) = (expected.clone(), sink.clone());
+                    async move {
+                        assert_eq!(headers["authorization"], auth);
+                        sink.lock().unwrap().push(body);
+                        Json(serde_json::json!({"accepted": 2}))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let provider = interactive_provider(
+            url,
+            token,
+            BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
+        )
+        .with_agent(true);
+        assert!(
+            provider.capabilities().interactive_commands,
+            "an agent-mode provider reports interactive commands"
+        );
+        assert!(
+            provider
+                .session_capabilities("session")
+                .await
+                .unwrap()
+                .interactive_commands
+        );
+
+        let mut command = provider
+            .run_interactive("session", interactive_request())
+            .await
+            .unwrap();
+        command.input.write(b"hi").await.unwrap();
+        assert_eq!(seen_stdin.lock().unwrap().len(), 1, "input reached the agent");
+        assert!(
+            matches!(command.output.next().await.unwrap().unwrap(), CommandOutput::Stdout { data, .. } if data == b"ok")
+        );
+        assert!(matches!(
+            command.output.next().await.unwrap().unwrap(),
+            CommandOutput::Exit { code: 0, .. }
+        ));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn an_interactive_start_refreshes_a_credential_the_agent_no_longer_accepts() {
+        // Another process resumed the sandbox: the cached token belongs to the old boot.
+        let fresh = STANDARD.encode([7u8; 32]);
+        let stale = STANDARD.encode([3u8; 32]);
+        let accept = format!("Bearer {fresh}");
+        let (activate_auth, interactive_auth) = (accept.clone(), accept.clone());
+        let started = Arc::new(AtomicUsize::new(0));
+        let counted = started.clone();
+        let router = Router::new()
+            .route(
+                "/v1/activate",
+                post(move |headers: HeaderMap| {
+                    let auth = activate_auth.clone();
+                    async move {
+                        if headers["authorization"] == auth {
+                            axum::http::StatusCode::NO_CONTENT
+                        } else {
+                            axum::http::StatusCode::UNAUTHORIZED
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/interactive",
+                post(move |headers: HeaderMap| {
+                    let auth = interactive_auth.clone();
+                    let counted = counted.clone();
+                    async move {
+                        if headers["authorization"] != auth {
+                            return (axum::http::StatusCode::UNAUTHORIZED, String::new());
+                        }
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        (
+                            axum::http::StatusCode::OK,
+                            "{\"t\":\"exit\",\"code\":0,\"truncated\":false}\n".to_string(),
+                        )
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let provider = interactive_provider(
+            url.clone(),
+            fresh,
+            BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
+        )
+        .with_agent(true);
+        *provider.connection_slot("session").await.lock().await = Some(Connection {
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            url: url.parse().unwrap(),
+            token: stale,
+        });
+        let mut command = provider
+            .run_interactive("session", interactive_request())
+            .await
+            .expect("a stale cached credential is refreshed before the command starts");
+        assert!(matches!(
+            command.output.next().await.unwrap().unwrap(),
+            CommandOutput::Exit { code: 0, .. }
+        ));
+        assert_eq!(started.load(Ordering::SeqCst), 1, "the command started once");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn interactive_commands_are_refused_on_a_session_without_the_agent() {
+        // No agent label: the platform's own exec takes no stdin, and no request may leave.
+        let provider = interactive_provider(
+            "http://127.0.0.1:1".into(),
+            STANDARD.encode([7u8; 32]),
+            BTreeMap::new(),
+        );
+        assert!(
+            !provider
+                .session_capabilities("session")
+                .await
+                .unwrap()
+                .interactive_commands
+        );
+        let error = provider
+            .run_interactive("session", interactive_request())
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
+    }
+
     #[tokio::test]
     async fn a_cached_connection_activates_new_boots_and_only_replays_a_changed_credential() {
         #[derive(Default)]
