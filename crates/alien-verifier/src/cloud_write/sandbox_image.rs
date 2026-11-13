@@ -101,6 +101,48 @@ fn check_bundle_uri(facts: &Signed<'_>, request: &Value) -> Result<String> {
     }
 }
 
+/// Where the bundle a build request names is stored: `(bucket, key)`.
+pub fn bundle_location(facts: &Signed<'_>, request: &Value) -> Result<(String, String)> {
+    let uri = check_bundle_uri(facts, request)?;
+    let (bucket, key) = uri
+        .strip_prefix("s3://")
+        .and_then(|path| path.split_once('/'))
+        .ok_or_else(|| refused("the build's bundle is not an s3 uri"))?;
+    Ok((bucket.to_string(), key.to_string()))
+}
+
+/// Whether `zip`, read from `uri`, is the bundle the verifier renders from the image the release
+/// signed. The URI's prefix only says who may write there; bundles of older releases stay in the
+/// bucket, so a build must read the bytes the signed image renders, not any saved bundle.
+pub fn check_bundle_contents(facts: &Signed<'_>, uri: &str, zip: &[u8]) -> Result<()> {
+    let image = bundle_image(zip).ok_or_else(|| {
+        refused(format!(
+            "the bundle at {uri} is not a single Dockerfile that builds FROM one image"
+        ))
+    })?;
+    let rendered = check_bundle(facts, &image)?;
+    if rendered.uri() != uri || rendered.zip != zip {
+        return Err(refused(format!(
+            "the bundle at {uri} is not the bundle rendered from the image the release signed              for sandbox '{}'",
+            facts.id
+        )));
+    }
+    Ok(())
+}
+
+/// The image a bundle's Dockerfile builds from.
+fn bundle_image(zip: &[u8]) -> Option<String> {
+    use std::io::Read;
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).ok()?;
+    if archive.len() != 1 {
+        return None;
+    }
+    let mut file = archive.by_name("Dockerfile").ok()?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    Some(text.strip_prefix("FROM ")?.strip_suffix('\n')?.to_string())
+}
+
 /// The free-form strings of a request, which only name the build.
 fn naming(request: &Value) -> Result<(Option<String>, String)> {
     let description = match request.get("description") {
@@ -315,6 +357,25 @@ mod tests {
             // The signed digest through another registry host is the same bytes.
             let proxied = format!("manager.example.com/proxy/agents@sha256:{}", "a".repeat(64));
             check_bundle(signed, &proxied).expect("the same digest through the manager's proxy");
+        });
+    }
+
+    #[test]
+    fn a_saved_bundle_of_another_image_is_not_the_signed_bundle() {
+        with_signed(|signed| {
+            let (bundle, _) = bundle_and_create(signed);
+            check_bundle_contents(signed, &bundle.uri(), &bundle.zip).expect("the signed bundle");
+
+            // A deny-listed older image's bundle sits under the same sandbox prefix.
+            let old = format!("registry.example/agents@sha256:{}", "d".repeat(64));
+            let older = render(&bundle_bucket(PREFIX), &old, "agents").expect("renders");
+            assert!(
+                check_bundle_contents(signed, &older.uri(), &older.zip).is_err(),
+                "a bundle of an image the release did not sign was accepted"
+            );
+            // The URI of the signed bundle with other bytes behind it.
+            assert!(check_bundle_contents(signed, &bundle.uri(), &older.zip).is_err());
+            assert!(check_bundle_contents(signed, &bundle.uri(), b"not a zip").is_err());
         });
     }
 

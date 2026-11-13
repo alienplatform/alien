@@ -1044,6 +1044,7 @@ pub async fn forward_aws_write(
                 &account,
                 request,
             )?;
+            verify_bundle(s3, &super::sandbox_image::Signed::of(facts)?, request).await?;
             let created = microvms.create_microvm_image(derived).await.context(
                 crate::error::ErrorData::CloudCallFailed {
                     operation: "lambda:CreateMicrovmImage".to_string(),
@@ -1065,6 +1066,7 @@ pub async fn forward_aws_write(
                 image,
                 request,
             )?;
+            verify_bundle(s3, &super::sandbox_image::Signed::of(facts)?, request).await?;
             let rolled = microvms
                 .update_microvm_image(image, derived)
                 .await
@@ -1096,6 +1098,30 @@ pub async fn forward_aws_write(
             Err(refused(format!("AWS takes no {} write", write.operation())))
         }
     }
+}
+
+/// Reads the bundle a build names and refuses it unless it is the one rendered from the signed
+/// image: a saved bundle of an older, since revoked image has the same prefix.
+async fn verify_bundle(
+    s3: &dyn alien_aws_clients::s3::S3Api,
+    signed: &super::sandbox_image::Signed<'_>,
+    request: &Value,
+) -> Result<()> {
+    use alien_error::Context;
+    let (bucket, key) = super::sandbox_image::bundle_location(signed, request)?;
+    let uri = format!("s3://{bucket}/{key}");
+    let object = s3
+        .get_object(&alien_aws_clients::s3::GetObjectRequest {
+            bucket,
+            key,
+            version_id: None,
+            range: None,
+        })
+        .await
+        .context(crate::error::ErrorData::CloudCallFailed {
+            operation: format!("s3:GetObject {uri}"),
+        })?;
+    super::sandbox_image::check_bundle_contents(signed, &uri, &object.body)
 }
 
 /// The bucket name this install gives storage `facts.resource_id` on GCP.
