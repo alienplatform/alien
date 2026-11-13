@@ -717,6 +717,27 @@ mod tests {
             .is_err());
         headless.delete_async().await;
 
+        // A publicly numbered Service address cannot be blocked by the direct-egress policy.
+        let mut public = server
+            .mock_async(|when, then| {
+                when.method(GET).path(path);
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"acme"},"spec":{"clusterIP":"34.118.0.9"}}));
+            })
+            .await;
+        let mut direct = sandbox.clone();
+        direct.egress = alien_core::SandboxEgress::Allow;
+        let refused = resolve_operator_address(&ctx, &direct, "test-ns")
+            .await
+            .unwrap_err();
+        assert!(refused.message.contains("publicly numbered"), "{}", refused.message);
+        assert!(kubernetes_spec::operator_address().is_none());
+        // The gateway policy admits only the gateway, so the same address is a valid canary.
+        resolve_operator_address(&ctx, &sandbox, "test-ns")
+            .await
+            .unwrap();
+        kubernetes_spec::forget_operator_address();
+        public.delete_async().await;
+
         server
             .mock_async(|when, then| {
                 when.method(GET).path(path);

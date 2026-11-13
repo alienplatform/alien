@@ -665,6 +665,15 @@ pub(crate) async fn resolve_operator_address(
                 "the Operator's Service '{name}' needs an IPv4 ClusterIP for the sandbox network check"
             ))
         })?;
+    // Under the deprecated direct-egress policy only non-public ranges are blocked, so a
+    // publicly numbered Service address would stay reachable and no pod could prove its policy.
+    if matches!(sandbox.egress, alien_core::SandboxEgress::Allow)
+        && alien_core::is_public_ipv4(address)
+    {
+        return Err(invalid(format!(
+            "the Operator's Service '{name}' has the publicly numbered address {address}, which the direct-egress policy cannot block, so a sandbox pod could not prove its network policy; use a private Service range or egress 'internet'"
+        )));
+    }
     super::kubernetes_spec::remember_operator_address(format!("{address}:{port}"));
     Ok(())
 }

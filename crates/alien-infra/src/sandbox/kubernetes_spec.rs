@@ -310,6 +310,35 @@ pub(crate) fn operator_address() -> Option<String> {
         .or_else(|| std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).ok())
 }
 
+/// What a Ready pod's canary is compared with. While the chart names the Operator Service but
+/// its address is not resolved yet (right after a restart), no canary matches, so a pod built
+/// against a departed Operator is not handed out before the first lookup.
+pub(crate) fn operator_address_for_checks() -> Option<String> {
+    checks_address(
+        operator_address(),
+        std::env::var_os(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE).is_some(),
+    )
+}
+
+fn checks_address(resolved: Option<String>, service_configured: bool) -> Option<String> {
+    resolved.or_else(|| service_configured.then(|| "unresolved".to_string()))
+}
+
+#[cfg(test)]
+mod checks_address_tests {
+    use super::checks_address;
+
+    #[test]
+    fn a_configured_but_unresolved_service_matches_no_canary() {
+        assert_eq!(checks_address(None, true).as_deref(), Some("unresolved"));
+        assert_eq!(checks_address(None, false), None);
+        assert_eq!(
+            checks_address(Some("10.0.0.5:8080".into()), true).as_deref(),
+            Some("10.0.0.5:8080")
+        );
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn forget_operator_address() {
     *RESOLVED_OPERATOR_ADDRESS
