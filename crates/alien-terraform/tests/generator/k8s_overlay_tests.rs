@@ -927,6 +927,20 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         .get("variables.tf")
         .expect("registered module should include variables");
     assert!(variables.contains("variable \"remote_operator_sync_token\""));
+    // Terraform before 1.12 evaluates both sides of `||`, so a null token must not reach
+    // `trimspace` through `x == null || ...`.
+    for token in [
+        "remote_operator_sync_token",
+        "remote_operator_collector_token",
+    ] {
+        assert!(
+            variables.contains(&format!(
+                "var.{token} == null ? true : length(trimspace(var.{token})) > 0"
+            )),
+            "{token} validation must not rely on short-circuit"
+        );
+    }
+    assert!(!variables.contains("== null || length("));
     assert!(variables.contains("variable \"remote_operator_encryption_key\""));
     assert!(variables.contains("variable \"remote_operator_collector_token\""));
     assert!(variables.contains("variable \"remote_operator_enabled\""));
@@ -1515,4 +1529,37 @@ fn aks_adds_a_kata_node_pool_only_when_the_stack_has_a_sandbox() {
         "{pool}"
     );
     assert_terraform_valid(&module, "aks_kata_node_pool");
+}
+
+/// An existing cluster brings its own network, so the registration of a module that can attach
+/// to one sends a `network` setting only when it creates the cluster.
+#[test]
+fn kubernetes_modules_register_a_network_only_when_they_create_the_cluster() {
+    let stack = Stack::new("eks-network-registration".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    let locals = module.get("locals.tf").expect("locals should render");
+    let settings = locals
+        .lines()
+        .find(|line| line.contains("deployment_settings"))
+        .expect("locals should define deployment_settings");
+    assert!(
+        settings.contains(
+            r#"jsondecode(var.kubernetes_cluster_mode == "create" ? jsonencode({ network = jsondecode("#
+        ),
+        "network must be registered only for a created cluster: {settings}"
+    );
+    assert!(
+        !settings.contains("endpointAccess = var.endpoint_access, network ="),
+        "network must not be registered unconditionally: {settings}"
+    );
 }
