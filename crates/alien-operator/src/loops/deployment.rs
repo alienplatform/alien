@@ -315,6 +315,26 @@ pub(crate) async fn run_deployment_continuously(
         LoopOperation::Deploy
     };
 
+    // Protected: whatever wrote the stored target, deploy it only if it is
+    // still exactly the signed release. Deleting needs no signature.
+    if let Some(signing) = &state.config.release_signing {
+        if operation == LoopOperation::Deploy {
+            let stored =
+                state.db.get_signing_trust().await?.unwrap_or_else(|| {
+                    crate::protected::OperatorTrust::new(&signing.settings.prefix)
+                });
+            if let Err(refusal) = signing.verify_release(current.platform, target_release, &stored)
+            {
+                error!(
+                    release_id = %target_release_id,
+                    reason = %refusal,
+                    "Protected mode: refused to deploy the stored target; nothing was changed"
+                );
+                return Ok((0, Duration::ZERO));
+            }
+        }
+    }
+
     // Get deployment ID (used for logging in runner)
     let deployment_id = state
         .db
@@ -1128,6 +1148,8 @@ mod tests {
             volume_restores: Vec::new(),
             value_slots: Vec::new(),
             deletion_policy: Default::default(),
+            release_statements: None,
+            signed_config: None,
         }
     }
 
@@ -1211,6 +1233,8 @@ mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("observe".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let state = |status, target: &str| DeploymentState {
             platform: Platform::Test,
@@ -1334,6 +1358,8 @@ mod tests {
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let current = DeploymentState {
             platform: Platform::Local,
@@ -2109,6 +2135,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -2310,6 +2338,8 @@ mod tests {
             version: Some("1.0.0".into()),
             description: None,
             stack,
+            signed: None,
+            signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::Pending,
@@ -2493,6 +2523,8 @@ mod tests {
                 version: Some("1.0.0".into()),
                 description: None,
                 stack,
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             stack_state: None,
             error: None,

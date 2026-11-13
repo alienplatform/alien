@@ -66,6 +66,39 @@ pub enum ErrorData {
         permission_set_id: String,
     },
 
+    /// A protected install would receive the grants kept for setups without a boundary.
+    #[error(
+        code = "PROTECTED_DEPLOYMENT_WITHOUT_BOUNDARY",
+        message = "Permission set '{permission_set_id}' grants '{label}' only to setups that recorded no permissions boundary, and a protected install never receives it. Rerun setup so it records the boundary.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ProtectedDeploymentWithoutBoundary {
+        /// Permission set holding the legacy grant
+        permission_set_id: String,
+        /// Label of the legacy grant
+        label: String,
+    },
+
+    /// A permission set grants the management identity an action in a family it never holds on a
+    /// protected install.
+    #[error(
+        code = "PROTECTED_MANAGEMENT_FAMILY_ACTION",
+        message = "Permission set '{permission_set_id}' grants '{action}' to the management identity, which a protected install does not allow: it can {family} (run unsigned code, change an identity that could, or open the install to outside access). Only the verifier writes this. Remove it from the permission set, or narrow the pattern to actions outside that family.",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ProtectedManagementFamilyAction {
+        /// Permission set holding the grant
+        permission_set_id: String,
+        /// The refused action pattern, permission or role
+        action: String,
+        /// The family the action can belong to: RUN, IDENTITY or REACH
+        family: String,
+    },
+
     /// Required variable not found in permission context.
     #[error(
         code = "VARIABLE_NOT_FOUND",

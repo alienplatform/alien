@@ -18,6 +18,8 @@ pub mod secrets_digest_key;
 
 mod deployer_secrets;
 pub use deployer_secrets::*;
+pub mod aws_naming;
+pub mod gcp_naming;
 pub mod vault_naming;
 
 pub mod permissions;
@@ -43,6 +45,7 @@ pub use error::*;
 
 #[cfg(feature = "bundle-signature")]
 pub mod bundle_signature;
+pub mod release_statement;
 mod resource;
 pub mod sandbox_capability;
 #[cfg(feature = "sandbox-capability")]

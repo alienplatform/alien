@@ -1,0 +1,121 @@
+{
+  "id": "mixed",
+  "resources": {
+    "assets": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "assets",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    },
+    "jobs": {
+      "config": {
+        "id": "jobs",
+        "type": "queue"
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    },
+    "metadata": {
+      "config": {
+        "id": "metadata",
+        "type": "kv"
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    },
+    "app-vault": {
+      "config": {
+        "id": "app-vault",
+        "type": "vault"
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    },
+    "api": {
+      "config": {
+        "code": {
+          "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "concurrencyLimit": null,
+        "environment": {},
+        "id": "api",
+        "links": [
+          {
+            "id": "assets",
+            "type": "storage"
+          },
+          {
+            "id": "metadata",
+            "type": "kv"
+          },
+          {
+            "id": "app-vault",
+            "type": "vault"
+          }
+        ],
+        "memoryMb": 512,
+        "permissions": "execution",
+        "readinessProbe": null,
+        "timeoutSeconds": 180,
+        "triggers": [],
+        "type": "worker"
+      },
+      "lifecycle": "live",
+      "dependencies": [],
+      "remoteAccess": false
+    },
+    "web": {
+      "config": {
+        "code": {
+          "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "type": "image"
+        },
+        "commandsEnabled": false,
+        "cpu": {
+          "desired": "0.25",
+          "min": "0.25"
+        },
+        "environment": {},
+        "id": "web",
+        "links": [],
+        "memory": {
+          "desired": "512Mi",
+          "min": "512Mi"
+        },
+        "permissions": "execution",
+        "ports": [],
+        "stateful": false,
+        "type": "container"
+      },
+      "lifecycle": "live",
+      "dependencies": [],
+      "remoteAccess": false
+    }
+  },
+  "permissions": {
+    "profiles": {
+      "execution": {
+        "*": [
+          "storage/data-read",
+          "storage/data-write",
+          "kv/data-write",
+          "vault/data-read",
+          "queue/data-write"
+        ]
+      }
+    },
+    "management": "auto"
+  }
+}

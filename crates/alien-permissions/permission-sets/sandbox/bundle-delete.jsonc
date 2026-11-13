@@ -1,0 +1,49 @@
+{
+  "id": "sandbox/bundle-delete",
+  "description": "Allows deleting the image-build bundles of a deployment's sandboxes, without writing any",
+  "platforms": {
+    "aws": [
+      {
+        // A protected install's bundles are written by its verifier from the signed release. The
+        // controller still removes the ones no image needs any more: a delete can fail a build
+        // but not change what it builds. Bound to the one bundle bucket by name, as the write set is.
+        "label": "delete-sandbox-bundles",
+        "grant": {
+          "actions": ["s3:DeleteObject"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-sandbox-bundles*/sandbox-bundle/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-sandbox-bundles*/sandbox-bundle/*"]
+          }
+        }
+      },
+      {
+        "label": "list-sandbox-bundles",
+        "grant": {
+          "actions": ["s3:ListBucket"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-sandbox-bundles*"],
+            "condition": {
+              "StringLike": {
+                "s3:prefix": ["sandbox-bundle/*"]
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-sandbox-bundles*"],
+            "condition": {
+              "StringLike": {
+                "s3:prefix": ["sandbox-bundle/*"]
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

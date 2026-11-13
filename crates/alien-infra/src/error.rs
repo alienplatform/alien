@@ -78,6 +78,59 @@ pub enum ErrorData {
         resource_id: Option<String>,
     },
 
+    /// The install holds signing settings, but the deployment config it was handed has none, so
+    /// rendering its management permissions would treat a protected install as unprotected.
+    #[error(
+        code = "SIGNING_SETTINGS_MISSING_FROM_CONFIG",
+        message = "Resource '{resource_id}' belongs to a protected install (signing settings at '{settings_location}'), but the deployment config has no signing settings",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SigningSettingsMissingFromConfig {
+        /// The resource whose permissions were about to be rendered
+        resource_id: String,
+        /// Where the install's signing settings are
+        settings_location: String,
+    },
+
+    /// A protected install's verifier refused to apply the release to a resource.
+    #[error(
+        code = "RELEASE_REFUSED_BY_VERIFIER",
+        message = "The install's verifier '{verifier}' refused to apply the release to '{resource_id}': {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 403
+    )]
+    ReleaseRefusedByVerifier {
+        /// The resource the release was applied to
+        resource_id: String,
+        /// The verifier that refused, `<prefix>-verifier`
+        verifier: String,
+        /// The verifier's reason, as it gave it
+        reason: String,
+    },
+
+    /// A protected install's verifier answered with a failure that isn't a refusal, such as a
+    /// cloud call that failed or a write that raced another; applying again may succeed.
+    #[error(
+        code = "VERIFIER_FAILED",
+        message = "The install's verifier '{verifier}' failed to apply the release to '{resource_id}' ({code}): {reason}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 502
+    )]
+    VerifierFailed {
+        /// The resource the release was applied to
+        resource_id: String,
+        /// The verifier, `<prefix>-verifier`
+        verifier: String,
+        /// The verifier's error code, or the cloud's when the verifier didn't answer
+        code: String,
+        /// What the verifier reported
+        reason: String,
+    },
+
     /// A required vault-native deployer secret is not in the deployment's
     /// secrets vault, so the workload does not start.
     #[error(

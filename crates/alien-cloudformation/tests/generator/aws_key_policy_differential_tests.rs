@@ -137,15 +137,14 @@ fn with_service_accounts(accounts: &[&str], key_scope: &str) -> Stack {
         );
     }
     let mut stack = stack.permissions(permissions).build();
-    stack.permissions.management = alien_core::ManagementPermissions::Extend(
-        PermissionProfile::new().resource(
+    stack.permissions.management =
+        alien_core::ManagementPermissions::Extend(PermissionProfile::new().resource(
             "secrets",
             [
                 PermissionSetReference::from_name("key/management"),
                 PermissionSetReference::from_name("key/availability"),
             ],
-        ),
-    );
+        ));
     stack
 }
 
@@ -173,12 +172,11 @@ fn key_used_by_storage_has_no_allowlist() {
             ResourceLifecycle::Frozen,
         )
         .build();
-    stack.permissions.management = alien_core::ManagementPermissions::Extend(
-        PermissionProfile::new().resource(
+    stack.permissions.management =
+        alien_core::ManagementPermissions::Extend(PermissionProfile::new().resource(
             "data-key",
             [PermissionSetReference::from_name("key/management")],
-        ),
-    );
+        ));
     assert_same_policy(&stack, "data-key", "DataKey");
 }
 

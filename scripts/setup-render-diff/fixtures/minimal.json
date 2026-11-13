@@ -1,0 +1,24 @@
+{
+  "id": "minimal",
+  "resources": {
+    "assets": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "assets",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    }
+  },
+  "permissions": {
+    "profiles": {
+      "execution": {}
+    },
+    "management": "auto"
+  }
+}

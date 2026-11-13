@@ -31,6 +31,16 @@ pub enum ErrorData {
         repair: String,
     },
 
+    /// Protected mode refused a release the manager sent.
+    #[error(
+        code = "RELEASE_REFUSED",
+        message = "Refused the release: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    ReleaseRefused { reason: String },
+
     #[error(
         code = "CONFIGURATION_ERROR",
         message = "{message}",

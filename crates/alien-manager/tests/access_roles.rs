@@ -215,6 +215,7 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         charts: None,
         release_channels: None,
+        signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
@@ -401,6 +402,8 @@ async fn vault_routes_refuse_deployer_values_and_preserve_shared_secrets() {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -923,6 +926,8 @@ mod runtime_credentials {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    setup_templates: Default::default(),
+                    signed_stacks: Default::default(),
                 },
             )
             .await
@@ -1007,7 +1012,11 @@ mod runtime_credentials {
     #[tokio::test]
     async fn receiver_authority_expires_with_parent_and_fresh_receiver_can_refresh() {
         let (mut state, deployment_id, tmp) = state().await;
-        let clock = Arc::new(AtomicI64::new(Utc::now().timestamp()));
+        // The command server's storage signer stamps presigned URLs with real
+        // time, while this clock is whole seconds. Start it at the next whole
+        // second so it never lags real time; a lagging clock would spend the
+        // signer's one-second reserve before the request is made.
+        let clock = Arc::new(AtomicI64::new(Utc::now().timestamp() + 1));
         let server_clock = clock.clone();
         let registry = Arc::new(InMemoryCommandRegistry::new());
         registry
@@ -1746,6 +1755,8 @@ mod runtime_credentials {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    setup_templates: Default::default(),
+                    signed_stacks: Default::default(),
                 },
             )
             .await

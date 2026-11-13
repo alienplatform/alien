@@ -27,7 +27,17 @@ pub async fn prepare_for_render(stack: Stack) -> Stack {
 
 /// The stack as `alien render --format terraform --target <target>` prepares it, on the target's
 /// deployment platform: Kubernetes, on its cloud, for a managed Kubernetes target.
-pub async fn prepare_for_target(mut stack: Stack, target: TerraformTarget) -> Stack {
+pub async fn prepare_for_target(stack: Stack, target: TerraformTarget) -> Stack {
+    prepare_for_target_with(stack, target, StackSettings::default()).await
+}
+
+/// [`prepare_for_target`] for a stack deployed with `settings`, which some mutations read (a
+/// protected stack gets its verifier).
+pub async fn prepare_for_target_with(
+    mut stack: Stack,
+    target: TerraformTarget,
+    settings: StackSettings,
+) -> Stack {
     let platform = target.deployment_platform();
     alien_core::remove_off_platform_gated_resources(&mut stack, platform, None);
     let runner = PreflightRunner::new();
@@ -37,7 +47,7 @@ pub async fn prepare_for_target(mut stack: Stack, target: TerraformTarget) -> St
         .expect("template preflights pass");
     let config = DeploymentConfig::builder()
         .deployment_name(stack.id().to_string())
-        .stack_settings(StackSettings::default())
+        .stack_settings(settings)
         .management_config(ManagementConfig::Aws(AwsManagementConfig {
             managing_role_arn: "rendered-from-template-parameter".to_string(),
         }))
@@ -123,6 +133,20 @@ pub fn assert_ungated_registration_list_is_a_plain_array(main: &str) {
     );
 }
 
+/// What a released CLI build pins, so protected setups render in tests.
+pub fn test_pins() -> alien_core::SetupPins {
+    alien_core::SetupPins {
+        aws_publisher: Some("111122223333".to_string()),
+        aws_verifier_image: Some(format!("verifier@sha256:{}", "ab".repeat(32))),
+        gcp_verifier_image: Some(format!("gcr.example/verifier@sha256:{}", "6e".repeat(32))),
+        azure_verifier_image: Some(format!(
+            "registry.example/verifier@sha256:{}",
+            "7f".repeat(32)
+        )),
+        operator_digest: Some(format!("sha256:{}", "cd".repeat(32))),
+    }
+}
+
 /// Render `stack` for `target` against the built-in registry with the given
 /// settings. Panics on render failure so test bodies stay short.
 pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -> ModuleFiles {
@@ -149,6 +173,15 @@ pub fn render_with_registry(
         stack,
         target,
         TerraformOptions {
+            // Protected modules report which setup they are; the value doesn't matter here.
+            setup_identity: settings.signing.as_ref().map(|_| {
+                alien_terraform::TerraformSetupIdentity {
+                    setup_target: target.cloud_platform().as_str().to_string(),
+                    setup_fingerprint: "test-fingerprint".to_string(),
+                    setup_fingerprint_version: 1,
+                }
+            }),
+            pins: test_pins(),
             display_name: None,
             registry,
             stack_settings: settings,
@@ -234,6 +267,13 @@ pub fn snapshot_module(name: &str, module: &ModuleFiles) {
 pub fn assert_terraform_valid(module: &ModuleFiles, context: &str) {
     let files = linter_files(module);
     test_utils::terraform_fmt_check(&files).assert_ok(format!("{context} terraform fmt -check"));
+    test_utils::terraform_validate(&files).assert_ok(format!("{context} terraform validate"));
+}
+
+/// `terraform validate` alone, for a protected module: the generator leaves it unformatted so
+/// its bytes don't depend on the renderer's PATH.
+pub fn assert_terraform_validates(module: &ModuleFiles, context: &str) {
+    let files = linter_files(module);
     test_utils::terraform_validate(&files).assert_ok(format!("{context} terraform validate"));
 }
 

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 // Re-export types from alien-core
 pub use alien_core::KubernetesClientConfig;
 
+pub mod config_maps;
 pub mod deployments;
 pub mod events;
 pub mod jobs;

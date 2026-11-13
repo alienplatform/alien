@@ -6,7 +6,7 @@ platforms = ["aws", "gcp", "azure"]
 [postgres.ledger]
 display-name = "Ledger database"
 description = "Transactional store for the ledger service."
-lifecycle = "live"
+lifecycle = "frozen"
 remote-access = true
 enabled-when = "ledger_enabled"
 version = "16"

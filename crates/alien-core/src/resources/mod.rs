@@ -67,6 +67,9 @@ pub use remote_stack_management::*;
 mod remote_bindings;
 pub use remote_bindings::*;
 
+mod signing_verifier;
+pub use signing_verifier::*;
+
 mod vault;
 pub use vault::*;
 

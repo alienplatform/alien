@@ -66,7 +66,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             ],
         ));
         let generator = AwsRuntimePermissionsGenerator::new();
-        let context = stack_permission_context(ctx);
+        let context = stack_permission_context(ctx).with_signing(ctx.stack_settings);
         let stack_context = context.clone().with_resource_name("management".to_string());
         let mut statements = Vec::<AwsIamStatement>::new();
         // Keyed by gate input so resources sharing one input share a policy.
@@ -521,6 +521,7 @@ mod tests {
             targets_kubernetes: true,
             stack_settings: &StackSettings::default(),
             names: &Default::default(),
+            pins: &alien_core::SetupPins::default(),
         };
         let emitted = boundary_document(&ctx).unwrap();
         let Expression::FuncCall(call) = emitted else {

@@ -13,6 +13,15 @@ use super::{
 /// Deployment configuration
 ///
 /// Configuration for how to perform the deployment.
+/// A signed release and the chain that verifies it, carried to enforcers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseStatements {
+    /// The `release/v2` statement for this deployment's platform.
+    pub release: crate::SignedStatement,
+    /// The project's signer list chain, oldest first.
+    pub signer_lists: Vec<crate::SignedStatement>,
+}
+
 /// Note: Credentials (ClientConfig) are passed separately to step() function.
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -30,6 +39,18 @@ pub struct DeploymentConfig {
     #[serde(skip)]
     #[cfg_attr(feature = "openapi", schema(ignore))]
     pub setup_run_id: Option<String>,
+    /// The target release's signed statement and the signer list chain, for
+    /// controllers that hand them to the deployment's enforcers unchanged.
+    /// Set by the deployment runner from the release being deployed; not
+    /// serialized, so stored configuration can't supply them.
+    #[serde(skip)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    pub release_statements: Option<ReleaseStatements>,
+    /// A protected deployment's newest signed `config/v1`, which controllers hand to the
+    /// enforcers with the release. The enforcers verify it against the install's own trust and
+    /// refuse one older than what they accepted, so it is carried as received.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<crate::SignedStatement>,
     /// Site registry (`host[/path]`) every Kubernetes workload image is pulled from.
     /// Set by the Operator from the installation's `global.imageRegistry`; never part of a
     /// release, so a release cannot redirect where an installation pulls from.

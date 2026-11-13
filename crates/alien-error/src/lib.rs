@@ -679,11 +679,16 @@ where
     }
 
     /// Convert to an Axum response suitable for external API responses.
-    /// Sanitizes internal errors to prevent information leakage.
+    /// Sanitizes internal errors to prevent information leakage. A sanitized
+    /// error is logged in full first: the response no longer says what went
+    /// wrong, so the log is the only place that does.
     pub fn into_external_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
         use axum::response::{IntoResponse, Json};
 
+        if self.internal {
+            tracing::error!(code = %self.code, error = %self, "Internal error answered as a generic one");
+        }
         let response_error = self.into_external();
 
         // Convert HTTP status code to StatusCode
@@ -830,5 +835,32 @@ mod tests {
         assert_eq!(external.message, "Internal server error");
         assert!(external.context.is_none());
         assert!(external.source.is_none());
+    }
+
+    /// An internal error leaves the service as "Internal server error", so
+    /// what actually failed must reach the log.
+    #[cfg(feature = "axum")]
+    #[tracing_test::traced_test]
+    #[test]
+    fn a_sanitized_internal_error_is_logged_in_full() {
+        let mut error = AlienError::new(GenericError {
+            message: "column \"setup_template_digest\" does not exist".to_string(),
+        });
+        error.internal = true;
+
+        let response = error.into_external_response();
+
+        assert_eq!(response.status(), 500);
+        assert!(logs_contain("Internal error answered as a generic one"));
+        assert!(logs_contain(
+            "column \"setup_template_digest\" does not exist"
+        ));
+
+        let public = AlienError::new(TestError::Normal).into_external_response();
+        assert_eq!(public.status(), 500);
+        assert!(
+            !logs_contain("Inner failure"),
+            "an error the response already shows isn't logged again"
+        );
     }
 }

@@ -1,0 +1,13 @@
+{
+  "description": "a config statement sent as a release",
+  "expect": "SIGNING_WRONG_KIND",
+  "statement": {
+    "payload": "eyJ0eXBlIjoiY29uZmlnL3YxIiwicHJvamVjdCI6InByal90ZXN0IiwiaW5zdGFsbCI6ImF3czoxMTExMjIyMjMzMzM6dXMtZWFzdC0xOmFjbWUtcHJvZCIsInNlcXVlbmNlIjoyMCwibm90QWZ0ZXIiOm51bGwsInNpZ25lckxpc3RWZXJzaW9uIjoxLCJib2R5Ijp7fX0=",
+    "signatures": [
+      {
+        "signer": "ci",
+        "sig": "MEYCIQDqi7VhLoev/Dky04nq4G2ZVdsQ1BzfDfNPfnfnWdWOUgIhAKsORbfnNE/jN6Roesax5B24GXVDvezqEOLC0Iuo+Q3j"
+      }
+    ]
+  }
+}

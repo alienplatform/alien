@@ -61,8 +61,10 @@ impl crate::providers::sandbox::interactive::BoundAgent for Connection {
     }
 }
 
-pub(super) const TRANSPORT_LABEL: &str = "alienAgentTransport";
-pub(super) const TRANSPORT_VERSION: &str = "native-file-v1";
+pub(super) const TRANSPORT_LABEL: &str =
+    alien_azure_clients::azure::sandbox_data_plane::AGENT_TRANSPORT_LABEL;
+pub(super) const TRANSPORT_VERSION: &str =
+    alien_azure_clients::azure::sandbox_data_plane::AGENT_TRANSPORT_VERSION;
 
 /// Select from authenticated provider metadata, never from an HTTP failure or current release.
 /// Missing means a session created by a released native binding; unknown versions fail closed.

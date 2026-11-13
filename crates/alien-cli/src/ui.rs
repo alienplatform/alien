@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -727,9 +727,45 @@ struct LiveRegionInner {
     tick: usize,
 }
 
+/// Every live region, so a prompt can take them off the screen first.
+static LIVE_REGIONS: Mutex<Vec<Weak<Mutex<LiveRegionInner>>>> = Mutex::new(Vec::new());
+
+/// Prompts waiting for an answer. While any is, live regions draw nothing:
+/// a region redraws by erasing its own last lines, which after a prompt are
+/// the prompt and whatever it showed (a recovery code, a pairing code).
+static WAITING_PROMPTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Keeps progress off the screen until dropped. See [`pause_progress`].
+#[must_use = "progress comes back as soon as the guard is dropped"]
+pub struct ProgressPaused(());
+
+impl Drop for ProgressPaused {
+    fn drop(&mut self) {
+        WAITING_PROMPTS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Take live progress off the screen, and keep it off until the guard is
+/// dropped, so lines printed and answers typed meanwhile stay where they are.
+pub fn pause_progress() -> ProgressPaused {
+    WAITING_PROMPTS.fetch_add(1, Ordering::SeqCst);
+    let regions = LIVE_REGIONS.lock().unwrap_or_else(|e| e.into_inner());
+    for region in regions.iter().filter_map(Weak::upgrade) {
+        let mut inner = region.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.rendered_count > 0 {
+            let _ = inner.term.clear_last_lines(inner.rendered_count);
+            inner.rendered_count = 0;
+        }
+    }
+    ProgressPaused(())
+}
+
 impl LiveRegionInner {
     /// Clear the current live region from the terminal and write new content.
     fn render(&mut self) {
+        if WAITING_PROMPTS.load(Ordering::SeqCst) > 0 {
+            return;
+        }
         // Collect all lines from all sections
         let lines: Vec<&str> = self
             .sections
@@ -776,6 +812,11 @@ impl LiveRegion {
             rendered_count: 0,
             tick: 0,
         }));
+        {
+            let mut regions = LIVE_REGIONS.lock().unwrap_or_else(|e| e.into_inner());
+            regions.retain(|region| region.strong_count() > 0);
+            regions.push(Arc::downgrade(&inner));
+        }
 
         let stop = Arc::new(AtomicBool::new(false));
 

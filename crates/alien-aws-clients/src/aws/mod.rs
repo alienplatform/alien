@@ -72,6 +72,8 @@ pub mod lambda_microvms;
 pub mod rds;
 pub mod resourcegroupstagging;
 pub mod s3;
+pub mod sandbox_bundle;
+pub mod sandbox_image_build;
 pub mod secrets_manager;
 pub mod service_quotas;
 pub mod ses;

@@ -51,6 +51,11 @@ pub fn register(registry: &mut ImporterRegistry) {
             GcpRemoteStackManagementImporter,
         )
         .register(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Gcp,
+            crate::signing_verifier::SigningVerifierImporter,
+        )
+        .register(
             RemoteBindings::RESOURCE_TYPE,
             Platform::Gcp,
             GcpRemoteBindingsImporter,

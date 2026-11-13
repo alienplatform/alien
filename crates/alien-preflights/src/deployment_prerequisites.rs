@@ -985,6 +985,8 @@ mod tests {
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
+            release_statements: None,
+            signed_config: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
             management_config: None,

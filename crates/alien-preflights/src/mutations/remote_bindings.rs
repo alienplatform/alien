@@ -48,6 +48,13 @@ impl StackMutation for RemoteBindingsMutation {
     ) -> Result<Stack> {
         let platform = config.base_platform.unwrap_or(stack_state.platform);
         validate_remote_bindings_cover_the_platform(&stack, platform, self.description())?;
+        if config.stack_settings.signing.is_some() {
+            validate_no_remote_sandbox_on_a_protected_install(
+                &stack,
+                platform,
+                self.description(),
+            )?;
+        }
         validate_isolated_remote_resource(&stack, self.description())?;
         validate_remote_sandboxes_are_deliverable(&stack, self.description())?;
         validate_remote_sandboxes_are_single_tenant(&stack, self.description(), platform)?;
@@ -128,6 +135,41 @@ fn validate_remote_bindings_cover_the_platform(
                  grants nothing there",
                 entry.config.resource_type(),
                 definition.permission_set
+            ),
+            resource_id: Some(resource_id.clone()),
+        }));
+    }
+    Ok(())
+}
+
+/// Refuses a remotely published sandbox on a protected Azure or GCP install.
+///
+/// The remote-access identity trusts the vendor's token issuer, so whoever controls it holds the
+/// sandbox roles. On Azure and GCP those create sandboxes from any image, which is a power a
+/// protected install leaves to the verifier alone. AWS limits the grant to the install's own
+/// MicroVM image.
+fn validate_no_remote_sandbox_on_a_protected_install(
+    stack: &Stack,
+    platform: Platform,
+    mutation_name: &str,
+) -> Result<()> {
+    if !matches!(platform, Platform::Azure | Platform::Gcp) {
+        return Ok(());
+    }
+    for (resource_id, entry) in &stack.resources {
+        let Some(definition) = alien_core::remote_bindings::remote_binding_for_entry(entry) else {
+            continue;
+        };
+        if definition.permission_set != "sandbox/remote-execute" {
+            continue;
+        }
+        return Err(AlienError::new(ErrorData::StackMutationFailed {
+            mutation_name: mutation_name.to_string(),
+            message: format!(
+                "sandbox '{resource_id}' is published for remote access, which a protected \
+                 install does not support on {platform} yet: the remote caller could create \
+                 sandboxes from any image. Remove its remote access, or install without release \
+                 signing"
             ),
             resource_id: Some(resource_id.clone()),
         }));
@@ -348,6 +390,8 @@ mod tests {
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
+            release_statements: None,
+            signed_config: None,
             deployment_name: None,
             stack_settings: StackSettings::default(),
             management_config: Some(ManagementConfig::Kubernetes),
@@ -535,6 +579,56 @@ mod tests {
                 "the refusal must name the permission set that decides it, got: {message}"
             );
         }
+    }
+
+    /// Azure and GCP sandbox roles can create a sandbox from any image, so the identity the
+    /// control plane can mint tokens for must not hold them on a protected install. AWS scopes
+    /// the grant to the install's own image and stays supported.
+    #[tokio::test]
+    async fn a_remote_sandbox_is_refused_on_a_protected_azure_or_gcp_install() {
+        let protected = || {
+            let mut config = config();
+            config.stack_settings.signing = Some(alien_core::StackSigning {
+                fingerprint: "SHA256:00".to_string(),
+                channel: "production".to_string(),
+            });
+            config
+        };
+        let stack = || {
+            Stack::new("byo-sandbox".to_string())
+                .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+                .build()
+        };
+
+        for platform in [Platform::Azure, Platform::Gcp] {
+            let error = RemoteBindingsMutation
+                .mutate(stack(), &StackState::new(platform), &protected())
+                .await
+                .expect_err(&format!("{platform}: a protected install refuses it"));
+            let message = error.to_string();
+            assert!(message.contains("'agents'"), "{platform}: {message}");
+            assert!(message.contains("protected"), "{platform}: {message}");
+
+            RemoteBindingsMutation
+                .mutate(stack(), &StackState::new(platform), &config())
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{platform}: an unprotected install is unchanged: {error}")
+                });
+        }
+
+        RemoteBindingsMutation
+            .mutate(stack(), &StackState::new(Platform::Aws), &protected())
+            .await
+            .expect("AWS scopes the grant to the install's own image");
+        RemoteBindingsMutation
+            .mutate(
+                published(Storage::new("exports".to_string()).build()),
+                &StackState::new(Platform::Azure),
+                &protected(),
+            )
+            .await
+            .expect("a protected Azure install keeps remote storage");
     }
 
     /// The gate reads `base_platform` where a deployment sets one, exactly as `should_run` does.

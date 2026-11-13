@@ -137,6 +137,15 @@ pub struct Stack {
 }
 
 impl Stack {
+    /// The ids of the stack's own vaults: those the application reads and writes, not the
+    /// reserved ones the framework keeps its secrets in.
+    pub fn application_vault_ids(&self) -> Vec<String> {
+        self.resources()
+            .filter(|(_, entry)| entry.config.resource_type() == crate::Vault::RESOURCE_TYPE)
+            .map(|(id, _)| id.clone())
+            .filter(|id| id != crate::SECRETS_VAULT_ID && id != crate::DEPLOYER_SECRETS_VAULT_ID)
+            .collect()
+    }
     /// SQS visibility derived from all consumers, including a batch collection window.
     pub fn queue_visibility_timeout_seconds(&self, queue_id: &str) -> u32 {
         self.resources

@@ -385,15 +385,7 @@ fn mirror_targets(
         .collect()
 }
 
-/// The target is read from encrypted SQLite, so a restart resumes convergence
-/// even if it missed the response that last changed the target.
-pub async fn reconcile_saved(
-    state: &OperatorState,
-    deployment_id: &str,
-) -> Result<Option<Vec<DynamicContainerReport>>> {
-    let Some(target) = state.db.get_target_dynamic_containers().await? else {
-        return Ok(None);
-    };
+async fn in_cluster_client(state: &OperatorState) -> Result<(KubernetesClient, &str)> {
     let namespace = state
         .config
         .namespace
@@ -407,6 +399,47 @@ pub async fn reconcile_saved(
     .context(ErrorData::DeploymentFailed {
         message: "Failed to initialize Kubernetes client for dynamic containers".to_string(),
     })?;
+    Ok((client, namespace))
+}
+
+/// Protected mode runs no dynamic container: no signed release names one. So
+/// the deployment's existing ones, started before its owner pinned release
+/// keys, are removed like the stale objects of an emptied target.
+pub async fn remove_all(state: &OperatorState, deployment_id: &str) -> Result<()> {
+    let (client, namespace) = in_cluster_client(state).await?;
+    remove_all_in(&client, namespace, deployment_id).await
+}
+
+async fn remove_all_in(
+    client: &KubernetesClient,
+    namespace: &str,
+    deployment_id: &str,
+) -> Result<()> {
+    let empty = alien_core::Stack::new("cleanup".to_string()).build();
+    reconcile_with_admission(
+        client,
+        namespace,
+        deployment_id,
+        &[],
+        None,
+        &[],
+        &empty,
+        None,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// The target is read from encrypted SQLite, so a restart resumes convergence
+/// even if it missed the response that last changed the target.
+pub async fn reconcile_saved(
+    state: &OperatorState,
+    deployment_id: &str,
+) -> Result<Option<Vec<DynamicContainerReport>>> {
+    let Some(target) = state.db.get_target_dynamic_containers().await? else {
+        return Ok(None);
+    };
+    let (client, namespace) = in_cluster_client(state).await?;
     let pull_token = if state.config.sync.is_some() {
         Some(
             crate::daily_identity::request_token(state, serde_json::json!({"type":"registryPull"}))
@@ -514,6 +547,8 @@ mod tests {
             version: None,
             description: None,
             stack: stack.clone(),
+            signed: None,
+            signer_lists: Vec::new(),
         });
         assert!(!installed_compute_ready(&state, &stack));
         let mut resource = StackResourceState::new_pending(

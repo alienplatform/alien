@@ -86,6 +86,8 @@ fn deployment() -> Value {
         "releaseChannel": "production",
         "retryRequested": false,
         "updateBlocked": false,
+        "protected": false,
+        "signingChannel": null,
         "createdAt": "2026-01-01T00:00:00Z",
         "updatedAt": "2026-01-01T00:00:00Z",
         "managerId": "mgr_0000000000000000000000000000",

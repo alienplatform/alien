@@ -540,6 +540,9 @@ impl S3Api for S3Client {
 
         // Build the request – include the XML body & headers only when necessary.
         let url = self.url(bucket, "");
+        // No ownership or ACL header: new buckets default to `BucketOwnerEnforced` (ACLs off),
+        // and sending `x-amz-object-ownership` takes `s3:PutBucketOwnershipControls`, which
+        // storage provisioning does not grant and protected management denies.
         let mut builder = self.client.request(Method::PUT, &url).host(&host);
 
         if let Some(body_xml) = body {
@@ -2192,6 +2195,38 @@ pub struct QueueConfiguration {
     pub filter: Option<NotificationFilter>,
 }
 
+impl QueueConfiguration {
+    /// The queue configuration a storage notification rule becomes: object creation events,
+    /// filtered by the rule's literal prefix and suffix. Setup, the controller and the verifier
+    /// all derive it here.
+    pub fn for_rule(
+        notification: &alien_core::StorageNotification,
+        queue_arn: String,
+        id: Option<String>,
+    ) -> Self {
+        let filter_rules: Vec<FilterRule> = [
+            ("prefix", &notification.prefix),
+            ("suffix", &notification.suffix),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| {
+            value.as_ref().map(|value| FilterRule {
+                name: name.into(),
+                value: value.clone(),
+            })
+        })
+        .collect();
+        Self {
+            id,
+            queue_arn,
+            events: vec!["s3:ObjectCreated:*".into()],
+            filter: (!filter_rules.is_empty()).then(|| NotificationFilter {
+                key: S3KeyFilter { filter_rules },
+            }),
+        }
+    }
+}
+
 /// An SNS destination and its event/key filters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -2282,6 +2317,30 @@ mod tests {
             }),
         });
         S3Client::new(Client::new(), credentials)
+    }
+
+    /// CreateBucket sends no ownership or ACL header: those need grants storage does not have.
+    #[tokio::test]
+    async fn a_bucket_is_created_without_ownership_or_acl_headers() {
+        let server = MockServer::start_async().await;
+        let created = server
+            .mock_async(|when, then| {
+                when.method(PUT).path("/new-bucket").matches(|req| {
+                    !req.headers.iter().flatten().any(|(name, _)| {
+                        let name = name.to_ascii_lowercase();
+                        name == "x-amz-object-ownership"
+                            || name.starts_with("x-amz-grant")
+                            || name == "x-amz-acl"
+                    })
+                });
+                then.status(200);
+            })
+            .await;
+        client(&server)
+            .create_bucket("new-bucket")
+            .await
+            .expect("the bucket is created");
+        created.assert_async().await;
     }
 
     fn zero_day_expiration() -> LifecycleConfiguration {

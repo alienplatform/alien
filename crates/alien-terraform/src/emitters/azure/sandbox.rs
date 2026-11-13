@@ -268,7 +268,11 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
             message: "failed to generate Azure remote Sandbox permissions".to_string(),
         })?;
 
-    emit_remote_bindings_role_definitions(fragment, permission_set)?;
+    emit_remote_bindings_role_definitions(
+        fragment,
+        permission_set,
+        ctx.stack_settings.signing.is_some(),
+    )?;
     for (index, binding) in plan.bindings.iter().enumerate() {
         let role_definition_id = match &binding.role_definition {
             AzureRoleDefinitionRef::Predefined { role_definition_id } => {
@@ -784,6 +788,7 @@ mod tests {
             targets_kubernetes: false,
             stack_settings: &settings,
             names: &names,
+            pins: &alien_core::SetupPins::default(),
         };
 
         AzureSandboxEmitter.emit(&ctx).expect("the sandbox renders")
@@ -829,6 +834,7 @@ mod tests {
             targets_kubernetes: false,
             stack_settings: &settings,
             names: &names,
+            pins: &alien_core::SetupPins::default(),
         };
 
         AzureSandboxEmitter

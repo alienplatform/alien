@@ -25,7 +25,7 @@
   },
   "postgres": {
     "frozen": true,
-    "live": true
+    "live": false
   },
   "queue": {
     "frozen": true,

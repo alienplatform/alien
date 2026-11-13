@@ -357,6 +357,31 @@ rm -rf airgap customer-1.json customer-2.json customer-3.json
 
 **Release** whenever you like. `alien release` reaches every connected customer within a minute, and each air-gapped site on its next trip. To stage releases, use [release channels and pins](https://alien.dev/docs/releases).
 
+## Run only releases you signed
+
+Some customers want a guarantee that even your manager can't run other code in their cluster. Sign your releases, and they pin your public key:
+
+```bash
+alien release-key generate --out release-key.pem   # once; prints your public key
+alien release --signing-key-file release-key.pem    # every release
+```
+
+Signing pins every image to its digest and signs each platform's stack. For each image it built, `alien release` checks that the registry holds exactly that image before signing its digest. Images it didn't build must be named by digest (`image@sha256:...`) in `alien.json`. Publish the public key somewhere your customers trust that isn't the manager, such as your docs over HTTPS. Keep the key in your CI as a secret that only your release job can read. The customer's admin adds it to their values:
+
+```yaml
+releaseSigning:
+  publicKeys: ["ecdsa-p256:MFkw..."]
+  project: default   # the project you release to
+```
+
+From then on, the Operator deploys only stacks signed with a pinned key, each newer than the last one it applied. The manager still decides which signed release runs and when. It can no longer change the stack or its images, set environment variables or bindings, supply deployer inputs (those come only from `inputValues`), or update the Operator to an image no release names. Debug sessions, access requests, operations plugins and dynamic containers are off. Refusals are logged by the Operator and change nothing in the cluster.
+
+Two things stay under the manager's control, and you should design for them. Values of inputs that only you, the developer, provide still come from the manager, so declare anything that says where data goes (a database URL, an upload endpoint) as provided by the deployer. Telemetry goes where the manager's monitoring settings point.
+
+**Air-gapped sites** pin the key the same way, in the values they pass to `alien-deploy sync`. The chart in each bundle is signed only by your manager, and it decides which Operator runs, so a protected site installs a chart only once its admin accepts it. `alien-deploy sync --dry-run` prints the chart's digest; after checking it with you, the admin passes `--accept-chart sha256:...`. Later bundles with the same chart install as usual. A bundle with a new chart still installs your release, but keeps the installed chart and Operator until the admin accepts the new one. The site runs the `alien-deploy` it got from you, never the builds carried in bundles.
+
+To roll back, release the older code again: it gets a new sequence and rolls out like any other release. `alien-deploy rollback` is refused at a protected site for the same reason. To rotate keys, the admin adds the new key, you release with it, and then they remove the old one.
+
 ## Public services under a customer domain
 
 For a stack with several named public endpoints, set one base domain and one existing
