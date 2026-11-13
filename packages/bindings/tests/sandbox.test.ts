@@ -93,6 +93,8 @@ describe("sandbox preview", () => {
         headers: {},
         allowedPorts: [8080],
         expiresInSeconds: 0,
+        callerAuthorizationHeader: "Authorization",
+        subprotocols: [],
       })
       expect(requests).toEqual([
         { url: "/v1/sessions/s1/preview?port=8080", authorization: "Bearer route-token" },
