@@ -733,12 +733,8 @@ async fn signing_from_first_release_to_recovery() {
         output.contains("not signed: this repo has no .alien/signing.json"),
         "{output}"
     );
-    assert_eq!(
-        newest_release(&world.manager, &fingerprint)
-            .await
-            .as_deref(),
-        Some(alice_id)
-    );
+    // The newest release is now Dave's, and it carries no signature.
+    assert_eq!(newest_release(&world.manager, &fingerprint).await, None);
 
     // Bob, a teammate, asks to be trusted; his release goes out unsigned.
     let bob = world.person("bob");
