@@ -68,6 +68,9 @@ pub struct AzureKeyController {
     /// Ids of the role assignments the grants made, at the key's scope.
     #[serde(default)]
     pub(crate) role_assignment_ids: Vec<String>,
+    /// The Disk Encryption Set setup created when a volume uses the key.
+    #[serde(default)]
+    pub(crate) disk_encryption_set_id: Option<String>,
 }
 
 #[controller]
@@ -601,6 +604,7 @@ impl AzureKeyController {
                 lineage_version_id: self.lineage_version_id.clone()?,
             },
             wrapping_key_id: self.key_id.clone()?,
+            disk_encryption_set_id: self.disk_encryption_set_id.clone(),
         }))
     }
 
@@ -869,6 +873,7 @@ impl ResourceImporter for AzureKeyImporter {
                 key_create_attempts: 0,
                 access_revision: None,
                 role_assignment_ids: Vec::new(),
+                disk_encryption_set_id: data.disk_encryption_set_id,
                 _internal_stay_count: None,
             },
             ctx,
