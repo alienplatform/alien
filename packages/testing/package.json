@@ -61,7 +61,7 @@
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
     "@aws-sdk/client-ssm": "^3.0.0",
-    "@azure/identity": "^4.0.0",
+    "@azure/identity": "^4.14.1",
     "@azure/keyvault-secrets": "^4.0.0",
     "@google-cloud/secret-manager": "^6.0.0",
     "@types/node": "^24.0.15",
