@@ -712,6 +712,14 @@ pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
 }
 
 impl Sandbox {
+    /// Whether, on GCP, this sandbox must reach the deployment VPC through Private Service Connect.
+    ///
+    /// Google fixes a project's sandbox network placement when its first sandbox is created, so
+    /// setup, the controller and the plan-time dependency all key off this one answer.
+    pub fn needs_gcp_private_network(&self) -> bool {
+        matches!(self.egress, SandboxEgress::Internet) || !self.preview_ports.is_empty()
+    }
+
     pub(crate) fn setup_digest_value(&self) -> serde_json::Value {
         match &self.egress {
             SandboxEgress::None => serde_json::json!({"mode":"deny"}),
@@ -1800,6 +1808,14 @@ mod tests {
 
     /// A URI with no token must come back whole, because every bundle configured today has none
     /// and emitting one differently would change every existing customer's template.
+    #[test]
+    fn only_internet_egress_or_preview_ports_need_the_gcp_private_network() {
+        assert!(sandbox_with(SandboxEgress::Internet, vec![]).needs_gcp_private_network());
+        assert!(sandbox_with(SandboxEgress::Deny, vec![8080]).needs_gcp_private_network());
+        assert!(!sandbox_with(SandboxEgress::Deny, vec![]).needs_gcp_private_network());
+        assert!(!sandbox_with(SandboxEgress::Allow, vec![]).needs_gcp_private_network());
+    }
+
     #[test]
     fn a_uri_without_a_token_is_carried_whole() {
         assert_eq!(

@@ -28,6 +28,25 @@ impl GcpAgentPlatformEngineMutation {
     }
 }
 
+/// The stack's network, when this sandbox needs Private Service Connect egress or ingress.
+fn network_dependency(stack: &Stack, sandbox_id: &str) -> Option<ResourceRef> {
+    let needs = stack
+        .resources
+        .get(sandbox_id)?
+        .config
+        .downcast_ref::<Sandbox>()?
+        .needs_gcp_private_network();
+    if !needs {
+        return None;
+    }
+    stack.resources().find_map(|(id, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::Network>()
+            .map(|_| ResourceRef::new(alien_core::Network::RESOURCE_TYPE, id.clone()))
+    })
+}
+
 #[async_trait]
 impl StackMutation for GcpAgentPlatformEngineMutation {
     fn description(&self) -> &'static str {
@@ -75,10 +94,18 @@ impl StackMutation for GcpAgentPlatformEngineMutation {
             // when the template is built) and tears down last (after the template and sessions).
             let engine_ref =
                 ResourceRef::new(GcpAgentPlatformEngine::RESOURCE_TYPE, engine_id.clone());
+            let network_ref = network_dependency(&stack, &sandbox_id);
             if let Some(entry) = stack.resources.get_mut(&sandbox_id) {
                 if !entry.dependencies.iter().any(|r| r.id == engine_id) {
                     entry.dependencies.push(engine_ref);
                     info!(sandbox=%sandbox_id, engine=%engine_id, "sandbox depends on its reasoning engine");
+                }
+                // The setup-created PSC-I attachment is published by the network, so a sandbox
+                // that needs it deploys after the network and reads it from its state.
+                if let Some(network_ref) = network_ref {
+                    if !entry.dependencies.iter().any(|r| r.id == network_ref.id) {
+                        entry.dependencies.push(network_ref);
+                    }
                 }
             }
         }
@@ -160,6 +187,47 @@ mod tests {
                 .any(|r| r.id == "worker-sbx-engine"),
             "the sandbox must depend on its engine for teardown ordering"
         );
+    }
+
+    /// The template controller reads the setup-created network attachment from the network's
+    /// state, so a sandbox that needs Private Service Connect must deploy after the network.
+    #[tokio::test]
+    async fn a_private_network_sandbox_depends_on_the_network_and_others_do_not() {
+        for (egress, depends) in [
+            (SandboxEgress::Internet, true),
+            (SandboxEgress::None, false),
+        ] {
+            let sandbox = Sandbox::new("worker-sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "python:3.12".to_string(),
+                    bundled_from: None,
+                })
+                .egress(egress)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            let stack = Stack::new("gcp-sandbox".to_string())
+                .permissions(PermissionsConfig::new())
+                .add(
+                    alien_core::Network::new("default-network".to_string())
+                        .settings(alien_core::NetworkSettings::UseDefault)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Live)
+                .build();
+            let mutated = GcpAgentPlatformEngineMutation
+                .mutate(stack, &gcp_state(), &config())
+                .await
+                .expect("mutation should succeed");
+            let has = mutated.resources["worker-sbx"]
+                .dependencies
+                .iter()
+                .any(|r| r.id == "default-network");
+            assert_eq!(has, depends);
+        }
     }
 
     /// A declined sandbox must not leave a billed engine behind, so the gate travels with the

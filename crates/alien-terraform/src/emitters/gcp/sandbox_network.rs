@@ -26,10 +26,7 @@ pub fn stack_needs_psc(stack: &alien_core::Stack) -> bool {
         entry
             .config
             .downcast_ref::<Sandbox>()
-            .is_some_and(|sandbox| {
-                matches!(sandbox.egress, SandboxEgress::Internet)
-                    || !sandbox.preview_ports.is_empty()
-            })
+            .is_some_and(Sandbox::needs_gcp_private_network)
     })
 }
 
