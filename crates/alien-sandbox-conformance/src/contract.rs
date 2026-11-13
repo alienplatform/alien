@@ -308,7 +308,15 @@ async fn get_json(
 async fn http_port(sandbox: &dyn Sandbox, id: &str, port: u16, token: &str) -> Outcome {
     let capability = capability(sandbox, id, port).await?;
     let client = http_client()?;
-    let (status, body) = get_json(&client, &capability, Some(token), "/whoami").await?;
+    // The ENTRYPOINT starts asynchronously after create; the agent answers 502 until the daemon listens.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (status, body) = loop {
+        let (status, body) = get_json(&client, &capability, Some(token), "/whoami").await?;
+        if status != 502 || Instant::now() >= deadline {
+            break (status, body);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    };
     if status != 200 {
         return Err(format!(
             "expected 200 with the caller's bearer, got {status}"
@@ -488,11 +496,21 @@ async fn run_guest(
     script: &str,
     args: &[&str],
 ) -> std::result::Result<String, String> {
+    let script_path = format!("{FIXTURE_DIR}/{script}");
+    let args = std::iter::once(script_path.as_str()).chain(args.iter().copied());
+    run_python(sandbox, id, args, script).await
+}
+
+/// Runs `python3 <args>` in the guest and returns stdout; `label` names it in errors.
+async fn run_python<'a>(
+    sandbox: &dyn Sandbox,
+    id: &str,
+    args: impl Iterator<Item = &'a str>,
+    label: &str,
+) -> std::result::Result<String, String> {
     let request = RunCommandRequest {
         command: "python3".into(),
-        args: std::iter::once(format!("{FIXTURE_DIR}/{script}"))
-            .chain(args.iter().map(|arg| arg.to_string()))
-            .collect(),
+        args: args.map(str::to_string).collect(),
         cwd: None,
         env: BTreeMap::new(),
         timeout: Duration::from_secs(60),
@@ -507,7 +525,7 @@ async fn run_guest(
         }
     }
     if exit != Some((0, false)) {
-        return Err(format!("{script} ended with {exit:?}"));
+        return Err(format!("{label} ended with {exit:?}"));
     }
     String::from_utf8(stdout).map_err(failed)
 }
@@ -603,11 +621,15 @@ async fn boot_once(sandbox: &dyn Sandbox, id: &str, boot_uid: u64) -> Outcome {
     let output = run_guest(sandbox, id, "census.py", &[]).await?;
     let census: serde_json::Value = serde_json::from_str(&output).map_err(failed)?;
     let detail = assert_census(&census, boot_uid)?;
-    let boots = sandbox
-        .read_file(id, "/tmp/alien-contract/boots.jsonl")
-        .await
-        .map_err(failed)?;
-    let boots: Vec<serde_json::Value> = String::from_utf8_lossy(&boots)
+    // Read it from inside the guest: a backend's file API may not see the guest's /tmp.
+    let boots = run_python(
+        sandbox,
+        id,
+        ["-c", "print(open('/tmp/alien-contract/boots.jsonl').read(), end='')"].into_iter(),
+        "boots.jsonl",
+    )
+    .await?;
+    let boots: Vec<serde_json::Value> = boots
         .lines()
         .map(serde_json::from_str)
         .collect::<std::result::Result<_, _>>()
