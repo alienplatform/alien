@@ -61,7 +61,8 @@ pub struct AzureSandboxNetwork {
     /// Dedicated source ranges keyed by Sandbox resource id for exact linked-resource access.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sandbox_cidrs_by_resource: BTreeMap<String, Vec<String>>,
-    /// Gateway ranges allowed by the sandbox subnet NSGs on TCP3128 and TCP3129.
+    /// Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before
+    /// the admin port was removed from that rule also allow TCP 3129; both are accepted.
     pub gateway_cidrs: Vec<String>,
     /// Workload source ranges allowed on the authenticated admin listener.
     pub workload_cidrs: Vec<String>,
