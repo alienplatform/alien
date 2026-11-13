@@ -189,11 +189,11 @@ heartbeat:
 
 airgapped:
   # No connection to the manager: targets arrive in bundles installed with
-  # `alien-deploy sync`, which also carries state and telemetry back. Needs
+  # the deploy CLI's `sync` command, which also carries state and telemetry back. Needs
   # management.deploymentId from the bundle.
   enabled: false
   # Public key (ed25519:...) bundles must be signed with. Set by the first
-  # `alien-deploy sync --trusted-key`, and checked on every later one.
+  # `sync --trusted-key` of the deploy CLI, and checked on every later one.
   bundleSigningKey: ""
 
 tunnel:
