@@ -754,7 +754,6 @@ impl GcpArtifactRegistryController {
                 registry_endpoint,
                 pull_role: self.pull_service_account_email.clone(),
                 push_role: self.push_service_account_email.clone(),
-                replication: None,
             }))
         } else {
             None

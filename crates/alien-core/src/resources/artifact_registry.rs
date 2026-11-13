@@ -154,11 +154,6 @@ pub struct ArtifactRegistryOutputs {
     /// - Azure: Managed identity resource ID (e.g., "/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/my-registry-push")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub push_role: Option<String>,
-
-    /// Who owns the account's image replication rules, as last read from the registry.
-    /// AWS only. Absent until the controller has read the registry once.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replication: Option<RegistryReplicationReport>,
 }
 
 /// Whose rules the registry's replication configuration holds. The configuration is one

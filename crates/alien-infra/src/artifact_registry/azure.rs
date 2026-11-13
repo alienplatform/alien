@@ -522,7 +522,6 @@ impl AzureArtifactRegistryController {
                 registry_endpoint,
                 pull_role: None, // Azure uses built-in token mechanism
                 push_role: None, // Azure uses built-in token mechanism
-                replication: None,
             }))
         } else {
             None

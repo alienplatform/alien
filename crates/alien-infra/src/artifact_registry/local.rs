@@ -252,7 +252,6 @@ impl LocalArtifactRegistryController {
                 registry_endpoint: url.clone(),
                 pull_role: None,
                 push_role: None,
-                replication: None,
             })
         })
     }

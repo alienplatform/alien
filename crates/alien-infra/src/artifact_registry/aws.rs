@@ -12,8 +12,8 @@ use alien_core::{
     standard_resource_tags, ArtifactRegistry, ArtifactRegistryHeartbeatData,
     ArtifactRegistryHeartbeatStatus, ArtifactRegistryOutputs, AwsEcrArtifactRegistryHeartbeatData,
     AwsEcrRepositoryHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth,
-    Platform, ProviderLifecycleState, RegistryReplicationOwner, RegistryReplicationReport,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 
 use alien_aws_clients::aws::ecr::{DescribeRepositoriesRequest, Repository};
@@ -114,9 +114,6 @@ pub struct AwsArtifactRegistryController {
     pub(crate) push_role_arn: Option<String>,
     /// The repository prefix (resource id)
     pub(crate) repository_prefix: Option<String>,
-    /// The replication ownership read from the registry on the last refresh.
-    #[serde(default)]
-    pub(crate) replication: Option<RegistryReplicationReport>,
 }
 
 #[controller]
@@ -994,7 +991,6 @@ impl AwsArtifactRegistryController {
                 registry_endpoint,
                 pull_role: self.pull_role_arn.clone(),
                 push_role: self.push_role_arn.clone(),
-                replication: self.replication.clone(),
             }))
         } else {
             None
@@ -1434,7 +1430,6 @@ impl AwsArtifactRegistryController {
             pull_role_arn: Some(format!("arn:aws:iam::{}:role/test-pull-role", account_id)),
             push_role_arn: Some(format!("arn:aws:iam::{}:role/test-push-role", account_id)),
             repository_prefix: Some("test-artifact-registry".to_string()),
-            replication: None,
             _internal_stay_count: None,
         }
     }
@@ -2144,7 +2139,6 @@ mod tests {
             pull_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-pull".to_string()),
             push_role_arn: Some("arn:aws:iam::123456789012:role/short-registry-push".to_string()),
             repository_prefix: Some("test-registry".to_string()),
-            replication: None,
             _internal_stay_count: None,
         };
 
@@ -2440,7 +2434,6 @@ mod tests {
             pull_role_arn: None,
             push_role_arn: None,
             repository_prefix: Some("test-my-registry".to_string()),
-            replication: None,
             _internal_stay_count: None,
         }
     }
