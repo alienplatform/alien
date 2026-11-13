@@ -326,6 +326,11 @@ Create and label it first, because Helm fails with `namespaces "<name>" not foun
 A pre-install hook creates a probe pod and fails the install with the namespace and fix when the
 namespace rejects root boot.
 
+NetworkPolicy enforcement: the install is refused until the cluster enforces NetworkPolicy (a
+probe checks it with live traffic). On EKS Auto Mode, enforcement is off until you apply a
+ConfigMap `amazon-vpc-cni` in `kube-system` with `enable-network-policy-controller: "true"`; the
+NodeClass `networkPolicy` field only sets the default. The probe's failure message names this step.
+
 Preview serves ports 8080, 8081 and 8090 over HTTP and WebSocket. The capability travels in
 `X-Alien-Preview-Capability` (optionally with `X-Alien-Preview-Port`); the caller's own
 `Authorization` header reaches the workload unchanged.

@@ -10,6 +10,17 @@ import urllib.request
 import uuid
 
 
+# Where the cluster has a NetworkPolicy controller that is off by default, name the switch.
+FIX_HINT = (
+    "Turn on NetworkPolicy enforcement and re-run the install. "
+    "EKS Auto Mode: kubectl apply a ConfigMap amazon-vpc-cni in kube-system with data "
+    "enable-network-policy-controller: \"true\" (the NodeClass networkPolicy field only sets the "
+    "default). EKS with the VPC CNI add-on: enable network policy in the add-on configuration. "
+    "GKE: enable network policy (Dataplane V2 or Calico). AKS: create the cluster with "
+    "--network-policy azure|calico|cilium."
+)
+
+
 def main():
     namespace = os.environ["PROBE_NAMESPACE"]
     job = os.environ["PROBE_JOB"]
@@ -137,13 +148,13 @@ def main():
                 details = [status.get("state", {}).get("terminated", {}).get("message", "")
                            for status in current.get("status", {}).get("containerStatuses", [])]
                 raise RuntimeError(f"{role} probe failed: NetworkPolicy enforcement is unproven; "
-                                   + " ".join(details)[:2048])
+                                   + " ".join(details)[:1024] + " | " + FIX_HINT)
             if predicate(current):
                 print(f"{role}: {phase}; node={current['spec'].get('nodeName')}; "
                       f"ip={current.get('status', {}).get('podIP')}", flush=True)
                 return current
             time.sleep(1)
-        raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement")
+        raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement. " + FIX_HINT)
 
     # Pod and NetworkPolicy creation are confined by admission policies for this account.
     # Refuse to run unless each one rejects a request it must reject, with its own message.
