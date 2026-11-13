@@ -6867,7 +6867,13 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         "            - name: {}\n              value: {{{{ join \",\" (default list (dig \"clusterDNS\" (list) (default dict .Values.sandbox))) | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS
     );
-    let broker = format!("{broker}{placement}{dns}");
+    // The Operator's own pod address: a sandbox pod proves its NetworkPolicy is enforced by
+    // finding this address unreachable. `$(VAR)` expands an env var defined earlier in the list.
+    let operator_address = format!(
+        "            - name: ALIEN_OPERATOR_POD_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.podIP\n            - name: {}\n              value: {{{{ printf \"$(ALIEN_OPERATOR_POD_IP):%d\" (int .Values.runtime.api.port) | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS
+    );
+    let broker = format!("{broker}{placement}{dns}{operator_address}");
     assert!(
         template.contains(anchor),
         "the operator Deployment template sets OTLP_HOST"
