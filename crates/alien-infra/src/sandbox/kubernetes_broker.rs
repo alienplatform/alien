@@ -609,17 +609,48 @@ pub(crate) async fn reattach_session_for_deployment(
     }))
 }
 
-/// Whether the pod's `Ready` condition is true. A pod built with the policy gate becomes Ready
-/// only after its NetworkPolicy is proven in force; one built without it, when its container runs.
+/// Whether the pod's `Ready` condition is true and its policy check still points at this
+/// Operator. A pod built with the policy gate becomes Ready only after its NetworkPolicy is
+/// proven in force (connections to the Operator's address are dropped); that proof means nothing
+/// if the address is no longer the Operator's (it was rescheduled), because a dropped packet to a
+/// dead address says nothing about the policy. Such a pod is not handed out and the controller
+/// replaces it. One built without the gate is Ready when its container runs.
 pub(crate) fn pod_is_ready(pod: &Pod) -> bool {
-    pod.status
+    pod_is_ready_for(
+        pod,
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn pod_is_ready_for(pod: &Pod, operator_address: Option<&str>) -> bool {
+    let ready = pod
+        .status
         .as_ref()
         .and_then(|status| status.conditions.as_ref())
         .is_some_and(|conditions| {
             conditions
                 .iter()
                 .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+        });
+    let canary = pod
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.containers.first())
+        .and_then(|container| container.env.as_ref())
+        .and_then(|env| {
+            env.iter()
+                .find(|var| var.name == "ALIEN_SANDBOX_POLICY_CANARY")
         })
+        .and_then(|var| var.value.as_deref());
+    match (
+        canary,
+        operator_address.filter(|address| !address.is_empty()),
+    ) {
+        (Some(canary), Some(current)) => ready && canary == current,
+        _ => ready,
+    }
 }
 
 /// The longest a preview capability lives. A caller asks again before it ends.
@@ -1547,6 +1578,38 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    /// A policy proof made against an address that is no longer the Operator's (the Operator was
+    /// rescheduled) proves nothing: packets to a dead address are dropped whatever the policy.
+    #[test]
+    fn a_ready_pod_whose_policy_check_targets_another_address_is_not_ready() {
+        use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec};
+        let mut pod = Pod {
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "p".into(),
+                    env: Some(vec![EnvVar {
+                        name: "ALIEN_SANDBOX_POLICY_CANARY".into(),
+                        value: Some("10.0.0.5:8080".into()),
+                        value_from: None,
+                    }]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        pod.status = Some(k8s_openapi::api::core::v1::PodStatus {
+            conditions: Some(ready_condition(true)),
+            ..Default::default()
+        });
+        assert!(pod_is_ready_for(&pod, Some("10.0.0.5:8080")));
+        assert!(!pod_is_ready_for(&pod, Some("10.0.0.9:8080")));
+        assert!(
+            pod_is_ready_for(&pod, None),
+            "no Operator address: nothing to compare"
+        );
     }
 
     fn ready_condition(ready: bool) -> Vec<k8s_openapi::api::core::v1::PodCondition> {

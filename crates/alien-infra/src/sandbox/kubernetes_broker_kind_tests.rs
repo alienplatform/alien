@@ -1071,65 +1071,100 @@ spec:
         "jsonpath={.status.podIP}",
     ]);
 
-    // The agent pod is built by the code under test: its readiness probe and canary come from
-    // `require_enforced_policy`; the contract environment is what a layered image sets.
+    // The pod applied is the one the code under test builds, readiness probe included: only the
+    // image, the command and the environment a layered image would carry are filled in.
     let mut pod = template(&namespace);
     super::kubernetes_spec::require_enforced_policy(&mut pod, Some(&format!("{listener_ip}:8080")));
-    let probe = pod.spec.as_ref().unwrap().containers[0]
-        .readiness_probe
-        .clone()
-        .expect("the gate adds a readiness probe");
-    assert_eq!(
-        probe.http_get.unwrap().path.as_deref(),
-        Some("/v1/network-ready")
-    );
-
-    let mut contract = alien_core::sandbox_image::KUBERNETES_SANDBOX
-        .contract_env_vars()
-        .to_vec();
-    for (name, value) in contract.iter_mut() {
-        match *name {
-            "ALIEN_SANDBOX_EXEC_UID" | "ALIEN_SANDBOX_EXEC_GID" => *value = "65534".into(),
-            "ALIEN_SANDBOX_ROOT" => *value = "/tmp/sbx".into(),
-            _ => {}
+    {
+        let mut contract = alien_core::sandbox_image::KUBERNETES_SANDBOX
+            .contract_env_vars()
+            .to_vec();
+        for (name, value) in contract.iter_mut() {
+            match *name {
+                "ALIEN_SANDBOX_EXEC_UID" | "ALIEN_SANDBOX_EXEC_GID" => *value = "1001".into(),
+                "ALIEN_SANDBOX_ROOT" => *value = "/tmp/sbx".into(),
+                _ => {}
+            }
+        }
+        let public_key = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .encode(ed25519_compact::KeyPair::generate().pk.as_ref())
+        };
+        let spec = pod.spec.as_mut().unwrap();
+        let container = &mut spec.containers[0];
+        assert!(
+            container.readiness_probe.is_some(),
+            "the gate adds a readiness probe"
+        );
+        assert_eq!(
+            container
+                .readiness_probe
+                .as_ref()
+                .and_then(|probe| probe.http_get.as_ref())
+                .and_then(|get| get.path.as_deref()),
+            Some("/v1/network-ready")
+        );
+        container.image = Some("python:3.12-slim".into());
+        container.image_pull_policy = Some("IfNotPresent".into());
+        container.command = Some(vec![
+            "sh".into(),
+            "-c".into(),
+            "mkdir -p /tmp/sbx; sleep 3600".into(),
+        ]);
+        let env = container.env.get_or_insert_default();
+        let mut add = |name: &str, value: String| {
+            env.retain(|var| var.name != name);
+            env.push(k8s_openapi::api::core::v1::EnvVar {
+                name: name.to_string(),
+                value: Some(value),
+                value_from: None,
+            });
+        };
+        for (name, value) in contract {
+            add(name, value.to_string());
+        }
+        add("ALIEN_SANDBOX_PUBLIC_KEY", public_key);
+        add("ALIEN_SANDBOX_GENERATION", "1".into());
+        // The agent identifies itself by the pod uid.
+        if !env.iter().any(|var| var.name == "ALIEN_SANDBOX_SESSION_ID") {
+            env.push(k8s_openapi::api::core::v1::EnvVar {
+                name: "ALIEN_SANDBOX_SESSION_ID".into(),
+                value: None,
+                value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
+                    field_ref: Some(k8s_openapi::api::core::v1::ObjectFieldSelector {
+                        field_path: "metadata.uid".into(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+            });
         }
     }
-    let public_key = {
-        use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD
-            .encode(ed25519_compact::KeyPair::generate().pk.as_ref())
-    };
-    let environment = contract
-        .iter()
-        .map(|(name, value)| format!("{{name: {name}, value: \"{value}\"}}"))
-        .chain([
-            format!("{{name: ALIEN_SANDBOX_PUBLIC_KEY, value: \"{public_key}\"}}"),
-            "{name: ALIEN_SANDBOX_SESSION_ID, valueFrom: {fieldRef: {fieldPath: metadata.uid}}}"
-                .to_string(),
-            "{name: ALIEN_SANDBOX_GENERATION, value: \"1\"}".to_string(),
-            format!("{{name: ALIEN_SANDBOX_POLICY_CANARY, value: \"{listener_ip}:8080\"}}"),
-        ])
-        .collect::<Vec<_>>()
-        .join(", ");
-    apply(&format!(
-        r#"apiVersion: v1
-kind: Pod
-metadata: {{name: gate-agent, namespace: {namespace}, labels: {{gate: agent}}}}
-spec:
-  securityContext: {{runAsUser: 65534, runAsGroup: 65534, runAsNonRoot: true}}
-  containers:
-    - name: p
-      image: python:3.12-slim
-      command: ["sh", "-c", "mkdir -p /tmp/sbx; sleep 3600"]
-      env: [{environment}]
-"#
-    ));
+    pod.metadata.name = Some("gate-agent".into());
+    pod.metadata.generate_name = None;
+    pod.metadata.namespace = Some(namespace.clone());
+    pod.metadata
+        .labels
+        .get_or_insert_default()
+        .insert("gate".into(), "agent".into());
+    pod.metadata.annotations = None;
+    apply(&serde_json::to_string(&pod).unwrap());
     kubectl_ns(&[
         "wait",
-        "--for=condition=Ready",
+        "--for=jsonpath={.status.phase}=Running",
         "pod/gate-agent",
         "--timeout=240s",
     ]);
+    let ready = || {
+        kubectl_ns(&[
+            "get",
+            "pod",
+            "gate-agent",
+            "-o",
+            "jsonpath={.status.conditions[?(@.type==\"Ready\")].status}",
+        ])
+    };
     kubectl_ns(&["cp", &binary, "gate-agent:/tmp/agent"]);
     kubectl_ns(&[
         "exec",
@@ -1139,20 +1174,9 @@ spec:
         "-c",
         "chmod +x /tmp/agent; (/tmp/agent >/tmp/agent.log 2>&1 &); sleep 2",
     ]);
-    let status = || {
-        kubectl_ns(&[
-            "exec", "gate-agent", "--", "python3", "-c",
-            "import urllib.request,urllib.error\n\
-             try:\n  print(urllib.request.urlopen('http://127.0.0.1:8971/v1/network-ready',timeout=5).status)\n\
-             except urllib.error.HTTPError as e:\n  print(e.code)",
-        ])
-        .trim()
-        .to_string()
-    };
-
-    // No policy: the listener answers, so the policy is not in force.
-    for _ in 0..4 {
-        assert_eq!(status(), "503", "an unrestricted pod must not be ready");
+    // No policy: the listener answers, so the policy is not in force and kubelet's probe fails.
+    for _ in 0..6 {
+        assert_eq!(ready(), "False", "an unrestricted pod must not be Ready");
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 
@@ -1165,15 +1189,18 @@ spec:
   policyTypes: [Egress]
 "#
     ));
-    let mut ready = false;
-    for _ in 0..30 {
-        if status() == "200" {
-            ready = true;
+    let mut became_ready = false;
+    for _ in 0..40 {
+        if ready() == "True" {
+            became_ready = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
-    assert!(ready, "ready once the deny-all egress policy is enforced");
+    assert!(
+        became_ready,
+        "Ready once the deny-all egress policy is enforced"
+    );
 
     kubectl_ns(&[
         "delete",

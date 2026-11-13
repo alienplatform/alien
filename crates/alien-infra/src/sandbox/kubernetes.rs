@@ -523,6 +523,15 @@ pub(crate) fn pods_probing_a_missing_network_ready_endpoint(
     names
 }
 
+/// Keeps the names of this sandbox's pool pods (`alien-sbx-<sandbox>-pool-<suffix>`).
+fn pool_pods_among(names: Vec<String>, sandbox_id: &str) -> Vec<String> {
+    let prefix = format!("{}-", super::kubernetes_spec::pod_name(sandbox_id, "pool"));
+    names
+        .into_iter()
+        .filter(|name| name.starts_with(&prefix))
+        .collect()
+}
+
 /// Says why pool pods stay unready when their agent has no `/v1/network-ready`. Only logs; a
 /// failure to read events is not a health failure.
 async fn report_pods_without_network_ready_endpoint(
@@ -549,11 +558,10 @@ async fn report_pods_without_network_ready_endpoint(
     else {
         return;
     };
-    let prefix = format!("{sandbox_id}-");
-    let pods: Vec<String> = pods_probing_a_missing_network_ready_endpoint(&events.items)
-        .into_iter()
-        .filter(|name| name.starts_with(&prefix))
-        .collect();
+    let pods = pool_pods_among(
+        pods_probing_a_missing_network_ready_endpoint(&events.items),
+        sandbox_id,
+    );
     if !pods.is_empty() {
         warn!(sandbox_id = %sandbox_id, pods = ?pods, "{NETWORK_READY_MISSING_MESSAGE}");
     }
@@ -1224,6 +1232,16 @@ mod tests {
             vec!["s-old"]
         );
         assert!(NETWORK_READY_MISSING_MESSAGE.contains("use the agent image of this release"));
+    }
+
+    #[test]
+    fn pool_pods_are_matched_by_their_generated_name() {
+        let names = vec![
+            "alien-sbx-s-pool-abc12".to_string(),
+            "alien-sbx-other-pool-abc12".to_string(),
+            "s-old".to_string(),
+        ];
+        assert_eq!(pool_pods_among(names, "s"), vec!["alien-sbx-s-pool-abc12"]);
     }
 
     #[tokio::test]
