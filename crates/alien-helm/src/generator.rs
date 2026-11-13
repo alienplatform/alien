@@ -5874,8 +5874,8 @@ fn helpers_tpl() -> String {
 {{- /*
 Image reference for a repository, tag and optional digest. When global.imageRegistry is set the
 registry host is replaced by it (a path after the host is kept as a prefix), so every image the chart
-runs comes from the site's mirror. A digest wins over the tag. Keep in step with the Operator's
-rewrite of workload images (alien-core image_rewrite::rewrite_to_site_registry).
+runs comes from the site's mirror. A digest wins over the tag. Keep in step with how the Operator rewrites
+workload images to the site registry.
 */ -}}
 {{- define "deployment.image" -}}
 {{- $repository := .repository -}}
@@ -8367,7 +8367,7 @@ fn gitops_values(indent: usize) -> String {
 management:
   url: https://manager.example.com
   existingSecret:
-    name: alien-management
+    name: deployment-management
     tokenKey: sync-token
 runtime:
   image:
@@ -8376,11 +8376,11 @@ runtime:
     selfUpdate: false
   encryption:
     existingSecret:
-      name: alien-encryption
+      name: deployment-encryption
       key: encryption-key
   imagePullSecrets:
-    - name: alien-registry
-infrastructureExistingSecret: alien-infrastructure
+    - name: deployment-registry
+infrastructureExistingSecret: deployment-infrastructure
 logCollector:
   enabled: true
   mode: podApi
@@ -8398,12 +8398,12 @@ fn flux_example(chart_name: &str) -> String {
         r#"# Install this chart with Flux. Use one namespace per install.
 #
 # Create these Secrets in the namespace first (not in git, or sealed):
-#   alien-management      key sync-token: the deployment group token
-#   alien-encryption      key encryption-key: 64 hex characters, kept for the life of the install
-#   alien-infrastructure  key external-bindings.json: the `infrastructure` values as JSON
-#                         (the Terraform module's chart_infrastructure_json output)
-#   alien-registry        kubernetes.io/dockerconfigjson: pulls the Operator image and charts
-#                         through the manager
+#   deployment-management     key sync-token: the deployment group token
+#   deployment-encryption     key encryption-key: 64 hex characters, kept for the life of the install
+#   deployment-infrastructure key external-bindings.json: the `infrastructure` values as JSON
+#                             (the Terraform module's chart_infrastructure_json output)
+#   deployment-registry       kubernetes.io/dockerconfigjson: pulls the Operator image and charts
+#                             through the manager
 #
 # `semver: "1.x"` takes every new chart version. A new Operator image is a new chart
 # version, so the Operator upgrades through Flux without a git change. Pin an exact
@@ -8418,7 +8418,7 @@ spec:
   ref:
     semver: "1.x"
   secretRef:
-    name: alien-registry
+    name: deployment-registry
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -8449,8 +8449,8 @@ fn argocd_example(chart_name: &str) -> String {
         r#"# Install this chart with Argo CD. Use one namespace per install.
 #
 # Create the Secrets named below in the destination namespace first (not in git, or
-# sealed): alien-management (sync-token), alien-encryption (encryption-key),
-# alien-infrastructure (external-bindings.json) and alien-registry
+# sealed): deployment-management (sync-token), deployment-encryption (encryption-key),
+# deployment-infrastructure (external-bindings.json) and deployment-registry
 # (kubernetes.io/dockerconfigjson). Register the registry as an Argo CD OCI
 # repository with the manager's install credentials.
 #
