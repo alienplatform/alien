@@ -1187,7 +1187,7 @@ fn sandbox_namespace(config: &alien_core::KubernetesClientConfig) -> Result<Stri
 /// The message for a pod the API server refused under Pod Security, or `None` for any other
 /// refusal. A root-boot sandbox needs a namespace that admits `baseline`; without this the pool
 /// would stay empty and the only trace would be a warning per tick.
-fn pod_security_rejection(
+pub(crate) fn pod_security_rejection(
     sandbox_id: &str,
     namespace: &str,
     refusal: &(impl serde::Serialize + ?Sized),
