@@ -166,6 +166,12 @@ async fn claim_session_with_scope(
         let Some(name) = pod.metadata.name.clone() else {
             continue;
         };
+        // A pod that is not Ready has not proven its NetworkPolicy is in force yet (see
+        // `require_enforced_policy`): on a fresh node its egress may still be unrestricted.
+        // It stays in the pool until it is, and this create takes another pod or goes cold.
+        if !pod_is_ready(&pod) {
+            continue;
+        }
 
         // The agent starts while the pod is still idle. Its authorization identity is the
         // immutable pod UID, supplied by the downward API, rather than this later claim label.
@@ -177,6 +183,7 @@ async fn claim_session_with_scope(
             continue;
         }
         crate::sandbox::annotate_claim(&mut candidate, now_unix, tenant_key, timeout_seconds)?;
+        mark_policy_verified(&mut candidate);
 
         // A conflict here is another caller winning the same pod, not an error to report: try
         // the next one rather than failing a create that a warm pool can still satisfy.
@@ -372,6 +379,7 @@ async fn cold_create(
             .as_ref()
             .and_then(|pod| pod.status.as_ref())
             .filter(|status| status.phase.as_deref() == Some("Running"))
+            .filter(|_| current.as_ref().is_some_and(pod_is_ready))
             .and_then(|status| status.pod_ip.clone());
         // The deadline started at the claim. It is checked after the pod is read, so a pod that
         // is Running only after it is not returned: the Operator would end it at once, and the
@@ -390,6 +398,13 @@ async fn cold_create(
             .into());
         }
         if let Some(address) = address {
+            // Record the proof so a retry after an Operator restart can tell this pod from one
+            // that became Ready against a dead address. Failing to write it is safe: reattach
+            // then falls back to the address comparison.
+            if let Some(mut verified) = current {
+                mark_policy_verified(&mut verified);
+                let _ = pods.update_pod(namespace, &name, &verified).await;
+            }
             let (capability, expires_at) = mint_capability(
                 signing_key,
                 &agent_session_id,
@@ -571,6 +586,23 @@ pub(crate) async fn reattach_session_for_deployment(
                 resource_id: Some(sandbox_id.to_string()),
             })
         })?;
+    // A pod that is not Ready has not proven its NetworkPolicy is in force (see `cold_create`):
+    // a retry for a session whose pod is still starting must not receive it early. Only the
+    // `Ready` condition counts, together with either the verified mark (set when the session was
+    // handed out against the then-current Operator, so a restart does not strand it) or a check
+    // that still points at this Operator. A claimed pod with neither (a cold pod that became
+    // Ready against a dead address) is not handed out.
+    if !reattachable_for(
+        &pod,
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+            .ok()
+            .as_deref(),
+    ) {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("session '{session_id}' is not ready yet"),
+            resource_id: Some(sandbox_id.to_string()),
+        }));
+    }
     let (capability, expires_at) = mint_capability(
         &signing_key,
         &agent_session_id,
@@ -592,6 +624,73 @@ pub(crate) async fn reattach_session_for_deployment(
         deadline: crate::sandbox::session_deadline(&pod),
         setup_pending: setup_pending(secrets, namespace, sandbox_id, session_id, now_unix).await?,
     }))
+}
+
+/// Whether the pod's `Ready` condition is true and its policy check still points at this
+/// Operator. A pod built with the policy gate becomes Ready only after its NetworkPolicy is
+/// proven in force (connections to the Operator's address are dropped); that proof means nothing
+/// if the address is no longer the Operator's (it was rescheduled), because a dropped packet to a
+/// dead address says nothing about the policy. Such a pod is not handed out and the controller
+/// replaces it. One built without the gate is Ready when its container runs.
+pub(crate) fn pod_is_ready(pod: &Pod) -> bool {
+    pod_is_ready_for(
+        pod,
+        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn mark_policy_verified(pod: &mut Pod) {
+    pod.metadata
+        .annotations
+        .get_or_insert_with(Default::default)
+        .insert(ANNOTATION_POLICY_VERIFIED.to_string(), "true".to_string());
+}
+
+fn policy_verified(pod: &Pod) -> bool {
+    pod.metadata
+        .annotations
+        .as_ref()
+        .is_some_and(|annotations| annotations.contains_key(ANNOTATION_POLICY_VERIFIED))
+}
+
+/// Whether a claimed pod may be handed to a retry: Ready, and either marked verified or checked
+/// against the current Operator address.
+fn reattachable_for(pod: &Pod, operator_address: Option<&str>) -> bool {
+    pod_condition_ready(pod) && (policy_verified(pod) || pod_is_ready_for(pod, operator_address))
+}
+
+fn pod_condition_ready(pod: &Pod) -> bool {
+    pod.status
+        .as_ref()
+        .and_then(|status| status.conditions.as_ref())
+        .is_some_and(|conditions| {
+            conditions
+                .iter()
+                .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+        })
+}
+
+fn pod_is_ready_for(pod: &Pod, operator_address: Option<&str>) -> bool {
+    let ready = pod_condition_ready(pod);
+    let canary = pod
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.containers.first())
+        .and_then(|container| container.env.as_ref())
+        .and_then(|env| {
+            env.iter()
+                .find(|var| var.name == "ALIEN_SANDBOX_POLICY_CANARY")
+        })
+        .and_then(|var| var.value.as_deref());
+    match (
+        canary,
+        operator_address.filter(|address| !address.is_empty()),
+    ) {
+        (Some(canary), Some(current)) => ready && canary == current,
+        _ => ready,
+    }
 }
 
 /// The longest a preview capability lives. A caller asks again before it ends.
@@ -795,6 +894,10 @@ const ANNOTATION_SETUP_PENDING: &str = "alien.dev/setup-pending";
 /// creator that is still claiming, and a second pod for the id would follow if it were cleared.
 /// The value is the unix second of the claim, where the setup window starts.
 const ANNOTATION_CLAIMED: &str = "alien.dev/session-claimed";
+/// Set on a pod once it was Ready with its policy check pointing at the Operator that handed
+/// the session out. A retry or a later Operator (new address) trusts the pod only with this
+/// mark, or while the check still points at the current Operator.
+const ANNOTATION_POLICY_VERIFIED: &str = "alien.dev/policy-verified";
 /// How long a creator may take over a session's setup. Past it a session that is still marked is
 /// reported as ready: a creator that died mid-setup must not leave every caller waiting for a
 /// session that is only missing its egress policy, which each of them can set.
@@ -1514,10 +1617,60 @@ mod tests {
             },
             status: Some(PodStatus {
                 pod_ip: Some(ip.to_string()),
+                conditions: Some(ready_condition(true)),
                 ..Default::default()
             }),
             ..Default::default()
         }
+    }
+
+    /// A policy proof made against an address that is no longer the Operator's (the Operator was
+    /// rescheduled) proves nothing: packets to a dead address are dropped whatever the policy.
+    #[test]
+    fn a_ready_pod_whose_policy_check_targets_another_address_is_not_ready() {
+        use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec};
+        let mut pod = Pod {
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "p".into(),
+                    env: Some(vec![EnvVar {
+                        name: "ALIEN_SANDBOX_POLICY_CANARY".into(),
+                        value: Some("10.0.0.5:8080".into()),
+                        value_from: None,
+                    }]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        pod.status = Some(k8s_openapi::api::core::v1::PodStatus {
+            conditions: Some(ready_condition(true)),
+            ..Default::default()
+        });
+        assert!(pod_is_ready_for(&pod, Some("10.0.0.5:8080")));
+        assert!(!pod_is_ready_for(&pod, Some("10.0.0.9:8080")));
+        assert!(
+            !reattachable_for(&pod, Some("10.0.0.9:8080")),
+            "a Ready pod whose check targeted a dead address and was never verified is not handed to a retry"
+        );
+        mark_policy_verified(&mut pod);
+        assert!(
+            reattachable_for(&pod, Some("10.0.0.9:8080")),
+            "a session verified when handed out stays reachable after an Operator restart"
+        );
+        assert!(
+            pod_is_ready_for(&pod, None),
+            "no Operator address: nothing to compare"
+        );
+    }
+
+    fn ready_condition(ready: bool) -> Vec<k8s_openapi::api::core::v1::PodCondition> {
+        vec![k8s_openapi::api::core::v1::PodCondition {
+            type_: "Ready".to_string(),
+            status: if ready { "True" } else { "False" }.to_string(),
+            ..Default::default()
+        }]
     }
 
     /// A pool pod that exists but has not been given an address yet.
@@ -1529,7 +1682,12 @@ mod tests {
                 labels: Some(sandbox_labels()),
                 ..Default::default()
             },
-            status: None,
+            // Ready but with no address: the window between the condition and the status write
+            // that carries the IP. A pod not Ready is skipped before it is claimed.
+            status: Some(PodStatus {
+                conditions: Some(ready_condition(true)),
+                ..Default::default()
+            }),
             ..Default::default()
         }
     }
@@ -1971,6 +2129,49 @@ mod tests {
             pod.metadata.annotations.as_ref().unwrap()[crate::sandbox::ANNOTATION_SESSION_DEADLINE],
             (4_242 + 600).to_string()
         );
+    }
+
+    /// A retry for a session whose pod has not proven its policy yet (not Ready) must not be
+    /// handed the pod: only the creating call waited for Ready.
+    #[tokio::test]
+    async fn a_session_whose_pod_is_not_ready_is_not_handed_out() {
+        let mut claimed = idle_pod("pool-a", "10.0.0.7");
+        claimed
+            .metadata
+            .labels
+            .as_mut()
+            .unwrap()
+            .insert(crate::sandbox::LABEL_SESSION.to_string(), "s1".to_string());
+        claimed.status.as_mut().unwrap().conditions = Some(ready_condition(false));
+        crate::sandbox::annotate_claim(&mut claimed, 77, None, None).unwrap();
+        let mut mock = MockPodApi::new();
+        mock.expect_list_pods().returning(move |_, _, _| {
+            Ok(k8s_openapi::List {
+                items: vec![claimed.clone()],
+                ..Default::default()
+            })
+        });
+        let pods: Arc<dyn PodApi> = Arc::new(mock);
+        let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
+        let secret = key_secret();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(secret.clone()));
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        let result = reattach_session_for_deployment(
+            &pods,
+            &secrets,
+            "sbx",
+            "alien",
+            "s1",
+            "key",
+            1_000,
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+        )
+        .await;
+        assert!(result.is_err(), "a pod that is not Ready is not returned");
     }
 
     #[tokio::test]
@@ -2889,6 +3090,13 @@ mod tests {
             created.metadata.uid = Some("uid-cold-0".to_string());
             Ok(created)
         });
+        pods.expect_update_pod().times(1).returning(|_, _, pod| {
+            assert!(
+                policy_verified(pod),
+                "a cold pod handed out is marked as verified"
+            );
+            Ok(pod.clone())
+        });
         let mut polls = 0;
         pods.expect_get_pod().returning(move |_, _| {
             polls += 1;
@@ -2896,6 +3104,7 @@ mod tests {
             pod.status = Some(PodStatus {
                 phase: Some(if polls < 3 { "Pending" } else { "Running" }.to_string()),
                 pod_ip: (polls >= 3).then(|| "10.9.9.9".to_string()),
+                conditions: Some(ready_condition(polls >= 3)),
                 ..Default::default()
             });
             Ok(pod)
@@ -2946,6 +3155,7 @@ mod tests {
             pod.status = Some(PodStatus {
                 phase: Some(if up { "Running" } else { "Pending" }.to_string()),
                 pod_ip: up.then(|| "10.9.9.9".to_string()),
+                conditions: Some(ready_condition(up)),
                 ..Default::default()
             });
             Ok(pod)
@@ -2993,6 +3203,85 @@ mod tests {
         .expect_err("no template means no pod to build");
 
         assert!(format!("{error:?}").contains("health tick"));
+    }
+
+    /// A pod whose NetworkPolicy is not proven in force yet is not Ready and is not handed out,
+    /// even though it is idle, running and has an address: on a fresh node its egress may still
+    /// be unrestricted. It is not claimed (no label write), so it stays in the pool.
+    #[tokio::test]
+    async fn an_idle_pod_that_is_not_ready_is_not_claimed() {
+        let mut waiting = idle_pod("pool-0", "10.1.2.3");
+        waiting.status.as_mut().unwrap().conditions = Some(ready_condition(false));
+        let mut pods = pods_returning(vec![waiting]);
+        pods.expect_update_pod().never();
+        let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(key_secret()));
+
+        let error = claim_session(
+            &(Arc::new(pods) as Arc<dyn PodApi>),
+            &(Arc::new(secrets) as Arc<dyn SecretsApi>),
+            "sbx",
+            "ns",
+            "s1",
+            "k",
+            1_000,
+        )
+        .await
+        .expect_err("the only idle pod is not Ready, and there is no template to go cold");
+        assert!(format!("{error:?}").contains("health tick"));
+    }
+
+    /// A cold pod that is Running with an address but not Ready (its policy is not proven yet)
+    /// is waited for, not returned.
+    #[tokio::test(start_paused = true)]
+    async fn a_cold_pod_is_returned_only_once_it_is_ready() {
+        let mut template = idle_pod("ignored", "0.0.0.0");
+        template.metadata.name = None;
+        template.metadata.uid = None;
+        template.status = None;
+        let mut pods = pods_returning(Vec::new());
+        pods.expect_create_pod().times(1).returning(|_, pod| {
+            let mut created = pod.clone();
+            created.metadata.name = Some("cold-0".to_string());
+            created.metadata.uid = Some("uid-cold-0".to_string());
+            Ok(created)
+        });
+        pods.expect_update_pod()
+            .returning(|_, _, pod| Ok(pod.clone()));
+        let polls = Arc::new(std::sync::Mutex::new(0));
+        let seen = Arc::clone(&polls);
+        pods.expect_get_pod().returning(move |_, _| {
+            let mut count = seen.lock().unwrap();
+            *count += 1;
+            let mut pod = idle_pod("cold-0", "10.9.9.9");
+            pod.status = Some(PodStatus {
+                phase: Some("Running".to_string()),
+                pod_ip: Some("10.9.9.9".to_string()),
+                conditions: Some(ready_condition(*count >= 4)),
+                ..Default::default()
+            });
+            Ok(pod)
+        });
+        let pods: Arc<dyn PodApi> = Arc::new(pods);
+        let session = cold_create(
+            &pods,
+            &ed25519_compact::KeyPair::generate().sk,
+            "ns",
+            "sbx",
+            "s1",
+            "k",
+            1_000,
+            template,
+            None,
+            None,
+        )
+        .await
+        .expect("returned once Ready");
+        assert_eq!(session.endpoint, "http://10.9.9.9:8971");
+        assert_eq!(*polls.lock().unwrap(), 4, "it kept polling while not Ready");
     }
 
     /// The capability the broker mints has to be the one the agent accepts. Verifying it here
