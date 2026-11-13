@@ -655,6 +655,14 @@ impl Ec2Client {
                 resource_type: "SecurityGroupRule".into(),
                 resource_name: resource.into(),
             },
+            // DescribeLaunchTemplates naming a template that doesn't exist answers 400
+            // with this code, not an empty set.
+            "InvalidLaunchTemplateName.NotFoundException" | "InvalidLaunchTemplateId.NotFound" => {
+                ErrorData::RemoteResourceNotFound {
+                    resource_type: "LaunchTemplate".into(),
+                    resource_name: resource.into(),
+                }
+            }
             "InvalidSnapshot.NotFound" | "InvalidSnapshotID.NotFound" => {
                 ErrorData::RemoteResourceNotFound {
                     resource_type: "Snapshot".into(),
@@ -3791,7 +3799,11 @@ pub struct Image {
     pub name: Option<String>,
     pub description: Option<String>,
     pub image_location: Option<String>,
+    /// EC2 names it `imageState` in DescribeImages.
+    #[serde(rename = "imageState")]
     pub state: Option<String>,
+    /// EC2 names it `imageOwnerId` in DescribeImages.
+    #[serde(rename = "imageOwnerId")]
     pub owner_id: Option<String>,
     pub creation_date: Option<String>,
     pub architecture: Option<String>,
@@ -4711,6 +4723,22 @@ mod error_mapping_tests {
     }
 
     #[test]
+    fn a_missing_launch_template_is_not_found() {
+        for code in [
+            "InvalidLaunchTemplateName.NotFoundException",
+            "InvalidLaunchTemplateId.NotFound",
+        ] {
+            assert!(
+                matches!(
+                    mapped(code),
+                    Some(ErrorData::RemoteResourceNotFound { resource_type, .. }) if resource_type == "LaunchTemplate"
+                ),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
     fn security_group_rule_codes_map_to_their_kind() {
         assert!(matches!(
             mapped("InvalidPermission.NotFound"),
@@ -4926,6 +4954,20 @@ mod volume_operation_tests {
         );
         // Without a value, EC2 removes the tag whatever its value.
         assert!(!delete.contains_key("Tag.1.Value"));
+    }
+
+    #[test]
+    fn describe_images_reads_the_owner_state_and_architecture() {
+        // A DescribeImages response as EC2 returned it (2026-11-05).
+        let response: DescribeImagesResponse = quick_xml::de::from_str(
+            r#"<DescribeImagesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>b7237af0-f209-410c-a83e-d66cacb8d279</requestId><imagesSet><item><imageId>ami-033ea4ff4a9c726dc</imageId><imageLocation>amazon/ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-20261021</imageLocation><imageState>available</imageState><imageOwnerId>099720109477</imageOwnerId><creationDate>2026-10-21T06:42:18.000Z</creationDate><isPublic>true</isPublic><architecture>x86_64</architecture><imageType>machine</imageType><sriovNetSupport>simple</sriovNetSupport><imageOwnerAlias>amazon</imageOwnerAlias><name>ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-20261021</name><description>Canonical, Ubuntu, 22.04, amd64 jammy image</description><rootDeviceType>ebs</rootDeviceType><rootDeviceName>/dev/sda1</rootDeviceName><blockDeviceMapping><item><deviceName>/dev/sda1</deviceName><ebs><snapshotId>snap-057a9947fa1012c62</snapshotId><volumeSize>8</volumeSize><deleteOnTermination>true</deleteOnTermination><volumeType>gp2</volumeType><encrypted>false</encrypted></ebs></item><item><deviceName>/dev/sdb</deviceName><virtualName>ephemeral0</virtualName></item><item><deviceName>/dev/sdc</deviceName><virtualName>ephemeral1</virtualName></item></blockDeviceMapping><virtualizationType>hvm</virtualizationType><hypervisor>xen</hypervisor><enaSupport>true</enaSupport><platformDetails>Linux/UNIX</platformDetails><usageOperation>RunInstances</usageOperation><bootMode>uefi-preferred</bootMode><deprecationTime>2028-10-21T06:42:18.000Z</deprecationTime><freeTierEligible>true</freeTierEligible></item></imagesSet></DescribeImagesResponse>"#,
+        )
+        .expect("DescribeImages response should deserialize");
+        let image = &response.images_set.expect("images set").items[0];
+        assert_eq!(image.image_id.as_deref(), Some("ami-033ea4ff4a9c726dc"));
+        assert_eq!(image.owner_id.as_deref(), Some("099720109477"));
+        assert_eq!(image.state.as_deref(), Some("available"));
+        assert_eq!(image.architecture.as_deref(), Some("x86_64"));
     }
 
     #[test]

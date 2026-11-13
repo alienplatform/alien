@@ -247,8 +247,7 @@ impl KubernetesContainerController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<()> {
         // Only Containers that declare egress (on Kubernetes, the managed sandbox gateway)
-        // get a NetworkPolicy. Others keep the cluster's default reachability, including
-        // operator tunnels to their ports.
+        // get a NetworkPolicy. Others keep the cluster's default reachability.
         if config.egress.is_none() {
             return self.delete_network_policy(namespace, &config.id, ctx).await;
         }

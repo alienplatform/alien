@@ -38,6 +38,11 @@ fn register_aws(registry: &mut TfRegistry) {
         aws::AwsRemoteStackManagementEmitter,
     );
     registry.register(
+        alien_core::SigningVerifier::RESOURCE_TYPE,
+        p,
+        crate::emitters::verifier::AwsVerifierEmitter,
+    );
+    registry.register(
         RemoteBindings::RESOURCE_TYPE,
         p,
         aws::AwsRemoteBindingsEmitter,
@@ -76,6 +81,11 @@ fn register_gcp(registry: &mut TfRegistry) {
         RemoteStackManagement::RESOURCE_TYPE,
         p,
         gcp::GcpRemoteStackManagementEmitter,
+    );
+    registry.register(
+        alien_core::SigningVerifier::RESOURCE_TYPE,
+        p,
+        crate::emitters::verifier::GcpVerifierEmitter,
     );
     registry.register(
         RemoteBindings::RESOURCE_TYPE,
@@ -132,6 +142,11 @@ fn register_azure(registry: &mut TfRegistry) {
         RemoteStackManagement::RESOURCE_TYPE,
         p,
         azure::AzureRemoteStackManagementEmitter,
+    );
+    registry.register(
+        alien_core::SigningVerifier::RESOURCE_TYPE,
+        p,
+        crate::emitters::verifier::AzureVerifierEmitter,
     );
     registry.register(
         RemoteBindings::RESOURCE_TYPE,

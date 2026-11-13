@@ -155,12 +155,21 @@ mod tests {
     #[test]
     fn models_are_omitted_when_empty_and_round_trip_when_set() {
         let plain = Ai::new("llm".to_string()).build();
-        assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!({"id": "llm"}));
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::json!({"id": "llm"})
+        );
 
         let with_models = Ai::new("llm".to_string())
             .models(vec![
-                AiModel { id: "claude-sonnet-4-6".to_string(), required: true },
-                AiModel { id: "claude-haiku-4-5".to_string(), required: false },
+                AiModel {
+                    id: "claude-sonnet-4-6".to_string(),
+                    required: true,
+                },
+                AiModel {
+                    id: "claude-haiku-4-5".to_string(),
+                    required: false,
+                },
             ])
             .build();
         let json = serde_json::to_value(&with_models).unwrap();
@@ -174,7 +183,8 @@ mod tests {
         assert_eq!(serde_json::from_value::<Ai>(json).unwrap(), with_models);
         // `required` defaults to false; unknown model fields are rejected.
         let parsed: Ai =
-            serde_json::from_value(serde_json::json!({"id": "llm", "models": [{"id": "m"}]})).unwrap();
+            serde_json::from_value(serde_json::json!({"id": "llm", "models": [{"id": "m"}]}))
+                .unwrap();
         assert!(!parsed.models[0].required);
         assert!(serde_json::from_value::<Ai>(
             serde_json::json!({"id": "llm", "models": [{"id": "m", "minRpm": 1}]})

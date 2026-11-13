@@ -611,16 +611,21 @@ impl AwsStorageController {
                 .restrict_public_buckets(false)
                 .build();
 
-            client
-                .put_public_access_block(bucket_name, public_access_config)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to configure public access block for S3 bucket '{}'",
-                        bucket_name
-                    ),
-                    resource_id: Some(storage_config.id.clone()),
-                })?;
+            put_public_access_block(
+                ctx,
+                client.as_ref(),
+                bucket_name,
+                &storage_config.id,
+                public_access_config,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to configure public access block for S3 bucket '{}'",
+                    bucket_name
+                ),
+                resource_id: Some(storage_config.id.clone()),
+            })?;
 
             info!(bucket=%bucket_name, "Public access block configured successfully");
         } else {
@@ -975,16 +980,21 @@ impl AwsStorageController {
                     .restrict_public_buckets(false)
                     .build();
 
-                client
-                    .put_public_access_block(bucket_name, public_access_config)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to enable public access for S3 bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(storage_config.id.clone()),
-                    })?;
+                put_public_access_block(
+                    ctx,
+                    client.as_ref(),
+                    bucket_name,
+                    &storage_config.id,
+                    public_access_config,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to enable public access for S3 bucket '{}'",
+                        bucket_name
+                    ),
+                    resource_id: Some(storage_config.id.clone()),
+                })?;
 
                 info!(bucket=%bucket_name, "Public access enabled successfully");
             } else {
@@ -996,16 +1006,21 @@ impl AwsStorageController {
                     .restrict_public_buckets(true)
                     .build();
 
-                client
-                    .put_public_access_block(bucket_name, public_access_config)
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to disable public access for S3 bucket '{}'",
-                            bucket_name
-                        ),
-                        resource_id: Some(storage_config.id.clone()),
-                    })?;
+                put_public_access_block(
+                    ctx,
+                    client.as_ref(),
+                    bucket_name,
+                    &storage_config.id,
+                    public_access_config,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to disable public access for S3 bucket '{}'",
+                        bucket_name
+                    ),
+                    resource_id: Some(storage_config.id.clone()),
+                })?;
 
                 info!(bucket=%bucket_name, "Public access disabled successfully");
             }
@@ -1491,6 +1506,49 @@ fn versioning_status_label(status: VersioningStatus) -> String {
     }
 }
 
+/// Sets a bucket's public access block. On a protected install who may reach the bucket is the
+/// verifier's to set: it checks the block against the signed stack and sends this very request.
+async fn put_public_access_block(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn S3Api,
+    bucket: &str,
+    storage_id: &str,
+    configuration: PublicAccessBlockConfiguration,
+) -> Result<()> {
+    if let Some(release) = crate::core::verifier::protected_statements(ctx, storage_id)? {
+        let lambda = ctx
+            .service_provider
+            .get_aws_lambda_client(ctx.get_aws_config()?)
+            .await?;
+        let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+        let body = serde_json::to_value(&configuration)
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "The public access block does not serialize".to_string(),
+                resource_id: Some(storage_id.to_string()),
+            })?;
+        crate::core::verifier::apply_resource_write(
+            &verifier,
+            release,
+            ctx.deployment_config.signed_config.as_ref(),
+            storage_id,
+            vec![crate::core::verifier::ResourceWrite::PutPublicAccessBlock {
+                bucket: bucket.to_string(),
+                configuration: body,
+            }],
+        )
+        .await?;
+        return Ok(());
+    }
+    client
+        .put_public_access_block(bucket, configuration)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to set the public access block of S3 bucket '{bucket}'"),
+            resource_id: Some(storage_id.to_string()),
+        })
+}
+
 impl AwsStorageController {
     async fn apply_bucket_policy(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.desired_resource_config::<Storage>()?;
@@ -1542,18 +1600,35 @@ impl AwsStorageController {
             }));
         }
         if config.public_read {
-            statements.push(serde_json::json!({
-                "Sid": "AllowPublicRead",
-                "Effect": "Allow",
-                "Principal": "*",
-                "Action": "s3:GetObject",
-                "Resource": format!("{bucket_arn}/*")
-            }));
+            statements.push(alien_permissions::aws_bucket_policy::public_read_statement(
+                &bucket_arn,
+            ));
         }
         let policy = serde_json::json!({
             "Version": "2012-10-17",
             "Statement": statements
         });
+        // On a protected install who may reach the bucket is the verifier's to set: it checks
+        // every statement against the signed stack and sends this very policy.
+        if let Some(release) = crate::core::verifier::protected_statements(ctx, &config.id)? {
+            let lambda = ctx
+                .service_provider
+                .get_aws_lambda_client(ctx.get_aws_config()?)
+                .await?;
+            let verifier = crate::core::verifier::LambdaVerifier::new(lambda, ctx.resource_prefix);
+            crate::core::verifier::apply_resource_write(
+                &verifier,
+                release,
+                ctx.deployment_config.signed_config.as_ref(),
+                &config.id,
+                vec![crate::core::verifier::ResourceWrite::PutBucketPolicy {
+                    bucket: bucket.to_string(),
+                    policy: policy.to_string(),
+                }],
+            )
+            .await?;
+            return Ok(());
+        }
         ctx.service_provider
             .get_aws_s3_client(ctx.get_aws_config()?)
             .await?
@@ -2048,6 +2123,37 @@ mod tests {
 
         assert_eq!(executor.last_heartbeats().len(), 1);
         assert_eq!(executor.last_heartbeats()[0].resource_id, storage.id);
+    }
+
+    #[tokio::test]
+    async fn the_binding_is_what_the_enforcers_derive() {
+        let storage = basic_storage();
+        let id = storage.id.clone();
+        let mock_provider =
+            setup_mock_service_provider(Arc::new(fake_s3(account_with(None), Fault::None)));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(AwsStorageController::default())
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let engine = crate::core::ResourceController::get_binding_params(
+            executor.internal_state::<AwsStorageController>().unwrap(),
+        )
+        .unwrap()
+        .expect("a running bucket has a binding");
+        crate::core::binding_equivalence::assert_enforcers_derive(
+            Platform::Aws,
+            "storage",
+            &id,
+            engine,
+        );
     }
 
     #[rstest]

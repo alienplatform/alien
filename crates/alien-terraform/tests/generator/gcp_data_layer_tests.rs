@@ -338,6 +338,64 @@ fn gcp_queue_renders_pubsub_topic_and_subscription() {
     assert_terraform_valid(&module, "gcp_queue_minimal");
 }
 
+/// A protected install's verifier derives a worker's queue and KV bindings from the install's
+/// prefix (`alien_signing::binding_env`); the topic, subscription and database setup creates
+/// must be the ones it names.
+#[test]
+fn gcp_queue_and_kv_are_named_the_way_the_enforcers_derive_them() {
+    let stack = Stack::new("acme-data".to_string())
+        .add(
+            Queue::new("jobs".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Kv::new("metadata".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+
+    let derived = alien_signing::binding_env(
+        &std::collections::BTreeMap::from([
+            ("jobs".to_string(), "queue".to_string()),
+            ("metadata".to_string(), "kv".to_string()),
+        ]),
+        &alien_signing::BindingContext {
+            platform: "gcp".to_string(),
+            prefix: "PREFIX".to_string(),
+            account: "project".to_string(),
+            region: None,
+        },
+    )
+    .unwrap();
+    let derived = |id: &str| -> serde_json::Value {
+        serde_json::from_str(&derived.values[&alien_signing::binding_env_name(id)]).unwrap()
+    };
+    let templated = |value: &serde_json::Value| {
+        format!(
+            "\"{}\"",
+            value
+                .as_str()
+                .unwrap()
+                .replace("PREFIX", "${local.resource_prefix}")
+        )
+    };
+    let name_of = |kind: &str| resource_attributes(&module, kind)[0].1["name"].clone();
+
+    assert_eq!(
+        name_of("google_pubsub_topic"),
+        templated(&derived("jobs")["topic"])
+    );
+    assert_eq!(
+        name_of("google_pubsub_subscription"),
+        templated(&derived("jobs")["subscription"])
+    );
+    assert_eq!(
+        name_of("google_firestore_database"),
+        templated(&derived("metadata")["databaseId"])
+    );
+}
+
 #[test]
 fn gcp_queue_permission_profile_splits_topic_and_subscription_iam() {
     let stack = Stack::new("acme-queue".to_string())

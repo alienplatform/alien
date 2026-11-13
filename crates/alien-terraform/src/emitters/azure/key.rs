@@ -387,7 +387,11 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
             message: "failed to generate Azure remote Key permissions".to_string(),
         })?;
 
-    emit_remote_bindings_role_definitions(fragment, permission_set)?;
+    emit_remote_bindings_role_definitions(
+        fragment,
+        permission_set,
+        ctx.stack_settings.signing.is_some(),
+    )?;
     for (principal_label, owner) in principals {
         for (index, binding) in plan.bindings.iter().enumerate() {
             let role_definition_id = match &binding.role_definition {

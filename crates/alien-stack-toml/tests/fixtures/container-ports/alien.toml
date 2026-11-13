@@ -14,19 +14,3 @@ image = "ghcr.io/acme/multiple:1.0.0"
 cpu = 1
 memory = "1Gi"
 ports = [9000, 9001, 9002]
-
-# A tunnel port that is already listed stays listed once.
-[container.tunnel-listed]
-image = "ghcr.io/acme/tunnel:1.0.0"
-cpu = 1
-memory = "1Gi"
-ports = [7000, 8080]
-tunnel = 7000
-
-# A tunnel port that is not listed is added after the listed ones.
-[container.tunnel-added]
-image = "ghcr.io/acme/tunnel:1.0.0"
-cpu = 1
-memory = "1Gi"
-ports = [8080]
-tunnel = { port = 7001 }

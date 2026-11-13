@@ -19,64 +19,14 @@ use crate::{
 };
 
 use super::{
-    aws_boundary_coverage::action_patterns_overlap, AwsIamStatement, AwsRuntimePermissionsGenerator,
+    aws_boundary_coverage::action_patterns_overlap,
+    families::{aws_family, AWS_SHARING},
+    protected_allowlist::is_built_in_unchanged,
+    verifier_owned::aws_passed_to_services,
+    AwsIamStatement, AwsRuntimePermissionsGenerator,
 };
 
 const MANAGED_POLICY_LIMIT: usize = 6_144;
-
-/// Resource-policy and sharing writes that could expose stack resources outside the
-/// account or to the public, including creates that accept a resource policy. Runtime
-/// catalog grants never need them. An inline application grant that names one of these
-/// exactly lifts the Deny only on that grant's own resources; entries with wildcards, which
-/// keep the boundary within IAM's size limit, are never lifted.
-const SHARING_ACTIONS: &[&str] = &[
-    "aoss:*AccessPolicy",
-    "aoss:*SecurityPolicy",
-    "backup:PutBackupVaultAccessPolicy",
-    "codebuild:PutResourcePolicy",
-    "dlm:*LifecyclePolicy",
-    "dynamodb:PutResourcePolicy",
-    "ec2:CopySnapshot",
-    "ec2:CreateVpcPeeringConnection",
-    "ec2:Modify*ImageAttribute",
-    "ec2:ModifySnapshotAttribute",
-    "ec2:ModifyVpcEndpointServicePermissions",
-    "ecr:*RepositoryCreationTemplate",
-    "ecr:PutRegistryPolicy",
-    "ecr:PutReplicationConfiguration",
-    "ecr:SetRepositoryPolicy",
-    "elasticfilesystem:PutFileSystemPolicy",
-    "es:Create*Domain",
-    "es:Update*DomainConfig",
-    "events:PutPermission",
-    "glacier:SetVaultAccessPolicy",
-    "glue:PutResourcePolicy",
-    "kinesis:PutResourcePolicy",
-    "kms:PutKeyPolicy",
-    "lambda:Add*Permission",
-    "lambda:CreateFunctionUrlConfig",
-    "lambda:UpdateFunctionUrlConfig",
-    "logs:PutDe*Policy",
-    "logs:PutResourcePolicy",
-    "logs:PutSubscriptionFilter",
-    "ram:*",
-    "rds:ModifyDB*SnapshotAttribute",
-    "s3:*BucketPolicy",
-    "s3:Put*PublicAccessBlock",
-    "s3:PutAccessPointPolicy*",
-    "s3:PutBucketAcl",
-    "s3:PutBucketOwnershipControls",
-    "s3:PutMultiRegionAccessPointPolicy",
-    "s3:PutReplicationConfiguration",
-    "secretsmanager:PutResourcePolicy",
-    "ses:*IdentityPolicy",
-    "sns:AddPermission",
-    "sns:CreateTopic",
-    "sns:SetTopicAttributes",
-    "sqs:AddPermission",
-    "sqs:CreateQueue",
-    "sqs:SetQueueAttributes",
-];
 
 /// Render the boundary including inline and ARN-selected application grants.
 ///
@@ -705,7 +655,7 @@ fn render_boundary(
             .collect()
     };
     let mut denies: Vec<(BTreeSet<&str>, Vec<&str>)> = Vec::new();
-    for action in SHARING_ACTIONS {
+    for action in AWS_SHARING {
         let resources = exempt(action);
         match denies
             .iter_mut()
@@ -869,27 +819,81 @@ fn minified_size(value: &Value) -> usize {
         .count()
 }
 
-/// Select legacy or bounded role grants using the installed setup boundary.
+/// Label prefix of catalog statements rendered only for a protected install's management
+/// identity.
+pub const SIGNING_LABEL_PREFIX: &str = "signing-";
+
+/// Select legacy or bounded role grants using the installed setup boundary, and the statements
+/// only a protected install renders.
+///
+/// A protected install never receives a legacy grant: rendering one is an error.
 pub(super) fn include_role_statement(
     permission_set: &PermissionSet,
     label: Option<&str>,
     context: &PermissionContext,
-) -> bool {
+) -> Result<bool> {
     if let Some(label) = label {
         if label.starts_with("bounded-role-") {
-            return context.aws_permissions_boundary_arn.is_some();
+            return Ok(context.aws_permissions_boundary_arn.is_some());
         }
         if label.starts_with("legacy-role-") {
-            return context.aws_permissions_boundary_arn.is_none();
+            if context.aws_permissions_boundary_arn.is_some() {
+                return Ok(false);
+            }
+            if context.signing_protected {
+                return Err(AlienError::new(
+                    ErrorData::ProtectedDeploymentWithoutBoundary {
+                        permission_set_id: permission_set.id.clone(),
+                        label: label.to_string(),
+                    },
+                ));
+            }
+            return Ok(true);
+        }
+        if label.starts_with(SIGNING_LABEL_PREFIX) {
+            return Ok(context.signing_protected);
         }
     }
     if permission_set.id != "container/provision" {
-        return true;
+        return Ok(true);
     }
-    match label {
+    Ok(match label {
         Some("deny-volume-backup-role-changes") => context.aws_permissions_boundary_arn.is_none(),
         _ => true,
+    })
+}
+
+/// The actions an Allow statement grants the rendered identity: on a protected install's
+/// management identity, all but what only the verifier may do. Denies are kept whole.
+///
+/// A set the stack defines that grants an action in a family is refused: a filter can't drop a
+/// wildcard, and the limits bind only the management role itself.
+pub(super) fn protected_management_actions<'a>(
+    permission_set: &PermissionSet,
+    allow: bool,
+    binding: &AwsBindingSpec,
+    actions: Cow<'a, [String]>,
+    context: &PermissionContext,
+) -> Result<Cow<'a, [String]>> {
+    if !allow || !context.signing_protected {
+        return Ok(actions);
     }
+    if !is_built_in_unchanged(permission_set) {
+        let services = aws_passed_to_services(binding);
+        for action in actions.iter() {
+            if let Some(family) = aws_family(action, services.as_deref()) {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ProtectedManagementFamilyAction {
+                        permission_set_id: permission_set.id.clone(),
+                        action: action.clone(),
+                        family: family.name().to_string(),
+                    },
+                ));
+            }
+        }
+    }
+    let kept = super::verifier_owned::aws_management_actions(&actions, binding);
+    Ok(Cow::Owned(kept))
 }
 
 /// Older setups have no boundary policy or adoption grant. Only omit the catalog's
@@ -1153,7 +1157,7 @@ mod tests {
                     continue;
                 }
                 for action in entry.grant.actions.iter().flatten() {
-                    for denied in SHARING_ACTIONS {
+                    for denied in AWS_SHARING {
                         assert!(
                             !action_patterns_overlap(action, denied),
                             "{id} grants {action}, which the boundary denies"
@@ -1201,7 +1205,7 @@ mod tests {
         let boundary = aws_permissions_boundary(&context(), &[]).unwrap();
         let mut denied = denied_actions(&boundary);
         denied.sort();
-        let mut expected: Vec<_> = SHARING_ACTIONS.iter().map(|a| a.to_string()).collect();
+        let mut expected: Vec<_> = AWS_SHARING.iter().map(|a| a.to_string()).collect();
         expected.sort();
         assert_eq!(denied, expected);
         let grant_deny = boundary["Statement"]
@@ -1245,7 +1249,7 @@ mod tests {
             .iter()
             .filter(|s| s["Effect"] == "Deny")
             .collect();
-        let everywhere: Vec<_> = SHARING_ACTIONS
+        let everywhere: Vec<_> = AWS_SHARING
             .iter()
             .filter(|action| **action != "sqs:SetQueueAttributes")
             .collect();
@@ -2118,7 +2122,7 @@ mod tests {
         };
         assert_eq!(denies(&after), denies(&before));
 
-        let mut actions: BTreeSet<String> = SHARING_ACTIONS.iter().map(|a| concrete(a)).collect();
+        let mut actions: BTreeSet<String> = AWS_SHARING.iter().map(|a| concrete(a)).collect();
         for id in list_permission_set_ids()
             .into_iter()
             .filter(|id| is_runtime_set(id))

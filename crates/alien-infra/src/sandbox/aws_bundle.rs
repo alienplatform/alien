@@ -5,84 +5,23 @@
 //! so the Dockerfile is one `FROM` line. It is written to the deployment's bundle Storage, which
 //! setup creates; this controller only writes and deletes its own keys there.
 
-use std::io::Write;
-
 use alien_aws_clients::s3::{ObjectIdentifier, PutObjectRequest, S3Api};
-use alien_core::sandbox_build_role::SANDBOX_BUNDLE_KEY_PREFIX;
-use alien_error::{AlienError, Context, IntoAlienError};
-use sha2::{Digest, Sha256};
+use alien_error::{AlienError, Context};
 use tracing::{info, warn};
-use zip::write::SimpleFileOptions;
-use zip::ZipWriter;
 
 use crate::error::{ErrorData, Result};
 
-/// A rendered bundle and where it goes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RenderedBundle {
-    pub(crate) bucket: String,
-    /// `sandbox-bundle/<sandbox id>/<sha256 of the zip>/bundle.zip`: a release that changes nothing
-    /// renders the same bytes, so the same key, and so no rebuild. The Storage is shared by the
-    /// deployment's sandboxes, so each keeps to its own prefix and deletes only there.
-    pub(crate) key: String,
-    pub(crate) zip: Vec<u8>,
-}
-
-impl RenderedBundle {
-    pub(crate) fn uri(&self) -> String {
-        format!("s3://{}/{}", self.bucket, self.key)
-    }
-}
+use alien_aws_clients::sandbox_bundle::sandbox_prefix;
+pub(crate) use alien_aws_clients::sandbox_bundle::RenderedBundle;
 
 /// Renders the bundle that builds `image`.
 pub(crate) fn render(bucket: &str, image: &str, resource_id: &str) -> Result<RenderedBundle> {
-    // A newline in the reference would write Dockerfile directives of its own.
-    if image.is_empty() || image.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "sandbox image '{image}' is empty or carries whitespace or control characters"
-            ),
+    alien_aws_clients::sandbox_bundle::render(bucket, image, resource_id).map_err(|message| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message,
             resource_id: Some(resource_id.to_string()),
-        }));
-    }
-    let dockerfile = format!("FROM {image}\n");
-
-    let failed = || ErrorData::ResourceConfigInvalid {
-        message: "could not assemble the sandbox image bundle".to_string(),
-        resource_id: Some(resource_id.to_string()),
-    };
-    let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    // A fixed timestamp keeps the bytes, and so the key, a function of the image alone. The
-    // archive is flat: `CreateMicrovmImage` looks for the Dockerfile at its root.
-    let options = SimpleFileOptions::default()
-        .last_modified_time(zip::DateTime::default())
-        .unix_permissions(0o644);
-    zip.start_file("Dockerfile", options)
-        .into_alien_error()
-        .context(failed())?;
-    zip.write_all(dockerfile.as_bytes())
-        .into_alien_error()
-        .context(failed())?;
-    let zip = zip
-        .finish()
-        .into_alien_error()
-        .context(failed())?
-        .into_inner();
-
-    Ok(RenderedBundle {
-        bucket: bucket.to_string(),
-        key: format!(
-            "{}{:x}/bundle.zip",
-            sandbox_prefix(resource_id),
-            Sha256::digest(&zip)
-        ),
-        zip,
+        })
     })
-}
-
-/// The key prefix one sandbox's bundles are written under.
-fn sandbox_prefix(resource_id: &str) -> String {
-    format!("{SANDBOX_BUNDLE_KEY_PREFIX}/{resource_id}/")
 }
 
 /// Writes the bundle, then deletes this sandbox's other bundles except `serving`, the one its
@@ -111,6 +50,18 @@ pub(crate) async fn write(
             message: format!("Failed to write the sandbox bundle '{}'", bundle.uri()),
             resource_id: Some(resource_id.to_string()),
         })?;
+    prune(client, bundle, serving, resource_id).await;
+    Ok(())
+}
+
+/// Deletes this sandbox's bundles other than `bundle` and `serving`, the one its active image was
+/// built from. A failure is logged: the next write or the sandbox's delete removes what is left.
+pub(crate) async fn prune(
+    client: &dyn S3Api,
+    bundle: &RenderedBundle,
+    serving: Option<&str>,
+    resource_id: &str,
+) {
     let serving = serving.and_then(|uri| uri.strip_prefix(&format!("s3://{}/", bundle.bucket)));
     if let Err(error) = delete_keys(client, &bundle.bucket, resource_id, |key| {
         key != bundle.key && Some(key) != serving
@@ -119,7 +70,6 @@ pub(crate) async fn write(
     {
         warn!(sandbox_id = %resource_id, bucket = %bundle.bucket, %error, "Left stale sandbox bundles for the next write or delete");
     }
-    Ok(())
 }
 
 /// Deletes every bundle this sandbox wrote, once nothing can build from them.

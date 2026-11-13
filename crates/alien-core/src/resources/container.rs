@@ -261,26 +261,129 @@ impl WorkloadPriority {
 }
 
 /// Security profile shared by container runtimes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Every workload the Operator creates runs under the Kubernetes Pod Security
+/// `restricted` profile unless its stack sets `security.profile` to
+/// `unrestricted`. The opt-out is per workload; use it only for an image that
+/// must run as root or write outside its declared writable paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum ContainerSecurityProfile {
+    /// Non-root, seccomp RuntimeDefault, all capabilities dropped, no
+    /// privilege escalation, read-only root filesystem.
+    #[default]
     Restricted,
+    /// Opt-out: no security context is applied and the image runs as built.
+    Unrestricted,
 }
 
 /// Container process identity and filesystem security.
+///
+/// Absent means `restricted` with the image's own non-root user.
+///
+/// On the wire every field a previous Operator requires is always written with
+/// a concrete value (`runAsUser`/`runAsGroup` as 65532 and `readOnlyRootFilesystem`
+/// as the profile's default when unset) and `profile` is written as `restricted`
+/// (the only value a previous release knows), so state and bundles written by
+/// this version stay readable after an Operator rollback. The `*Unset` and
+/// `unrestricted` markers, which previous releases ignore, record what was
+/// really set, so reading restores the exact value and never treats a real `0`
+/// or `false` as unset. A previous Operator applies `restricted` to an opted-out
+/// workload, so an image that needs root must not be rolled back to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(
+    rename_all = "camelCase",
+    from = "ContainerSecurityWire",
+    into = "ContainerSecurityWire"
+)]
 pub struct ContainerSecurity {
-    /// Runtime security profile.
+    /// Runtime security profile. `unrestricted` is the explicit opt-out.
     pub profile: ContainerSecurityProfile,
-    /// Numeric UID for the container process.
-    pub run_as_user: i64,
-    /// Numeric GID for the container process.
-    pub run_as_group: i64,
-    /// Mount the root filesystem read-only.
-    pub read_only_root_filesystem: bool,
+    /// Numeric UID for the container process. Defaults to the image's user,
+    /// which must not be root.
+    pub run_as_user: Option<i64>,
+    /// Numeric GID for the container process. Defaults to the image's group.
+    pub run_as_group: Option<i64>,
+    /// Mount the root filesystem read-only. Defaults to true under `restricted`.
+    pub read_only_root_filesystem: Option<bool>,
+    /// Absolute paths backed by a writable emptyDir. `/tmp` is always writable.
+    #[serde(default)]
+    pub writable_paths: Vec<String>,
+}
+
+/// Stands in for an unset user or group on the wire: a previous release needs a
+/// positive ID, and 65532 is the user source-built images run as.
+const PREVIOUS_RELEASE_ID: i64 = 65532;
+
+/// Wire form of [`ContainerSecurity`]; see its documentation.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContainerSecurityWire {
+    profile: ContainerSecurityProfile,
+    #[serde(default)]
+    run_as_user: Option<i64>,
+    #[serde(default)]
+    run_as_group: Option<i64>,
+    #[serde(default)]
+    read_only_root_filesystem: Option<bool>,
+    /// The opt-out, which `profile` cannot carry for a previous release.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unrestricted: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    run_as_user_unset: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    run_as_group_unset: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    read_only_root_filesystem_unset: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    writable_paths: Vec<String>,
+}
+
+impl From<ContainerSecurity> for ContainerSecurityWire {
+    fn from(security: ContainerSecurity) -> Self {
+        let unrestricted = security.profile == ContainerSecurityProfile::Unrestricted;
+        Self {
+            profile: ContainerSecurityProfile::Restricted,
+            unrestricted,
+            run_as_user_unset: security.run_as_user.is_none(),
+            run_as_user: Some(security.run_as_user.unwrap_or(PREVIOUS_RELEASE_ID)),
+            run_as_group_unset: security.run_as_group.is_none(),
+            run_as_group: Some(security.run_as_group.unwrap_or(PREVIOUS_RELEASE_ID)),
+            read_only_root_filesystem_unset: security.read_only_root_filesystem.is_none(),
+            read_only_root_filesystem: Some(
+                security.read_only_root_filesystem.unwrap_or(!unrestricted),
+            ),
+            writable_paths: security.writable_paths,
+        }
+    }
+}
+
+impl From<ContainerSecurityWire> for ContainerSecurity {
+    fn from(wire: ContainerSecurityWire) -> Self {
+        let profile = if wire.unrestricted {
+            ContainerSecurityProfile::Unrestricted
+        } else {
+            wire.profile
+        };
+        Self {
+            profile,
+            run_as_user: wire.run_as_user.filter(|_| !wire.run_as_user_unset),
+            run_as_group: wire.run_as_group.filter(|_| !wire.run_as_group_unset),
+            read_only_root_filesystem: wire
+                .read_only_root_filesystem
+                .filter(|_| !wire.read_only_root_filesystem_unset),
+            writable_paths: wire.writable_paths,
+        }
+    }
+}
+
+impl ContainerSecurity {
+    /// Whether a workload with this (possibly absent) setting runs restricted.
+    pub fn is_restricted(security: Option<&ContainerSecurity>) -> bool {
+        security.is_none_or(|security| security.profile == ContainerSecurityProfile::Restricted)
+    }
 }
 
 /// Autoscaling configuration for stateless containers.
@@ -458,11 +561,12 @@ pub struct Container {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub egress: Option<ContainerEgress>,
 
-    /// Makes one HTTP port reachable from the control plane through the
-    /// manager's tunnel, over the operator's outbound connection. Nothing is
-    /// exposed on the deployment's network.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tunnel: Option<ContainerTunnel>,
+    /// Container tunnels were removed. Releases and checkpoints saved before
+    /// that still carry the field; it is read and discarded, never written.
+    #[serde(default, rename = "tunnel", skip_serializing)]
+    #[cfg_attr(feature = "openapi", schema(ignore))]
+    #[builder(skip)]
+    retired_tunnel: Option<serde_json::Value>,
 
     /// Kubernetes liveness probe. Restarts an unhealthy container.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -599,12 +703,7 @@ impl Container {
                 reason,
             })
         };
-        if self.egress.is_some()
-            && !self
-                .security
-                .as_ref()
-                .is_some_and(|security| security.profile == ContainerSecurityProfile::Restricted)
-        {
+        if self.egress.is_some() && !ContainerSecurity::is_restricted(self.security.as_ref()) {
             return Err(invalid(
                 "container egress internet requires security.profile restricted".into(),
             ));
@@ -739,20 +838,6 @@ pub struct ReplicaStatus {
     pub container_ip: Option<String>,
 }
 
-/// A container port reachable from the control plane through the manager.
-///
-/// Requests to `/v1/deployments/{deployment}/tunnels/{container}/...` on the
-/// manager are forwarded to this port over the operator's outbound
-/// connection, so the control plane can call the service without any inbound
-/// network path into the deployment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ContainerTunnel {
-    /// Container port that serves HTTP. Must be one of the container's ports.
-    pub port: u16,
-}
-
 /// Outputs generated by a successfully provisioned Container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -766,7 +851,10 @@ pub struct ContainerOutputs {
     pub current_replicas: u32,
     /// Desired number of replicas
     pub desired_replicas: u32,
-    /// Internal DNS name (e.g., "api.svc")
+    /// Internal DNS name of the container's Service. On Kubernetes this is
+    /// `<name>.<namespace>.svc.<cluster domain>`; other platforms have no such
+    /// name. To reach another container, use the link binding
+    /// (`ALIEN_<ID>_BINDING`, `internalUrls`), not a name built from the id.
     pub internal_dns: String,
     /// Public endpoints resolved for this container.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -1011,6 +1099,99 @@ impl ResourceDefinition for Container {
 
 #[cfg(test)]
 mod tests {
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    enum PreviousProfile {
+        Restricted,
+    }
+
+    /// `ContainerSecurity` exactly as the previous release declares it. State and
+    /// air-gap bundles written by this version must parse with it, so an Operator
+    /// rollback keeps working.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(dead_code)]
+    struct PreviousContainerSecurity {
+        profile: PreviousProfile,
+        run_as_user: i64,
+        run_as_group: i64,
+        read_only_root_filesystem: bool,
+    }
+
+    #[test]
+    fn written_security_parses_with_the_previous_release_struct() {
+        let defaults = ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        };
+        let explicit = ContainerSecurity {
+            profile: ContainerSecurityProfile::Unrestricted,
+            run_as_user: Some(70),
+            run_as_group: Some(71),
+            read_only_root_filesystem: Some(false),
+            writable_paths: vec!["/data".to_string()],
+        };
+        let unrestricted_defaults = ContainerSecurity {
+            profile: ContainerSecurityProfile::Unrestricted,
+            ..defaults.clone()
+        };
+        let explicit_zero = ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: Some(0),
+            run_as_group: None,
+            read_only_root_filesystem: Some(false),
+            writable_paths: Vec::new(),
+        };
+        for security in [defaults, explicit, unrestricted_defaults, explicit_zero] {
+            let json = serde_json::to_value(&security).unwrap();
+            serde_json::from_value::<PreviousContainerSecurity>(json.clone())
+                .unwrap_or_else(|error| panic!("previous release cannot read {json}: {error}"));
+            // Reading our own output restores the value, so stacks do not diff.
+            let back: ContainerSecurity = serde_json::from_value(json).unwrap();
+            assert_eq!(back, security);
+        }
+    }
+
+    /// An opted-out workload is written as `restricted` plus a marker. A previous
+    /// Operator ignores the marker and applies the restricted settings, so a
+    /// rollback fails safe: a root image stops starting instead of gaining
+    /// privileges. Upgrading the Operator again restores the opt-out.
+    #[test]
+    fn unrestricted_opt_out_reads_as_restricted_with_the_previous_release_struct() {
+        let security = ContainerSecurity {
+            profile: ContainerSecurityProfile::Unrestricted,
+            run_as_user: Some(0),
+            run_as_group: Some(0),
+            read_only_root_filesystem: Some(false),
+            writable_paths: Vec::new(),
+        };
+        let json = serde_json::to_value(&security).unwrap();
+        assert_eq!(json["profile"], "restricted");
+        assert_eq!(json["unrestricted"], true);
+        let previous: PreviousContainerSecurity = serde_json::from_value(json.clone()).unwrap();
+        assert!(matches!(previous.profile, PreviousProfile::Restricted));
+        let back: ContainerSecurity = serde_json::from_value(json).unwrap();
+        assert_eq!(back, security);
+    }
+
+    #[test]
+    fn security_reads_accept_the_plain_unrestricted_profile() {
+        let security: ContainerSecurity =
+            serde_json::from_str(r#"{"profile":"unrestricted"}"#).unwrap();
+        assert_eq!(security.profile, ContainerSecurityProfile::Unrestricted);
+    }
+
+    #[test]
+    fn security_reads_tolerate_omitted_fields() {
+        let security: ContainerSecurity =
+            serde_json::from_str(r#"{"profile":"restricted"}"#).unwrap();
+        assert_eq!(security.run_as_user, None);
+        assert_eq!(security.read_only_root_filesystem, None);
+    }
+
     use super::*;
     use crate::resources::ExposeProtocol;
 
@@ -1039,19 +1220,48 @@ mod tests {
     }
 
     #[test]
-    fn internet_egress_requires_restricted_security_and_is_opt_in() {
+    fn a_saved_container_with_the_retired_tunnel_field_still_loads() {
+        let saved = serde_json::json!({
+            "id": "api",
+            "code": {"type": "image", "image": "example/api:1"},
+            "cpu": {"min": "0.5", "desired": "0.5"},
+            "memory": {"min": "256Mi", "desired": "256Mi"},
+            "permissions": "execution",
+            "links": [], "ports": [],
+            "tunnel": {"port": 8080}
+        });
+        let container: Container = serde_json::from_value(saved).expect("saved container loads");
+        assert!(serde_json::to_value(&container)
+            .unwrap()
+            .get("tunnel")
+            .is_none());
+    }
+
+    #[test]
+    fn internet_egress_is_opt_in_and_refuses_the_unrestricted_profile() {
         let mut container = network_container();
         assert!(serde_json::to_value(&container)
             .unwrap()
             .get("egress")
             .is_none());
+        // Containers are restricted unless they opt out, so egress needs no
+        // explicit security setting.
         container.egress = Some(ContainerEgress::Internet);
+        container.validate_update(&container).unwrap();
+        container.security = Some(ContainerSecurity {
+            profile: ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        });
         assert!(container.validate_update(&container).is_err());
         container.security = Some(ContainerSecurity {
             profile: ContainerSecurityProfile::Restricted,
-            run_as_user: 65532,
-            run_as_group: 65532,
-            read_only_root_filesystem: true,
+            run_as_user: Some(65532),
+            run_as_group: Some(65532),
+            read_only_root_filesystem: Some(true),
+            writable_paths: Vec::new(),
         });
         container.validate_update(&container).unwrap();
         assert_eq!(

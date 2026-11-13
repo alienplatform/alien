@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
-use crate::core::{linked_bindings, EnvironmentVariableBuilder, ResourcePermissionsHelper};
+use crate::core::{
+    linked_bindings, verifier, EnvironmentVariableBuilder, ResourcePermissionsHelper,
+};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -310,10 +312,18 @@ fn gone_unless_failed<T>(
 
 #[controller]
 pub struct GcpWorkerController {
+    /// On a protected install, the digest of the signed release and config the verifier last applied to
+    /// this worker; a step carrying other ones updates the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) applied_config: Option<String>,
     /// The Cloud Run service name
     pub(crate) service_name: Option<String>,
     /// The invocation URL of the worker, available after creation.
     pub(crate) url: Option<String>,
+    /// The address Cloud Run gives the service, which `url` is unless a public endpoint
+    /// overrides it. The worker's own binding reaches it here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cloud_run_url: Option<String>,
     /// The operation name for long-running operations (for create, update, delete)
     pub(crate) operation_name: Option<String>,
     /// Number of targeted retries after GAR IAM propagation denied an image pull.
@@ -695,6 +705,23 @@ impl GcpWorkerController {
             .build_cloud_run_service(&service_name, cfg, ctx)
             .await?;
 
+        // On a protected install management may not create the service: the verifier checks
+        // this very request against the signed release, sends it and waits for it to serve.
+        if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
+            let write = verifier::CloudWrite::CreateService {
+                service_id: service_name.clone(),
+                service: verifier::CloudWrite::body(&service)?,
+            };
+            self.write_through_verifier(ctx, statements, &cfg.id, &service_name, vec![write])
+                .await?;
+            self.applied_config = verifier::statements_digest(ctx)?;
+            self.service_name = Some(service_name);
+            return Ok(HandlerAction::Continue {
+                state: WaitingForServiceCreation,
+                suggested_delay: None,
+            });
+        }
+
         // Create the service
         let operation = ctx
             .service_provider
@@ -939,12 +966,17 @@ impl GcpWorkerController {
         }
 
         let cloud_run_url = service.uri.or_else(|| service.urls.first().cloned());
+        self.cloud_run_url = cloud_run_url.clone();
 
         // Check for URL override in deployment config, otherwise use Cloud Run URL
         let config = ctx.desired_resource_config::<Worker>()?;
-        self.url = config
-            .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
-            .or(cloud_run_url);
+        self.url = if verifier::is_protected(ctx) {
+            cloud_run_url
+        } else {
+            config
+                .configured_primary_public_url(ctx.deployment_config.public_endpoints.as_ref())
+                .or(cloud_run_url)
+        };
 
         info!(name=%service_name, url=?self.url, "Cloud Run service created successfully");
 
@@ -1955,28 +1987,15 @@ impl GcpWorkerController {
                 state: None,
             };
 
-            match scheduler_client
-                .create_job(gcp_config.region.clone(), job_id.clone(), job)
-                .await
-            {
-                Ok(_) => {}
-                Err(e) if is_remote_resource_conflict(&e) => {
-                    info!(
-                        worker=%cfg.id,
-                        job=%job_id,
-                        "Cloud Scheduler job already exists; treating as created"
-                    );
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create Cloud Scheduler job '{}' for worker '{}'",
-                            job_id, cfg.id
-                        ),
-                        resource_id: Some(cfg.id.clone()),
-                    }));
-                }
-            }
+            create_scheduler_job(
+                ctx,
+                &cfg.id,
+                scheduler_client.as_ref(),
+                gcp_config,
+                &job_id,
+                job,
+            )
+            .await?;
 
             if !self.scheduler_job_names.contains(&job_full_name) {
                 self.scheduler_job_names.push(job_full_name);
@@ -2153,35 +2172,70 @@ impl GcpWorkerController {
                 "Creating commands Pub/Sub push subscription"
             );
 
-            match pubsub_client
-                .create_subscription(subscription_name.clone(), subscription)
-                .await
-            {
-                Ok(_) => {
-                    self.commands_subscription_name = Some(subscription_name.clone());
-                }
-                Err(e) if is_remote_resource_conflict(&e) => {
-                    info!(
-                        worker=%cfg.id,
-                        subscription=%subscription_name,
-                        "Commands Pub/Sub push subscription already exists, adopting it"
-                    );
-                    self.commands_subscription_name = Some(subscription_name.clone());
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create commands push subscription '{}'",
-                            subscription_name
-                        ),
+            // On a protected install management may not create a push subscription: the
+            // verifier checks it delivers to this worker's own service and sends it unchanged.
+            if let Some(statements) = verifier::protected_statements(ctx, &cfg.id)? {
+                let body = serde_json::to_value(&subscription)
+                    .into_alien_error()
+                    .context(ErrorData::CloudPlatformError {
+                        message: "The commands push subscription does not serialize".to_string(),
                         resource_id: Some(cfg.id.clone()),
-                    }));
+                    })?;
+                verifier::apply_resource_write(
+                    &verifier::gcp_verifier(ctx)?,
+                    statements,
+                    ctx.deployment_config.signed_config.as_ref(),
+                    &cfg.id,
+                    vec![verifier::ResourceWrite::CreateCommandSubscription {
+                        subscription: subscription_name.clone(),
+                        body,
+                    }],
+                )
+                .await?;
+                self.commands_subscription_name = Some(subscription_name.clone());
+            } else {
+                match pubsub_client
+                    .create_subscription(subscription_name.clone(), subscription)
+                    .await
+                {
+                    Ok(_) => {
+                        self.commands_subscription_name = Some(subscription_name.clone());
+                    }
+                    Err(e) if is_remote_resource_conflict(&e) => {
+                        info!(
+                            worker=%cfg.id,
+                            subscription=%subscription_name,
+                            "Commands Pub/Sub push subscription already exists, adopting it"
+                        );
+                        self.commands_subscription_name = Some(subscription_name.clone());
+                    }
+                    Err(e) => {
+                        return Err(e.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to create commands push subscription '{}'",
+                                subscription_name
+                            ),
+                            resource_id: Some(cfg.id.clone()),
+                        }));
+                    }
                 }
             }
         }
 
-        self.apply_command_topic_management_permissions(ctx, &topic_short_name)
-            .await?;
+        // Writing a topic's policy is a reach action management does not hold on a protected
+        // install, and the verifier never grants management anything, so the controller does not
+        // attempt it there. Management's access to the commands topic has to come from setup.
+        if verifier::is_protected(ctx) {
+            warn!(
+                worker=%cfg.id,
+                topic=%topic_short_name,
+                "Protected install: management's command permissions on the commands topic are not \
+                 written by the controller"
+            );
+        } else {
+            self.apply_command_topic_management_permissions(ctx, &topic_short_name)
+                .await?;
+        }
 
         info!(worker=%cfg.id, "Commands Pub/Sub infrastructure created");
 
@@ -2346,13 +2400,25 @@ impl GcpWorkerController {
             }
         }
 
+        // The address the service reports is what the worker's own binding names as its private
+        // URL, so a worker recorded without it (imported, or deployed before it was kept) learns
+        // it here.
+        self.cloud_run_url = service
+            .uri
+            .clone()
+            .or_else(|| service.urls.first().cloned());
+
         emit_gcp_cloud_run_worker_heartbeat(ctx, &worker_config, &service_name, &service);
 
         // A linked resource can change what its binding publishes without this worker being
         // updated, such as a Cloud SQL server CA rotation the Postgres binding picks up on its
         // own Ready. Compare the bindings rendered now with the ones the service runs, from the
         // read the heartbeat already made, and refresh only when they differ.
-        if let Some(live) = live_service_env(&service) {
+        // On a protected install the verifier renders the bindings; what it wrote is checked
+        // against the signed release, not against management's rendering.
+        let live = live_service_env(&service)
+            .filter(|_| ctx.deployment_config.stack_settings.signing.is_none());
+        if let Some(live) = live {
             let drifted = linked_bindings::linked_binding_drift(
                 ctx,
                 &worker_config.runtime_binding_links(),
@@ -2545,10 +2611,11 @@ impl GcpWorkerController {
 
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let previous_cfg = ctx.previous_resource_config::<Worker>()?;
+        let protected = verifier::protected_statements(ctx, &cfg.id)?;
         // An update whose own configuration is unchanged was planned because a linked resource
         // was. It still re-renders the linked bindings: the resource it links may publish a new
         // binding.
-        if cfg == previous_cfg {
+        if cfg == previous_cfg && protected.is_none() {
             let links = cfg.runtime_binding_links();
             if !linked_bindings::links_settled(ctx, &links) {
                 // A linked resource is still in its own flow; wait for the value it settles on.
@@ -2620,12 +2687,43 @@ impl GcpWorkerController {
                 resource_id: Some(ctx.desired_config.id().to_string()),
             })?;
 
+        // The worker's own binding names the address Cloud Run reports as its private URL. A
+        // worker recorded without it (imported, or deployed before it was kept) would otherwise
+        // fall back to its public URL, which can be a custom domain, and an update can come
+        // before any heartbeat records it. Take it from the service read for this update.
+        if let Some(address) = current_service
+            .uri
+            .clone()
+            .or_else(|| current_service.urls.first().cloned())
+        {
+            if protected.is_some() {
+                self.url = Some(address.clone());
+            }
+            self.cloud_run_url = Some(address);
+        }
+
         // Build updated service configuration
         let mut updated_service = self.build_cloud_run_service(service_name, cfg, ctx).await?;
 
         // Preserve important fields from current service
         updated_service.name = current_service.name;
         updated_service.etag = current_service.etag;
+
+        // On a protected install management may not write the service: the verifier checks
+        // this very request against the signed release, sends it and waits for it to serve.
+        if let Some(statements) = protected {
+            let write = verifier::CloudWrite::ReplaceService {
+                name: service_name.clone(),
+                service: verifier::CloudWrite::body(&updated_service)?,
+            };
+            self.write_through_verifier(ctx, statements, &cfg.id, service_name, vec![write])
+                .await?;
+            self.applied_config = verifier::statements_digest(ctx)?;
+            return Ok(HandlerAction::Continue {
+                state: WaitingForServiceUpdate,
+                suggested_delay: None,
+            });
+        }
 
         // Patch the service
         let operation = ctx
@@ -3549,28 +3647,15 @@ impl GcpWorkerController {
                         state: None,
                     };
 
-                    match scheduler_client
-                        .create_job(gcp_config.region.clone(), job_id.clone(), job)
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(e) if is_remote_resource_conflict(&e) => {
-                            info!(
-                                worker=%current_config.id,
-                                job=%job_id,
-                                "Cloud Scheduler job already exists; treating as created"
-                            );
-                        }
-                        Err(e) => {
-                            return Err(e.context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to create Cloud Scheduler job '{}' for worker '{}'",
-                                    job_id, current_config.id
-                                ),
-                                resource_id: Some(current_config.id.clone()),
-                            }));
-                        }
-                    }
+                    create_scheduler_job(
+                        ctx,
+                        &current_config.id,
+                        scheduler_client.as_ref(),
+                        gcp_config,
+                        &job_id,
+                        job,
+                    )
+                    .await?;
 
                     if !self.scheduler_job_names.contains(&job_full_name) {
                         self.scheduler_job_names.push(job_full_name);
@@ -3686,6 +3771,7 @@ impl GcpWorkerController {
                 // Clear any remaining state and mark as deleted
                 self.service_name = None;
                 self.url = None;
+                self.cloud_run_url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
                 self.storage_notification_topics.clear();
@@ -4353,6 +4439,19 @@ impl GcpWorkerController {
 
         info!(name=%service_name, "Deleting Cloud Run service");
 
+        // A protected install's services change only through its verifier, which deletes the
+        // service with its IAM policy; the wait reads the service until it is gone.
+        if verifier::is_protected(ctx) {
+            let verifier = verifier::gcp_verifier(ctx)?;
+            let worker = ctx.desired_config.id().to_string();
+            let deleted = verifier::delete_workload(&verifier, &worker, service_name).await?;
+            info!(name=%service_name, existed=deleted.existed, "The verifier deleted the Cloud Run service");
+            return Ok(HandlerAction::Continue {
+                state: WaitingForServiceDeletion,
+                suggested_delay: Some(Duration::from_secs(2)),
+            });
+        }
+
         // Try to delete the service, handling the case where it's already missing
         match ctx
             .service_provider
@@ -4389,6 +4488,7 @@ impl GcpWorkerController {
 
                 self.service_name = None;
                 self.url = None;
+                self.cloud_run_url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
 
@@ -4503,6 +4603,7 @@ impl GcpWorkerController {
 
                 self.service_name = None;
                 self.url = None;
+                self.cloud_run_url = None;
                 self.operation_name = None;
                 self.push_subscriptions.clear();
 
@@ -4536,6 +4637,10 @@ impl GcpWorkerController {
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        verifier::statements_changed(ctx, self.applied_config.as_deref())
+    }
 
     #[handler(
         state = RefreshFailed,
@@ -4610,7 +4715,9 @@ impl GcpWorkerController {
                 project_id: BindingValue::Value(project_id),
                 service_name: BindingValue::Value(service_name.clone()),
                 location: BindingValue::Value(location),
-                private_url: BindingValue::Value(url.clone()),
+                private_url: BindingValue::Value(
+                    self.cloud_run_url.clone().unwrap_or_else(|| url.clone()),
+                ),
                 public_url: Some(BindingValue::Value(url.clone())),
             });
             Ok(Some(
@@ -4779,7 +4886,7 @@ impl GcpWorkerController {
                 self.certificate_id = domain_info.certificate_id;
                 self.ssl_certificate_name = domain_info.ssl_certificate_name;
                 self.uses_custom_domain = domain_info.uses_custom_domain;
-                if self.url.is_none() {
+                if self.url.is_none() && !verifier::is_protected(ctx) {
                     self.url = config
                         .configured_primary_public_url(
                             ctx.deployment_config.public_endpoints.as_ref(),
@@ -4869,27 +4976,7 @@ impl GcpWorkerController {
             .to_string();
         let service_account = Some(service_account);
 
-        // Extract container image
-        let image = match &cfg.code {
-            alien_core::WorkerCode::Image { image } => image.clone(),
-            alien_core::WorkerCode::Source { .. } => {
-                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!(
-                        "Worker '{}' is configured with source code, but only pre-built images are supported in alien-infra.",
-                        cfg.id
-                    ),
-                    resource_id: Some(cfg.id.clone()),
-                }));
-            }
-        };
-
-        // Resolve proxy URIs to native GAR URIs. Cloud Run can only pull from GAR.
-        let image = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
-            alien_core::image_rewrite::resolve_native_image_uri(&image, native_host)
-                .unwrap_or(image)
-        } else {
-            image
-        };
+        let image = Self::service_image(ctx, cfg)?;
 
         // Prepare environment variables
         let env_vars = self
@@ -5092,6 +5179,60 @@ impl GcpWorkerController {
         })
     }
 
+    /// The image the service pulls: the configured image, with a proxy URI resolved to the
+    /// native Artifact Registry one, since Cloud Run pulls only from there.
+    fn service_image(ctx: &ResourceControllerContext<'_>, cfg: &Worker) -> Result<String> {
+        let image = match &cfg.code {
+            alien_core::WorkerCode::Image { image } => image.clone(),
+            alien_core::WorkerCode::Source { .. } => {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Worker '{}' is configured with source code, but only pre-built images are supported in alien-infra.",
+                        cfg.id
+                    ),
+                    resource_id: Some(cfg.id.clone()),
+                }));
+            }
+        };
+        Ok(
+            if let Some(ref native_host) = ctx.deployment_config.native_image_host {
+                alien_core::image_rewrite::resolve_native_image_uri(&image, native_host)
+                    .unwrap_or(image)
+            } else {
+                image
+            },
+        )
+    }
+
+    /// Hands `writes`, the requests this controller built for `service_name` for one release,
+    /// to the install's verifier, which checks them all against the signed release before it
+    /// sends any, and sends them unchanged, in order.
+    async fn write_through_verifier(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        statements: &alien_core::ReleaseStatements,
+        worker: &str,
+        service_name: &str,
+        writes: Vec<verifier::CloudWrite>,
+    ) -> Result<verifier::Written> {
+        let verifier = verifier::gcp_verifier(ctx)?;
+        let written = verifier::apply_write(
+            &verifier,
+            statements,
+            ctx.deployment_config.signed_config.as_ref(),
+            worker,
+            writes,
+            service_name,
+        )
+        .await?;
+        info!(
+            worker = %worker,
+            release = written.release,
+            "The verifier applied the controller's write"
+        );
+        Ok(written)
+    }
+
     async fn prepare_environment_variables(
         &self,
         initial_env: &HashMap<String, String>,
@@ -5119,6 +5260,8 @@ impl GcpWorkerController {
             .add_linked_resources(&runtime_links, ctx, function_name_for_error_logging)
             .await?
             .add_self_worker_binding(&worker_config.id, self_binding_params.as_ref())?
+            .add_signed_values(ctx, &worker_config.id)
+            .await?
             .build();
 
         Ok(env_vars)
@@ -5130,8 +5273,6 @@ impl GcpWorkerController {
         ctx: &ResourceControllerContext<'_>,
         service_name: &str,
     ) -> Result<()> {
-        use alien_gcp_clients::iam::Binding;
-
         let config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
@@ -5145,43 +5286,34 @@ impl GcpWorkerController {
                 resource_id: Some(config.id.clone()),
             })?;
 
-        // Apply resource-scoped permissions from the stack.
+        let original = policy.clone();
+
+        // Apply resource-scoped permissions from the stack. On a protected install setup binds
+        // the permission sets granted for every worker (`*`) on the project, and the verifier
+        // creates the service, so only grants naming this worker belong on its policy.
+        let protected = ctx.deployment_config.stack_settings.signing.is_some();
         let mut resource_bindings = Vec::new();
-        self.collect_resource_scoped_bindings(ctx, service_name, &mut resource_bindings)
-            .await?;
+        self.collect_resource_scoped_bindings(
+            ctx,
+            service_name,
+            !protected,
+            &mut resource_bindings,
+        )
+        .await?;
 
         // Pub/Sub and Cloud Scheduler mint their OIDC token for the worker's
         // execution service account. Private services keep the Cloud Run IAM
         // invoker check enabled, so grant that identity access to this service.
-        if config.public_endpoints.is_empty() {
-            let invoker_role = "roles/run.invoker".to_string();
-            let invoker_member = format!(
+        let invoker = if config.public_endpoints.is_empty() {
+            Some(format!(
                 "serviceAccount:{}",
                 self.get_service_account_email(ctx, &config)?
-            );
-
-            let binding_exists = policy.bindings.iter().any(|binding| {
-                binding.role == invoker_role && binding.members.contains(&invoker_member)
-            });
-
-            if !binding_exists {
-                if let Some(binding) = policy
-                    .bindings
-                    .iter_mut()
-                    .find(|binding| binding.role == invoker_role && binding.condition.is_none())
-                {
-                    if !binding.members.contains(&invoker_member) {
-                        binding.members.push(invoker_member);
-                    }
-                } else {
-                    policy.bindings.push(
-                        Binding::builder()
-                            .role(invoker_role)
-                            .members(vec![invoker_member])
-                            .build(),
-                    );
-                }
-            }
+            ))
+        } else {
+            None
+        };
+        if let Some(member) = &invoker {
+            admit_invoker(&mut policy, member);
         }
 
         // Add generated resource-scoped bindings.
@@ -5192,6 +5324,36 @@ impl GcpWorkerController {
                 "Adding resource-scoped permissions to IAM policy"
             );
             policy.bindings.extend(resource_bindings);
+        }
+
+        // On a protected install management may not set the service's IAM policy. The verifier
+        // lets the worker's own account invoke its service; what else the worker needs, setup
+        // must have granted.
+        if let Some(statements) = verifier::protected_statements(ctx, &config.id)? {
+            let mut admitted = original.clone();
+            if let Some(member) = &invoker {
+                admit_invoker(&mut admitted, member);
+            }
+            let missing = grants_missing(&admitted, &policy);
+            if !missing.is_empty() {
+                return Err(AlienError::new(ErrorData::SetupRerunRequired {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "on a protected install setup sets the IAM policy of Cloud Run service '{service_name}', and it doesn't grant {}; rerun setup with this release",
+                        missing.join(", ")
+                    ),
+                }));
+            }
+            if grants_missing(&original, &admitted).is_empty() {
+                return Ok(());
+            }
+            let write = verifier::CloudWrite::SetServicePolicy {
+                name: service_name.to_string(),
+                policy: verifier::CloudWrite::body(&admitted)?,
+            };
+            self.write_through_verifier(ctx, statements, &config.id, service_name, vec![write])
+                .await?;
+            return Ok(());
         }
 
         // Apply the consolidated policy in one operation.
@@ -5211,10 +5373,14 @@ impl GcpWorkerController {
     }
 
     /// Collect resource-scoped bindings without applying them
+    /// The bindings the stack's permission profiles and management grant on this worker's
+    /// service: the ones naming the worker, and with `wildcards` the ones granted for every
+    /// worker (`*`).
     async fn collect_resource_scoped_bindings(
         &self,
         ctx: &ResourceControllerContext<'_>,
         service_name: &str,
+        wildcards: bool,
         all_bindings: &mut Vec<alien_gcp_clients::iam::Binding>,
     ) -> Result<()> {
         use alien_permissions::generators::GcpRuntimePermissionsGenerator;
@@ -5241,7 +5407,7 @@ impl GcpWorkerController {
                 );
             }
 
-            if let Some(wildcard_refs) = profile.0.get("*") {
+            if let Some(wildcard_refs) = profile.0.get("*").filter(|_| wildcards) {
                 combined_refs.extend(
                     wildcard_refs
                         .iter()
@@ -5293,7 +5459,7 @@ impl GcpWorkerController {
                 );
             }
 
-            if let Some(wildcard_refs) = management_profile.0.get("*") {
+            if let Some(wildcard_refs) = management_profile.0.get("*").filter(|_| wildcards) {
                 management_refs.extend(
                     wildcard_refs
                         .iter()
@@ -6076,9 +6242,11 @@ impl GcpWorkerController {
     #[cfg(feature = "test-utils")]
     pub fn mock_ready(function_name: &str) -> Self {
         Self {
+            applied_config: None,
             state: GcpWorkerState::Ready,
             service_name: Some(function_name.to_string()),
             url: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
+            cloud_run_url: None,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
@@ -6112,6 +6280,59 @@ impl GcpWorkerController {
 /// Pub/Sub accepts acknowledgement deadlines of 10 to 600 seconds. A command
 /// is handled inside the push request, so the deadline follows the worker's
 /// timeout up to that ceiling, as the Terraform emitter does.
+/// Create a Cloud Scheduler job. On a protected install management may not create one that
+/// calls a service as another identity, so the verifier checks it and sends it unchanged.
+/// A job that already exists is adopted.
+async fn create_scheduler_job(
+    ctx: &ResourceControllerContext<'_>,
+    worker_id: &str,
+    client: &dyn alien_gcp_clients::cloudscheduler::CloudSchedulerApi,
+    gcp_config: &alien_gcp_clients::GcpClientConfig,
+    job_id: &str,
+    mut job: SchedulerJob,
+) -> Result<()> {
+    if let Some(statements) = crate::core::verifier::protected_statements(ctx, worker_id)? {
+        job.name = Some(format!(
+            "projects/{}/locations/{}/jobs/{}",
+            gcp_config.project_id, gcp_config.region, job_id
+        ));
+        let body = serde_json::to_value(&job).into_alien_error().context(
+            ErrorData::CloudPlatformError {
+                message: "The scheduler job does not serialize".to_string(),
+                resource_id: Some(worker_id.to_string()),
+            },
+        )?;
+        crate::core::verifier::apply_resource_write(
+            &crate::core::verifier::gcp_verifier(ctx)?,
+            statements,
+            ctx.deployment_config.signed_config.as_ref(),
+            worker_id,
+            vec![crate::core::verifier::ResourceWrite::CreateSchedulerJob {
+                job: job_id.to_string(),
+                body,
+            }],
+        )
+        .await?;
+        return Ok(());
+    }
+    match client
+        .create_job(gcp_config.region.clone(), job_id.to_string(), job)
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(e) if is_remote_resource_conflict(&e) => {
+            info!(worker=%worker_id, job=%job_id, "Cloud Scheduler job already exists; treating as created");
+            Ok(())
+        }
+        Err(e) => Err(e.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create Cloud Scheduler job '{job_id}' for worker '{worker_id}'"
+            ),
+            resource_id: Some(worker_id.to_string()),
+        })),
+    }
+}
+
 fn pubsub_ack_deadline_seconds(timeout_seconds: u32) -> i32 {
     timeout_seconds.clamp(10, 600) as i32
 }
@@ -6127,6 +6348,69 @@ fn live_service_env(service: &Service) -> Option<HashMap<String, String>> {
             .filter_map(|var| Some((var.name.clone(), var.value.clone()?)))
             .collect(),
     )
+}
+
+/// The grants of `desired`, as `role to member` (with the condition's title when it has one),
+/// that `current` doesn't hold.
+/// Grant `member` the Cloud Run invoker role without a condition, unless `policy` already does.
+fn admit_invoker(policy: &mut alien_gcp_clients::iam::IamPolicy, member: &str) {
+    const INVOKER: &str = "roles/run.invoker";
+    let admitted = policy.bindings.iter().any(|binding| {
+        binding.role == INVOKER && binding.members.iter().any(|existing| existing == member)
+    });
+    if admitted {
+        return;
+    }
+    match policy
+        .bindings
+        .iter_mut()
+        .find(|binding| binding.role == INVOKER && binding.condition.is_none())
+    {
+        Some(binding) => binding.members.push(member.to_string()),
+        None => policy.bindings.push(
+            alien_gcp_clients::iam::Binding::builder()
+                .role(INVOKER.to_string())
+                .members(vec![member.to_string()])
+                .build(),
+        ),
+    }
+}
+
+fn grants_missing(
+    current: &alien_gcp_clients::iam::IamPolicy,
+    desired: &alien_gcp_clients::iam::IamPolicy,
+) -> Vec<String> {
+    let key = |binding: &alien_gcp_clients::iam::Binding| {
+        (
+            binding.role.clone(),
+            binding
+                .condition
+                .as_ref()
+                .map(|condition| serde_json::to_string(condition).unwrap_or_default()),
+        )
+    };
+    let held: HashSet<_> = current
+        .bindings
+        .iter()
+        .flat_map(|binding| {
+            binding
+                .members
+                .iter()
+                .map(move |member| (key(binding), member.clone()))
+        })
+        .collect();
+    let mut missing = Vec::new();
+    for binding in &desired.bindings {
+        for member in &binding.members {
+            if !held.contains(&(key(binding), member.clone())) {
+                let grant = format!("{} to {member}", binding.role);
+                if !missing.contains(&grant) {
+                    missing.push(grant);
+                }
+            }
+        }
+    }
+    missing
 }
 
 #[cfg(test)]
@@ -6170,10 +6454,20 @@ mod tests {
         CLOUD_RUN_SERVICE_NAME_MAX_LEN, GCP_RESOURCE_NAME_MAX_LEN,
     };
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::verifier_test_support::{
+        http_verifier_stub, run_write_over, signed_release, CHANNEL,
+    };
     use crate::core::MockPlatformServiceProvider;
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
     use crate::GcpWorkerState;
+    use alien_core::{
+        ClientConfig, GcpClientConfig, GcpCredentials, GcpImpersonationConfig, GcpServiceOverrides,
+        ResourceLifecycle, Stack, StackSettings, StackSigning, WorkerCode,
+    };
+    use alien_gcp_clients::iam::GenerateIdTokenResponse;
+    use alien_gcp_clients::GcpClientConfigExt as _;
+    use alien_verifier::plan::OwnResource;
 
     #[test]
     fn cloudrun_service_name_preserves_valid_short_names() {
@@ -8635,6 +8929,7 @@ mod tests {
             state: GcpWorkerState::CreateFailed,
             service_name: None, // This is the key - no service name set
             url: None,
+            cloud_run_url: None,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
@@ -8660,6 +8955,7 @@ mod tests {
             scheduler_job_names: Vec::new(),
             project_id: None,
             region: None,
+            applied_config: None,
             _internal_stay_count: None,
         };
 
@@ -8688,6 +8984,29 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    /// A worker behind a custom domain reaches itself at the address Cloud Run gave the
+    /// service, which a protected install's verifier can check against Cloud Run; the custom
+    /// domain is only what the worker displays.
+    #[test]
+    fn the_own_binding_reaches_the_service_not_the_custom_domain() {
+        let mut worker = GcpWorkerController::mock_ready("basic-func");
+        worker.url = Some("https://api.acme.example".to_string());
+        worker.cloud_run_url = Some("https://basic-func-abcd1234-uc.a.run.app".to_string());
+        let binding = worker.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["privateUrl"],
+            "https://basic-func-abcd1234-uc.a.run.app"
+        );
+        assert_eq!(binding["publicUrl"], "https://api.acme.example");
+
+        worker.cloud_run_url = None;
+        let binding = worker.get_binding_params().unwrap().unwrap();
+        assert_eq!(
+            binding["privateUrl"], "https://api.acme.example",
+            "a worker recorded before the address was kept falls back to its url"
+        );
     }
 
     mod linked_binding_refresh {
@@ -9000,6 +9319,40 @@ mod tests {
             );
         }
 
+        /// A worker imported, or deployed before its Cloud Run address was kept, has none
+        /// recorded. Its own binding names that address as the private URL, which a protected
+        /// install's verifier checks against what Cloud Run reports, so the heartbeat records it.
+        #[tokio::test]
+        async fn a_heartbeat_records_the_address_cloud_run_reports() {
+            let mut cloudrun = MockCloudRunApi::new();
+            let mut service = rendered_service(true).await;
+            service.uri = Some("https://basic-func-abcd1234-uc.a.run.app".to_string());
+            serving(service, &mut cloudrun);
+            let mut worker = GcpWorkerController::mock_ready("basic-func");
+            worker.url = Some("https://api.acme.example".to_string());
+            worker.cloud_run_url = None;
+            let mut executor = executor(
+                cloudrun,
+                worker,
+                sandbox_on(true, GcpAgentPlatformTemplateState::Ready),
+                None,
+            )
+            .await;
+            executor.step().await.expect("the heartbeat runs");
+
+            let worker = executor.internal_state::<GcpWorkerController>().unwrap();
+            assert_eq!(
+                worker.cloud_run_url.as_deref(),
+                Some("https://basic-func-abcd1234-uc.a.run.app")
+            );
+            let binding = worker.get_binding_params().unwrap().unwrap();
+            assert_eq!(
+                binding["privateUrl"],
+                "https://basic-func-abcd1234-uc.a.run.app"
+            );
+            assert_eq!(binding["publicUrl"], "https://api.acme.example");
+        }
+
         /// The executor planned this worker only because a linked resource was planned, so its
         /// own configuration is unchanged. The update must still apply the binding that moved.
         #[tokio::test]
@@ -9035,6 +9388,59 @@ mod tests {
             );
         }
 
+        /// A worker recorded without its Cloud Run address, behind a custom domain, is updated
+        /// before any heartbeat records the address. The update must still name the address
+        /// Cloud Run reports as the own binding's private URL, not the custom domain, since a
+        /// protected install's verifier accepts only the former.
+        #[tokio::test]
+        async fn an_update_names_the_address_cloud_run_reports_without_a_heartbeat() {
+            const ADDRESS: &str = "https://basic-func-abcd1234-uc.a.run.app";
+            let own = format!(
+                "ALIEN_{}_BINDING",
+                basic_function().id.replace('-', "_").to_uppercase()
+            );
+            let mut cloudrun = MockCloudRunApi::new();
+            let mut service = rendered_service(true).await;
+            service.uri = Some(ADDRESS.to_string());
+            serving(service, &mut cloudrun);
+            cloudrun
+                .expect_patch_service()
+                .times(1)
+                .withf(move |_, _, service, _, _, _| {
+                    let env = super::super::live_service_env(service).expect("a container");
+                    let binding: serde_json::Value =
+                        serde_json::from_str(&env[&own]).expect("the own binding is JSON");
+                    binding["privateUrl"] == ADDRESS
+                        && binding["publicUrl"] == "https://api.acme.example"
+                })
+                .returning(|_, name, _, _, _, _| Ok(create_successful_operation_response(&name)));
+            cloudrun
+                .expect_get_operation()
+                .returning(|_, name| Ok(create_completed_operation_response(&name)));
+            let mut worker = GcpWorkerController {
+                state: GcpWorkerState::UpdateStart,
+                ..GcpWorkerController::mock_ready("basic-func")
+            };
+            worker.url = Some("https://api.acme.example".to_string());
+            worker.cloud_run_url = None;
+            let mut executor = executor(
+                cloudrun,
+                worker,
+                sandbox_on(false, GcpAgentPlatformTemplateState::Ready),
+                Some(prepared_worker().await),
+            )
+            .await;
+            executor.step().await.expect("the update runs");
+            assert_eq!(
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .cloud_run_url
+                    .as_deref(),
+                Some(ADDRESS)
+            );
+        }
+
         /// A dependency-only update whose bindings did not move still makes no write.
         #[tokio::test]
         async fn a_dependency_only_update_with_current_bindings_writes_nothing() {
@@ -9060,5 +9466,957 @@ mod tests {
                 GcpWorkerState::UpdateEnsuringPublicExposure
             );
         }
+    }
+
+    /// A worker that has just been created, with a custom domain the manager chose for it: the
+    /// unprotected install shows the domain, a protected install shows the address Cloud Run
+    /// reports, which its verifier reads back.
+    #[tokio::test]
+    async fn a_protected_worker_shows_the_cloud_run_address_not_the_managers_domain() {
+        let custom = "https://api.example.test";
+        let worker = function_public_ingress();
+        let cloud_run = format!("https://{}-abcd1234-uc.a.run.app", worker.id);
+        let mut shown = Vec::new();
+        for protected in [false, true] {
+            let mut cloudrun = MockCloudRunApi::new();
+            cloudrun
+                .expect_get_service()
+                .returning(|_, name| Ok(create_successful_service_response(&name)));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(GcpWorkerController {
+                    state: GcpWorkerState::WaitingForServiceCreation,
+                    service_name: Some(worker.id.clone()),
+                    ..Default::default()
+                })
+                .platform(Platform::Gcp)
+                .service_provider(setup_mock_service_provider(Arc::new(cloudrun), None))
+                .public_endpoints(HashMap::from([(
+                    worker.id.clone(),
+                    HashMap::from([("api".to_string(), custom.to_string())]),
+                )]))
+                .stack_settings(if protected {
+                    protected_settings()
+                } else {
+                    StackSettings::default()
+                })
+                .build()
+                .await
+                .unwrap();
+            executor.step().await.expect("the service is ready");
+            shown.push(
+                executor
+                    .internal_state::<GcpWorkerController>()
+                    .unwrap()
+                    .url
+                    .clone(),
+            );
+        }
+        assert_eq!(shown, [Some(custom.to_string()), Some(cloud_run)]);
+    }
+
+    // ─────────────── PROTECTED INSTALL TESTS ───────────────────────
+
+    const PROTECTED_WORKER: &str = "api";
+    const PROTECTED_SERVICE: &str = "test-api";
+    const MANAGEMENT_SA: &str = "test-management@test-project-123.iam.gserviceaccount.com";
+
+    /// The protected service as the controller holds it once it runs in the install's project.
+    fn protected_controller() -> GcpWorkerController {
+        let mut controller = GcpWorkerController::mock_ready(PROTECTED_SERVICE);
+        controller.project_id = Some("test-project-123".to_string());
+        controller
+    }
+
+    /// What Cloud Run reports about the protected service.
+    fn protected_service() -> OwnResource {
+        OwnResource {
+            urls: vec![format!("https://{PROTECTED_SERVICE}-abcd1234-uc.a.run.app")],
+            location: Some("us-central1".to_string()),
+        }
+    }
+
+    fn pinned_image(digest_byte: char) -> String {
+        format!(
+            "us-central1-docker.pkg.dev/test-project-123/app/api@sha256:{}",
+            digest_byte.to_string().repeat(64)
+        )
+    }
+
+    fn pinned_worker(digest_byte: char, memory_mb: u32) -> Worker {
+        Worker::new(PROTECTED_WORKER.to_string())
+            .code(WorkerCode::Image {
+                image: pinned_image(digest_byte),
+            })
+            .permissions("default-profile".to_string())
+            .memory_mb(memory_mb)
+            .build()
+    }
+
+    fn protected_settings() -> StackSettings {
+        StackSettings {
+            signing: Some(StackSigning {
+                fingerprint: crate::core::verifier_test_support::settings("test").fingerprint,
+                channel: CHANNEL.to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Management's GCP credentials, with the verifier at `verifier_url`.
+    fn management_client_config(verifier_url: &str) -> ClientConfig {
+        let mut config = GcpClientConfig::mock();
+        config.credentials = GcpCredentials::ImpersonatedServiceAccount {
+            source: Box::new(GcpClientConfig::mock()),
+            config: GcpImpersonationConfig {
+                service_account_email: MANAGEMENT_SA.to_string(),
+                scopes: Vec::new(),
+                delegates: None,
+                lifetime: None,
+                target_project_id: None,
+                target_region: None,
+            },
+        };
+        config.service_overrides = Some(GcpServiceOverrides {
+            endpoints: HashMap::from([("verifier".to_string(), verifier_url.to_string())]),
+        });
+        ClientConfig::Gcp(Box::new(config))
+    }
+
+    /// Cloud Run on a protected install: reads succeed and nothing may patch the service.
+    fn protected_provider(
+        verifier_url: &str,
+        setup_policy: IamPolicy,
+    ) -> Arc<MockPlatformServiceProvider> {
+        let mut cloudrun = MockCloudRunApi::new();
+        cloudrun
+            .expect_get_service()
+            .returning(|_, _| Ok(create_successful_service_response(PROTECTED_SERVICE)));
+        cloudrun
+            .expect_get_service_iam_policy()
+            .returning(move |_, _| Ok(setup_policy.clone()));
+        // Setup sets the service's IAM policy on a protected install; management may not.
+        cloudrun.expect_set_service_iam_policy().never();
+        cloudrun.expect_patch_service().never();
+        cloudrun.expect_create_service().never();
+        let cloudrun = Arc::new(cloudrun);
+        let mut iam = MockIamApi::new();
+        let audience = verifier_url.to_string();
+        iam.expect_generate_id_token()
+            .withf(move |account, request| account == MANAGEMENT_SA && request.audience == audience)
+            .returning(|_, _| {
+                Ok(GenerateIdTokenResponse {
+                    token: "management-id-token".to_string(),
+                })
+            });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_cloudrun_client()
+            .returning(move |_| Ok(cloudrun.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(|_| Ok(Arc::new(MockPubSubApi::new())));
+        Arc::new(provider)
+    }
+
+    /// The install's GCP identity in these tests.
+    fn gcp_install() -> alien_signing::InstallId {
+        alien_signing::InstallId::Gcp {
+            project: "test-project-123".to_string(),
+            prefix: "test".to_string(),
+        }
+    }
+
+    /// The account setup creates for the worker's permission profile.
+    fn own_account() -> String {
+        format!(
+            "{}@test-project-123.iam.gserviceaccount.com",
+            alien_core::gcp_naming::gcp_service_account_id("test", "default-profile-sa")
+        )
+    }
+
+    fn setup_account() -> alien_core::ServiceAccount {
+        alien_core::ServiceAccount::new("default-profile-sa".to_string()).build()
+    }
+
+    fn setup_account_controller() -> crate::service_account::GcpServiceAccountController {
+        let mut controller =
+            crate::service_account::GcpServiceAccountController::mock_ready("default-profile-sa");
+        controller.service_account_email = Some(own_account());
+        controller
+    }
+
+    /// The install's `secrets` vault as setup creates it: `<prefix>-secrets`.
+    fn setup_vault() -> alien_core::Vault {
+        alien_core::Vault::new("secrets".to_string()).build()
+    }
+
+    fn setup_vault_controller() -> crate::vault::GcpVaultController {
+        crate::vault::GcpVaultController {
+            state: crate::vault::GcpVaultState::Ready,
+            project_id: Some("test-project-123".to_string()),
+            location: Some("us-central1".to_string()),
+            vault_prefix: Some("test-secrets".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Uninstall on a protected install: the service goes through the verifier in one call,
+    /// with no delete of its own (management has no `run.services.delete`), and the controller
+    /// waits until Cloud Run answers that it is gone.
+    #[tokio::test]
+    async fn a_protected_delete_goes_through_the_verifier_alone() {
+        let (url, requests) = http_verifier_stub(
+            axum::http::StatusCode::OK,
+            serde_json::json!({"deleted": PROTECTED_SERVICE, "existed": true}),
+        )
+        .await;
+        let mut cloudrun = MockCloudRunApi::new();
+        let seen = requests.clone();
+        cloudrun.expect_get_service().returning(move |_, _| {
+            if seen.lock().unwrap().is_empty() {
+                Ok(create_successful_service_response(PROTECTED_SERVICE))
+            } else {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "CloudRunService".to_string(),
+                        resource_name: PROTECTED_SERVICE.to_string(),
+                    },
+                ))
+            }
+        });
+        cloudrun.expect_delete_service().never();
+        cloudrun.expect_set_service_iam_policy().never();
+        let cloudrun = Arc::new(cloudrun);
+        let mut iam = MockIamApi::new();
+        iam.expect_generate_id_token().returning(|_, _| {
+            Ok(GenerateIdTokenResponse {
+                token: "management-id-token".to_string(),
+            })
+        });
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_cloudrun_client()
+            .returning(move |_| Ok(cloudrun.clone()));
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(|_| Ok(Arc::new(MockPubSubApi::new())));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 256))
+            .controller(protected_controller())
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .management_config(alien_core::ManagementConfig::Gcp(
+                alien_core::GcpManagementConfig {
+                    service_account_email: MANAGEMENT_SA.to_string(),
+                    federation_trust: None,
+                },
+            ))
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the delete completes through the verifier");
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0.as_deref(), Some("Bearer management-id-token"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[0].1).unwrap(),
+            serde_json::json!({"deleteWorkload": {"workload": PROTECTED_WORKER}})
+        );
+    }
+
+    /// The verifier's answer to an `applyWrite` of release `release` for the protected worker.
+    fn written(release: u64) -> serde_json::Value {
+        serde_json::json!({
+            "release": release,
+            "function": PROTECTED_SERVICE,
+            "operations": ["write"],
+            "answers": [null],
+        })
+    }
+
+    /// The `applyWrite` requests the verifier got, by operation, each accepted by the
+    /// verifier's own tables.
+    async fn checked_writes(requests: &[(Option<String>, Vec<u8>)]) -> Vec<serde_json::Value> {
+        checked_writes_with_inputs(requests, &[]).await
+    }
+
+    /// [`checked_writes`] for an install whose store holds the deployer inputs `inputs`.
+    async fn checked_writes_with_inputs(
+        requests: &[(Option<String>, Vec<u8>)],
+        inputs: &[(&str, &str)],
+    ) -> Vec<serde_json::Value> {
+        let mut writes = Vec::new();
+        for (bearer, payload) in requests {
+            assert_eq!(bearer.as_deref(), Some("Bearer management-id-token"));
+            let (answer, forwarded) =
+                crate::core::verifier_test_support::run_write_over_with_inputs(
+                    gcp_install(),
+                    "test",
+                    None,
+                    protected_service(),
+                    payload,
+                    inputs,
+                )
+                .await;
+            answer.expect("the verifier's tables accept the controller's request");
+            assert_eq!(forwarded.len(), 1);
+            let request: serde_json::Value = serde_json::from_slice(payload).unwrap();
+            let sent = request["applyWrite"]["writes"].as_array().unwrap();
+            assert_eq!(sent.len(), 1, "each of these requests carries one write");
+            writes.push(sent[0].clone());
+        }
+        writes
+    }
+
+    fn operations(writes: &[serde_json::Value]) -> Vec<String> {
+        writes
+            .iter()
+            .map(|write| write.as_object().unwrap().keys().next().unwrap().clone())
+            .collect()
+    }
+
+    /// The IAM policy setup gave the worker's service: its own account may invoke it, which
+    /// Pub/Sub and Cloud Scheduler need for a private worker.
+    fn setup_policy() -> IamPolicy {
+        IamPolicy::builder()
+            .bindings(vec![alien_gcp_clients::iam::Binding::builder()
+                .role("roles/run.invoker".to_string())
+                .members(vec![format!("serviceAccount:{}", own_account())])
+                .build()])
+            .build()
+    }
+
+    /// On a protected install management may not set the service's IAM policy; when the
+    /// worker needs a grant on its service that setup didn't make (here one management's
+    /// permissions name for this worker), the update says setup must run again, and sets no
+    /// policy.
+    #[tokio::test]
+    async fn a_protected_update_needs_setup_for_a_grant_setup_did_not_make() {
+        let (result, requests, _) = protected_update_with(
+            axum::http::StatusCode::OK,
+            written(2),
+            setup_policy(),
+            alien_core::ManagementPermissions::Extend(
+                alien_core::PermissionProfile::new()
+                    .resource(PROTECTED_WORKER, ["worker/heartbeat"]),
+            ),
+        )
+        .await;
+
+        let error = result.expect_err("setup must make the grant");
+        assert_eq!(
+            operations(&checked_writes(&requests).await),
+            ["replaceService"],
+            "the verifier wrote the service first, and no policy"
+        );
+        assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{error:?}");
+        assert!(
+            error
+                .message
+                .contains("doesn't grant roles/run.viewer to serviceAccount:management@"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// A private worker's own account must be able to invoke its service. When the policy
+    /// lacks that grant, the controller hands the verifier the policy with it added, which is
+    /// the one policy change the verifier makes.
+    #[tokio::test]
+    async fn a_private_workers_own_invoker_grant_goes_through_the_verifier() {
+        let (result, requests, _) = protected_update(
+            axum::http::StatusCode::OK,
+            written(2),
+            IamPolicy::builder()
+                .version(1)
+                .etag("BwX1".to_string())
+                .bindings(Vec::new())
+                .build(),
+        )
+        .await;
+
+        result.expect("the verifier admits the worker's own account");
+        let writes = checked_writes(&requests).await;
+        assert_eq!(operations(&writes), ["replaceService", "setServicePolicy"]);
+        assert_eq!(
+            writes[1]["setServicePolicy"],
+            serde_json::json!({
+                "name": PROTECTED_SERVICE,
+                "policy": {
+                    "version": 1,
+                    "etag": "BwX1",
+                    "bindings": [{"role": "roles/run.invoker", "members": [format!("serviceAccount:{}", own_account())]}],
+                },
+            })
+        );
+    }
+
+    async fn protected_update(
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        setup_policy: IamPolicy,
+    ) -> (
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        protected_update_with(
+            status,
+            answer,
+            setup_policy,
+            alien_core::ManagementPermissions::Auto,
+        )
+        .await
+    }
+
+    async fn protected_update_with(
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        setup_policy: IamPolicy,
+        management: alien_core::ManagementPermissions,
+    ) -> (
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        protected_update_injecting(status, answer, setup_policy, management, &[]).await
+    }
+
+    /// [`protected_update_with`], with `injected` env the deployment adds to the worker beside
+    /// what the vendor signed (dashboard variables set before the install was protected).
+    async fn protected_update_injecting(
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        setup_policy: IamPolicy,
+        management: alien_core::ManagementPermissions,
+        injected: &[(&str, &str)],
+    ) -> (
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        protected_update_from(
+            protected_controller(),
+            status,
+            answer,
+            setup_policy,
+            management,
+            injected,
+        )
+        .await
+    }
+
+    async fn protected_update_from(
+        controller: GcpWorkerController,
+        status: axum::http::StatusCode,
+        answer: serde_json::Value,
+        setup_policy: IamPolicy,
+        management: alien_core::ManagementPermissions,
+        injected: &[(&str, &str)],
+    ) -> (
+        Result<(), AlienError<crate::error::ErrorData>>,
+        Vec<(Option<String>, Vec<u8>)>,
+        alien_core::ReleaseStatements,
+    ) {
+        let signed = pinned_worker('2', 512);
+        let release = signed_release(
+            Platform::Gcp,
+            &Stack::new("test".to_string())
+                .add(signed.clone(), ResourceLifecycle::Live)
+                .build(),
+            2,
+        );
+        let mut to = signed;
+        to.environment.extend(
+            injected
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string())),
+        );
+        let (url, requests) = http_verifier_stub(status, answer).await;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(pinned_worker('1', 256))
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(protected_provider(&url, setup_policy))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .management_config(alien_core::ManagementConfig::Gcp(
+                alien_core::GcpManagementConfig {
+                    service_account_email: MANAGEMENT_SA.to_string(),
+                    federation_trust: None,
+                },
+            ))
+            .management_permissions(management)
+            .signed_release(release.clone(), None)
+            .build()
+            .await
+            .unwrap();
+        executor.update(to).unwrap();
+        let result = executor.run_until_terminal().await;
+        if result.is_ok() {
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+        let requests = requests.lock().unwrap().clone();
+        (result, requests, release)
+    }
+
+    /// A worker recorded with a domain the manager chose, from before the install was protected,
+    /// is updated with the address Cloud Run reports for its own binding, which the verifier
+    /// accepts; the stale domain would be refused every time.
+    #[tokio::test]
+    async fn a_protected_update_replaces_a_recorded_custom_domain_with_the_cloud_run_address() {
+        let controller = GcpWorkerController {
+            url: Some("https://api.acme.example".to_string()),
+            cloud_run_url: None,
+            ..protected_controller()
+        };
+        let (result, requests, _) = protected_update_from(
+            controller,
+            axum::http::StatusCode::OK,
+            written(2),
+            setup_policy(),
+            alien_core::ManagementPermissions::Auto,
+            &[],
+        )
+        .await;
+        result.expect("the update completes through the verifier");
+        assert_eq!(
+            operations(&checked_writes(&requests).await)[0],
+            "replaceService"
+        );
+    }
+
+    /// Env the deployment holds beside the signed release (set in the dashboard before the
+    /// install was protected) never reaches a protected worker: the controller builds its env
+    /// from what the release signs, and the verifier's tables accept the request.
+    #[tokio::test]
+    async fn a_protected_service_gets_no_env_the_release_doesnt_sign() {
+        let (result, requests, _) = protected_update_injecting(
+            axum::http::StatusCode::OK,
+            written(2),
+            setup_policy(),
+            alien_core::ManagementPermissions::Auto,
+            &[("V8_PROBE", "1")],
+        )
+        .await;
+
+        result.expect("the update completes through the verifier");
+        let writes = checked_writes(&requests).await;
+        assert_eq!(operations(&writes), ["replaceService"]);
+        let env: Vec<&str> = writes[0]["replaceService"]["service"]["template"]["containers"][0]
+            ["env"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        assert!(!env.contains(&"V8_PROBE"), "{env:?}");
+        assert!(
+            env.contains(&"ALIEN_TRANSPORT"),
+            "the runtime's own env is still there: {env:?}"
+        );
+    }
+
+    /// Setup grants management's permissions for every worker (`*`) at the project, so the
+    /// service the verifier created needs no copy of them on its own policy.
+    #[tokio::test]
+    async fn a_protected_update_needs_no_service_grant_setup_makes_for_every_worker() {
+        let (result, requests, _) = protected_update_with(
+            axum::http::StatusCode::OK,
+            written(2),
+            setup_policy(),
+            alien_core::ManagementPermissions::Extend(
+                alien_core::PermissionProfile::new().resource("*", ["worker/heartbeat"]),
+            ),
+        )
+        .await;
+
+        result.expect("management's project grants cover the service");
+        assert_eq!(
+            operations(&checked_writes(&requests).await),
+            ["replaceService"],
+            "one verifier call for the update, and no policy"
+        );
+    }
+
+    /// A signed config isn't part of the worker's own configuration, so a new one updates a
+    /// protected worker by itself: the update goes to the verifier carrying it, and once it is
+    /// applied the worker asks for no further update.
+    #[tokio::test]
+    async fn a_new_signed_config_updates_a_protected_worker_through_the_verifier() {
+        let worker = pinned_worker('2', 512);
+        let release = crate::core::verifier_test_support::signed_release_configuring(
+            Platform::Gcp,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            2,
+            &["PROBE"],
+        );
+        let config =
+            crate::core::verifier_test_support::signed_config(&gcp_install(), &[("PROBE", "1")], 1);
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(2)).await;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(protected_controller())
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(protected_provider(&url, setup_policy()))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .management_config(alien_core::ManagementConfig::Gcp(
+                alien_core::GcpManagementConfig {
+                    service_account_email: MANAGEMENT_SA.to_string(),
+                    federation_trust: None,
+                },
+            ))
+            .signed_release(release, Some(config.clone()))
+            .build()
+            .await
+            .unwrap();
+
+        assert!(
+            executor.needs_update().unwrap(),
+            "the worker never had this config"
+        );
+        executor.update(worker).unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the update completes through the verifier");
+
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1, "one verifier call");
+        let request: serde_json::Value = serde_json::from_slice(&requests[0].1).unwrap();
+        assert_eq!(
+            request["applyWrite"]["config"],
+            serde_json::to_value(&config).unwrap()
+        );
+        assert_eq!(
+            operations(&checked_writes(&requests).await),
+            ["replaceService"]
+        );
+        assert!(
+            !executor.needs_update().unwrap(),
+            "the config is applied, nothing else is due"
+        );
+    }
+
+    /// A developer input signed by `set-inputs` reaches the protected worker as the env the
+    /// signed stack maps it to: the controller renders it and the verifier, which rebuilds the
+    /// env from the release and the config, accepts it.
+    #[tokio::test]
+    async fn a_signed_developer_input_reaches_a_protected_worker_as_its_mapped_env() {
+        let worker = pinned_worker('2', 512);
+        let mut stack = Stack::new("test".to_string())
+            .add(worker.clone(), ResourceLifecycle::Live)
+            .build();
+        stack.inputs = serde_json::from_value(serde_json::json!([
+            {"id": "logLevel", "kind": "string", "providedBy": ["developer"], "required": false,
+             "label": "Log level", "description": "How much the worker logs",
+             "env": [{"name": "LOG_LEVEL", "targetResources": [PROTECTED_WORKER]}]},
+        ]))
+        .unwrap();
+        let release = signed_release(Platform::Gcp, &stack, 2);
+        let config = crate::core::verifier_test_support::signed_config_inputs(
+            &gcp_install(),
+            &[("logLevel", serde_json::json!("debug"))],
+            1,
+        );
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(2)).await;
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(protected_controller())
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(protected_provider(&url, setup_policy()))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .management_config(alien_core::ManagementConfig::Gcp(
+                alien_core::GcpManagementConfig {
+                    service_account_email: MANAGEMENT_SA.to_string(),
+                    federation_trust: None,
+                },
+            ))
+            .signed_release(release, Some(config))
+            .build()
+            .await
+            .unwrap();
+
+        executor.update(worker).unwrap();
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the update completes through the verifier");
+
+        let requests = requests.lock().unwrap().clone();
+        let writes = checked_writes(&requests).await;
+        assert_eq!(operations(&writes), ["replaceService"]);
+        assert!(
+            writes[0]["replaceService"]["service"]["template"]["containers"][0]["env"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!({"name": "LOG_LEVEL", "value": "debug"})),
+            "{}",
+            writes[0]["replaceService"]["service"]["template"]["containers"][0]["env"]
+        );
+    }
+
+    /// A developer input that applies only while a deployer input is on follows the value the
+    /// customer gave that input: the controller leaves the env out when the customer turned the
+    /// feature off, and the verifier, which reads the same value from the install's store,
+    /// agrees.
+    #[tokio::test]
+    async fn a_signed_developer_input_gated_on_a_deployer_input_follows_the_customers_choice() {
+        for (audit, expected) in [("false", false), ("true", true)] {
+            let worker = pinned_worker('2', 512);
+            let mut stack = Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build();
+            stack.inputs = serde_json::from_value(serde_json::json!([
+                {"id": "audit", "kind": "boolean", "providedBy": ["deployer"], "required": false,
+                 "label": "Audit", "description": "Send audit events",
+                 "default": {"type": "boolean", "value": true}},
+                {"id": "auditSink", "kind": "string", "providedBy": ["developer"],
+                 "required": false, "label": "Sink", "description": "Where audit events go",
+                 "when": {"input": "audit", "equals": true},
+                 "env": [{"name": "AUDIT_SINK", "targetResources": [PROTECTED_WORKER]}]},
+            ]))
+            .unwrap();
+            let release = signed_release(Platform::Gcp, &stack, 2);
+            let config = crate::core::verifier_test_support::signed_config_inputs(
+                &gcp_install(),
+                &[("auditSink", serde_json::json!("https://audit.example"))],
+                1,
+            );
+            let (url, requests) = crate::core::verifier_test_support::http_verifier_stub_with_inputs(
+                axum::http::StatusCode::OK,
+                written(2),
+                &[("audit", audit)],
+            )
+            .await;
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(worker.clone())
+                .controller(protected_controller())
+                .platform(Platform::Gcp)
+                .client_config(management_client_config(&url))
+                .service_provider(protected_provider(&url, setup_policy()))
+                .with_test_dependencies()
+                .with_dependency(setup_account(), setup_account_controller())
+                .with_dependency(setup_vault(), setup_vault_controller())
+                .stack_settings(protected_settings())
+                .management_config(alien_core::ManagementConfig::Gcp(
+                    alien_core::GcpManagementConfig {
+                        service_account_email: MANAGEMENT_SA.to_string(),
+                        federation_trust: None,
+                    },
+                ))
+                // The deployment's own copy disagrees with the store: the store wins.
+                .input_values(std::collections::HashMap::from([(
+                    "audit".to_string(),
+                    serde_json::Value::String(
+                        if audit == "true" { "false" } else { "true" }.to_string(),
+                    ),
+                )]))
+                .signed_release(release, Some(config))
+                .build()
+                .await
+                .unwrap();
+
+            executor.update(worker).unwrap();
+            executor
+                .run_until_terminal()
+                .await
+                .expect("the update completes through the verifier");
+
+            let requests = requests.lock().unwrap().clone();
+            let writes = checked_writes_with_inputs(&requests, &[("audit", audit)]).await;
+            let env = writes[0]["replaceService"]["service"]["template"]["containers"][0]["env"]
+                .as_array()
+                .unwrap();
+            assert_eq!(
+                env.contains(
+                    &serde_json::json!({"name": "AUDIT_SINK", "value": "https://audit.example"})
+                ),
+                expected,
+                "audit={audit}: {env:?}"
+            );
+        }
+    }
+
+    /// On a protected install management may not write the Cloud Run service, so an update
+    /// goes to the install's verifier with the signed release, as management, and the verifier
+    /// accepts what it is sent.
+    #[tokio::test]
+    async fn a_protected_update_goes_through_the_verifier_and_never_patches_the_service() {
+        let (result, requests, release) =
+            protected_update(axum::http::StatusCode::OK, written(2), setup_policy()).await;
+
+        result.expect("the update completes through the verifier");
+        let request: serde_json::Value = serde_json::from_slice(&requests[0].1).unwrap();
+        assert_eq!(
+            request["applyWrite"]["release"],
+            serde_json::json!(release.release)
+        );
+        assert_eq!(
+            request["applyWrite"]["workload"],
+            serde_json::json!(PROTECTED_WORKER)
+        );
+        let writes = checked_writes(&requests).await;
+        assert_eq!(operations(&writes), ["replaceService"]);
+        let replace = &writes[0]["replaceService"];
+        assert_eq!(replace["name"], serde_json::json!(PROTECTED_SERVICE));
+        let container = &replace["service"]["template"]["containers"][0];
+        assert_eq!(container["image"], serde_json::json!(pinned_image('2')));
+        assert_eq!(
+            container["resources"]["limits"]["memory"],
+            serde_json::json!("512Mi")
+        );
+        assert!(
+            container["env"].as_array().unwrap().contains(
+                &serde_json::json!({"name": "ALIEN_WORKER_TIMEOUT_SECONDS", "value": "180"})
+            ),
+            "{}",
+            container["env"]
+        );
+    }
+
+    /// On a protected install no setup creates the service and management may not: the
+    /// worker's first deployment hands the verifier the very request an unprotected install
+    /// sends Cloud Run.
+    #[tokio::test]
+    async fn a_protected_create_hands_the_verifier_the_unprotected_request() {
+        let worker = pinned_worker('2', 512);
+        let release = signed_release(
+            Platform::Gcp,
+            &Stack::new("test".to_string())
+                .add(worker.clone(), ResourceLifecycle::Live)
+                .build(),
+            1,
+        );
+
+        // Unprotected: the request goes to Cloud Run.
+        let sent = Arc::new(Mutex::new(None));
+        let mut cloudrun = MockCloudRunApi::new();
+        let recorded = sent.clone();
+        cloudrun
+            .expect_create_service()
+            .times(1)
+            .returning(move |_, service_id, service, _| {
+                *recorded.lock().unwrap() =
+                    Some((service_id, serde_json::to_value(&service).unwrap()));
+                Ok(create_successful_operation_response("create"))
+            });
+        cloudrun
+            .expect_get_operation()
+            .returning(|_, _| Ok(create_completed_operation_response("create")));
+        cloudrun
+            .expect_get_service()
+            .returning(|_, _| Ok(create_successful_service_response(PROTECTED_SERVICE)));
+        cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(setup_policy()));
+        cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, policy| Ok(policy));
+        let mut unprotected = SingleControllerExecutor::builder()
+            .resource(worker.clone())
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(setup_mock_service_provider(Arc::new(cloudrun), None))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .build()
+            .await
+            .unwrap();
+        unprotected.run_until_terminal().await.unwrap();
+        let (service_id, unprotected_service) = sent
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("Cloud Run got the create");
+
+        // Protected: the same request goes to the verifier, which alone may send it.
+        let (url, requests) = http_verifier_stub(axum::http::StatusCode::OK, written(1)).await;
+        let mut protected = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .client_config(management_client_config(&url))
+            .service_provider(protected_provider(&url, setup_policy()))
+            .with_test_dependencies()
+            .with_dependency(setup_account(), setup_account_controller())
+            .with_dependency(setup_vault(), setup_vault_controller())
+            .stack_settings(protected_settings())
+            .signed_release(release, None)
+            .build()
+            .await
+            .unwrap();
+        protected.run_until_terminal().await.unwrap();
+
+        assert_eq!(protected.status(), ResourceStatus::Running);
+        let requests = requests.lock().unwrap().clone();
+        let writes = checked_writes(&requests).await;
+        assert_eq!(
+            writes,
+            [serde_json::json!({"createService": {
+                "serviceId": service_id,
+                "service": unprotected_service,
+            }})],
+            "the verifier gets the unprotected request, and nothing else"
+        );
+        assert_eq!(
+            writes[0]["createService"]["service"]["ingress"],
+            serde_json::json!("INGRESS_TRAFFIC_INTERNAL_ONLY"),
+            "a private worker's service takes no internet requests"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_protected_update_fails_with_the_verifiers_reason() {
+        let (result, requests, _) = protected_update(
+            axum::http::StatusCode::FORBIDDEN,
+            serde_json::json!({"errorType": "VERIFIER_REFUSED", "errorMessage": "Refused: the release was refused: SIGNING_WRONG_CHANNEL: The release is for channel 'dev', but this install follows 'production'"}),
+            setup_policy(),
+        ).await;
+
+        let error = result.expect_err("the verifier refused");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(error.code, "RELEASE_REFUSED_BY_VERIFIER", "{error:?}");
+        assert!(!error.retryable);
+        assert!(
+            error.message.contains("this install follows 'production'"),
+            "{}",
+            error.message
+        );
     }
 }

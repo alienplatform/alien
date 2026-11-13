@@ -151,9 +151,9 @@ pub struct AgentSyncRequest {
     pub session: String,
     #[serde(default)]
     pub supports_execution_claims: bool,
-    /// Absent for Operators that predate container tunnels.
+    /// Absent for Operators that predate the pod security profile settings.
     #[serde(default)]
-    pub supports_tunnels: bool,
+    pub supports_pod_security: bool,
     #[serde(default)]
     pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Current deployment state as reported by the agent.
@@ -246,15 +246,15 @@ pub struct AgentSyncResponse {
     /// Complete release-independent target set. Older embedders omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_dynamic_containers: Option<Vec<alien_core::sync::TargetDynamicContainer>>,
-    /// Base URL operators open tunnel connections to. Absent when this manager
-    /// does not accept tunnels; operators then never dial.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tunnel_url: Option<String>,
     /// Operator image this manager's charts install. Operators that manage
     /// their own workload update to it. Absent when the manager serves no
     /// charts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_operator_image: Option<String>,
+    /// The deployment's newest signed config, on every sync, so a protected
+    /// Operator applies new developer values without a new release.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<alien_core::SignedStatement>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -857,6 +857,7 @@ async fn reconcile(
         .state(&mut final_state)
         .proxy_url(&state.config.base_url())
         .supported_aws_regions(&state.config.supported_aws_regions)
+        .protected(is_protected(&deployment))
         .call()
         .await
         .err();
@@ -1178,14 +1179,13 @@ pub(in crate::routes) mod tests {
                 &crate::auth::Subject::system(),
                 &request,
                 error,
-                Some("https://manager.example.test".into()),
             )
             .await
             .expect("acknowledge completed receipt")
             .expect("successful recovery");
             assert_eq!(
                 serde_json::to_value(response).expect("serialize acknowledgment"),
-                json!({"tunnelUrl": "https://manager.example.test"})
+                json!({})
             );
         }
     }
@@ -1207,7 +1207,6 @@ pub(in crate::routes) mod tests {
             &crate::auth::Subject::system(),
             &request,
             "SYNC_FAILED",
-            None,
         )
         .await
         .expect("unrelated error")
@@ -1217,7 +1216,6 @@ pub(in crate::routes) mod tests {
             &crate::auth::Subject::system(),
             &request,
             "DEPLOYMENT_UPDATE_CLAIM_LOST",
-            None,
         )
         .await
         .expect("live claim is not recovered")
@@ -1383,6 +1381,8 @@ pub(in crate::routes) mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -1549,9 +1549,9 @@ pub(in crate::routes) mod tests {
                 RegistryRoutingTable::new(vec![]).expect("empty routing table"),
             ),
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-            tunnels: None,
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
@@ -1657,6 +1657,8 @@ pub(in crate::routes) mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -2296,6 +2298,8 @@ pub(in crate::routes) mod tests {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        setup_templates: Default::default(),
+                        signed_stacks: Default::default(),
                     },
                 )
                 .await
@@ -2328,6 +2332,8 @@ pub(in crate::routes) mod tests {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        setup_templates: Default::default(),
+                        signed_stacks: Default::default(),
                     },
                 )
                 .await
@@ -3018,6 +3024,8 @@ pub(in crate::routes) mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    setup_templates: Default::default(),
+                    signed_stacks: Default::default(),
                 },
             )
             .await
@@ -3706,60 +3714,6 @@ pub(in crate::routes) mod tests {
         assert!(req.capabilities.is_empty());
         assert!(req.operator_version.is_none());
         assert!(!req.supports_execution_claims);
-        assert!(
-            !req.supports_tunnels,
-            "Operators that predate tunnels don't send the flag"
-        );
-    }
-
-    #[test]
-    fn tunnels_are_removed_for_operators_that_predate_them() {
-        let container = |id: &str, tunnel: Option<u16>| {
-            alien_core::Container::new(id.to_string())
-                .code(alien_core::ContainerCode::Image {
-                    image: "api:latest".to_string(),
-                })
-                .cpu(alien_core::ResourceSpec {
-                    min: "0.5".to_string(),
-                    desired: "1".to_string(),
-                })
-                .memory(alien_core::ResourceSpec {
-                    min: "512Mi".to_string(),
-                    desired: "1Gi".to_string(),
-                })
-                .port(8080)
-                .maybe_tunnel(tunnel.map(|port| alien_core::ContainerTunnel { port }))
-                .permissions("execution".to_string())
-                .build()
-        };
-        let mut stack = alien_core::Stack::new("app".to_string())
-            .add(
-                container("api", Some(8080)),
-                alien_core::ResourceLifecycle::Live,
-            )
-            .add(
-                container("worker", None),
-                alien_core::ResourceLifecycle::Live,
-            )
-            .build();
-
-        assert!(crate::routes::sync::remove_container_tunnels(&mut stack));
-        let json = serde_json::to_value(&stack).unwrap();
-        assert!(
-            !json.to_string().contains("\"tunnel\""),
-            "no container may carry a tunnel: {json}"
-        );
-        // The rest of the container is delivered unchanged.
-        let api = stack
-            .resources()
-            .find(|(id, _)| id.as_str() == "api")
-            .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Container>())
-            .expect("api container");
-        assert_eq!(api.ports.len(), 1);
-        assert!(
-            !crate::routes::sync::remove_container_tunnels(&mut stack),
-            "nothing left to remove"
-        );
     }
 
     #[test]
@@ -4230,6 +4184,8 @@ pub(in crate::routes) mod tests {
             version: None,
             description: None,
             stack: Stack::new("test".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         });
         assert!(!agent_report_completes_claim(&deployment, &state));
 
@@ -4371,8 +4327,125 @@ pub(in crate::routes) mod tests {
         }
     }
 
+    #[test]
+    fn security_settings_old_operators_cannot_read_are_removed() {
+        use alien_core::{ContainerSecurity, ContainerSecurityProfile};
+        let container = |id: &str, security: Option<ContainerSecurity>| {
+            let mut container = alien_core::Container::new(id.to_string())
+                .code(alien_core::ContainerCode::Image {
+                    image: "api:latest".to_string(),
+                })
+                .cpu(alien_core::ResourceSpec {
+                    min: "0.5".to_string(),
+                    desired: "1".to_string(),
+                })
+                .memory(alien_core::ResourceSpec {
+                    min: "512Mi".to_string(),
+                    desired: "1Gi".to_string(),
+                })
+                .port(8080)
+                .permissions("execution".to_string())
+                .build();
+            container.security = security;
+            container
+        };
+        let old_form = ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            run_as_group: Some(1000),
+            read_only_root_filesystem: Some(true),
+            writable_paths: vec![],
+        };
+        let mut stack = alien_core::Stack::new("app".to_string())
+            .add(
+                container(
+                    "optout",
+                    Some(ContainerSecurity {
+                        profile: ContainerSecurityProfile::Unrestricted,
+                        run_as_user: None,
+                        run_as_group: None,
+                        read_only_root_filesystem: None,
+                        writable_paths: vec![],
+                    }),
+                ),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container(
+                    "partial",
+                    Some(ContainerSecurity {
+                        run_as_user: None,
+                        ..old_form.clone()
+                    }),
+                ),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .add(
+                container("complete", Some(old_form.clone())),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert!(super::downgrade_container_security(&mut stack));
+        let security = |id: &str| {
+            stack
+                .resources()
+                .find(|(rid, _)| rid.as_str() == id)
+                .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Container>())
+                .expect("container")
+                .security
+                .clone()
+        };
+        assert_eq!(security("optout"), None);
+        assert_eq!(security("partial"), None);
+        assert_eq!(security("complete"), Some(old_form));
+        assert!(!super::downgrade_container_security(&mut stack));
+    }
+
+    #[test]
+    fn older_operators_get_daemons_and_workers_without_security() {
+        use alien_core::{ContainerSecurity, Daemon, DaemonCode, Worker, WorkerCode};
+        let security = ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: vec![],
+        };
+        let mut daemon = Daemon::new("d".to_string())
+            .permissions("p".to_string())
+            .code(DaemonCode::Image {
+                image: "img".to_string(),
+            })
+            .build();
+        daemon.security = Some(security.clone());
+        let mut worker = Worker::new("w".to_string())
+            .permissions("p".to_string())
+            .code(WorkerCode::Image {
+                image: "img".to_string(),
+            })
+            .build();
+        worker.security = Some(security);
+        let mut stack = alien_core::Stack::new("app".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        assert!(super::downgrade_container_security(&mut stack));
+        for (_, entry) in stack.resources() {
+            if let Some(d) = entry.config.downcast_ref::<Daemon>() {
+                assert!(d.security.is_none());
+            }
+            if let Some(w) = entry.config.downcast_ref::<Worker>() {
+                assert!(w.security.is_none());
+            }
+        }
+        assert!(!super::downgrade_container_security(&mut stack));
+    }
+
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
             stored_secret_input_ids: None,
@@ -4403,6 +4476,8 @@ pub(in crate::routes) mod tests {
             volume_restores: Vec::new(),
             value_slots: Vec::new(),
             deletion_policy: Default::default(),
+            release_statements: None,
+            signed_config: None,
         }
     }
 
@@ -4775,6 +4850,8 @@ pub(in crate::routes) mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("s".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
 
         let mut waiting = uninitialized_state();
@@ -4959,7 +5036,6 @@ async fn acknowledge_completed_claim(
     subject: &crate::auth::Subject,
     request: &AgentSyncRequest,
     error_code: &str,
-    tunnel_url: Option<String>,
 ) -> Result<Option<AgentSyncResponse>, alien_error::AlienError> {
     if !matches!(
         error_code,
@@ -4983,9 +5059,17 @@ async fn acknowledge_completed_claim(
         commands_url: None,
         target_operations_bundle_set: None,
         target_dynamic_containers: None,
-        tunnel_url,
         target_operator_image: None,
+        signed_config: None,
     }))
+}
+
+/// Whether the deployment's setup pinned a signing fingerprint.
+pub(super) fn is_protected(deployment: &DeploymentRecord) -> bool {
+    deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.signing.is_some())
 }
 
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
@@ -5003,7 +5087,6 @@ async fn acknowledge_completed_claim(
         ("bearer" = [])
     )
 ))]
-
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5147,7 +5230,6 @@ async fn agent_sync(
                 &subject,
                 &req,
                 &error.code,
-                state.tunnels.as_ref().map(|_| state.config.base_url()),
             )
             .await
             {
@@ -5209,6 +5291,7 @@ async fn agent_sync(
                             .state(&mut agent_state)
                             .proxy_url(&state.config.base_url())
                             .supported_aws_regions(&state.config.supported_aws_regions)
+                            .protected(is_protected(&deployment))
                             .call()
                             .await
                     {
@@ -5270,7 +5353,6 @@ async fn agent_sync(
                                     &subject,
                                     &req,
                                     &e.code,
-                                    state.tunnels.as_ref().map(|_| state.config.base_url()),
                                 )
                                 .await
                                 {
@@ -5473,7 +5555,7 @@ async fn agent_sync(
                     r,
                     management_config,
                     agent_token,
-                    req.supports_tunnels,
+                    req.supports_pod_security,
                 )
                 .await
                 {
@@ -5616,7 +5698,24 @@ async fn agent_sync(
         None
     };
 
-    if let Some(targets) = &mut target_dynamic_containers {
+    // A protected deployment's newest signed config travels with every
+    // sync. Unprotected deployments don't touch the signing store at all.
+    let signed_config = match &state.signing {
+        Some(signing) if is_protected(&deployment) => {
+            match signing.latest_config_statement(&deployment.id).await {
+                Ok(config) => config,
+                Err(error) => return error.into_response(),
+            }
+        }
+        _ => None,
+    };
+    // A protected install runs no dynamic containers, so their environment is
+    // not loaded for it; the field naming the values never reaches the Operator.
+    if let (Some(targets), true) = (&mut target_dynamic_containers, is_protected(&deployment)) {
+        for target in targets.iter_mut() {
+            target.value_slots = None;
+        }
+    } else if let Some(targets) = &mut target_dynamic_containers {
         match state.values.as_deref() {
             Some(values) => {
                 if let Err(error) =
@@ -5668,7 +5767,6 @@ async fn agent_sync(
         commands_url: Some(state.config.commands_base_url()),
         target_operations_bundle_set,
         target_dynamic_containers,
-        tunnel_url: state.tunnels.as_ref().map(|_| state.config.base_url()),
         // Charts this manager serves name the image. A manager without charts
         // uses the one its store reported for this deployment.
         target_operator_image: state
@@ -5676,6 +5774,7 @@ async fn agent_sync(
             .as_ref()
             .map(|charts| charts.deployed_operator_image(&state.config.base_url()))
             .or(reconciled_operator_image),
+        signed_config,
     })
     .into_response()
 }
@@ -5750,14 +5849,31 @@ async fn save_pull_render_failure(
 /// The target a pull deployment converges to for `release`: the release's
 /// stack for the deployment's platform and the deployment's configuration.
 /// Sync delivers it to connected Operators; air-gapped bundles carry it.
-/// Remove tunnel declarations from every container in `stack`, for Operators
-/// that would otherwise reject the whole target. Returns whether any were
-/// removed.
-fn remove_container_tunnels(stack: &mut alien_core::Stack) -> bool {
+/// Drop `security` settings an Operator that predates pod security profiles
+/// cannot parse (it would reject the whole target, including its own
+/// self-update). Such Operators already apply no security context unless a
+/// container declares the complete old form, so removing the rest keeps their
+/// behavior as it was. Returns whether anything was removed.
+fn downgrade_container_security(stack: &mut alien_core::Stack) -> bool {
+    use alien_core::ContainerSecurityProfile;
     let mut removed = false;
     for (_, entry) in stack.resources_mut() {
         if let Some(container) = entry.config.downcast_mut::<alien_core::Container>() {
-            removed |= container.tunnel.take().is_some();
+            let readable = container.security.as_ref().is_none_or(|security| {
+                security.profile == ContainerSecurityProfile::Restricted
+                    && security.run_as_user.is_some()
+                    && security.run_as_group.is_some()
+                    && security.read_only_root_filesystem.is_some()
+            });
+            if !readable {
+                container.security = None;
+                removed = true;
+            }
+        } else if let Some(daemon) = entry.config.downcast_mut::<alien_core::Daemon>() {
+            // Older Operators have no `security` field on daemons or workers.
+            removed |= daemon.security.take().is_some();
+        } else if let Some(worker) = entry.config.downcast_mut::<alien_core::Worker>() {
+            removed |= worker.security.take().is_some();
         }
     }
     removed
@@ -5786,7 +5902,7 @@ pub(crate) async fn build_pull_target(
     r: crate::traits::ReleaseRecord,
     management_config: Option<alien_core::ManagementConfig>,
     agent_token: Option<String>,
-    operator_supports_tunnels: bool,
+    operator_supports_pod_security: bool,
 ) -> Result<TargetDeployment, Response> {
     let release_stack_platform = release_stack_platform(deployment.platform);
     let management_platform = management_platform(deployment.platform, deployment.base_platform);
@@ -5798,10 +5914,18 @@ pub(crate) async fn build_pull_target(
 
     let manager_url = state.config.base_url();
 
+    // A protected install takes its variables and inputs from its signed
+    // config and its own inputs, so nothing from the value store is loaded
+    // for it.
+    let protected = is_protected(deployment);
     let stored_record = deployment;
-    let held = crate::values::hydrate_held_values(state.values.as_deref(), deployment)
-        .await
-        .map_err(|e| e.into_response())?;
+    let held = if protected {
+        std::borrow::Cow::Borrowed(deployment)
+    } else {
+        crate::values::hydrate_held_values(state.values.as_deref(), deployment)
+            .await
+            .map_err(|e| e.into_response())?
+    };
     let deployment: &DeploymentRecord = &held;
 
     // Derive native image host for Lambda/Cloud Run so controllers
@@ -5824,29 +5948,35 @@ pub(crate) async fn build_pull_target(
         }
     };
 
-    if !operator_supports_tunnels && remove_container_tunnels(&mut stack) {
+    if !operator_supports_pod_security && downgrade_container_security(&mut stack) {
         tracing::info!(
             deployment_id = %deployment.id,
             release_id = %r.id,
-            "Operator predates container tunnels; delivering the release without them. Upgrade the Operator to enable tunnels."
+            "Operator predates pod security profiles; delivering the release without the settings it cannot read. Upgrade the Operator to apply them."
         );
     }
 
-    let (held, _) =
+    let held = if protected {
+        held
+    } else {
         crate::values::with_generated_inputs(state.values.as_deref(), Some(&stack), held)
             .await
-            .map_err(|e| e.into_response())?;
+            .map_err(|e| e.into_response())?
+            .0
+    };
     let deployment: &DeploymentRecord = &held;
 
-    crate::values::HeldValues::of_step(
-        state.values.as_deref(),
-        &state.config,
-        stored_record,
-        deployment,
-        Some(&stack),
-    )
-    .await
-    .map_err(|e| e.into_response())?;
+    if !protected {
+        crate::values::HeldValues::of_step(
+            state.values.as_deref(),
+            &state.config,
+            stored_record,
+            deployment,
+            Some(&stack),
+        )
+        .await
+        .map_err(|e| e.into_response())?;
+    }
 
     let mut env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment)
     {
@@ -5909,8 +6039,34 @@ pub(crate) async fn build_pull_target(
         config.monitoring = default_monitoring(&state.config, &deployment);
     }
 
+    // A signed release travels with the project's signer list chain, which
+    // the deployment verifies from the fingerprint its setup pinned.
+    let signed = r.signed_stacks.get(&release_stack_platform).cloned();
+    let signer_lists = match (&signed, &state.signing) {
+        (Some(_), Some(signing)) => signing
+            .signer_lists(&r.project_id)
+            .await
+            .map_err(|error| error.into_response())?
+            .into_iter()
+            .map(|record| record.statement)
+            .collect(),
+        _ => Vec::new(),
+    };
+    // The deployment's newest signed config: a protected deployment takes
+    // developer inputs and configurable env only from it. Unprotected
+    // deployments don't touch the signing store.
+    let signed_config = match (&signed, &state.signing) {
+        (Some(_), Some(signing)) if is_protected(deployment) => signing
+            .latest_config_statement(&deployment.id)
+            .await
+            .map_err(|error| error.into_response())?,
+        _ => None,
+    };
     Ok(TargetDeployment {
+        signed_config,
         release_info: ReleaseInfo {
+            signed,
+            signer_lists,
             release_id: Some(r.id),
             version: None,
             description: None,
@@ -6584,7 +6740,37 @@ fn release_info_from_record(
         version: None,
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),
+        signed: release.signed_stacks.get(&release_stack_platform).cloned(),
+        signer_lists: Vec::new(),
     })
+}
+
+/// The signing settings an install reports when it registers. A protected Operator reports
+/// the ones it pinned, so the manager sends it the signed config and signer lists. The manager
+/// only ever learns protection this way, never gives it up, and the install enforces its own
+/// pinned settings whatever is recorded here.
+fn reported_signing(
+    state: &AppState,
+    stack_settings: Option<&alien_core::StackSettings>,
+    helm_release: Option<&HelmRelease>,
+) -> Result<Option<alien_core::StackSigning>, AlienError<ErrorData>> {
+    let Some(signing) = stack_settings.and_then(|settings| settings.signing.as_ref()) else {
+        return Ok(None);
+    };
+    if state.signing.is_none() {
+        return Err(ErrorData::bad_request(
+            "This manager stores no signer lists, so it can't serve a protected install",
+        ));
+    }
+    let Some(release) = helm_release else {
+        return Err(ErrorData::bad_request(
+            "An install that reports signing settings names the Helm release they were found for",
+        ));
+    };
+    signing
+        .settings(&release.name)
+        .map_err(|error| ErrorData::bad_request(error.message))?;
+    Ok(Some(signing.clone()))
 }
 
 /// `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
@@ -6665,6 +6851,14 @@ async fn initialize(
                 Ok(base_platform) => base_platform,
                 Err(e) => return e.into_response(),
             };
+            let reported_signing = match reported_signing(
+                &state,
+                req.stack_settings.as_ref(),
+                req.helm_release.as_ref(),
+            ) {
+                Ok(signing) => signing,
+                Err(e) => return e.into_response(),
+            };
 
             // Idempotency: if a deployment with this name already exists in the
             // group, issue a fresh deployment token and return the existing ID.
@@ -6673,6 +6867,19 @@ async fn initialize(
                 .get_deployment_by_name(&subject, &dg_id, &name)
                 .await
             {
+                // Protection is learned once, when the deployment is created. A later
+                // registration that reports other signing settings, or none, doesn't change it.
+                if existing
+                    .stack_settings
+                    .as_ref()
+                    .and_then(|settings| settings.signing.as_ref())
+                    != reported_signing.as_ref()
+                {
+                    return ErrorData::bad_request(
+                        "Deployment already uses different signing settings",
+                    )
+                    .into_response();
+                }
                 if let Some(requested) = &stack_state {
                     if existing
                         .stack_state

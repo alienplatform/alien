@@ -173,6 +173,15 @@ pub struct Args {
     #[arg(long, env = "CHART_DEFAULT_BINDINGS")]
     pub chart_default_bindings: Option<String>,
 
+    /// Site registry every workload image is pulled from (`host[/path]`).
+    #[arg(long, env = "IMAGE_REGISTRY")]
+    pub image_registry: Option<String>,
+
+    /// Names of the image pull Secrets the chart's `runtime.imagePullSecrets` lists
+    /// (comma separated). Dynamic containers use them to pull from a private mirror.
+    #[arg(long, env = "IMAGE_PULL_SECRETS", value_delimiter = ',')]
+    pub image_pull_secrets: Vec<String>,
+
     #[arg(long, env = "PUBLIC_ENDPOINTS")]
     pub public_endpoints: Option<String>,
 
@@ -195,11 +204,6 @@ pub struct Args {
     /// JSON map of setup-time stack inputs. Keep this file on a Secret volume.
     #[arg(long, env = "STACK_INPUT_VALUES_FILE")]
     pub stack_input_values_file: Option<PathBuf>,
-
-    /// Serve tunnel requests from the manager for the stack's declared tunnel
-    /// endpoints (`--tunnel-enabled=false` turns the tunnel off).
-    #[arg(long, env = "TUNNEL_ENABLED", default_value_t = true, action = clap::ArgAction::Set)]
-    pub tunnel_enabled: bool,
 
     /// Whether `DATA_DIR` survives a Pod replacement. The chart sets it from
     /// `runtime.data.persistence.enabled`. Unset, as an older chart leaves it,
@@ -549,6 +553,13 @@ async fn run_operator_cli(
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
     let operator_setup_method = args.operator_setup_method;
+    let release_signing = release_signing(
+        args.platform,
+        args.namespace.as_deref(),
+        args.operator_helm_release.as_deref(),
+        &db,
+    )
+    .await?;
     let helm_release = args
         .operator_helm_release
         .zip(args.namespace.clone())
@@ -690,6 +701,7 @@ async fn run_operator_cli(
                                 operator_permission.as_deref(),
                                 operator_setup_method.as_deref(),
                                 helm_release.as_ref(),
+                                release_signing.as_ref(),
                                 InitialDesiredReleaseArg::None,
                                 &stack_input_values,
                             )
@@ -743,6 +755,7 @@ async fn run_operator_cli(
                                 operator_permission.as_deref(),
                                 operator_setup_method.as_deref(),
                                 helm_release.as_ref(),
+                                release_signing.as_ref(),
                                 args.initial_desired_release,
                                 &stack_input_values,
                             )
@@ -884,18 +897,27 @@ async fn run_operator_cli(
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
         .maybe_chart_default_bindings(chart_default_bindings)
+        .maybe_image_registry(args.image_registry.clone().filter(|r| !r.trim().is_empty()))
+        .image_pull_secrets(
+            args.image_pull_secrets
+                .iter()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty())
+                .collect(),
+        )
         .maybe_operations(operations)
         .maybe_installed_setup(installed_setup)
         .maybe_setup_release_file(args.setup_release_file.clone())
         .maybe_setup_fingerprint_file(args.setup_fingerprint_file.clone())
         .local_debug_enabled(args.enable_local_debug)
-        .tunnel_enabled(args.tunnel_enabled)
         .maybe_self_update_deployment(args.self_update_deployment)
         .maybe_registry_secret(args.registry_secret)
         .maybe_resource_prefix(args.operator_resource_prefix.clone())
         .maybe_airgap_target_secret(args.airgap_target_secret)
         .maybe_airgap_status_secret(args.airgap_status_secret)
         .maybe_local_debug_shell_command(args.local_debug_shell_command)
+        .maybe_release_signing(release_signing)
+        .stack_input_values(stack_input_values.clone())
         .build();
 
     let cancel = CancellationToken::new();
@@ -1094,6 +1116,64 @@ fn observe_only_initial_state(
             base_platform,
         ),
     }
+}
+
+/// Protected mode is on when the chart wrote signing settings to the kept
+/// ConfigMap `<release>-signing` in the Operator's namespace; the Operator
+/// reads it and the cluster's identity itself. An Operator whose ledger holds
+/// a trust root refuses to start without those settings.
+async fn release_signing(
+    platform: Platform,
+    namespace: Option<&str>,
+    release: Option<&str>,
+    db: &crate::db::OperatorDb,
+) -> Result<Option<crate::protected::ReleaseSigning>> {
+    let stored = db.get_signing_trust().await?;
+    let (Platform::Kubernetes, Some(namespace), Some(release)) = (platform, namespace, release)
+    else {
+        if let Some(stored) = stored.filter(|stored| stored.ledger.is_sticky()) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "this install accepted signed state under fingerprint {}, but the Operator has no Kubernetes namespace and Helm release to find its signing settings",
+                    stored.ledger.fingerprint.unwrap_or_default()
+                ),
+            }));
+        }
+        return Ok(None);
+    };
+    let client = alien_k8s_clients::KubernetesClient::new(
+        <alien_k8s_clients::KubernetesClientConfig as alien_k8s_clients::KubernetesClientConfigExt>::try_incluster()
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "loading in-cluster credentials to read the signing settings".to_string(),
+            })?,
+    )
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "creating the Kubernetes client to read the signing settings".to_string(),
+    })?;
+    let client = std::sync::Arc::new(client);
+    let ledger = std::sync::Arc::new(crate::protected::ConfigMapLedger {
+        client: client.clone(),
+        namespace: namespace.to_string(),
+        name: crate::protected::ledger_config_map(release),
+    });
+    let Some((signing, kept)) = crate::protected::find_signing(
+        &crate::protected::KubernetesReads(client.as_ref()),
+        ledger,
+        namespace,
+        release,
+        stored.as_ref(),
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    // The install's ledger rises to what the database held, and the
+    // database to what the install's ledger held.
+    signing.ledger.store(&kept.ledger).await?;
+    db.set_signing_trust(&kept).await?;
+    Ok(Some(signing))
 }
 
 #[cfg(unix)]
@@ -1308,6 +1388,7 @@ async fn initialize_with_manager(
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
     helm_release: Option<&HelmRelease>,
+    release_signing: Option<&crate::protected::ReleaseSigning>,
     initial_desired_release: InitialDesiredReleaseArg,
     input_values: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(String, Option<String>)> {
@@ -1385,6 +1466,23 @@ async fn initialize_with_manager(
     }
     if let Some(helm_release) = helm_release {
         builder = builder.body_map(|b| b.helm_release(helm_release.clone()));
+    }
+    // A protected install tells the manager what it pinned, so the manager sends it the signed
+    // config. The manager keeps this only on a deployment it creates here, and the install
+    // enforces its own settings whatever the manager believes.
+    if let Some(signing) = release_signing {
+        let stack_settings =
+            serde_json::from_value::<alien_manager_api::types::StackSettings>(serde_json::json!({
+                "signing": {
+                    "fingerprint": signing.settings.fingerprint,
+                    "channel": signing.settings.channel,
+                },
+            }))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to describe the install's signing settings".to_string(),
+            })?;
+        builder = builder.body_map(|b| b.stack_settings(stack_settings));
     }
 
     let response =
@@ -2305,8 +2403,7 @@ mod initialize_tests {
     use axum::{routing::post, Json, Router};
     use std::sync::{Arc, Mutex};
 
-    #[tokio::test]
-    async fn helm_registration_reports_the_release_name_and_namespace() {
+    async fn register(signing: Option<&crate::protected::ReleaseSigning>) -> serde_json::Value {
         let received = Arc::new(Mutex::new(None));
         let app = Router::new().route(
             "/v1/initialize",
@@ -2342,6 +2439,7 @@ mod initialize_tests {
                 name: "shop-operator".to_string(),
                 namespace: "customer-shop".to_string(),
             }),
+            signing,
             InitialDesiredReleaseArg::Active,
             &serde_json::Map::new(),
         )
@@ -2351,10 +2449,34 @@ mod initialize_tests {
         assert_eq!(deployment_id, "dep_a");
         assert_eq!(token.as_deref(), Some("ax_dep_a"));
         let body = received.lock().unwrap().take().expect("initialize request");
+        body
+    }
+
+    #[tokio::test]
+    async fn helm_registration_reports_the_release_name_and_namespace() {
+        let body = register(None).await;
         assert_eq!(body["setupMethod"], "helm");
         assert_eq!(
             body["helmRelease"],
             serde_json::json!({"name": "shop-operator", "namespace": "customer-shop"})
+        );
+        assert!(
+            body.get("stackSettings")
+                .is_none_or(|settings| settings.get("signing").is_none()),
+            "an install without pinned signing reports none: {body:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_protected_registration_reports_the_signing_the_install_pinned() {
+        let signing = crate::protected::test_signing("shop");
+        let body = register(Some(&signing)).await;
+        assert_eq!(
+            body["stackSettings"]["signing"],
+            serde_json::json!({
+                "fingerprint": signing.settings.fingerprint,
+                "channel": "production",
+            })
         );
     }
 }

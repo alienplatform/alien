@@ -9,17 +9,17 @@
 //! `terraform fmt -check` + `terraform validate` against the cloud providers.
 
 use super::helpers::{
-    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, render,
+    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input, render,
     snapshot_module,
 };
 use alien_core::{
-    AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
-    Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
+    ArtifactRegistry, AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection,
+    ComputeSettings, Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec, ServiceAccount,
-    Stack, StackSettings, Storage, Worker, WorkerCode,
+    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
+    ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
     generate_product_terraform_module, TerraformHelmInstall, TerraformOptions,
@@ -594,6 +594,39 @@ fn eks_managed_cluster_with_remote_management_irsa_is_valid() {
     assert_terraform_valid(&module, "eks_managed_cluster_remote_management_irsa");
 }
 
+/// The module decides the cluster source from `kubernetes_cluster_mode`. A caller that sends no
+/// `kubernetes` advanced settings (the portal sends none) must still register the ownership the
+/// setup policy needs.
+#[test]
+fn kubernetes_module_sends_cluster_ownership_from_the_cluster_mode() {
+    for (target, provider) in [
+        (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
+        (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
+        (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
+    ] {
+        let stack = Stack::new("cluster-ownership".to_string())
+            .add(
+                KubernetesCluster::new("kubernetes".to_string())
+                    .provider(provider)
+                    .ownership(KubernetesClusterOwnership::Managed)
+                    .namespace("default".to_string())
+                    .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let module = render(&stack, target, StackSettings::default());
+        let locals = module.get("locals.tf").expect("locals should render");
+        assert!(
+            locals.contains(
+                r#"cluster = merge(try(local.advanced_settings.kubernetes.cluster, {}), { ownership = var.kubernetes_cluster_mode == "create" ? "managed" : "existing" })"#
+            ),
+            "{target:?} must derive kubernetes.cluster.ownership from kubernetes_cluster_mode:\n{locals}"
+        );
+        assert_terraform_valid(&module, &format!("{target:?} cluster ownership"));
+    }
+}
+
 #[test]
 fn eks_created_network_with_irsa_and_remote_management_is_valid() {
     let stack = Stack::new("eks-created-network-identity".to_string())
@@ -796,6 +829,8 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         &stack,
         TerraformTarget::Eks,
         TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),
@@ -966,6 +1001,8 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
         &stack,
         TerraformTarget::Gke,
         TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),
@@ -1088,4 +1125,394 @@ fn aks_brought_network_uses_data_subnet_for_node_pool() {
         .join("\n");
     assert!(rendered.contains("vnet_subnet_id = data.azurerm_subnet.default_network_private.id"));
     assert_terraform_valid(&module, "aks_byo_shared_network");
+}
+
+#[test]
+fn the_charts_infrastructure_output_names_binding_types_and_skips_a_declined_store() {
+    let stack = Stack::new("chart-gated".to_string())
+        .inputs(vec![gate_input(
+            "extraStore",
+            "Extra store",
+            "Create the extra store.",
+        )])
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_enabled_when(
+            Storage::new("extra".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "extraStore",
+        )
+        .add(
+            ArtifactRegistry::new("registry".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // The chart's binding type is snake_case.
+    assert!(
+        compact.contains("type = \"artifact_registry\""),
+        "{outputs}"
+    );
+    assert!(!compact.contains("artifact-registry\""), "{outputs}");
+    // The declined store is left out while its gate is false, and never read without an index.
+    assert!(compact.contains("merge("), "{outputs}");
+    assert!(compact.contains("var.input_extra_store ?"), "{outputs}");
+    assert!(
+        !compact.contains("aws_s3_bucket.extra.bucket"),
+        "a gated bucket needs its count index: {outputs}"
+    );
+    assert_terraform_valid(&module, "eks_chart_gated_bindings");
+}
+
+#[test]
+fn eks_module_outputs_the_charts_infrastructure_values() {
+    let stack = Stack::new("chart-bindings".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("artifacts".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    assert!(
+        compact.contains("output \"chart_infrastructure_json\""),
+        "{outputs}"
+    );
+    // One entry per Storage, each with the chart's resource type and the
+    // bucket this module creates.
+    for id in ["data", "artifacts"] {
+        assert!(
+            compact.contains(&format!("{id} = {{")) || compact.contains(&format!("\"{id}\" = {{")),
+            "{id}: {outputs}"
+        );
+        assert!(
+            compact.contains(&format!("bucketName = aws_s3_bucket.{id}.bucket")),
+            "{id}: {outputs}"
+        );
+    }
+    assert!(compact.contains("type = \"storage\""), "{outputs}");
+    assert!(compact.contains("service = \"s3\""), "{outputs}");
+    // The identity annotations the chart's service accounts need come from the module too.
+    assert!(
+        compact.contains("output \"chart_service_accounts_json\""),
+        "{outputs}"
+    );
+    assert!(
+        compact.contains("serviceAccountPrefix = local.resource_prefix"),
+        "{outputs}"
+    );
+    assert!(compact.contains("local.helm_service_accounts"), "{outputs}");
+    assert!(
+        compact.contains("local.helm_manager_service_account"),
+        "{outputs}"
+    );
+}
+
+fn eks_stack_with_databases() -> Stack {
+    Stack::new("with-databases".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::Postgres::new("db".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::Redis::new("cache".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build()
+}
+
+/// A stack with a Postgres or Redis resource renders on EKS: the module leaves them out and
+/// says the installer supplies their bindings. Before this, rendering failed with
+/// IMPORT_REGISTRATION_MISSING.
+#[test]
+fn eks_module_leaves_out_resources_the_installer_binds() {
+    let module = render(
+        &eks_stack_with_databases(),
+        TerraformTarget::Eks,
+        StackSettings::default(),
+    );
+    let all = whole_module(&module);
+    assert!(
+        !all.contains("aws_rds") && !all.contains("aws_rds_cluster"),
+        "{all}"
+    );
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        compact.contains("output \"installer_supplied_bindings\""),
+        "{outputs}"
+    );
+    assert!(compact.contains("db = \"postgres\""), "{outputs}");
+    assert!(compact.contains("cache = \"redis\""), "{outputs}");
+    let readme = module.get("README.md").expect("README.md");
+    assert!(readme.contains("## Bindings you supply"), "{readme}");
+    assert!(readme.contains("`db` (postgres)") && readme.contains("`cache` (redis)"));
+    // What the module does create is still bound as before.
+    assert!(
+        compact.contains("output \"chart_infrastructure_json\""),
+        "{outputs}"
+    );
+    assert_terraform_valid(&module, "eks_installer_bindings");
+}
+
+/// An emitter an embedder registers for the type always wins over the skip.
+#[test]
+fn a_registered_emitter_still_renders_its_resource() {
+    use alien_terraform::{TfEmitter, TfFragment};
+
+    struct Marker;
+    impl TfEmitter for Marker {
+        fn emit(
+            &self,
+            _ctx: &alien_core::import::EmitContext<'_>,
+        ) -> alien_core::Result<TfFragment> {
+            Ok(TfFragment::default())
+        }
+        fn emit_import_ref(
+            &self,
+            _ctx: &alien_core::import::EmitContext<'_>,
+        ) -> alien_core::Result<hcl::Expression> {
+            Ok(hcl::Expression::String("registered-postgres".to_string()))
+        }
+    }
+
+    let mut registry = TfRegistry::built_in();
+    registry.register("postgres", alien_core::Platform::Aws, Marker);
+    let module = super::helpers::render_with_registry(
+        &eks_stack_with_databases(),
+        TerraformTarget::Eks,
+        StackSettings::default(),
+        &registry,
+    )
+    .expect("renders");
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    let compact = outputs.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("cache = \"redis\""), "{outputs}");
+    assert!(!compact.contains("db = \"postgres\""), "{outputs}");
+    assert!(
+        whole_module(&module).contains("registered-postgres"),
+        "the registered emitter's import data is in the registration"
+    );
+}
+
+fn whole_module(module: &alien_terraform::ModuleFiles) -> String {
+    module
+        .iter()
+        .map(|(_, contents)| contents.as_ref())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A new EKS cluster starts on Kubernetes 1.36 (Nitro sandboxes need it on Auto
+/// Mode), and an existing cluster is never upgraded by the module: the version
+/// is ignored after creation, so `terraform plan` shows no change for it.
+#[test]
+fn a_new_eks_cluster_starts_on_1_36_and_an_existing_one_is_not_upgraded() {
+    let stack = Stack::new("eks-version".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
+    let rendered = whole_module(&module);
+    let cluster = rendered
+        .split("resource \"aws_eks_cluster\"")
+        .nth(1)
+        .expect("the module creates an EKS cluster");
+    let cluster = cluster.split("\nresource ").next().unwrap();
+    let compact = cluster.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("version = \"1.36\""), "{cluster}");
+    assert!(
+        compact
+            .replace(' ', "")
+            .contains("lifecycle{ignore_changes=[version]}"),
+        "{cluster}"
+    );
+}
+
+/// EKS Auto Mode ignores NetworkPolicy until the network policy controller is on (checked on
+/// a real 1.36 Auto Mode cluster: a deny-all policy let traffic through). A stack with a
+/// sandbox needs enforcement; a stack without one keeps the addon exactly as before, so an
+/// existing install's plan does not change.
+#[test]
+fn eks_turns_on_network_policy_enforcement_only_when_the_stack_has_a_sandbox() {
+    use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+    let cluster = || {
+        KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("default".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build()
+    };
+    let vpc_cni = |stack: &Stack| {
+        let module = render(stack, TerraformTarget::Eks, StackSettings::default());
+        let rendered = whole_module(&module);
+        let block = rendered
+            .split("resource \"aws_eks_addon\" \"kubernetes_vpc_cni\"")
+            .nth(1)
+            .expect("vpc-cni addon")
+            .split("\nresource ")
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        block
+    };
+
+    let plain = Stack::new("eks-plain".to_string())
+        .add(cluster(), ResourceLifecycle::Frozen)
+        .build();
+    assert!(!vpc_cni(&plain).contains("configuration_values"));
+
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "registry.example.com/agent:latest".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let with_sandbox = Stack::new("eks-sandbox".to_string())
+        .add(cluster(), ResourceLifecycle::Frozen)
+        .add(sandbox, ResourceLifecycle::Live)
+        .build();
+    let block = vpc_cni(&with_sandbox);
+    assert!(block.contains("enableNetworkPolicy = \"true\""), "{block}");
+    // Enforcement only: `strict` would deny every Pod that has no policy, the chart's own
+    // Pods and hook Jobs included.
+    assert!(!block.contains("NETWORK_POLICY_ENFORCING_MODE"), "{block}");
+    assert_terraform_valid(
+        &render(
+            &with_sandbox,
+            TerraformTarget::Eks,
+            StackSettings::default(),
+        ),
+        "eks_network_policy_enforcement",
+    );
+}
+
+#[test]
+fn aks_adds_a_kata_node_pool_only_when_the_stack_has_a_sandbox() {
+    use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+    let plain = Stack::new("aks-plain".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Aks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let rendered = whole_module(&render(
+        &plain,
+        TerraformTarget::Aks,
+        StackSettings::default(),
+    ));
+    assert!(!rendered.contains("KataVmIsolation"), "{rendered}");
+    assert!(!rendered.contains("azurerm_kubernetes_cluster_node_pool"));
+
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "registry.example.com/agent:latest".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let with_sandbox = Stack::new("aks-sandbox".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Aks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Live)
+        .build();
+    let module = render(
+        &with_sandbox,
+        TerraformTarget::Aks,
+        StackSettings::default(),
+    );
+    let rendered = whole_module(&module);
+    let pool = rendered
+        .split("resource \"azurerm_kubernetes_cluster_node_pool\"")
+        .nth(1)
+        .expect("a sandbox adds a node pool");
+    let pool = pool.split("\nresource ").next().unwrap();
+    let compact = pool.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        compact.contains("workload_runtime = \"KataVmIsolation\""),
+        "{pool}"
+    );
+    assert!(compact.contains("os_sku = \"AzureLinux\""), "{pool}");
+    assert!(compact.contains("vm_size = \"Standard_D4s_v3\""), "{pool}");
+    // Only a cluster this module creates gets the pool.
+    assert!(
+        compact.contains("count = var.kubernetes_cluster_mode == \"create\" ? 1 : 0"),
+        "{pool}"
+    );
+    assert_terraform_valid(&module, "aks_kata_node_pool");
 }

@@ -128,7 +128,6 @@ async fn manager(stores: &Stores, operator_image: &str) -> AppState {
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
-        tunnels: None,
         charts: Some(Arc::new(ChartSettings::new(
             Some(operator_image.to_string()),
             false,
@@ -140,6 +139,7 @@ async fn manager(stores: &Stores, operator_image: &str) -> AppState {
         values: None,
         value_access: None,
         verify_limiter: Arc::new(alien_manager::values::VerifyLimiter::default()),
+        signing: None,
     }
 }
 
@@ -158,6 +158,8 @@ async fn create_release_of(stores: &Stores, stack: Stack) {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                setup_templates: Default::default(),
+                signed_stacks: Default::default(),
             },
         )
         .await

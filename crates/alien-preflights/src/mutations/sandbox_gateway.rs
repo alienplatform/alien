@@ -98,9 +98,10 @@ impl StackMutation for SandboxGatewayMutation {
             .permissions(SANDBOX_EGRESS_GATEWAY_ID.into())
             .security(ContainerSecurity {
                 profile: ContainerSecurityProfile::Restricted,
-                run_as_user: 1000,
-                run_as_group: 1000,
-                read_only_root_filesystem: true,
+                run_as_user: Some(1000),
+                run_as_group: Some(1000),
+                read_only_root_filesystem: Some(true),
+                writable_paths: Vec::new(),
             })
             .egress(ContainerEgress::Internet)
             .port(3128)

@@ -32,32 +32,51 @@ fn is_cloud_backed_kubernetes_pull(
         && stack_settings.deployment_model == DeploymentModel::Pull
 }
 
-/// Whether the deployment is a cloud-backed Kubernetes pull deployment whose
-/// operator is installed into an existing cluster. That operator already has its
-/// workload identity, so the stack gets no setup-owned management identity to
-/// provision or import.
-fn operator_in_existing_cluster(
+/// Whether a cloud-backed Kubernetes pull deployment has an Operator that brings its own
+/// workload identity, so the stack gets no setup-owned management identity to provision or
+/// import.
+///
+/// That is an `External` cluster. An `Existing` cluster is one the setup owns (for example a
+/// Terraform install into a cluster the customer already has): setup creates the management
+/// identity there, and the Operator uses it through its workload identity. A deployment recorded
+/// as `Existing` before setup delivered an identity has none, though, and keeps rendering without
+/// one, so `Existing` only counts as having it once `management_installed` says setup delivered it.
+fn operator_without_setup_identity(
     platform: Platform,
     base_platform: Option<Platform>,
     stack_settings: &StackSettings,
+    management_installed: bool,
 ) -> bool {
     is_cloud_backed_kubernetes_pull(platform, base_platform, stack_settings)
         && stack_settings
             .kubernetes
             .as_ref()
             .and_then(|settings| settings.cluster.as_ref())
-            .is_some_and(|cluster| cluster.ownership != KubernetesClusterOwnership::Managed)
+            .is_some_and(|cluster| match cluster.ownership {
+                KubernetesClusterOwnership::External => true,
+                KubernetesClusterOwnership::Existing => !management_installed,
+                KubernetesClusterOwnership::Managed => false,
+            })
+}
+
+/// Whether a stack's state holds a setup-delivered management identity.
+pub fn management_identity_installed(stack_state: &StackState) -> bool {
+    stack_state.resources.values().any(|resource| {
+        resource.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+            && resource.status != alien_core::ResourceStatus::Deleted
+    })
 }
 
 /// Whether a deployment's stack has a setup-owned management resource that is
 /// rendered from the manager's management identity: cross-account cloud stacks
-/// (and test), and Kubernetes stacks on a cloud, except an Operator installed
-/// into an existing cluster. Without the identity such a stack renders without
-/// the resource, so the manager must not render it then.
+/// (and test), and Kubernetes stacks on a cloud, except an Operator that brings its own
+/// identity (see [`operator_without_setup_identity`]). Without the identity such a stack renders
+/// without the resource, so the manager must not render it then.
 pub fn stack_renders_management_identity(
     platform: Platform,
     base_platform: Option<Platform>,
     stack_settings: &StackSettings,
+    management_installed: bool,
 ) -> bool {
     // Kubernetes setup can also need a cloud management identity for Helm pull
     // mode; in that case the cloud is carried as the base platform.
@@ -69,7 +88,13 @@ pub fn stack_renders_management_identity(
             base_platform.unwrap_or(platform),
             Platform::Aws | Platform::Gcp | Platform::Azure
         ));
-    cross_account && !operator_in_existing_cluster(platform, base_platform, stack_settings)
+    cross_account
+        && !operator_without_setup_identity(
+            platform,
+            base_platform,
+            stack_settings,
+            management_installed,
+        )
 }
 
 #[async_trait]
@@ -90,6 +115,7 @@ impl StackMutation for RemoteStackManagementMutation {
             platform,
             config.base_platform,
             &config.stack_settings,
+            management_identity_installed(stack_state),
         ) {
             return false;
         }
@@ -191,8 +217,12 @@ mod tests {
         deployment_model: DeploymentModel,
     ) -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
+            release_statements: None,
+            signed_config: None,
             deployment_name: None,
             stack_settings: StackSettings {
                 deployment_model,
@@ -236,21 +266,92 @@ mod tests {
         assert!(mutation.should_run(&stack, &StackState::new(Platform::Kubernetes), &config));
     }
 
-    #[test]
-    fn existing_cloud_cluster_does_not_provision_remote_management() {
-        let mutation = RemoteStackManagementMutation;
-        let stack = empty_stack();
+    fn config_with_ownership(ownership: KubernetesClusterOwnership) -> DeploymentConfig {
         let mut config = config(Some(Platform::Aws), DeploymentModel::Pull);
         config.stack_settings.kubernetes = Some(KubernetesSettings {
             cluster: Some(KubernetesClusterSettings {
-                ownership: KubernetesClusterOwnership::Existing,
+                ownership,
                 namespace: Some("application".to_string()),
                 cloud: None,
             }),
             exposure: None,
         });
+        config
+    }
 
-        assert!(!mutation.should_run(&stack, &StackState::new(Platform::Kubernetes), &config));
+    fn state_with_management() -> StackState {
+        let mut state = StackState::new(Platform::Kubernetes);
+        let mut installed = alien_core::StackResourceState::new_pending(
+            RemoteStackManagement::RESOURCE_TYPE.to_string(),
+            alien_core::Resource::new(RemoteStackManagement::new("management".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        installed.status = alien_core::ResourceStatus::Running;
+        state.resources.insert("management".to_string(), installed);
+        state
+    }
+
+    #[test]
+    fn external_cloud_cluster_does_not_provision_remote_management() {
+        let mutation = RemoteStackManagementMutation;
+        let config = config_with_ownership(KubernetesClusterOwnership::External);
+
+        for state in [
+            StackState::new(Platform::Kubernetes),
+            state_with_management(),
+        ] {
+            assert!(!mutation.should_run(&empty_stack(), &state, &config));
+        }
+    }
+
+    /// A deployment recorded for an existing cluster before setup delivered an identity has
+    /// none in its state, and keeps rendering without one.
+    #[test]
+    fn existing_cluster_without_a_delivered_identity_renders_without_one() {
+        let mutation = RemoteStackManagementMutation;
+        let config = config_with_ownership(KubernetesClusterOwnership::Existing);
+
+        assert!(!mutation.should_run(
+            &empty_stack(),
+            &StackState::new(Platform::Kubernetes),
+            &config
+        ));
+    }
+
+    /// A Terraform install into an existing cluster creates the management identity and
+    /// delivers it; the Operator uses it, so the stack keeps it.
+    #[test]
+    fn existing_cluster_keeps_the_identity_setup_delivered() {
+        let mutation = RemoteStackManagementMutation;
+        let config = config_with_ownership(KubernetesClusterOwnership::Existing);
+
+        assert!(mutation.should_run(&empty_stack(), &state_with_management(), &config));
+    }
+
+    #[test]
+    fn management_identity_follows_cluster_ownership() {
+        let expected = [
+            (KubernetesClusterOwnership::Managed, false, true),
+            (KubernetesClusterOwnership::Managed, true, true),
+            (KubernetesClusterOwnership::Existing, false, false),
+            (KubernetesClusterOwnership::Existing, true, true),
+            (KubernetesClusterOwnership::External, false, false),
+            (KubernetesClusterOwnership::External, true, false),
+        ];
+        for (ownership, installed, renders) in expected {
+            let config = config_with_ownership(ownership);
+            assert_eq!(
+                stack_renders_management_identity(
+                    Platform::Kubernetes,
+                    config.base_platform,
+                    &config.stack_settings,
+                    installed
+                ),
+                renders,
+                "{ownership:?}, installed: {installed}"
+            );
+        }
     }
 
     #[test]

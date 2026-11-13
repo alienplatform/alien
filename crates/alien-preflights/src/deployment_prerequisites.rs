@@ -745,6 +745,57 @@ impl DeploymentPrerequisiteCheck for ExternalBindingsRequiredCheck {
     }
 }
 
+pub struct ControllerAvailableCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for ControllerAvailableCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("RESOURCE_NOT_SUPPORTED")
+    }
+
+    fn description(&self) -> &'static str {
+        "Every resource has a controller or an external-binding path on the target platform"
+    }
+
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> bool {
+        // Kubernetes is the one target whose controller list is complete in
+        // this repository, and only without a cloud behind the cluster.
+        stack_state.platform == Platform::Kubernetes && config.base_platform.is_none()
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let mut result = CheckResult::success();
+        for (id, entry) in stack.resources() {
+            let resource_type = entry.config.resource_type();
+            let kind = resource_type.as_ref();
+            if crate::controller_available::KUBERNETES_CONTROLLER_TYPES.contains(&kind)
+                || crate::controller_available::EXTERNAL_BINDING_TYPES.contains(&kind)
+            {
+                continue;
+            }
+            result.add_error(format!(
+                "Resource '{id}' is a {kind}, which a {platform} deployment without a cloud \
+                 behind the cluster can't create: nothing here manages it. Install through \
+                 your cloud's Terraform module for a managed cluster (EKS, GKE or AKS), which \
+                 creates it, or remove '{id}' from the stack. A resource type that accepts an \
+                 external binding can instead be pointed at existing infrastructure with one.",
+                platform = stack_state.platform
+            ));
+        }
+        Ok(result)
+    }
+}
+
 /// Validates that a resource running without Alien control still has a binding.
 ///
 /// Adoption is what records a resource Running with no controller state, on create and on
@@ -981,8 +1032,12 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
+            release_statements: None,
+            signed_config: None,
             deployment_name: Some("test deployment".to_string()),
             stack_settings: Default::default(),
             management_config: None,
@@ -1068,6 +1123,39 @@ mod tests {
                 "{platform:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_key_on_plain_kubernetes_is_refused_before_setup() {
+        let stack = Stack::new("keyed".into())
+            .add(
+                Storage::new("data".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::Key::new("secrets-key".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let state = stack_state(Platform::Kubernetes);
+        let mut config = deployment_config();
+        let check = ControllerAvailableCheck;
+        assert!(check.should_run(&stack, &state, &config));
+        let result = check.check(&stack, &state, &config).await.unwrap();
+        assert!(!result.success, "{result:?}");
+        assert_eq!(result.errors.len(), 1, "{:?}", result.errors);
+        assert!(
+            result.errors[0].contains("secrets-key"),
+            "{:?}",
+            result.errors
+        );
+
+        // A cloud behind the cluster (EKS, GKE, AKS) supplies the controller.
+        config.base_platform = Some(Platform::Aws);
+        assert!(!check.should_run(&stack, &state, &config));
+        // Other platforms have their own controllers.
+        config.base_platform = None;
+        assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
     }
 
     #[tokio::test]
@@ -1908,7 +1996,7 @@ mod tests {
     /// Alien cannot update or adopt such a resource once the binding is gone, so the release
     /// is refused rather than left resolving a target nobody declared.
     #[tokio::test]
-    async fn a_release_that_drops_an_adopted_binding_is_refused() {
+    async fn a_release_without_an_adopted_binding_is_refused() {
         let mut resources = IndexMap::new();
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);
@@ -1955,7 +2043,7 @@ mod tests {
     /// A store bound without remote access carries neither params nor outputs, so the
     /// binding is the only record that it was adopted.
     #[tokio::test]
-    async fn a_release_that_drops_a_binding_carrying_no_state_is_refused() {
+    async fn a_release_without_a_stateless_binding_is_refused() {
         let mut resources = IndexMap::new();
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);

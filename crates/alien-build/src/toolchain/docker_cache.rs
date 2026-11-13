@@ -1,9 +1,9 @@
 //! Optional durable BuildKit snapshots using the existing toolchain cache store.
-use super::{ToolchainContext, docker::DockerToolchain};
+use super::{docker::DockerToolchain, ToolchainContext};
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use futures::TryStreamExt;
-use object_store::{MultipartUpload, ObjectStore, path::Path as ObjectPath};
+use object_store::{path::Path as ObjectPath, MultipartUpload, ObjectStore};
 use sha2::{Digest, Sha256};
 use std::{
     fs::File,
@@ -267,7 +267,7 @@ async fn upload_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{WorkloadKind, cache_utils::store_from_url};
+    use super::super::{cache_utils::store_from_url, WorkloadKind};
     use super::*;
     use alien_core::BinaryTarget;
     use std::path::PathBuf;

@@ -27,7 +27,6 @@ impl SqliteTokenStore {
             "admin" => TokenType::Admin,
             "deployment-group" => TokenType::DeploymentGroup,
             "deployment" => TokenType::Deployment,
-            "tunnel" => TokenType::Tunnel,
             "commands-receiver" => TokenType::CommandsReceiver,
             "setup" => TokenType::Setup,
             other => return Err(db_error(&format!("Unknown token type: {}", other))),

@@ -16,7 +16,7 @@ import { VolumeOutputSchema } from "./volume-output-schema.js";
 export const ContainerOutputsSchema = z.object({
     "currentReplicas": z.int().min(0).describe("Number of current replicas"),
 "desiredReplicas": z.int().min(0).describe("Desired number of replicas"),
-"internalDns": z.string().describe("Internal DNS name (e.g., \"api.svc\")"),
+"internalDns": z.string().describe("Internal DNS name of the container's Service. On Kubernetes this is\n`<name>.<namespace>.svc.<cluster domain>`; other platforms have no such\nname. To reach another container, use the link binding\n(`ALIEN_<ID>_BINDING`, `internalUrls`), not a name built from the id."),
 "internalUrls": z.optional(z.object({
     
     }).catchall(z.string()).describe("Internal URLs keyed by port for cluster members and linking resources.")),

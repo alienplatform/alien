@@ -111,6 +111,16 @@ pub(super) fn decide(
         ));
     }
 
+    // A protected Operator never takes a setup update authorization from the
+    // manager, so minting one would tell the owner a chart upgrade completes an
+    // update it cannot.
+    if super::sync::is_protected(deployment) {
+        return ReportDecision::Refuse(
+            "This install runs protected: it applies only releases and configuration signed by its vendor, and a chart upgrade cannot authorize a setup change. Ask the vendor how to apply this release."
+                .to_string(),
+        );
+    }
+
     // The first report on an existing Helm deployment records its lane; later
     // reports must stay in it.
     if let (Some(target_lane), Some(version)) = (
@@ -473,6 +483,11 @@ async fn prepare_target(
             // re-import does; otherwise the rebuilt target would drop a
             // resource the baseline holds and read as a cloud change.
             imported_quota_activation: stack_state.resources.contains_key("enable-cloud-quotas"),
+            // A cluster the setup owns keeps the management identity setup delivered.
+            imported_management_identity:
+                alien_preflights::mutations::remote_stack_management::management_identity_installed(
+                    &stack_state,
+                ),
         },
         &settings,
     )
@@ -725,6 +740,8 @@ pub(super) mod tests {
             workspace_id: "workspace".to_string(),
             project_id: "project".to_string(),
             stacks: std::collections::HashMap::from([(Platform::Kubernetes, source.clone())]),
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
             git_commit_sha: None,
             git_commit_ref: None,
             git_commit_message: None,
@@ -808,6 +825,27 @@ pub(super) mod tests {
         );
         assert_eq!(authorization.release_id, "rel_2");
         assert_eq!(authorization.setup_fingerprint, "fp_2");
+    }
+
+    #[test]
+    fn a_protected_install_is_refused_because_its_operator_ignores_the_authorization() {
+        let installed = baseline();
+        let target = with_service_account(&installed);
+        let mut protected = deployment(installed);
+        protected.stack_settings = Some(alien_core::StackSettings {
+            signing: Some(alien_core::StackSigning {
+                fingerprint: format!("SHA256:{}", "0".repeat(64)),
+                channel: "production".to_string(),
+            }),
+            ..Default::default()
+        });
+
+        let decision = decide(&protected, &report("rel_2"), &target, None);
+
+        assert!(
+            matches!(&decision, ReportDecision::Refuse(reason) if reason.contains("protected")),
+            "expected a refusal, got {decision:?}"
+        );
     }
 
     #[test]
@@ -1041,6 +1079,8 @@ pub(super) mod tests {
                                 Platform::Kubernetes,
                                 stack,
                             )]),
+                            signed_stacks: Default::default(),
+                            setup_templates: Default::default(),
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,
@@ -1485,6 +1525,8 @@ pub(super) mod tests {
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,
+                            setup_templates: Default::default(),
+                            signed_stacks: Default::default(),
                         },
                     )
                     .await
@@ -1822,6 +1864,8 @@ pub(super) mod tests {
                                 Platform::Kubernetes,
                                 stack,
                             )]),
+                            signed_stacks: Default::default(),
+                            setup_templates: Default::default(),
                             git_commit_sha: None,
                             git_commit_ref: None,
                             git_commit_message: None,

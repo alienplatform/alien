@@ -796,6 +796,9 @@ async fn sandbox_consumers_get_signing_access_only_with_management_permissions()
                 profile.0[SECRETS_VAULT_ID]
                     .iter()
                     .map(|set| set.id())
+                    // Machine workloads also read their own secret values; that
+                    // grant is covered by the secrets vault tests.
+                    .filter(|id| *id != "vault/machine-workload-secrets-read")
                     .collect::<Vec<_>>(),
                 if signs {
                     vec![

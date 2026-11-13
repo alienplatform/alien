@@ -21,7 +21,7 @@ use crate::traits::{
     ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
-    CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
+    egress_policy, CreateSandbox, EgressPolicy, SandboxDataPlaneApi, ALLOW, DENY, FULL_INSPECTION,
 };
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{
@@ -55,6 +55,19 @@ pub struct AzureSandbox {
     cpu: String,
     memory: String,
     disk: Option<String>,
+    /// Where creates go on a protected install: the install's verifier, through the manager,
+    /// because the caller's own role cannot create sandboxes.
+    create_route: Option<std::sync::Arc<dyn SandboxCreateRoute>>,
+}
+
+/// Creates a sandbox for a caller whose own identity may not: the request carries only the
+/// environment, and whoever receives it builds everything else from the signed release.
+#[async_trait]
+pub trait SandboxCreateRoute: std::fmt::Debug + Send + Sync {
+    async fn create(
+        &self,
+        environment: &BTreeMap<String, String>,
+    ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>;
 }
 
 impl AzureSandbox {
@@ -83,7 +96,55 @@ impl AzureSandbox {
             cpu,
             memory,
             disk,
+            create_route: None,
         }
+    }
+
+    /// Send creates through `route` instead of the data plane.
+    pub fn with_create_route(mut self, route: std::sync::Arc<dyn SandboxCreateRoute>) -> Self {
+        self.create_route = Some(route);
+        self
+    }
+
+    /// The disk image reference and create body of a sandbox with `environment`, exactly as
+    /// `create` sends them, for a caller that hands them to the verifier instead. Only the
+    /// environment is the caller's; everything else comes from the binding. The verifier
+    /// rebuilds the same body from the signed release and refuses any difference.
+    pub async fn verified_create(
+        &self,
+        environment: BTreeMap<String, String>,
+    ) -> Result<(String, serde_json::Value)> {
+        checked_sandbox_env(CREATE, &environment)?;
+        if self.egress_manager.is_some() {
+            return Err(self.unsupported(
+                CREATE,
+                "a gateway egress policy has no signed form the verifier can check",
+            ));
+        }
+        let mut labels = BTreeMap::new();
+        if self.agent {
+            labels.insert(
+                agent::TRANSPORT_LABEL.into(),
+                agent::TRANSPORT_VERSION.into(),
+            );
+        }
+        let request = CreateSandbox {
+            disk_image: self.disk_image.clone(),
+            disk_image_id: self.disk_image_id().await?,
+            cpu: self.cpu.clone(),
+            memory: self.memory.clone(),
+            disk: self.disk.clone(),
+            environment,
+            labels,
+            egress: self.native_policy(),
+            customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
+                .then(|| "default".to_string()),
+            idle_pause_seconds: self.idle_pause_seconds,
+        };
+        Ok((
+            self.disk_image.clone(),
+            alien_azure_clients::azure::sandbox_data_plane::create_body(&request),
+        ))
     }
 
     /// The built disk image a sandbox starts from, or `None` to send the value as a catalog name,
@@ -369,23 +430,32 @@ impl Sandbox for AzureSandbox {
             labels.insert(SANDBOX_EXPIRY_LABEL.to_string(), expires.to_string());
         }
         let asked = self.native_policy();
-        let disk_image_id = self.disk_image_id().await?;
-        let identity = self.prepare_identity(&mut request.env, &mut labels).await?;
-        let sandbox = self
-            .create_from_image(CreateSandbox {
-                disk_image: self.disk_image.clone(),
-                disk_image_id,
-                cpu: self.cpu.clone(),
-                memory: self.memory.clone(),
-                disk: self.disk.clone(),
-                environment: request.env,
-                labels,
-                egress: asked.clone(),
-                customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
-                    .then(|| "default".to_string()),
-                idle_pause_seconds: self.idle_pause_seconds,
-            })
-            .await?;
+        let (sandbox, identity) = if let Some(route) = &self.create_route {
+            let sandbox = route
+                .create(&request.env)
+                .await
+                .map_err(|error| Self::failed(CREATE, error))?;
+            (sandbox, None)
+        } else {
+            let disk_image_id = self.disk_image_id().await?;
+            let identity = self.prepare_identity(&mut request.env, &mut labels).await?;
+            let sandbox = self
+                .create_from_image(CreateSandbox {
+                    disk_image: self.disk_image.clone(),
+                    disk_image_id,
+                    cpu: self.cpu.clone(),
+                    memory: self.memory.clone(),
+                    disk: self.disk.clone(),
+                    environment: request.env,
+                    labels,
+                    egress: asked.clone(),
+                    customer_vnet_connection_name: (self.egress == SandboxEgress::Internet)
+                        .then(|| "default".to_string()),
+                    idle_pause_seconds: self.idle_pause_seconds,
+                })
+                .await?;
+            (sandbox, identity)
+        };
 
         // The caller's requested id is not authoritative: Azure allocates the id, and returning
         // the requested one would hand back a handle that addresses nothing. Checked because
@@ -1505,46 +1575,6 @@ fn checked_path(operation: &str, path: &str) -> Result<String> {
     Ok(relative.to_string())
 }
 
-/// The policy a declared mode is created with.
-///
-/// `Full` inspection is what makes a `Deny` default mean no outbound access: under `Partial`,
-/// `Legacy` and `None`, non-HTTP traffic is allowed through whatever the default action says, so
-/// the sandbox would carry a `deny` label and a live network. `allow` sends no policy at all —
-/// the data plane's default is already open, and `Full` there would block the non-HTTP traffic
-/// `allow` promises.
-fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
-    let bounded = |host_rules| {
-        Some(EgressPolicy {
-            default_action: DENY.to_string(),
-            unmodelled: Default::default(),
-            rules: Vec::new(),
-            host_rules,
-            traffic_inspection: Some(FULL_INSPECTION.to_string()),
-        })
-    };
-
-    match egress {
-        SandboxEgress::Allow | SandboxEgress::Internet => None,
-        // Written as a rule as well as a default, because Microsoft documents `Partial`
-        // inspection as evaluating only traffic a rule matches and never states that `Full`
-        // differs. A policy holding no rule at all is the one shape where "deny" could mean
-        // nothing, and this is one rule to be out of it.
-        SandboxEgress::None => bounded(vec![EgressHostRule {
-            pattern: EVERY_HOST.to_string(),
-            action: DENY.to_string(),
-        }]),
-        SandboxEgress::AllowDomains { domains } => bounded(
-            domains
-                .iter()
-                .map(|domain| EgressHostRule {
-                    pattern: domain.clone(),
-                    action: ALLOW.to_string(),
-                })
-                .collect(),
-        ),
-    }
-}
-
 /// Whether the sandbox is running the policy it was created with.
 ///
 /// Not equality — the data plane may return the policy normalised, and failing every create over a
@@ -1559,6 +1589,10 @@ fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool 
     let Some(effective) = effective else {
         return false;
     };
+    let Some(effective) = without_enforcement_fields(asked, effective) else {
+        return false;
+    };
+    let effective = &effective;
 
     let asked_for = |host: &str| {
         asked
@@ -1594,6 +1628,41 @@ fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool 
         })
         // A field this client cannot read is a permission it cannot rule out.
         && effective.unmodelled.is_empty()
+}
+
+/// The policy with the two fields the live data plane adds to every readback taken off, when
+/// they are provably harmless; `None` when either is not.
+///
+/// - `enforcementMode` must be exactly `Enforced`. Any other value (an audit-only mode, say)
+///   means the policy is not being applied.
+/// - `http` is the same policy restated for the HTTP layer. It is accepted when empty, or when it
+///   holds on its own against the same declaration; a rule inside it that permits anything the
+///   declaration did not ask for fails.
+///
+/// Every other field stays in `unmodelled` and still fails closed.
+fn without_enforcement_fields(
+    asked: &EgressPolicy,
+    effective: &EgressPolicy,
+) -> Option<EgressPolicy> {
+    let mut policy = effective.clone();
+
+    if let Some(mode) = policy.unmodelled.remove("enforcementMode") {
+        if mode.as_str() != Some(ENFORCED) {
+            return None;
+        }
+    }
+
+    if let Some(http) = policy.unmodelled.remove("http") {
+        let empty = http.as_object().is_some_and(|fields| fields.is_empty());
+        if !empty {
+            let nested: EgressPolicy = serde_json::from_value(http).ok()?;
+            if !policy_holds(asked, Some(&nested)) {
+                return None;
+            }
+        }
+    }
+
+    Some(policy)
 }
 
 /// The effective policy, short enough to read in an error.
@@ -1647,14 +1716,8 @@ fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
     }
 }
 
-/// The data plane's own words for the two actions and the one inspection mode that blocks
-/// non-HTTP traffic.
-const DENY: &str = "Deny";
-const ALLOW: &str = "Allow";
-const FULL_INSPECTION: &str = "Full";
-
-/// The host pattern that matches everything, so `deny` is a rule rather than only a default.
-const EVERY_HOST: &str = "*";
+/// The only enforcement mode the data plane reports for a policy it is applying.
+const ENFORCED: &str = "Enforced";
 
 /// Longest sandbox id this client will put in a data-plane URL.
 ///
@@ -1722,6 +1785,7 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_azure_clients::azure::sandbox_data_plane::EgressHostRule;
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
     use alien_azure_clients::azure::sandbox_data_plane::{DiskImage, DiskImageStatus};
@@ -1870,6 +1934,89 @@ mod tests {
             .create(CreateSandboxRequest::default())
             .await
             .expect("create succeeds");
+    }
+
+    #[derive(Debug)]
+    struct Route(std::sync::Mutex<Vec<BTreeMap<String, String>>>);
+
+    #[async_trait]
+    impl SandboxCreateRoute for Route {
+        async fn create(
+            &self,
+            environment: &BTreeMap<String, String>,
+        ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox>
+        {
+            self.0.lock().unwrap().push(environment.clone());
+            Ok(running("routed", None))
+        }
+    }
+
+    /// A routed create never reaches the data plane, and what the verifier is asked for is the
+    /// body the provider would have sent itself, so the two cannot drift apart.
+    #[tokio::test]
+    async fn a_routed_create_sends_the_body_the_provider_would_have_sent() {
+        let env = BTreeMap::from([("A".to_string(), "b".to_string())]);
+
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let mut direct = MockSandboxDataPlaneApi::new();
+        let capture = sent.clone();
+        direct
+            .expect_create_sandbox()
+            .times(1)
+            .returning(move |_, request| {
+                *capture.lock().unwrap() = Some(request);
+                Ok(running("s1", None))
+            });
+        settles_running(&mut direct, None);
+        let sandbox = AzureSandbox::new(
+            std::sync::Arc::new(direct),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            Some(300),
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        );
+        let (base, body) = sandbox.verified_create(env.clone()).await.expect("body");
+        sandbox
+            .create(CreateSandboxRequest {
+                env: env.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect("create");
+        let request = sent.lock().unwrap().clone().expect("a create was sent");
+        assert_eq!(base, "ubuntu");
+        assert_eq!(
+            body,
+            alien_azure_clients::azure::sandbox_data_plane::create_body(&request)
+        );
+
+        let route = std::sync::Arc::new(Route(Default::default()));
+        // No create expectation: a create that reached the data plane would panic.
+        let mut routed_client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut routed_client, None);
+        let routed = AzureSandbox::new(
+            std::sync::Arc::new(routed_client),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            None,
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        )
+        .with_create_route(route.clone());
+        let created = routed
+            .create(CreateSandboxRequest {
+                env: env.clone(),
+                ..Default::default()
+            })
+            .await
+            .expect("routed create");
+        assert_eq!(created.sandbox_id, "routed");
+        assert_eq!(*route.0.lock().unwrap(), vec![env]);
     }
 
     fn disk_image(id: &str, label: &str, state: &str) -> DiskImage {
@@ -3685,6 +3832,66 @@ mod tests {
             .create(CreateSandboxRequest::default())
             .await
             .expect("a normalised echo of the same policy is the same policy");
+    }
+
+    /// The live data plane reads a `none` policy back with `enforcementMode` and an `http`
+    /// restatement the client does not model. Those are accepted only when they cannot loosen it.
+    #[test]
+    fn policy_holds_reads_the_live_none_readback() {
+        let asked = egress_policy(&SandboxEgress::None).expect("none sends a policy");
+        let read = |json: serde_json::Value| -> EgressPolicy {
+            serde_json::from_value(json).expect("readback parses")
+        };
+        let mirror = |mode: &str, rule_action: &str| {
+            serde_json::json!({
+                "defaultAction": "Deny",
+                "hostRules": [{"pattern": "*", "action": rule_action}],
+                "trafficInspection": "Full",
+                "enforcementMode": mode,
+            })
+        };
+        let with = |mode: &str, http: serde_json::Value| {
+            let mut json = mirror(mode, "Deny");
+            json["http"] = http;
+            read(json)
+        };
+
+        // The exact readback taken from a live `none` sandbox.
+        assert!(policy_holds(
+            &asked,
+            Some(&with("Enforced", mirror("Enforced", "Deny")))
+        ));
+        // `http` absent, or empty.
+        assert!(policy_holds(
+            &asked,
+            Some(&read(mirror("Enforced", "Deny")))
+        ));
+        assert!(policy_holds(
+            &asked,
+            Some(&with("Enforced", serde_json::json!({})))
+        ));
+        // A mode other than the enforced one, at either level.
+        assert!(!policy_holds(
+            &asked,
+            Some(&with("Audit", mirror("Enforced", "Deny")))
+        ));
+        assert!(!policy_holds(
+            &asked,
+            Some(&with("Enforced", mirror("Audit", "Deny")))
+        ));
+        // A rule inside `http` that allows a host, or an http block of another shape.
+        assert!(!policy_holds(
+            &asked,
+            Some(&with("Enforced", mirror("Enforced", "Allow")))
+        ));
+        assert!(!policy_holds(
+            &asked,
+            Some(&with("Enforced", serde_json::json!("open")))
+        ));
+        // Any other unknown field still fails closed.
+        let mut other = mirror("Enforced", "Deny");
+        other["bypassList"] = serde_json::json!(["exfil.example.com"]);
+        assert!(!policy_holds(&asked, Some(&read(other))));
     }
 
     /// A sandbox the declaration no longer matches is replaced, not a permanent error.

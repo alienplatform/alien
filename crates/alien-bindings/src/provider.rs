@@ -47,6 +47,10 @@ pub struct BindingsProvider {
     /// Memorystore client for reading a Redis instance's token, reused across binding loads.
     #[cfg(feature = "gcp")]
     gcp_memorystore: tokio::sync::OnceCell<Arc<dyn alien_gcp_clients::memorystore::MemorystoreApi>>,
+    /// Where Azure sandboxes are created when the caller's own role may not: the install's
+    /// manager, which has the install's verifier create them.
+    #[cfg(feature = "azure")]
+    sandbox_create_route: Option<Arc<dyn crate::providers::sandbox::azure::SandboxCreateRoute>>,
 }
 
 /// Environment-backed provider that defers cloud client configuration until the
@@ -91,8 +95,10 @@ impl std::fmt::Debug for LazyEnvBindingsProvider {
 
 /// The ADC service defaults, named so a reader can tell a deliberate default from a magic number.
 /// One core and 2 GiB — what `begin_create_sandbox` uses when a caller passes neither.
-const DEFAULT_AZURE_CPU: &str = "1000m";
-const DEFAULT_AZURE_MEMORY: &str = "2048Mi";
+#[cfg(feature = "azure")]
+use alien_azure_clients::azure::sandbox_data_plane::{
+    DEFAULT_CPU as DEFAULT_AZURE_CPU, DEFAULT_MEMORY as DEFAULT_AZURE_MEMORY,
+};
 
 impl BindingsProvider {
     /// Creates a new BindingsProvider with explicit credentials and bindings.
@@ -112,7 +118,19 @@ impl BindingsProvider {
             azure_managed_redis: tokio::sync::OnceCell::new(),
             #[cfg(feature = "gcp")]
             gcp_memorystore: tokio::sync::OnceCell::new(),
+            #[cfg(feature = "azure")]
+            sandbox_create_route: None,
         })
+    }
+
+    /// Create this provider's Azure sandboxes through `route` instead of the data plane.
+    #[cfg(feature = "azure")]
+    pub(crate) fn with_sandbox_create_route(
+        mut self,
+        route: Arc<dyn crate::providers::sandbox::azure::SandboxCreateRoute>,
+    ) -> Self {
+        self.sandbox_create_route = Some(route);
+        self
     }
 
     /// The workload's resolved cloud credentials (native, projected, or explicit).
@@ -2212,6 +2230,9 @@ impl BindingsProviderApi for BindingsProvider {
                     disk,
                 )
                 .with_agent(azure_binding.agent);
+                if let Some(route) = &self.sandbox_create_route {
+                    sandbox = sandbox.with_create_route(route.clone());
+                }
                 if let Some(manager) = egress_manager {
                     sandbox = sandbox.with_egress_manager(
                         manager,

@@ -731,10 +731,15 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provi
         binding,
         client_config,
         expires_at: lease_expires_at,
+        create_via_manager,
     } = lease
     else {
         panic!("generated client returned the wrong lease variant for an Azure sandbox");
     };
+    assert!(
+        !create_via_manager,
+        "an answer without the flag creates on the data plane"
+    );
     let value = |raw: &str| alien_core::BindingValue::Value(raw.to_string());
     assert_eq!(binding.sandbox_group, value("acme-agent"));
     assert_eq!(
@@ -896,4 +901,92 @@ async fn decode_gcp_sandbox_lease(allow_egress: Option<bool>) {
     };
     assert_eq!(token, "SENTINEL_GCP_TOKEN");
     assert_eq!(lease_expires_at.timestamp(), expires_at.timestamp());
+}
+
+/// A lease that carries `createViaManager` makes the caller create through the install's
+/// manager. The request names only the deployment, the sandbox and the environment (the manager
+/// rebuilds the rest from the signed release), and carries the caller's manager token.
+#[cfg(feature = "azure")]
+#[tokio::test]
+async fn an_azure_lease_that_asks_for_it_creates_through_the_manager() {
+    use crate::providers::sandbox::azure::SandboxCreateRoute as _;
+
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+
+    let mut lease_body = azure_sandbox_lease_body(expires_at, true);
+    lease_body["binding"]["createViaManager"] = json!(true);
+    let recorded = Arc::new(StdMutex::new(Vec::new()));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response: Arc::new(StdRwLock::new((StatusCode::OK, lease_body))),
+        requests: recorded.clone(),
+    })
+    .await;
+    let manager = DiscoveredManager {
+        deployment_id: DEPLOYMENT_ID.to_string(),
+        url: reqwest::Url::parse(&manager_url).expect("valid manager URL"),
+        http: authenticated_http_client(GENERATED_MANAGER_TOKEN, "generated manager fixture")
+            .expect("build generated contract client"),
+        refresh_at: expires_at,
+        generation: 0,
+    };
+    let lease = GeneratedManagerBindingResolver
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("agent"),
+        )
+        .await
+        .expect("decode the lease");
+    assert!(
+        lease.creates_sandboxes_through_manager(),
+        "the manager's flag reaches the caller"
+    );
+
+    let created = Arc::new(StdMutex::new(Vec::new()));
+    let sink = created.clone();
+    let app = Router::new().route(
+        "/v1/bindings/sandboxes/create",
+        post(
+            move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                let sink = sink.clone();
+                async move {
+                    sink.lock().unwrap().push((authorization(&headers), body));
+                    Json(json!({"id": "s1", "state": "Running", "labels": {}}))
+                }
+            },
+        ),
+    );
+    let url = spawn_server(app).await;
+    let source = Arc::new(
+        RemoteBindingSource::from_manager_access(
+            DEPLOYMENT_ID,
+            &url,
+            GENERATED_MANAGER_TOKEN,
+            expires_at,
+            Arc::new(SystemClock),
+        )
+        .expect("manager access"),
+    );
+    let route = access::ManagerSandboxCreate {
+        source,
+        resource_id: "agent".to_string(),
+    };
+    let sandbox = route
+        .create(&std::collections::BTreeMap::from([(
+            "A".to_string(),
+            "b".to_string(),
+        )]))
+        .await
+        .expect("the manager creates the sandbox");
+    assert_eq!(sandbox.id, "s1");
+    let sent = created.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(
+        sent[0].0.as_deref(),
+        Some(format!("Bearer {GENERATED_MANAGER_TOKEN}").as_str())
+    );
+    assert_eq!(
+        sent[0].1,
+        json!({"deploymentId": DEPLOYMENT_ID, "resourceId": "agent", "env": {"A": "b"}})
+    );
 }

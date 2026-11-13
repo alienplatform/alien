@@ -18,6 +18,10 @@ const PROTECT_BUNDLE_POLICY: &str = "sandbox/protect-bundle-policy";
 /// Lets management write and delete bundles in the bundle Storage, and in no other bucket.
 const SANDBOX_BUNDLE_WRITE: &str = "sandbox/bundle-write";
 
+/// What management holds on a protected install: deleting bundles only. The verifier writes them,
+/// rendered from the signed release, because a bundle decides what the sandbox's image runs.
+const SANDBOX_BUNDLE_DELETE: &str = "sandbox/bundle-delete";
+
 /// Adds the Storage a Live AWS sandbox's controller renders its image-build bundle into.
 ///
 /// `CreateMicrovmImage` builds from a zip in S3 in the image's own region. A Live sandbox released
@@ -54,8 +58,9 @@ impl StackMutation for SandboxBundleStorageMutation {
         &self,
         mut stack: Stack,
         _state: &StackState,
-        _config: &DeploymentConfig,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
+        let protected = config.stack_settings.signing.is_some();
         let has_management = stack
             .resources
             .values()
@@ -125,8 +130,13 @@ impl StackMutation for SandboxBundleStorageMutation {
         // management grant; the set itself is bound to this bucket's name.
         if let Some(mut profile) = management {
             let grants = profile.0.entry("*".to_string()).or_default();
-            if !grants.iter().any(|set| set.id() == SANDBOX_BUNDLE_WRITE) {
-                grants.push(PermissionSetReference::from_name(SANDBOX_BUNDLE_WRITE));
+            let set = if protected {
+                SANDBOX_BUNDLE_DELETE
+            } else {
+                SANDBOX_BUNDLE_WRITE
+            };
+            if !grants.iter().any(|existing| existing.id() == set) {
+                grants.push(PermissionSetReference::from_name(set));
             }
             stack.permissions.management = ManagementPermissions::Extend(profile);
         }
@@ -202,8 +212,12 @@ mod tests {
 
     fn config() -> DeploymentConfig {
         DeploymentConfig {
+            image_registry: None,
+            image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
             gcp_federation_scope: None,
+            release_statements: None,
+            signed_config: None,
             deployment_name: None,
             stack_settings: StackSettings::default(),
             management_config: Some(ManagementConfig::Aws(AwsManagementConfig {
@@ -503,5 +517,42 @@ mod tests {
             let prepared = prepared(stack, &StackState::new(Platform::Aws)).await;
             assert!(!prepared.resources.contains_key(SANDBOX_BUNDLE_STORAGE_ID));
         }
+    }
+
+    /// On a protected install the verifier writes bundles from the signed image, so management
+    /// keeps only the delete and list grants: a bundle decides what the sandbox's image runs.
+    #[tokio::test]
+    async fn a_protected_install_gives_management_no_bundle_write() {
+        let mut stack = release(RELEASED, None);
+        stack.resources.insert(
+            "management".to_string(),
+            ResourceEntry {
+                config: Resource::new(RemoteStackManagement::new("management".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        stack.permissions.management = ManagementPermissions::Extend(PermissionProfile::new());
+        let mut config = config();
+        config.stack_settings.signing = Some(alien_core::StackSigning {
+            fingerprint: "SHA256:00".to_string(),
+            channel: "production".to_string(),
+        });
+        let prepared = SandboxBundleStorageMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .expect("a protected release prepares");
+        let ManagementPermissions::Extend(management) = &prepared.permissions.management else {
+            panic!("management extends its grants");
+        };
+        let ids: Vec<_> = management.0["*"]
+            .iter()
+            .map(|set| set.id().to_string())
+            .collect();
+        assert_eq!(ids, vec![SANDBOX_BUNDLE_DELETE.to_string()]);
     }
 }

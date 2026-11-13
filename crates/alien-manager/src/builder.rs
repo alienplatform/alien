@@ -57,12 +57,12 @@ pub struct AlienManagerBuilder {
     /// proprietary controllers (`container`, `compute-cluster`) before
     /// passing it in here.
     import_registry: Option<Arc<alien_infra::ImporterRegistry>>,
-    /// Open tunnel connections; `Some` mounts the tunnel routes.
-    tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     /// Chart settings; `Some` serves Helm charts from the registry.
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signer lists, pending changes and signed config.
+    signing: Option<Arc<dyn crate::traits::SigningStore>>,
     /// Signs air-gapped bundles.
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     /// Where bundles' charts and Operator images come from.
@@ -99,9 +99,9 @@ impl AlienManagerBuilder {
             bindings_provider_override: None,
             target_bindings_providers_override: None,
             import_registry: None,
-            tunnels: None,
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
             value_store: None,
@@ -159,6 +159,12 @@ impl AlienManagerBuilder {
         self
     }
 
+    /// Store signer lists and signed config (see [`crate::traits::SigningStore`]).
+    pub fn signing(mut self, store: Arc<dyn crate::traits::SigningStore>) -> Self {
+        self.signing = Some(store);
+        self
+    }
+
     /// Route releases through channels (see [`crate::traits::ReleaseChannelStore`]).
     /// Standalone defaults set a SQLite store next to the SQLite deployment store.
     pub fn release_channels(mut self, store: Arc<dyn crate::traits::ReleaseChannelStore>) -> Self {
@@ -171,17 +177,6 @@ impl AlienManagerBuilder {
     /// manager.
     pub fn charts(mut self, settings: crate::routes::charts::ChartSettings) -> Self {
         self.charts = Some(Arc::new(settings));
-        self
-    }
-
-    /// Accept tunnel connections from operators and serve
-    /// `/v1/deployments/{deployment}/tunnels/{container}/...`, which forwards
-    /// requests into deployments over their operators' outbound connections.
-    ///
-    /// Off unless called. Operators only dial managers that advertise the
-    /// tunnel in their sync responses.
-    pub fn tunnels(mut self) -> Self {
-        self.tunnels = Some(alien_tunnel::manager::TunnelRegistry::new());
         self
     }
 
@@ -374,6 +369,11 @@ impl AlienManagerBuilder {
             self.release_channels = Some(Arc::new(
                 crate::stores::sqlite::SqliteReleaseChannelStore::new(db.clone()),
             ));
+        }
+        if self.signing.is_none() {
+            self.signing = Some(Arc::new(crate::stores::sqlite::SqliteSigningStore::new(
+                db.clone(),
+            )));
         }
         if self.deployment_store.is_none() {
             let store = crate::stores::sqlite::SqliteDeploymentStore::new(db.clone());
@@ -984,9 +984,9 @@ impl AlienManagerBuilder {
             self.platform_routes,
             self.dev_status_tx,
             self.import_registry,
-            self.tunnels,
             charts,
             self.release_channels,
+            self.signing,
             self.bundle_signing_key,
             self.bundle_sources,
             self.value_store,
@@ -1204,9 +1204,9 @@ async fn finalize(
     platform_routes: Option<axum::Router<crate::routes::AppState>>,
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
-    tunnels: Option<Arc<alien_tunnel::manager::TunnelRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    signing: Option<Arc<dyn crate::traits::SigningStore>>,
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
     values: Option<Arc<crate::values::ValueStore>>,
@@ -1251,9 +1251,9 @@ async fn finalize(
         // [`AlienManagerBuilder::import_registry`].
         import_registry: import_registry_override
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
-        tunnels,
         charts,
         release_channels: release_channels.clone(),
+        signing: signing.clone(),
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),
@@ -1299,6 +1299,7 @@ async fn finalize(
         log_buffer,
         token_store,
         command_server,
+        signing,
         values,
         release_channels,
     })

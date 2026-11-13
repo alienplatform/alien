@@ -3,7 +3,10 @@
 //! recoverable. Each reconciliation step performs at most one durable mutation.
 
 use crate::{
-    core::ResourceControllerContext,
+    core::{
+        verifier::{self, HttpVerifier, ResourceWrite},
+        ResourceControllerContext,
+    },
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
     queue::azure::AzureQueueController,
@@ -14,29 +17,69 @@ use alien_azure_clients::event_grid::{
     ServiceBusQueueDestinationProperties,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::{storage_notifications::notification_rule_key, Storage, StorageNotification};
-use alien_error::{AlienError, Context};
-use sha2::{Digest, Sha256};
+use alien_core::{
+    ReleaseStatements, SignedStatement,
+    storage_notifications::{azure_subscription_name, azure_subscription_prefix},
+    Storage, StorageNotification,
+};
+use alien_error::{AlienError, Context, IntoAlienError};
 use std::collections::BTreeMap;
 
-/// Every subscription name of this container's rules starts with this. Keep in sync with
-/// the Terraform storage emitter. Azure container names are ASCII; the hash keeps long names
-/// distinct after truncation.
 fn subscription_prefix(container: &str) -> String {
-    let head: String = container.chars().take(28).collect();
-    let hash = format!("{:x}", Sha256::digest(container.as_bytes()));
-    format!("{head}-sn-{}-", &hash[..10])
+    azure_subscription_prefix(container)
 }
 
-/// A rule's subscription name carries the hash of what the rule delivers, not its position:
-/// adding or removing another rule never replaces it, and a changed rule gets a new name, so
-/// its new subscription can exist before the old one is deleted. At most 59 characters.
 pub(super) fn subscription_name(container: &str, rule: &StorageNotification) -> String {
-    format!(
-        "{}{}",
-        subscription_prefix(container),
-        notification_rule_key(rule)
-    )
+    azure_subscription_name(container, rule)
+}
+
+/// How a protected install sends an Event Grid subscription: the verifier checks it against
+/// the signed stack and applies it unchanged, because where a storage account's events go is
+/// who can read them.
+pub(super) struct ViaVerifier<'a> {
+    verifier: HttpVerifier,
+    statements: &'a ReleaseStatements,
+    config: Option<&'a SignedStatement>,
+    account: &'a str,
+}
+
+async fn put_subscription(
+    client: &dyn EventGridApi,
+    via: Option<&ViaVerifier<'_>>,
+    source: &str,
+    name: String,
+    rule: EventSubscriptionRequest,
+    storage: &str,
+    action: &str,
+) -> Result<()> {
+    match via {
+        Some(via) => {
+            let body = serde_json::to_value(&rule).into_alien_error().context(
+                ErrorData::CloudPlatformError {
+                    message: "The Event Grid subscription does not serialize".into(),
+                    resource_id: Some(storage.to_string()),
+                },
+            )?;
+            verifier::apply_resource_write(
+                &via.verifier,
+                via.statements,
+                via.config,
+                storage,
+                vec![ResourceWrite::PutEventSubscription {
+                    account: via.account.to_string(),
+                    name,
+                    body,
+                }],
+            )
+            .await?;
+            Ok(())
+        }
+        None => client
+            .create_or_update_event_subscription(source.into(), name, rule)
+            .await
+            .map(|_| ())
+            .context(cloud_error(storage, action)),
+    }
 }
 
 pub(super) fn source_id(subscription: &str, group: &str, account: &str) -> String {
@@ -162,8 +205,18 @@ pub(super) async fn reconcile(
             });
         }
     }
+    let via = match verifier::protected_statements(ctx, &storage.id)? {
+        Some(statements) => Some(ViaVerifier {
+            verifier: verifier::azure_verifier(ctx).await?,
+            statements,
+            config: ctx.deployment_config.signed_config.as_ref(),
+            account: &account,
+        }),
+        None => None,
+    };
     reconcile_subscriptions()
         .client(client.as_ref())
+        .maybe_via(via.as_ref())
         .source(&source)
         .container(container)
         .storage(&storage.id)
@@ -176,6 +229,7 @@ pub(super) async fn reconcile(
 #[bon::builder]
 async fn reconcile_subscriptions(
     client: &dyn EventGridApi,
+    via: Option<&ViaVerifier<'_>>,
     source: &str,
     container: &str,
     storage: &str,
@@ -231,10 +285,8 @@ async fn reconcile_subscriptions(
         }
         if let Some(rule) = desired.remove(name) {
             if !matches(subscription, &rule) {
-                client
-                    .create_or_update_event_subscription(source.into(), name.clone(), rule)
-                    .await
-                    .context(cloud_error(storage, "Update"))?;
+                put_subscription(client, via, source, name.clone(), rule, storage, "Update")
+                    .await?;
                 return Ok(false);
             }
         } else {
@@ -244,10 +296,7 @@ async fn reconcile_subscriptions(
     // Create before delete: a changed rule has a new name, so its new subscription delivers
     // (possibly alongside the old one) before the old one goes.
     if let Some((name, rule)) = desired.into_iter().next() {
-        client
-            .create_or_update_event_subscription(source.into(), name, rule)
-            .await
-            .context(cloud_error(storage, "Create"))?;
+        put_subscription(client, via, source, name, rule, storage, "Create").await?;
         return Ok(false);
     }
     if let Some(name) = obsolete.first() {
@@ -717,5 +766,41 @@ mod tests {
             .await
             .expect_err("denied delete must fail");
         assert!(error.to_string().contains("Delete"));
+    }
+
+    /// The verifier checks the body as the cloud client serialises it, so pin the shape the
+    /// verifier's rule expects (its own test builds the same document).
+    #[test]
+    fn the_subscription_serialises_as_the_verifier_checks_it() {
+        let request = EventSubscriptionRequest {
+            properties: EventSubscriptionRequestProperties {
+                destination: ServiceBusQueueDestination {
+                    endpoint_type: "ServiceBusQueue".into(),
+                    properties: ServiceBusQueueDestinationProperties {
+                        resource_id: "/queue".into(),
+                    },
+                },
+                filter: EventSubscriptionFilter {
+                    included_event_types: vec!["Microsoft.Storage.BlobCreated".into()],
+                    subject_begins_with: "/begin".into(),
+                    subject_ends_with: Some(".json".into()),
+                    is_subject_case_sensitive: true,
+                },
+                event_delivery_schema: "CloudEventSchemaV1_0".into(),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({"properties": {
+                "destination": {"endpointType": "ServiceBusQueue", "properties": {"resourceId": "/queue"}},
+                "filter": {
+                    "includedEventTypes": ["Microsoft.Storage.BlobCreated"],
+                    "subjectBeginsWith": "/begin",
+                    "subjectEndsWith": ".json",
+                    "isSubjectCaseSensitive": true,
+                },
+                "eventDeliverySchema": "CloudEventSchemaV1_0",
+            }})
+        );
     }
 }

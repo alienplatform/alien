@@ -233,6 +233,7 @@ async fn apply_target_data(
                     target_hash(&TargetDeployment {
                         release_info: release.clone(),
                         config,
+                        signed_config: None,
                     })? == receipt.target_hash
                 }
                 _ => false,
@@ -242,6 +243,15 @@ async fn apply_target_data(
                     message: "The saved air-gapped target cannot be verified for retry; use a newer signed bundle".into(),
                 }));
             }
+        }
+        // Running the same bundle again re-checks it, so a refused bundle is
+        // reported as refused again rather than retrying the release before it.
+        if crate::loops::sync::protect_target(state, &target)
+            .await?
+            .is_none()
+        {
+            state.db.record_airgap_target(&receipt).await?;
+            return Ok(());
         }
         state
             .db
@@ -257,31 +267,13 @@ async fn apply_target_data(
     );
     // First bundle: seed the resource prefix the chart named its service
     // accounts with, as registration does for connected Operators.
-    if state.db.get_deployment_state().await?.is_none() {
-        if let Some(prefix) = &state.config.resource_prefix {
-            state
-                .db
-                .set_deployment_state(&alien_core::DeploymentState {
-                    platform: state.config.platform,
-                    status: alien_core::DeploymentStatus::Pending,
-                    current_release: None,
-                    target_release: None,
-                    stack_state: Some(alien_core::StackState::with_resource_prefix(
-                        state.config.platform,
-                        prefix.clone(),
-                    )),
-                    error: None,
-                    environment_info: None,
-                    runtime_metadata: None,
-                    retry_requested: false,
-                    protocol_version: alien_core::deployment_protocol_version_for_platform(
-                        state.config.platform,
-                        state.config.base_platform,
-                    ),
-                })
-                .await?;
-        }
-    }
+    crate::loops::sync::seed_local_deployment_state(state).await?;
+    let Some(target) = crate::loops::sync::protect_target(state, &target).await? else {
+        // The bundle is handled: its status reports the refusal to the site,
+        // and it isn't checked again on every pass.
+        state.db.record_airgap_target(&receipt).await?;
+        return Ok(());
+    };
     crate::loops::sync::accept_target(state, &target, false).await?;
     state.db.record_airgap_target(&receipt).await?;
     Ok(())
@@ -464,11 +456,14 @@ mod tests {
 
     fn retry_target() -> TargetDeployment {
         TargetDeployment {
+            signed_config: None,
             release_info: ReleaseInfo {
                 release_id: Some("release".into()),
                 version: None,
                 description: None,
                 stack: Stack::new("site".into()).build(),
+                signed: None,
+                signer_lists: Vec::new(),
             },
             config: DeploymentConfig::builder()
                 .stack_settings(Default::default())
@@ -518,6 +513,43 @@ mod tests {
             operations_sync_handler: None,
             pod_log_collection: false,
             cancel: CancellationToken::new(),
+        }
+    }
+
+    /// A protected site's refused bundle is handled once: its status names the
+    /// refusal for `alien-deploy sync`, and running the bundle again reports it
+    /// again instead of retrying the release before it.
+    #[tokio::test]
+    async fn a_refused_bundle_reports_its_refusal_to_the_site() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = retry_state(&directory).await;
+        state.config.release_signing = Some(crate::protected::test_signing("site"));
+        let installed = retry_target();
+        crate::loops::sync::accept_target(&state, &installed, false)
+            .await
+            .unwrap();
+        let mut deployment = state.db.get_deployment_state().await.unwrap().unwrap();
+        deployment.status = DeploymentStatus::Running;
+        deployment.current_release = deployment.target_release.clone();
+        state.db.set_deployment_state(&deployment).await.unwrap();
+        state.db.set_airgap_sequence(7).await.unwrap();
+
+        // The manager's bundle carries a target with no signed release.
+        let unsigned = retry_target();
+        for attempt in ["first", "again"] {
+            apply_target_data(&state, "target", retry_data(&unsigned, 8, attempt))
+                .await
+                .unwrap();
+            let (observed, sequence, exported_attempt) =
+                state.db.airgap_status_snapshot().await.unwrap();
+            let observed = observed.unwrap();
+            assert_eq!(sequence, Some(8));
+            assert_eq!(exported_attempt.as_deref(), Some(attempt));
+            assert_eq!(observed.status, DeploymentStatus::UpdateFailed);
+            assert!(!observed.retry_requested, "nothing retries the old release");
+            let error = observed.error.unwrap();
+            assert_eq!(error.code, "RELEASE_REFUSED");
+            assert!(error.message.contains("not signed"), "{}", error.message);
         }
     }
 

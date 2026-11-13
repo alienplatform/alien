@@ -31,6 +31,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 alien-core = { workspace = true }
+alien-signing = { workspace = true }
 alien-error = { workspace = true }
 alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }
@@ -92,6 +93,7 @@ alien-aws-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 alien-azure-clients = { workspace = true }
 alien-k8s-clients = { workspace = true, features = ["test-utils"] }
+alien-verifier = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -108,3 +110,7 @@ axum = { workspace = true, features = ["http1", "json", "tokio"] }
 tokio = { workspace = true, features = ["net"] }
 mockall = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "protected_worker_update"
+required-features = ["all-platforms"]

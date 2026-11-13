@@ -6,8 +6,8 @@
 import * as z from "zod";
 
 /**
- * @description Security profile shared by container runtimes.
+ * @description Security profile shared by container runtimes.\n\nEvery workload the Operator creates runs under the Kubernetes Pod Security\n`restricted` profile unless its stack sets `security.profile` to\n`unrestricted`. The opt-out is per workload; use it only for an image that\nmust run as root or write outside its declared writable paths.
  */
-export const ContainerSecurityProfileSchema = z.enum(["restricted"]).describe("Security profile shared by container runtimes.")
+export const ContainerSecurityProfileSchema = z.enum(["restricted", "unrestricted"]).describe("Security profile shared by container runtimes.\n\nEvery workload the Operator creates runs under the Kubernetes Pod Security\n`restricted` profile unless its stack sets `security.profile` to\n`unrestricted`. The opt-out is per workload; use it only for an image that\nmust run as root or write outside its declared writable paths.")
 
 export type ContainerSecurityProfile = z.infer<typeof ContainerSecurityProfileSchema>

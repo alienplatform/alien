@@ -347,6 +347,64 @@ impl RemoteBindingSource {
     }
 }
 
+/// Creates an Azure sandbox through the install's manager, for a caller whose own role cannot.
+/// Sends only the sandbox's environment: the manager rebuilds everything else from the signed
+/// release and has the install's verifier create it.
+#[cfg(feature = "azure")]
+#[derive(Debug)]
+pub(super) struct ManagerSandboxCreate {
+    pub(super) source: Arc<RemoteBindingSource>,
+    pub(super) resource_id: String,
+}
+
+#[cfg(feature = "azure")]
+#[async_trait]
+impl crate::providers::sandbox::azure::SandboxCreateRoute for ManagerSandboxCreate {
+    async fn create(
+        &self,
+        environment: &std::collections::BTreeMap<String, String>,
+    ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox> {
+        use alien_client_core::ErrorData as ClientErrorData;
+        let failed =
+            |message: String| AlienError::new(ClientErrorData::HttpRequestFailed { message });
+        let manager =
+            self.source.manager_access().await.map_err(|error| {
+                failed(format!("could not reach the install's manager: {error}"))
+            })?;
+        let url = manager
+            .url
+            .join("v1/bindings/sandboxes/create")
+            .map_err(|error| failed(format!("invalid manager URL: {error}")))?;
+        let response = manager
+            .http
+            .post(url.clone())
+            .json(&serde_json::json!({
+                "deploymentId": manager.deployment_id,
+                "resourceId": self.resource_id,
+                "env": environment,
+            }))
+            .send()
+            .await
+            .map_err(|error| failed(format!("the manager's create request failed: {error}")))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .map_err(|error| failed(format!("the manager's answer could not be read: {error}")))?;
+        if !status.is_success() {
+            return Err(AlienError::new(ClientErrorData::HttpResponseError {
+                message: "The install's manager refused to create the sandbox".to_string(),
+                url: url.to_string(),
+                http_status: status.as_u16(),
+                http_request_text: None,
+                http_response_text: Some(text),
+            }));
+        }
+        serde_json::from_str(&text)
+            .map_err(|error| failed(format!("the manager's answer is not a sandbox: {error}")))
+    }
+}
+
 #[async_trait]
 impl ManagerBindingResolver for GeneratedManagerBindingResolver {
     async fn resolve(

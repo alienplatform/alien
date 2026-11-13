@@ -183,7 +183,7 @@ impl CfEmitter for AwsNetworkEmitter {
                             false,
                         );
                         if ctx.targets_kubernetes
-                            || alien_core::restricts_network_mode(ctx.stack, false)
+                            || crate::emitters::aws::helpers::network_mode_names_subnets(ctx.stack)
                         {
                             byo
                         } else {
@@ -574,7 +574,7 @@ pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression
         CfExpression::object([
             ("IpProtocol", CfExpression::from("tcp")),
             ("FromPort", CfExpression::Integer(3128)),
-            ("ToPort", CfExpression::Integer(3129)),
+            ("ToPort", CfExpression::Integer(3128)),
             ("CidrIp", cidr),
             (
                 "Description",

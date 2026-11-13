@@ -525,6 +525,8 @@ impl InfrastructureDependenciesMutation {
                     | "service_activation"
                     | "remote-stack-management"
                     | "resource-access"
+                    // Setup's verifier: what it names, it references.
+                    | "verifier"
                     | "permission-profile"
                     | "service-account"
             ) {
@@ -607,7 +609,7 @@ mod tests {
             )
             .add(
                 Postgres::new("database".to_string()).build(),
-                ResourceLifecycle::Live,
+                ResourceLifecycle::Frozen,
             )
             .build();
         let stack_state = StackState::new(Platform::Aws);
@@ -803,7 +805,7 @@ mod tests {
             )
             .add(
                 Postgres::new("database".to_string()).build(),
-                ResourceLifecycle::Live,
+                ResourceLifecycle::Frozen,
             )
             .add(
                 alien_core::AzureContainerAppsEnvironment::new("default-container-env".to_string())

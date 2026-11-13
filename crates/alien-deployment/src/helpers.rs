@@ -5,7 +5,7 @@ use alien_core::{
     deployer_secret_environment, deployer_secret_location, deployer_secret_slots,
     AwsEnvironmentInfo, AzureEnvironmentInfo, AzureResourceGroupOutputs, ClientConfig, ComputeKind,
     DeployerSecretEnv, DeployerSecretLocationContext, DeployerSecretReport, DeployerSecretStatus,
-    DeploymentConfig, DeploymentStatus, EnvironmentInfo, EnvironmentVariable,
+    DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentInfo, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, GcpEnvironmentInfo,
     LocalEnvironmentInfo, OtlpConfig, Platform, ResourceLifecycle, ResourceStatus, RuntimeMetadata,
     SecretDelivery, Stack, StackResourceState, StackState, TestEnvironmentInfo, Vault,
@@ -35,6 +35,32 @@ const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
 const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:vault-backed-consumers:v4-keyed\0";
+
+/// The signed statement and signer list chain of the release being
+/// deployed, for controllers that forward them to enforcers.
+pub(crate) fn release_statements(
+    release: Option<&alien_core::ReleaseInfo>,
+) -> Option<alien_core::ReleaseStatements> {
+    let release = release?;
+    Some(alien_core::ReleaseStatements {
+        release: release.signed.clone()?,
+        signer_lists: release.signer_lists.clone(),
+    })
+}
+
+/// The statements of the release an installed deployment runs, for the steps that look after
+/// it (health checks, deletion). A deletion step has no target release, and an install that
+/// was never updated has only a target one.
+pub(crate) fn installed_release_statements(
+    current: &DeploymentState,
+) -> Option<alien_core::ReleaseStatements> {
+    release_statements(
+        current
+            .current_release
+            .as_ref()
+            .or(current.target_release.as_ref()),
+    )
+}
 
 /// The stack the executor reconciles once the deployment is prepared: the prepared stack from
 /// runtime metadata, with the deployment's environment variables and monitoring injected.

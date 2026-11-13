@@ -988,6 +988,11 @@ impl AzurePermissionsHelper {
             }
         };
 
+        // Setup wrote these roles leaving out, on a protected install, what management may not
+        // do there; the same filter gives the same roles, so nothing is rewritten.
+        let permission_context = &permission_context
+            .clone()
+            .with_signing(&ctx.deployment_config.stack_settings);
         let azure_config = ctx.get_azure_config()?;
         let authorization_client = ctx
             .service_provider

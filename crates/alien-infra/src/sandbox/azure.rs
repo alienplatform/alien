@@ -729,16 +729,22 @@ impl AzureSandboxController {
                 }
 
                 let registry_credentials = registry_credentials(ctx, &reference, &config.id)?;
-                let created = client
-                    .create_disk_image(
-                        &group,
-                        CreateDiskImage {
-                            base: reference.clone(),
-                            labels: [(AZURE_DISK_IMAGE_LABEL.to_string(), label.clone())].into(),
-                            registry_credentials,
-                        },
-                    )
-                    .await
+                let request = CreateDiskImage {
+                    base: reference.clone(),
+                    labels: [(AZURE_DISK_IMAGE_LABEL.to_string(), label.clone())].into(),
+                    registry_credentials,
+                };
+                // On a protected install the verifier builds it, from the signed image.
+                let built = match crate::core::verifier::azure_sandbox_disk_image(
+                    ctx, &config.id, &group, &request,
+                )
+                .await
+                {
+                    Ok(Some(image)) => Ok(image),
+                    Ok(None) => client.create_disk_image(&group, request).await,
+                    Err(error) => return Err(error),
+                };
+                let created = built
                     .map_err(|error| {
                         // Azure's reason (a missing tag, a denied pull, an arm64-only image) leads
                         // rather than sitting at the end of the chain.
