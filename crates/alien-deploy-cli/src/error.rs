@@ -37,6 +37,24 @@ pub enum ErrorData {
         failures: Vec<alien_error::AlienError>,
     },
 
+    /// A rerun found no way to authenticate without a setup token.
+    #[error(
+        code = "SETUP_TOKEN_REQUIRED",
+        message = "{message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    SetupTokenRequired { message: String },
+
+    /// A newer rerun of the same deployment replaced this run's key.
+    #[error(
+        code = "UPDATE_TOOK_OVER",
+        message = "{message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    UpdateTookOver { message: String },
+
     #[error(
         code = "CONFIGURATION_ERROR",
         message = "Configuration error: {message}",

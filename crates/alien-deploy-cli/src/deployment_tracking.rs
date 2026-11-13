@@ -16,17 +16,33 @@ pub struct TrackedDeployment {
     pub name: String,
     /// Deployment ID from the manager
     pub deployment_id: String,
-    /// Authentication token
-    pub token: String,
+    /// Authentication token. A Kubernetes install keeps none: the Operator
+    /// enrolls and the installation's key is retired, so a rerun asks the
+    /// running Operator for a short-lived key instead. Files written before
+    /// that carry one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
     /// Manager URL
     pub manager_url: String,
     /// Target platform
     pub platform: String,
+    /// Helm release and namespace of a Kubernetes install, where a rerun finds
+    /// the Operator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helm: Option<TrackedHelmRelease>,
     /// Local platform metadata needed to destroy pull-model resources later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local: Option<TrackedLocalDeployment>,
     /// When the deployment was tracked
     pub tracked_at: String,
+}
+
+/// Where a Kubernetes install's Operator runs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedHelmRelease {
+    pub release: String,
+    pub namespace: String,
 }
 
 /// Metadata for deployments managed by the local operator.
@@ -70,9 +86,10 @@ impl DeploymentTracker {
         &mut self,
         name: String,
         deployment_id: String,
-        token: String,
+        token: Option<String>,
         manager_url: String,
         platform: String,
+        helm: Option<TrackedHelmRelease>,
         local: Option<TrackedLocalDeployment>,
     ) -> Result<TrackedDeployment> {
         let tracked = TrackedDeployment {
@@ -81,6 +98,7 @@ impl DeploymentTracker {
             token,
             manager_url,
             platform,
+            helm,
             local,
             tracked_at: chrono::Utc::now().to_rfc3339(),
         };
@@ -206,16 +224,17 @@ mod tests {
             .track(
                 "prod".to_string(),
                 "dep_123".to_string(),
-                "ax_dg_abc".to_string(),
+                Some("ax_dg_abc".to_string()),
                 "https://manager.example.com".to_string(),
                 "aws".to_string(),
+                None,
                 None,
             )
             .unwrap();
 
         let dep = tracker.get("prod").unwrap();
         assert_eq!(dep.deployment_id, "dep_123");
-        assert_eq!(dep.token, "ax_dg_abc");
+        assert_eq!(dep.token.as_deref(), Some("ax_dg_abc"));
         assert_eq!(dep.manager_url, "https://manager.example.com");
         assert_eq!(dep.platform, "aws");
 
@@ -232,13 +251,11 @@ mod tests {
                 .track(
                     "staging".to_string(),
                     "dep_456".to_string(),
-                    "ax_dg_def".to_string(),
+                    Some("ax_dg_def".to_string()),
                     "https://manager.test.com".to_string(),
                     "local".to_string(),
-                    Some(TrackedLocalDeployment {
-                        data_dir: "/tmp/alien-agent-state".to_string(),
-                        service_managed: true,
-                    }),
+                    None,
+                    Some(TrackedLocalDeployment { data_dir: "/tmp/alien-agent-state".to_string(), service_managed: true, }),
                 )
                 .unwrap();
         }
@@ -267,9 +284,10 @@ mod tests {
             .track(
                 "prod".to_string(),
                 "dep_1".to_string(),
-                "tok".to_string(),
+                Some("tok".to_string()),
                 "url".to_string(),
                 "aws".to_string(),
+                None,
                 None,
             )
             .unwrap();
@@ -295,9 +313,10 @@ mod tests {
             .track(
                 "a".into(),
                 "dep_a".into(),
-                "t".into(),
+                Some("t".into()),
                 "u".into(),
                 "aws".into(),
+                None,
                 None,
             )
             .unwrap();
@@ -305,9 +324,10 @@ mod tests {
             .track(
                 "b".into(),
                 "dep_b".into(),
-                "t".into(),
+                Some("t".into()),
                 "u".into(),
                 "gcp".into(),
+                None,
                 None,
             )
             .unwrap();
@@ -327,9 +347,10 @@ mod tests {
             .track(
                 "prod".into(),
                 "dep_old".into(),
-                "t".into(),
+                Some("t".into()),
                 "u".into(),
                 "aws".into(),
+                None,
                 None,
             )
             .unwrap();
@@ -337,9 +358,10 @@ mod tests {
             .track(
                 "prod".into(),
                 "dep_new".into(),
-                "t".into(),
+                Some("t".into()),
                 "u".into(),
                 "aws".into(),
+                None,
                 None,
             )
             .unwrap();
@@ -355,7 +377,8 @@ mod tests {
         let dep = TrackedDeployment {
             name: "test".to_string(),
             deployment_id: "dep_123".to_string(),
-            token: "ax_dg_abc".to_string(),
+            token: Some("ax_dg_abc".to_string()),
+            helm: None,
             manager_url: "https://example.com".to_string(),
             platform: "aws".to_string(),
             local: None,
@@ -368,5 +391,51 @@ mod tests {
 
         let deserialized: TrackedDeployment = serde_json::from_value(json).unwrap();
         assert_eq!(deserialized.deployment_id, "dep_123");
+    }
+
+    #[test]
+    fn a_file_written_before_helm_tracking_still_loads_and_keeps_its_token() {
+        let path = temp_tracking_path();
+        std::fs::write(
+            &path,
+            r#"{"prod":{"name":"prod","deploymentId":"dep_1","token":"ax_dep_saved","managerUrl":"https://m","platform":"kubernetes","trackedAt":"2026-01-01T00:00:00Z"}}"#,
+        )
+        .unwrap();
+        let tracker = DeploymentTracker::with_path(path.clone()).unwrap();
+        let tracked = tracker.get("prod").unwrap();
+        assert_eq!(tracked.token.as_deref(), Some("ax_dep_saved"));
+        assert!(tracked.helm.is_none());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_kubernetes_install_is_saved_without_a_token_and_with_its_release() {
+        let path = temp_tracking_path();
+        let mut tracker = DeploymentTracker::with_path(path.clone()).unwrap();
+        tracker
+            .track(
+                "prod".into(),
+                "dep_1".into(),
+                None,
+                "https://m".into(),
+                "kubernetes".into(),
+                Some(TrackedHelmRelease {
+                    release: "rel".into(),
+                    namespace: "ns".into(),
+                }),
+                None,
+            )
+            .unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("token"), "no token on disk: {written}");
+        let reloaded = DeploymentTracker::with_path(path.clone()).unwrap();
+        assert_eq!(
+            reloaded.get("prod").unwrap().helm,
+            Some(TrackedHelmRelease {
+                release: "rel".into(),
+                namespace: "ns".into()
+            })
+        );
+        let _ = std::fs::remove_file(&path);
     }
 }

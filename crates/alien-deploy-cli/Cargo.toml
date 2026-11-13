@@ -28,7 +28,7 @@ alien-operator = { path = "../alien-operator" }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
 
 # Async & HTTP
-tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }
+tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal", "process"] }
 reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 
 # AWS SDK for `register --import cloudformation`.

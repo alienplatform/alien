@@ -3,6 +3,7 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
+use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
@@ -50,6 +51,22 @@ pub struct StatusArgs {
     /// Output status as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Kubernetes namespace of a Kubernetes install (default: the one it was installed in).
+    #[arg(long, env = "ALIEN_KUBERNETES_NAMESPACE")]
+    pub namespace: Option<String>,
+
+    /// Helm release of a Kubernetes install (default: the one it was installed as).
+    #[arg(long, env = "ALIEN_HELM_RELEASE")]
+    pub helm_release: Option<String>,
+
+    /// Kubeconfig path for Kubernetes installs. Defaults to KUBECONFIG or kubectl defaults.
+    #[arg(long, env = "KUBECONFIG")]
+    pub kubeconfig: Option<String>,
+
+    /// Kubernetes context for Kubernetes installs.
+    #[arg(long, env = "ALIEN_KUBE_CONTEXT")]
+    pub kube_context: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,11 +117,47 @@ pub async fn status_command(
     args: StatusArgs,
     embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
+    let in_cluster = InClusterUse::default();
+    status_command_with(args, embedded_config, &in_cluster)
+        .await
+        .map_err(|error| in_cluster.explain(error))
+}
+
+async fn status_command_with(
+    args: StatusArgs,
+    embedded_config: Option<&DeployCliConfig>,
+    in_cluster: &InClusterUse,
+) -> Result<()> {
     let tracker = DeploymentTracker::new()?;
 
     let tracked = tracker.get(&args.name);
-    let token = resolve_optional_token(args.token.clone(), args.token_file.as_ref(), embedded_config)?
-        .or_else(|| tracked.map(|deployment| deployment.token.clone()))
+    let explicit =
+        resolve_optional_token(args.token.clone(), args.token_file.as_ref(), embedded_config)?;
+    let token = match tracked {
+        Some(tracked) => {
+            let cli_name = embedded_config
+                .and_then(|config| config.name.as_deref())
+                .unwrap_or("alien-deploy");
+            let rerun = rerun_credential::resolve(
+                explicit,
+                tracked,
+                &KubeAccess {
+                    release: args.helm_release.clone(),
+                    namespace: args.namespace.clone(),
+                    kubeconfig: args.kubeconfig.clone(),
+                    kube_context: args.kube_context.clone(),
+                },
+                cli_name,
+                "status",
+            )
+            .await?;
+            if rerun.in_cluster {
+                in_cluster.mark(&args.name);
+            }
+            Some(rerun.token)
+        }
+        None => explicit,
+    }
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "token".to_string(),
