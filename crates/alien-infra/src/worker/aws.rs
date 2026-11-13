@@ -929,6 +929,7 @@ impl AwsWorkerController {
         // If the image URI points to ECR in a different region (e.g., the management
         // region), rewrite it to reference the local region where the replicated copy
         // lives. ECR private image replication must be configured separately.
+        Self::ensure_image_replicated(ctx, aws_cfg, &image_uri, &cfg.id).await?;
         let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
 
         let code = FunctionCode::builder().image_uri(image_uri).build();
@@ -3112,6 +3113,7 @@ impl AwsWorkerController {
                 image_uri
             };
 
+            Self::ensure_image_replicated(ctx, aws_cfg, &image_uri, &current_config.id).await?;
             let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
 
             let request = UpdateFunctionCodeRequest::builder()
@@ -5407,6 +5409,34 @@ impl AwsWorkerController {
                 resource_id: Some(resource_id.to_string()),
             })),
         }
+    }
+
+    /// Fails closed before Lambda create/update when the image is in another
+    /// region and the exact image has not reached the Lambda's region.
+    async fn ensure_image_replicated(
+        ctx: &ResourceControllerContext<'_>,
+        aws_cfg: &alien_core::AwsClientConfig,
+        image_uri: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        let Some(image) = super::ecr_region::parse_ecr_image_ref(image_uri) else {
+            return Ok(());
+        };
+        if image.region == aws_cfg.region {
+            return Ok(());
+        }
+        let mut source_cfg = aws_cfg.clone();
+        source_cfg.region = image.region.clone();
+        let source = ctx.service_provider.get_aws_ecr_client(&source_cfg).await?;
+        let target = ctx.service_provider.get_aws_ecr_client(aws_cfg).await?;
+        super::ecr_region::ensure_image_in_region(
+            image_uri,
+            &aws_cfg.region,
+            source.as_ref(),
+            target.as_ref(),
+            resource_id,
+        )
+        .await
     }
 
     /// Rewrite an ECR image URI to use the given region if it points to a different one.
