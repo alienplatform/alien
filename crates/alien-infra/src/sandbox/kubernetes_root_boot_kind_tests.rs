@@ -439,7 +439,22 @@ def get(extra=None):
         return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, ""
-status, body = get()
+# The startup egress gate runs before the agent listens; wait for the preview port.
+deadline = time.time() + 90
+while True:
+    try:
+        socket.create_connection((base, 8971), timeout=2).close()
+        break
+    except OSError:
+        if time.time() > deadline:
+            raise
+        time.sleep(1)
+# The workload starts after the agent listens: 502 until its port is open.
+while True:
+    status, body = get()
+    if status != 502 or time.time() > deadline:
+        break
+    time.sleep(1)
 out = {"http": status}
 if status == 200:
     seen = json.loads(body)
