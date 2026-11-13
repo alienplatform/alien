@@ -9,8 +9,9 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context};
 use alien_signing::{
-    binding_env, binding_env_name, build_workload, check_own_binding, release::RUNTIME_SEND_OTLP,
-    resolve_bindings, InstallId, LocalValues, OwnBindingFacts, Workload, WorkloadRequest,
+    binding_env, binding_env_name, binding_env_with, build_workload, check_own_binding,
+    release::RUNTIME_SEND_OTLP, resolve_bindings, InstallId, LocalValues, OwnBindingFacts,
+    Workload, WorkloadRequest,
 };
 use serde_json::Value;
 
@@ -169,10 +170,14 @@ pub fn check_env(
     // The secrets the function loads at start are the signed list.
     let secrets_list = rest.remove(SECRETS_ENV);
 
-    let derived =
-        binding_env(&workload.bindings, &place.binding_context()).context(ErrorData::Refused {
-            reason: format!("the bindings of workload '{name}' were refused"),
-        })?;
+    let derived = binding_env_with(
+        &workload.bindings,
+        &accepted.release.body.live_resources(),
+        &place.binding_context(),
+    )
+    .context(ErrorData::Refused {
+        reason: format!("the bindings of workload '{name}' were refused"),
+    })?;
     let bindings = resolve_bindings(derived, &reads.bindings, &config.bindings).context(
         ErrorData::Refused {
             reason: format!("the bindings of workload '{name}' have no value"),

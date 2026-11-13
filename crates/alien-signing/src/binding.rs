@@ -17,7 +17,7 @@
 //! [`resolve_bindings`] applies that order. The control plane supplies none of
 //! them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use alien_error::AlienError;
 use serde_json::json;
@@ -254,8 +254,23 @@ pub struct Bindings {
 
 /// The value of every binding in `bindings` (resource id to resource type)
 /// that follows from the install, by environment name.
+///
+/// Every resource is taken to be Frozen, which setup creates; see [`binding_env_with`] for a
+/// stack that also has Live resources.
 pub fn binding_env(
     bindings: &BTreeMap<String, String>,
+    context: &BindingContext,
+) -> Result<Bindings> {
+    binding_env_with(bindings, &BTreeSet::new(), context)
+}
+
+/// [`binding_env`], where `live` holds the ids of the signed stack's Live resources. A Live
+/// resource is created by its controller, which names a GCP queue's subscription `<topic>-sub`
+/// and keeps a KV store in the `(default)` Firestore database, in the collection
+/// `kv-<prefix>-<id>`; a Frozen one is created by setup, which names them differently.
+pub fn binding_env_with(
+    bindings: &BTreeMap<String, String>,
+    live: &BTreeSet<String>,
     context: &BindingContext,
 ) -> Result<Bindings> {
     let mut derived = Bindings::default();
@@ -285,7 +300,13 @@ pub fn binding_env(
             ("gcp", "queue") => json!({
                 "service": "pubsub",
                 "topic": name,
-                "subscription": format!("{name}-default"),
+                "subscription": format!("{name}{}", if live.contains(id) { "-sub" } else { "-default" }),
+            }),
+            ("gcp", "kv") if live.contains(id) => json!({
+                "service": "firestore",
+                "projectId": context.account,
+                "databaseId": "(default)",
+                "collectionName": format!("kv-{name}").to_lowercase().replace('_', "-"),
             }),
             ("gcp", "kv") => json!({
                 "service": "firestore",

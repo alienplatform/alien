@@ -619,3 +619,42 @@ fn config_sets_only_bindings_the_release_has() {
     };
     assert_eq!(code(other.check(&release)), "SIGNING_BODY_REFUSED");
 }
+
+#[test]
+fn a_live_gcp_queue_and_kv_are_named_the_way_their_controllers_name_them() {
+    let context = BindingContext {
+        platform: "gcp".to_string(),
+        prefix: PREFIX.to_string(),
+        account: "acme-project".to_string(),
+        region: None,
+    };
+    let live = std::collections::BTreeSet::from(["jobs".to_string(), "Meta_data".to_string()]);
+    let derived = alien_signing::binding_env_with(
+        &BTreeMap::from([
+            ("jobs".to_string(), "queue".to_string()),
+            ("Meta_data".to_string(), "kv".to_string()),
+        ]),
+        &live,
+        &context,
+    )
+    .unwrap();
+    let value =
+        |name: &str| -> serde_json::Value { serde_json::from_str(&derived.values[name]).unwrap() };
+    assert_eq!(
+        value("ALIEN_JOBS_BINDING"),
+        serde_json::json!({
+            "service": "pubsub",
+            "topic": "acme-prod-jobs",
+            "subscription": "acme-prod-jobs-sub",
+        })
+    );
+    assert_eq!(
+        value("ALIEN_META_DATA_BINDING"),
+        serde_json::json!({
+            "service": "firestore",
+            "projectId": "acme-project",
+            "databaseId": "(default)",
+            "collectionName": "kv-acme-prod-meta-data",
+        })
+    );
+}

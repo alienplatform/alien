@@ -345,6 +345,19 @@ pub struct FunctionSettings {
 }
 
 impl ReleaseBody {
+    /// The ids of the signed stack's Live resources, whose names their controllers choose.
+    pub fn live_resources(&self) -> BTreeSet<String> {
+        self.stack
+            .as_ref()
+            .and_then(|stack| stack.get("resources"))
+            .and_then(|resources| resources.as_object())
+            .into_iter()
+            .flatten()
+            .filter(|(_, entry)| entry["lifecycle"] == "live")
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// Check the rules a release must follow before any of it is used.
     pub fn validate(&self) -> Result<()> {
         let mut names = BTreeSet::new();

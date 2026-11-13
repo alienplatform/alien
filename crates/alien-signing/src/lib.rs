@@ -35,8 +35,8 @@ pub mod signer_list;
 pub mod verify;
 
 pub use binding::{
-    binding_env, binding_env_name, check_own_binding, resolve_bindings, BindingContext, Bindings,
-    OwnBindingFacts,
+    binding_env, binding_env_name, binding_env_with, check_own_binding, resolve_bindings,
+    BindingContext, Bindings, OwnBindingFacts,
 };
 pub use config::ConfigBody;
 pub use envelope::{Envelope, Kind, Opened, Role, Signature, SignedStatement};
