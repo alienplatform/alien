@@ -38,13 +38,15 @@ pub(super) async fn supervisor_udp(privileged: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
+pub(super) async fn command(identity: crate::exec::ExecIdentity, privileged: bool) -> Result<()> {
     let executable = std::env::current_exe()
         .into_alien_error()
         .context(failed("locate path check executable"))?;
     let mut command = tokio::process::Command::new(executable);
     command
         .arg("--egress-path-check")
+        .args(privileged.then_some("--privileged"))
+        .stdout(std::process::Stdio::piped())
         .env_clear()
         .kill_on_drop(true);
     // SAFETY: only the existing async-signal-safe identity drop runs between fork and exec.
@@ -54,6 +56,7 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
     let (mut child, _registration) = crate::children::spawn(&mut command)
         .into_alien_error()
         .context(failed("spawn command path check"))?;
+    let mut output = child.stdout.take();
     let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
         .await
         .into_alien_error()
@@ -61,10 +64,18 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
         .into_alien_error()
         .context(failed("run command path check"))?;
     if !status.success() {
+        // The child names what it found (for the metadata check: the cloud and path).
+        let mut cause = String::new();
+        if let Some(output) = output.as_mut() {
+            use tokio::io::AsyncReadExt;
+            let _ = output.take(1024).read_to_string(&mut cause).await;
+        }
+        let cause = cause.trim();
         let reason = status.code().map_or("the check was killed by a signal", path_check_reason);
+        let detail = if cause.is_empty() { String::new() } else { format!(": {cause}") };
         return Err(AlienError::new(ErrorData::egress_unverified(
             "command-identity",
-            format!("the command-identity path check did not confirm the path is closed: {reason} ({status})"),
+            format!("the command-identity path check did not confirm the path is closed: {reason} ({status}){detail}"),
         )));
     }
     Ok(())
@@ -93,18 +104,29 @@ fn path_check_reason(code: i32) -> &'static str {
 }
 
 /// Internal child mode. It receives no token or credentials and has the command's exact identity.
+///
 /// Returns [`PATH_CHECK_CLOSED`] when the path is closed, else the code naming the failed check.
-pub fn command_path_check() -> i32 {
-    for (address, code) in [
-        (
-            SocketAddr::from(([169, 254, 169, 254], 80)),
-            PATH_CHECK_METADATA_ANSWERED,
-        ),
-        (
-            SocketAddr::from(([1, 1, 1, 1], 443)),
-            PATH_CHECK_INTERNET_ANSWERED,
-        ),
-    ] {
+/// With `privileged` (a redirect exists) nothing may answer on the metadata address. Without it
+/// (Kubernetes) a NetworkPolicy may leave that address reachable, so the check is that no
+/// credentials or identity can be obtained from it. A leak is printed for the parent to report.
+pub fn command_path_check(privileged: bool) -> i32 {
+    let mut addresses = vec![(
+        SocketAddr::from(([1, 1, 1, 1], 443)),
+        PATH_CHECK_INTERNET_ANSWERED,
+    )];
+    if privileged {
+        addresses.insert(
+            0,
+            (
+                SocketAddr::from(([169, 254, 169, 254], 80)),
+                PATH_CHECK_METADATA_ANSWERED,
+            ),
+        );
+    } else if let Err(leak) = crate::metadata::credentials_obtainable() {
+        println!("{leak}");
+        return PATH_CHECK_METADATA_ANSWERED;
+    }
+    for (address, code) in addresses {
         if let Ok(mut stream) = TcpStream::connect_timeout(&address, PROBE_TIMEOUT) {
             if stream.set_read_timeout(Some(PROBE_TIMEOUT)).is_err()
                 || stream.set_write_timeout(Some(PROBE_TIMEOUT)).is_err()
@@ -144,8 +166,8 @@ pub fn command_path_check() -> i32 {
 }
 
 /// Whether the command identity's path is closed.
-pub fn command_path_is_closed() -> bool {
-    command_path_check() == PATH_CHECK_CLOSED
+pub fn command_path_is_closed(privileged: bool) -> bool {
+    command_path_check(privileged) == PATH_CHECK_CLOSED
 }
 
 #[cfg(test)]

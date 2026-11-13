@@ -51,7 +51,21 @@ const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
 fn main() -> Result<()> {
     #[cfg(target_os = "linux")]
     if std::env::args().nth(1).as_deref() == Some("--egress-path-check") {
-        std::process::exit(alien_sandbox_agent::gateway_egress::command_path_check());
+        std::process::exit(alien_sandbox_agent::gateway_egress::command_path_check(
+            std::env::args().any(|argument| argument == "--privileged"),
+        ));
+    }
+
+    // `check-metadata`: exits non-zero, naming what a command could read from the node's
+    // metadata service. Run it as the identity that runs commands (install hooks use it).
+    if std::env::args().nth(1).as_deref() == Some("check-metadata") {
+        return match alien_sandbox_agent::metadata::credentials_obtainable() {
+            Ok(()) => Ok(()),
+            Err(leak) => {
+                eprintln!("{leak}");
+                std::process::exit(1);
+            }
+        };
     }
 
     // Before anything reads the environment: the validate hook runs this binary as the exec
