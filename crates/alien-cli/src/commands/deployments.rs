@@ -147,6 +147,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::SetInputs { json: true, .. }
                 | DeploymentsCmd::Check { json: true, .. }
         ) || matches!(&self.cmd, DeploymentsCmd::JoinTokens { cmd } if cmd.json())
+            || matches!(&self.cmd, DeploymentsCmd::Transfer { cmd } if cmd.json())
     }
 }
 
@@ -488,6 +489,11 @@ pub enum DeploymentsCmd {
         /// Print the server response as machine-readable JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Transfer a deployment to another instance of the workspace without replacing its resources
+    Transfer {
+        #[command(subcommand)]
+        cmd: crate::commands::deployment_transfer::TransferCmd,
     },
     /// Pin a deployment to a specific release
     Pin {
@@ -1540,6 +1546,17 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             .await
         }
         DeploymentsCmd::JoinTokens { cmd } => join_tokens_task(&ctx, cmd).await,
+        DeploymentsCmd::Transfer { cmd } => {
+            let target = resolve_platform_target(&ctx, cmd.id(), cmd.json(), "Transfers").await?;
+            crate::commands::deployment_transfer::run(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                &target.deployment.name,
+                &cmd,
+            )
+            .await
+        }
         DeploymentsCmd::Untrack { name } => untrack_deployment_task(&name),
     }
 }
