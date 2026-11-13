@@ -310,3 +310,82 @@ async fn kubernetes_root_boot_kind_a_non_root_image_still_runs_restricted() {
         &["delete", "pod", "-n", &restricted, &pod, "--wait=false"],
     );
 }
+
+/// Run as root inside the pod (the same user and capability set as the image's ENTRYPOINT), this
+/// tries everything that would let image code replace the next boot's agent or its metadata.
+const ATTACK: &str = r#"
+import ctypes, errno, os, sys
+agent = "/usr/local/bin/alien-sandbox-agent"
+meta = "/opt/alien"
+assert os.getuid() == 0
+libc = ctypes.CDLL(None, use_errno=True)
+fails = []
+def refused(name, call, allowed=(errno.EROFS, errno.EPERM, errno.EBUSY, errno.EACCES, errno.ETXTBSY)):
+    try:
+        result = call()
+    except OSError as error:
+        if error.errno not in allowed:
+            fails.append(f"{name}: unexpected errno {error.errno}")
+        return
+    if result not in (None, -1):
+        fails.append(f"{name}: succeeded")
+    elif result == -1 and ctypes.get_errno() not in allowed:
+        fails.append(f"{name}: unexpected errno {ctypes.get_errno()}")
+    elif result is None:
+        fails.append(f"{name}: succeeded")
+def mount(source, target, fstype, flags):
+    return libc.mount(source, target, fstype, flags, None)
+MS_REMOUNT, MS_BIND = 32, 4096
+refused("write agent", lambda: open(agent, "wb").close())
+refused("append agent", lambda: open(agent, "ab").write(b"x"))
+refused("truncate agent", lambda: os.truncate(agent, 0))
+refused("chmod agent", lambda: os.chmod(agent, 0o777))
+refused("rename agent", lambda: os.rename(agent, agent + ".old"))
+refused("unlink agent", lambda: os.unlink(agent))
+refused("create under /opt/alien", lambda: open(meta + "/new", "w").close())
+refused("delete under /opt/alien", lambda: os.unlink(meta + "/image-command.json"))
+refused("rename under /opt/alien", lambda: os.rename(meta + "/image-command.json", meta + "/x"))
+refused("remount agent rw", lambda: mount(None, agent.encode(), None, MS_REMOUNT | MS_BIND))
+refused("remount meta rw", lambda: mount(None, meta.encode(), None, MS_REMOUNT | MS_BIND))
+refused("umount agent", lambda: libc.umount(agent.encode()))
+refused("umount meta", lambda: libc.umount(meta.encode()))
+refused("bind over agent", lambda: mount(b"/tmp", agent.encode(), None, MS_BIND))
+refused("bind over meta", lambda: mount(b"/tmp", meta.encode(), None, MS_BIND))
+# The agent is PID 1 of the container; a same-uid root without SYS_PTRACE must not attach.
+PTRACE_ATTACH = 16
+refused("ptrace attach to the agent", lambda: libc.ptrace(PTRACE_ATTACH, 1, 0, 0))
+try:
+    os.open("/proc/1/mem", os.O_RDWR)
+    fails.append("opened the agent's /proc/1/mem")
+except OSError:
+    pass
+print("FAILS:" + ";".join(fails) if fails else "ALL REFUSED")
+"#;
+
+#[tokio::test]
+#[ignore = "needs a Kind cluster; see the module docs"]
+async fn kubernetes_root_boot_kind_root_image_code_cannot_replace_the_agent_or_its_metadata() {
+    let context = env("ALIEN_ROOT_BOOT_KIND_CONTEXT");
+    let baseline = env("ALIEN_ROOT_BOOT_KIND_BASELINE_NAMESPACE");
+    let pods = client(&context).await;
+    let pair = ed25519_compact::KeyPair::generate();
+    let public_key = BASE64.encode(pair.pk.as_ref());
+    let sandbox = declared("rootprotect", 0);
+    let (pod, _) = start(&pods, &context, &baseline, &sandbox, &public_key)
+        .await
+        .expect("a root-boot pod is admitted where Pod Security is baseline");
+    let output = kubectl(
+        &context,
+        &["exec", "-n", &baseline, &pod, "--", "python3", "-c", ATTACK],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let _ = kubectl(
+        &context,
+        &["delete", "pod", "-n", &baseline, &pod, "--wait=false"],
+    );
+    assert!(
+        stdout.contains("ALL REFUSED"),
+        "root image code changed the agent or its metadata: {stdout} {stderr}"
+    );
+}
