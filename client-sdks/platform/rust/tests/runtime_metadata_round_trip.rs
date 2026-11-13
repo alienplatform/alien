@@ -230,6 +230,7 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         registry_access: Some(RegistryAccess {
             repositories: vec!["repo".to_string()],
             service_types: vec!["lambda".to_string()],
+            verifier: Some("verifier".to_string()),
         }),
         setup_scaffolding: [(
             "worker".to_string(),
@@ -263,6 +264,8 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         version: Some("1.0.0".to_string()),
         description: Some("release".to_string()),
         stack,
+        signed: None,
+        signer_lists: Vec::new(),
     };
     DeploymentState {
         status: DeploymentStatus::Updating,
