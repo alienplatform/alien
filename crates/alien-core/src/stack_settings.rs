@@ -1067,7 +1067,9 @@ pub fn is_pinned_image(image: &str) -> bool {
             .bytes()
             .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'/'))
         && hex.len() == 64
-        && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Digest (`sha256:<64 hex>`) of the Operator image protected charts run, if this build has
@@ -1076,8 +1078,11 @@ pub fn is_pinned_image(image: &str) -> bool {
 pub fn operator_digest() -> Option<&'static str> {
     let digest = include_str!("../operator-digest.txt").trim();
     let hex = digest.strip_prefix("sha256:")?;
-    (hex.len() == 64 && hex.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
-        .then_some(digest)
+    (hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+    .then_some(digest)
 }
 
 /// Values a protected setup pins that come with the CLI build, not with the stack: the account

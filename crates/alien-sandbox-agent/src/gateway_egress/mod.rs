@@ -54,6 +54,19 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
     AlienError::new(failed(reason))
 }
 
+/// Whether the egress limit is enforced outside the pod (Kubernetes NetworkPolicy plus the
+/// gateway). Only the operator's pod spec sets the variable. Anywhere else it refuses to start,
+/// so it can never downgrade the in-guest VM path.
+fn external_enforcement(value: Option<&str>, on_kubernetes: bool) -> Result<bool> {
+    match value {
+        None => Ok(false),
+        Some("networkpolicy") if on_kubernetes => Ok(true),
+        Some(_) => Err(invalid(
+            "ALIEN_SANDBOX_NETWORK_ENFORCER is only valid as `networkpolicy` on Kubernetes",
+        )),
+    }
+}
+
 /// Session egress state. Tokens never enter command environments, even in proxy-only mode.
 pub struct GatewayEgress {
     address: RwLock<Option<SocketAddr>>,
@@ -135,7 +148,13 @@ impl GatewayEgress {
         let identity = std::env::var("ALIEN_SANDBOX_EGRESS_AUDIENCE")
             .ok()
             .zip(std::env::var("ALIEN_SANDBOX_SESSION_ID").ok());
-        let privileged = unsafe { libc::geteuid() } == 0;
+        let privileged = unsafe { libc::geteuid() } == 0
+            && !external_enforcement(
+                std::env::var(alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER)
+                    .ok()
+                    .as_deref(),
+                std::env::var_os("KUBERNETES_SERVICE_HOST").is_some(),
+            )?;
         let defer_routing = crate::image_command::defer_to_run_hook()?;
         if defer_routing && !privileged {
             return Err(invalid("Run-hook firewall installation requires root"));
@@ -892,5 +911,24 @@ mod forwarder_tests {
         assert_eq!(hosts(&head), ["other.com:443"]);
         assert!(!head.contains("Basic guest"));
         assert_eq!(head.matches("Proxy-Authorization").count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod enforcer_tests {
+    use super::external_enforcement;
+
+    #[test]
+    fn selects_external_enforcement_only_on_kubernetes() {
+        assert!(!external_enforcement(None, false).unwrap());
+        assert!(!external_enforcement(None, true).unwrap());
+        assert!(external_enforcement(Some("networkpolicy"), true).unwrap());
+    }
+
+    #[test]
+    fn refuses_the_variable_off_kubernetes_or_with_another_value() {
+        assert!(external_enforcement(Some("networkpolicy"), false).is_err());
+        assert!(external_enforcement(Some("none"), true).is_err());
+        assert!(external_enforcement(Some(""), true).is_err());
     }
 }

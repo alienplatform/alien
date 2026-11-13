@@ -269,22 +269,31 @@ pub(super) async fn bootstrap_environment(
                 resource_id: Some(sandbox.id.clone()),
             })
         })?;
+    let mut variables: Vec<(&str, String)> = vec![
+        ("ALIEN_SANDBOX_EGRESS", "internet".into()),
+        ("ALIEN_SANDBOX_EGRESS_GATEWAY", format!("{address}:3128")),
+        (
+            "ALIEN_SANDBOX_EGRESS_AUDIENCE",
+            format!("{}/{}", ctx.resource_prefix, sandbox.id),
+        ),
+    ];
+    // A root-boot pod has no NET_ADMIN, so the agent cannot install firewall rules inside it.
+    // NetworkPolicy and the gateway enforce the egress limit outside the pod.
+    if sandbox.image_user == Some(0) {
+        variables.push((
+            alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER,
+            "networkpolicy".into(),
+        ));
+    }
     Ok(Some(
-        [
-            ("ALIEN_SANDBOX_EGRESS", "internet".into()),
-            ("ALIEN_SANDBOX_EGRESS_GATEWAY", format!("{address}:3128")),
-            (
-                "ALIEN_SANDBOX_EGRESS_AUDIENCE",
-                format!("{}/{}", ctx.resource_prefix, sandbox.id),
-            ),
-        ]
-        .into_iter()
-        .map(|(name, value)| EnvVar {
-            name: name.into(),
-            value: Some(value),
-            value_from: None,
-        })
-        .collect(),
+        variables
+            .into_iter()
+            .map(|(name, value)| EnvVar {
+                name: name.into(),
+                value: Some(value),
+                value_from: None,
+            })
+            .collect(),
     ))
 }
 
@@ -528,7 +537,23 @@ mod tests {
                 .as_deref(),
             Some("test/subject")
         );
-        service.assert_async().await;
+        // A non-root image keeps its in-pod enforcement and gets no enforcer setting.
+        assert!(!environment
+            .iter()
+            .any(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER"));
+        let mut root_sandbox = sandbox.clone();
+        root_sandbox.image_user = Some(0);
+        let root_environment = bootstrap_environment(&ctx, &root_sandbox, "test-ns")
+            .await
+            .unwrap()
+            .unwrap();
+        let enforcers: Vec<_> = root_environment
+            .iter()
+            .filter(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER")
+            .collect();
+        assert_eq!(enforcers.len(), 1);
+        assert_eq!(enforcers[0].value.as_deref(), Some("networkpolicy"));
+        service.assert_hits_async(2).await;
     }
 
     /// A gateway image that mounts its configuration and replica secret.
