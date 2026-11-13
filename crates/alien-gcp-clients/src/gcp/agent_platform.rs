@@ -257,6 +257,24 @@ pub struct EgressControlConfig {
     /// Whether the sandbox may reach the public internet
     #[serde(skip_serializing_if = "Option::is_none")]
     pub internet_access: Option<bool>,
+    /// Network attachment (PSC-I) that puts the sandbox's egress into the caller's VPC, as
+    /// `projects/{p}/regions/{r}/networkAttachments/{n}`. Fixed for a project by its first
+    /// sandbox, so every template must carry it or none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_attachment: Option<String>,
+    /// Preview fields not modelled above, kept rather than dropped.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Ingress policy for a template.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IngressControlConfig {
+    /// Publishes the sandbox behind a Private Service Connect service attachment (PSC-E).
+    /// PSC-I and PSC-E are enabled together or not at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_private_service_connect: Option<bool>,
     /// Preview fields not modelled above, kept rather than dropped.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -278,6 +296,9 @@ pub struct SandboxEnvironmentTemplate {
     /// Egress policy
     #[serde(skip_serializing_if = "Option::is_none")]
     pub egress_control_config: Option<EgressControlConfig>,
+    /// Ingress policy
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingress_control_config: Option<IngressControlConfig>,
     /// Lifecycle state, e.g. `ACTIVE`; unset on a create request
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
@@ -1495,8 +1516,10 @@ mod tests {
                 }),
                 egress_control_config: Some(EgressControlConfig {
                     internet_access: Some(true),
+                    network_attachment: None,
                     extra: serde_json::Map::new(),
                 }),
+                ingress_control_config: None,
                 state: None,
                 extra: serde_json::Map::new(),
             }

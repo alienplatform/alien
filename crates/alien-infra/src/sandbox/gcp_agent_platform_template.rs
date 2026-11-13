@@ -26,7 +26,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
     ContainerPort, ContainerResources, CustomContainerEnvironment, CustomContainerSpec,
-    EgressControlConfig, SandboxEnvironmentTemplate,
+    EgressControlConfig, IngressControlConfig, SandboxEnvironmentTemplate,
 };
 use alien_gcp_clients::longrunning::OperationResult;
 use alien_macros::controller;
@@ -160,19 +160,28 @@ fn build_template_body(
     sandbox: &Sandbox,
     display_name: &str,
     deployment_config: &DeploymentConfig,
+    network_attachment: Option<&str>,
 ) -> Result<SandboxEnvironmentTemplate> {
     let (image, limits, internet_access) = template_identity(sandbox)?;
     let image = pulled_image(&image, deployment_config, sandbox.id())?;
 
-    // cpu and memory are the ceilings the API's resource map expresses; disk and max_processes have
-    // no field on this template and are enforced by the runtime tier instead.
+    // cpu, memory and ephemeral-storage are the ceilings the API's resource map expresses;
+    // max_processes has no field on this template. The API refuses ephemeral-storage above its
+    // cap, which `validate_for_platform` already refuses at plan time.
     let resources = ContainerResources {
         requests: None,
         limits: Some(HashMap::from([
             ("cpu".to_string(), limits.cpu),
             ("memory".to_string(), limits.memory),
+            ("ephemeral-storage".to_string(), limits.disk),
         ])),
     };
+
+    // Ingress only reaches a port the template declares: the agent's own, then every preview port.
+    let mut declared_ports = vec![i32::from(GCP_AGENT_PLATFORM.port)];
+    declared_ports.extend(sandbox.preview_ports.iter().map(|port| i32::from(*port)));
+    declared_ports.sort_unstable();
+    declared_ports.dedup();
 
     Ok(SandboxEnvironmentTemplate {
         name: None,
@@ -189,14 +198,23 @@ fn build_template_body(
             // Must match the port the published image EXPOSEs and listens on. `TCP` is spelled
             // out because every create this preview API has accepted carried it, and no request
             // omitting it has ever been shown to be accepted.
-            ports: vec![ContainerPort {
-                port: i32::from(GCP_AGENT_PLATFORM.port),
-                protocol: Some("TCP".to_string()),
-            }],
+            ports: declared_ports
+                .into_iter()
+                .map(|port| ContainerPort {
+                    port,
+                    protocol: Some("TCP".to_string()),
+                })
+                .collect(),
             extra: Default::default(),
         }),
         egress_control_config: Some(EgressControlConfig {
             internet_access: Some(internet_access),
+            network_attachment: network_attachment.map(str::to_string),
+            extra: Default::default(),
+        }),
+        // PSC-I and PSC-E are accepted only together.
+        ingress_control_config: network_attachment.map(|_| IngressControlConfig {
+            enable_private_service_connect: Some(true),
             extra: Default::default(),
         }),
         state: None,
@@ -304,7 +322,7 @@ impl GcpAgentPlatformTemplateController {
             .engine_id
             .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
+        let body = build_template_body(config, &display_name, ctx.deployment_config, None)?;
 
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
@@ -596,7 +614,7 @@ impl GcpAgentPlatformTemplateController {
         })?;
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
-        let body = build_template_body(config, &display_name, ctx.deployment_config)?;
+        let body = build_template_body(config, &display_name, ctx.deployment_config, None)?;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
         let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
@@ -854,6 +872,7 @@ mod tests {
             display_name: None,
             custom_container_environment: None,
             egress_control_config: None,
+            ingress_control_config: None,
             state: Some(TEMPLATE_ACTIVE.to_string()),
             extra: Default::default(),
         }
@@ -1279,6 +1298,7 @@ mod tests {
                 Ok(SandboxEnvironmentTemplate {
                     egress_control_config: Some(EgressControlConfig {
                         internet_access: served.then_some(true),
+                        network_attachment: None,
                         extra: Default::default(),
                     }),
                     ..active_template(id)
@@ -1547,7 +1567,7 @@ mod tests {
     #[test]
     fn build_template_body_declares_the_port_the_agent_image_serves() {
         let sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
-        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None), None)
             .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         assert_eq!(
@@ -1555,6 +1575,53 @@ mod tests {
             serde_json::json!([{ "port": GCP_AGENT_PLATFORM.port, "protocol": "TCP" }]),
             "the create body must carry the port and protocol the API has accepted"
         );
+    }
+
+    #[test]
+    fn build_template_body_declares_preview_ports_disk_and_private_network() {
+        let mut sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        sandbox.preview_ports = vec![8081, 8090, 8080];
+        let attachment = "projects/p/regions/us-central1/networkAttachments/a2657-na";
+        let body = build_template_body(
+            &sandbox,
+            "agent-sbx",
+            &deployment_config(None, None),
+            Some(attachment),
+        )
+        .expect("a valid sandbox builds a body");
+        let wire = serde_json::to_value(&body).expect("the template body serializes");
+        let ports: Vec<i64> = wire["customContainerEnvironment"]["ports"]
+            .as_array()
+            .expect("ports")
+            .iter()
+            .map(|p| p["port"].as_i64().expect("port"))
+            .collect();
+        assert_eq!(
+            ports,
+            vec![8080, 8081, 8090],
+            "agent port once, then each preview port"
+        );
+        assert_eq!(
+            wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],
+            "8Gi"
+        );
+        assert_eq!(wire["egressControlConfig"]["networkAttachment"], attachment);
+        assert_eq!(
+            wire["ingressControlConfig"]["enablePrivateServiceConnect"], true,
+            "PSC-I and PSC-E are enabled together"
+        );
+    }
+
+    #[test]
+    fn build_template_body_without_a_network_attachment_leaves_placement_default() {
+        let sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None), None)
+            .expect("builds");
+        let wire = serde_json::to_value(&body).expect("serializes");
+        assert!(wire["egressControlConfig"]
+            .get("networkAttachment")
+            .is_none());
+        assert!(wire.get("ingressControlConfig").is_none());
     }
 
     fn deployment_config(
@@ -1577,7 +1644,7 @@ mod tests {
 
     fn template_image(image: &str, config: &DeploymentConfig) -> Result<String> {
         let sandbox = sandbox_with(SandboxEgress::None, image, None, None);
-        build_template_body(&sandbox, "agent-sbx", config).map(|body| {
+        build_template_body(&sandbox, "agent-sbx", config, None).map(|body| {
             body.custom_container_environment
                 .and_then(|environment| environment.custom_container_spec)
                 .expect("the body names an image")
