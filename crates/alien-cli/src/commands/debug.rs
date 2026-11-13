@@ -776,7 +776,10 @@ async fn run_remote_exec_attach(
     json: bool,
 ) -> Result<()> {
     let ws_url = remote_exec_ws_url(&session)?;
-    let (socket, _) = connect_async(ws_url.as_str())
+    // The session token goes in the handshake's Authorization header: a token
+    // in the URL ends up in access logs and proxies.
+    let request = remote_exec_ws_request(&ws_url, &session.client_token)?;
+    let (socket, _) = connect_async(request)
         .await
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
@@ -955,9 +958,28 @@ fn remote_exec_ws_url(session: &RemoteExecDebugSession) -> Result<String> {
             url: Some(session.attach_url.clone()),
         })
     })?;
-    url.query_pairs_mut()
-        .append_pair("token", &session.client_token);
     Ok(url.to_string())
+}
+
+fn remote_exec_ws_request(
+    ws_url: &str,
+    token: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message,
+            url: Some(ws_url.to_string()),
+        })
+    };
+    let mut request = ws_url
+        .into_client_request()
+        .map_err(|error| invalid(format!("Invalid remote exec URL: {error}")))?;
+    let value = format!("Bearer {token}")
+        .parse()
+        .map_err(|_| invalid("The remote exec token is not a valid header value".to_string()))?;
+    request.headers_mut().insert("authorization", value);
+    Ok(request)
 }
 
 fn spawn_remote_exec_stdin_forwarder(input_tx: mpsc::Sender<Message>) {
@@ -1779,7 +1801,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_exec_ws_url_converts_https_and_appends_token() {
+    fn remote_exec_ws_url_converts_https_and_never_carries_the_token() {
         let session = remote_exec_session(
             "https://control.example.test/v1/exec/sessions/exec_1/attach",
             "hec_token",
@@ -1787,7 +1809,7 @@ mod tests {
 
         assert_eq!(
             remote_exec_ws_url(&session).unwrap(),
-            "wss://control.example.test/v1/exec/sessions/exec_1/attach?token=hec_token"
+            "wss://control.example.test/v1/exec/sessions/exec_1/attach"
         );
     }
 
@@ -1800,8 +1822,20 @@ mod tests {
 
         assert_eq!(
             remote_exec_ws_url(&session).unwrap(),
-            "ws://control.example.test/v1/exec/sessions/exec_1/attach?trace=1&token=hec+token"
+            "ws://control.example.test/v1/exec/sessions/exec_1/attach?trace=1"
         );
+    }
+
+    #[test]
+    fn remote_exec_handshake_carries_the_token_as_a_bearer_header() {
+        let request = remote_exec_ws_request(
+            "wss://control.example.test/v1/exec/sessions/exec_1/attach",
+            "hec_token",
+        )
+        .unwrap();
+
+        assert_eq!(request.headers()["authorization"], "Bearer hec_token");
+        assert_eq!(request.uri().query(), None);
     }
 
     #[test]
