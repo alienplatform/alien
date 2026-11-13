@@ -758,7 +758,7 @@ async fn proxy_embeddings(
     Path(binding): Path<String>,
     ProxyBody(body): ProxyBody,
 ) -> Result<Response> {
-    let (mut payload, _requested, model) = parse_model_request(&body)?;
+    let (mut payload, requested_model, model) = parse_model_request(&body)?;
     let route = state.routes.get(&binding).ok_or_else(|| {
         AlienError::new(ErrorData::UnknownBinding {
             binding: binding.clone(),
@@ -790,8 +790,24 @@ async fn proxy_embeddings(
             .context(ErrorData::Other {
                 message: "could not re-serialize the rewritten request body".to_string(),
             })?;
-    let upstream = sign_and_execute(&state.client, route, &url, "", upstream_body, &[]).await?;
-    forward_response(upstream).await
+    // Embeddings answer in the OpenAI shape, so the chat-completions token parser reads
+    // `prompt_tokens`. Everything from here on is a provider-bound request and is reported.
+    let descriptor = AiUsageContext::new(
+        &binding,
+        cloud_usage_provider(cloud),
+        &model,
+        embedding.upstream_id,
+        AiUsageClientApi::OpenAiChatCompletions,
+        route.region.clone(),
+    )
+    .with_requested_model(&requested_model);
+    let response = async {
+        let upstream =
+            sign_and_execute(&state.client, route, &url, "", upstream_body, &[]).await?;
+        forward_response(upstream).await
+    }
+    .await;
+    observe_result(response, state.usage_observer.as_ref(), descriptor)
 }
 
 async fn proxy_messages(
@@ -2277,6 +2293,42 @@ mod tests {
         assert!(resp.status().is_client_error(), "{}", resp.status());
         // The rejected request never reached the upstream.
         assert_eq!(mock.hits_async().await, 1);
+    }
+
+    #[tokio::test]
+    async fn azure_embeddings_report_usage() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/openai/v1/embeddings");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"object":"list","data":[{"embedding":[0.1],"index":0}],"usage":{"prompt_tokens":7,"total_tokens":7}}"#);
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![azure_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+        let resp = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/embeddings"))
+            .json(&json!({"model": "byo/text-embedding-3-large", "input": "hello"}))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(resp.status(), 200);
+        resp.bytes().await.expect("body");
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("embeddings usage observation");
+        assert_eq!(event.provider, AiUsageProvider::AzureFoundry);
+        assert_eq!(event.public_model, "text-embedding-3-large");
+        assert_eq!(event.provider_model, "text-embedding-3-large");
+        assert_eq!(event.outcome, AiUsageOutcome::Success);
+        assert_eq!(event.tokens.input_tokens, Some(7));
     }
 
     #[tokio::test]
