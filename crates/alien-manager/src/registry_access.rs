@@ -647,6 +647,51 @@ pub async fn cleanup_deleted_registry_access(
         ) => {}
         _ => return Ok(()),
     }
+    revoke_recorded_registry_access(
+        deployment_store,
+        bindings_provider,
+        target_bindings_providers,
+        deployment_id,
+        project_id,
+        state,
+    )
+    .await
+}
+
+/// Revokes the registry access this manager granted a deployment that another manager now
+/// manages. Unlike the delete path this does not depend on the deployment's status: the grant
+/// stays with the previous manager's identity until it is removed, so the previous manager
+/// removes it once it has been handed over. AWS only; other platforms are left alone.
+pub async fn revoke_for_reassigned_deployment(
+    deployment_store: &dyn DeploymentStore,
+    bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
+    target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    deployment_id: &str,
+    project_id: &str,
+    state: &DeploymentState,
+) -> Result<()> {
+    if !matches!(state.environment_info, Some(EnvironmentInfo::Aws(_))) {
+        return Ok(());
+    }
+    revoke_recorded_registry_access(
+        deployment_store,
+        bindings_provider,
+        target_bindings_providers,
+        deployment_id,
+        project_id,
+        state,
+    )
+    .await
+}
+
+async fn revoke_recorded_registry_access(
+    deployment_store: &dyn DeploymentStore,
+    bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
+    target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    deployment_id: &str,
+    project_id: &str,
+    state: &DeploymentState,
+) -> Result<()> {
     let Some(environment_info) = state.environment_info.as_ref() else {
         return Ok(());
     };
@@ -2137,6 +2182,49 @@ mod tests {
         );
         state.status = DeploymentStatus::Deleted;
         cleanup_deleted_registry_access(
+            &MockDeploymentStore::new(),
+            &recording_provider(registry.clone()),
+            &HashMap::new(),
+            "deployment",
+            PROJECT,
+            &state,
+        )
+        .await
+        .expect("recorded grant must revoke");
+        assert_eq!(
+            *registry.removals.lock().expect("removals lock"),
+            vec!["alien-artifacts-other"]
+        );
+    }
+
+    /// A deployment handed to another manager stays running, so the delete-path cleanup does
+    /// nothing for it; the reassigned entry removes the recorded grant whatever the status.
+    #[tokio::test]
+    async fn reassigned_deployment_grant_is_revoked_while_the_deployment_runs() {
+        let registry = Arc::new(RecordingAwsRegistry::default());
+        let mut state = worker_grant_state(&format!(
+            "{}/alien-artifacts-other:latest",
+            registry.registry_endpoint()
+        ));
+        state.status = DeploymentStatus::Running;
+        let metadata = state.runtime_metadata.as_mut().expect("metadata");
+        metadata.registry_access_granted = true;
+        metadata.registry_access = Some(RegistryAccess {
+            repositories: vec!["alien-artifacts-other".to_string()],
+            service_types: vec!["worker".to_string()],
+        });
+        cleanup_deleted_registry_access(
+            &MockDeploymentStore::new(),
+            &recording_provider(registry.clone()),
+            &HashMap::new(),
+            "deployment",
+            PROJECT,
+            &state,
+        )
+        .await
+        .expect("a running deployment is not a delete");
+        assert!(registry.removals.lock().expect("removals lock").is_empty());
+        revoke_for_reassigned_deployment(
             &MockDeploymentStore::new(),
             &recording_provider(registry.clone()),
             &HashMap::new(),
