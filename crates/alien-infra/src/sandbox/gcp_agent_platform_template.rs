@@ -34,6 +34,9 @@ use alien_macros::controller;
 /// Lifecycle state the API reports for a template that is ready to cut sessions from.
 const TEMPLATE_ACTIVE: &str = "ACTIVE";
 
+/// State the API reports for a template whose container exited (it gives no reason).
+const TEMPLATE_FAILED: &str = "FAILED";
+
 /// Last path segment of a resource name — the id the client interpolates back into its paths.
 fn last_segment(name: &str) -> &str {
     name.rsplit('/').next().unwrap_or(name)
@@ -447,6 +450,18 @@ impl GcpAgentPlatformTemplateController {
                 resource_id: Some(config.id.clone()),
             },
         )?;
+
+        if template.state.as_deref() == Some(TEMPLATE_FAILED) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "template '{pending}' FAILED without a reason. Agent Platform reports this \
+                     when the image's container exits at start: its ENTRYPOINT must keep running \
+                     in the foreground and serve the declared ports, and the image must be \
+                     linux/amd64"
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
 
         if template.state.as_deref() != Some(TEMPLATE_ACTIVE) {
             return Ok(HandlerAction::Stay {
@@ -1623,6 +1638,30 @@ mod tests {
             .await
             .expect("executor builds");
         executor.run_until_terminal().await
+    }
+
+    /// A container that exits leaves the template FAILED with no reason. The create must stop at
+    /// once and say what usually causes it, not poll a template that will never become ACTIVE.
+    #[tokio::test]
+    async fn a_failed_template_stops_the_create_and_names_the_likely_cause() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_create_template().returning(|_, _| Ok(pending_op()));
+        m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
+        m.expect_get_template().returning(|_, id| {
+            Ok(SandboxEnvironmentTemplate {
+                state: Some("FAILED".to_string()),
+                ..active_template(id)
+            })
+        });
+        let mut executor = build_executor(
+            sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None),
+            provider_with(Arc::new(m)),
+        )
+        .await;
+        let result = executor.run_until_terminal().await;
+        let message = format!("{:?}", result.expect_err("a FAILED template must fail the create"));
+        assert!(message.contains("exits"), "{message}");
+        assert!(message.contains("foreground"), "{message}");
     }
 
     #[tokio::test]
