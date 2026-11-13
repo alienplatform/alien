@@ -6493,6 +6493,7 @@ mod tests {
             .add(legacy, ResourceLifecycle::Live)
             .build();
         let cluster = |runtime_identity| alien_core::HorizonClusterConfig {
+            machine_url: None,
             cluster_id: "cluster".to_string(),
             management_token: "hm_test".to_string(),
             runtime_identity,
@@ -6663,6 +6664,7 @@ mod tests {
             clusters: HashMap::from([(
                 "compute".to_string(),
                 alien_core::HorizonClusterConfig {
+                    machine_url: None,
                     cluster_id: "cluster".to_string(),
                     management_token: "hm_test".to_string(),
                     runtime_identity: Some(alien_core::MachineRuntimeIdentity {
