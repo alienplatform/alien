@@ -1589,6 +1589,10 @@ fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool 
     let Some(effective) = effective else {
         return false;
     };
+    let Some(effective) = without_enforcement_fields(asked, effective) else {
+        return false;
+    };
+    let effective = &effective;
 
     let asked_for = |host: &str| {
         asked
@@ -1624,6 +1628,41 @@ fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool 
         })
         // A field this client cannot read is a permission it cannot rule out.
         && effective.unmodelled.is_empty()
+}
+
+/// The policy with the two fields the live data plane adds to every readback taken off, when
+/// they are provably harmless; `None` when either is not.
+///
+/// - `enforcementMode` must be exactly `Enforced`. Any other value (an audit-only mode, say)
+///   means the policy is not being applied.
+/// - `http` is the same policy restated for the HTTP layer. It is accepted when empty, or when it
+///   holds on its own against the same declaration; a rule inside it that permits anything the
+///   declaration did not ask for fails.
+///
+/// Every other field stays in `unmodelled` and still fails closed.
+fn without_enforcement_fields(
+    asked: &EgressPolicy,
+    effective: &EgressPolicy,
+) -> Option<EgressPolicy> {
+    let mut policy = effective.clone();
+
+    if let Some(mode) = policy.unmodelled.remove("enforcementMode") {
+        if mode.as_str() != Some(ENFORCED) {
+            return None;
+        }
+    }
+
+    if let Some(http) = policy.unmodelled.remove("http") {
+        let empty = http.as_object().is_some_and(|fields| fields.is_empty());
+        if !empty {
+            let nested: EgressPolicy = serde_json::from_value(http).ok()?;
+            if !policy_holds(asked, Some(&nested)) {
+                return None;
+            }
+        }
+    }
+
+    Some(policy)
 }
 
 /// The effective policy, short enough to read in an error.
@@ -1676,6 +1715,9 @@ fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
         })),
     }
 }
+
+/// The only enforcement mode the data plane reports for a policy it is applying.
+const ENFORCED: &str = "Enforced";
 
 /// Longest sandbox id this client will put in a data-plane URL.
 ///
@@ -3790,6 +3832,66 @@ mod tests {
             .create(CreateSandboxRequest::default())
             .await
             .expect("a normalised echo of the same policy is the same policy");
+    }
+
+    /// The live data plane reads a `none` policy back with `enforcementMode` and an `http`
+    /// restatement the client does not model. Those are accepted only when they cannot loosen it.
+    #[test]
+    fn policy_holds_reads_the_live_none_readback() {
+        let asked = egress_policy(&SandboxEgress::None).expect("none sends a policy");
+        let read = |json: serde_json::Value| -> EgressPolicy {
+            serde_json::from_value(json).expect("readback parses")
+        };
+        let mirror = |mode: &str, rule_action: &str| {
+            serde_json::json!({
+                "defaultAction": "Deny",
+                "hostRules": [{"pattern": "*", "action": rule_action}],
+                "trafficInspection": "Full",
+                "enforcementMode": mode,
+            })
+        };
+        let with = |mode: &str, http: serde_json::Value| {
+            let mut json = mirror(mode, "Deny");
+            json["http"] = http;
+            read(json)
+        };
+
+        // The exact readback taken from a live `none` sandbox.
+        assert!(policy_holds(
+            &asked,
+            Some(&with("Enforced", mirror("Enforced", "Deny")))
+        ));
+        // `http` absent, or empty.
+        assert!(policy_holds(
+            &asked,
+            Some(&read(mirror("Enforced", "Deny")))
+        ));
+        assert!(policy_holds(
+            &asked,
+            Some(&with("Enforced", serde_json::json!({})))
+        ));
+        // A mode other than the enforced one, at either level.
+        assert!(!policy_holds(
+            &asked,
+            Some(&with("Audit", mirror("Enforced", "Deny")))
+        ));
+        assert!(!policy_holds(
+            &asked,
+            Some(&with("Enforced", mirror("Audit", "Deny")))
+        ));
+        // A rule inside `http` that allows a host, or an http block of another shape.
+        assert!(!policy_holds(
+            &asked,
+            Some(&with("Enforced", mirror("Enforced", "Allow")))
+        ));
+        assert!(!policy_holds(
+            &asked,
+            Some(&with("Enforced", serde_json::json!("open")))
+        ));
+        // Any other unknown field still fails closed.
+        let mut other = mirror("Enforced", "Deny");
+        other["bypassList"] = serde_json::json!(["exfil.example.com"]);
+        assert!(!policy_holds(&asked, Some(&read(other))));
     }
 
     /// A sandbox the declaration no longer matches is replaced, not a permanent error.
