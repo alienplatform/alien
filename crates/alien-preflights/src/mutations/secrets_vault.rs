@@ -829,8 +829,18 @@ fn machine_workload_profiles(stack: &Stack) -> BTreeSet<String> {
         .collect()
 }
 
+/// Whether a profile name may be part of a machine workload secret prefix:
+/// letters, digits, `-` and `_` only. Anything else (notably `.`) could make one
+/// profile's prefix fall inside another's.
+pub fn is_machine_workload_profile_name(profile: &str) -> bool {
+    !profile.is_empty()
+        && profile
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// The prefix, within the secrets vault, of the secret values the control plane
-/// hands one machine workload profile.
+/// hands one machine workload profile. It always ends with the separator.
 pub fn machine_workload_secret_prefix(profile: &str) -> String {
     format!("hz.{profile}.")
 }
@@ -848,10 +858,7 @@ fn add_machine_workload_secret_read(stack: &mut Stack, vault_name: &str) -> Resu
         // The prefix is `hz.<profile>.`, so a profile `web.admin` would sit
         // inside the grant for `web`. The control plane refuses such names when
         // it writes values, so nothing is lost.
-        if !profile
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-        {
+        if !is_machine_workload_profile_name(&profile) {
             continue;
         }
         let parameter = format!(
@@ -1698,6 +1705,19 @@ mod tests {
             .unwrap();
         assert!(prepared.permissions.profiles.is_empty());
         assert_eq!(config.input_values["apiKey"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn the_grant_prefix_is_built_only_from_allowed_profiles_and_ends_with_the_separator() {
+        for ok in ["web", "jobs-1", "a_b", "W9"] {
+            assert!(is_machine_workload_profile_name(ok), "{ok}");
+            let prefix = machine_workload_secret_prefix(ok);
+            assert_eq!(prefix, format!("hz.{ok}."));
+            assert!(prefix.ends_with('.'));
+        }
+        for bad in ["", "web.admin", "we.b", "a/b", "a*", "a b", "web\u{e9}"] {
+            assert!(!is_machine_workload_profile_name(bad), "{bad}");
+        }
     }
 
     #[tokio::test]
