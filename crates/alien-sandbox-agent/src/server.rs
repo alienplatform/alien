@@ -1075,6 +1075,24 @@ async fn preview(
         AgentAuthorization::Transport => {
             return preview_by_header(&state, request, port, rest).await
         }
+        #[cfg(unix)]
+        AgentAuthorization::NativeFile(boot_token) => {
+            // The boot token is the control credential. A caller that sends it here would hand it
+            // to the daemon, and the daemon is not the agent's peer: refuse before any connection.
+            let presented = request
+                .headers()
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "));
+            if presented.is_some_and(|value| boot_token.accepts(value)) {
+                return Err(ApiError {
+                    status: StatusCode::FORBIDDEN,
+                    message: "the agent's control credential is not a preview credential"
+                        .to_string(),
+                });
+            }
+            return preview_by_header(&state, request, port, rest).await;
+        }
         _ => {
             return Err(ApiError {
                 status: StatusCode::NOT_FOUND,
@@ -1220,7 +1238,10 @@ async fn preview_grant(
     headers: HeaderMap,
     Json(request): Json<PreviewGrantRequest>,
 ) -> std::result::Result<Response, ApiError> {
-    if !matches!(state.authorization, AgentAuthorization::Transport) {
+    if !matches!(
+        state.authorization,
+        AgentAuthorization::Transport | AgentAuthorization::NativeFile(_)
+    ) {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: "this sandbox does not issue preview capabilities".to_string(),
@@ -1461,13 +1482,21 @@ mod native_environment_tests {
             "MSI_SECRET",
             "ALIEN_SANDBOX_PORT",
         ] {
-            assert!(!is_inherited_native_variable(name), "{name} must be stripped");
+            assert!(
+                !is_inherited_native_variable(name),
+                "{name} must be stripped"
+            );
         }
     }
 
     #[test]
     fn user_and_proxy_variables_are_still_inherited() {
-        for name in ["HTTPS_PROXY", "APP_TOKEN", "IDENTITY", "MY_IDENTITY_ENDPOINT"] {
+        for name in [
+            "HTTPS_PROXY",
+            "APP_TOKEN",
+            "IDENTITY",
+            "MY_IDENTITY_ENDPOINT",
+        ] {
             assert!(is_inherited_native_variable(name), "{name} must pass");
         }
     }
