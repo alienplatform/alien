@@ -1308,7 +1308,11 @@ fn the_operator_gets_its_own_pod_address_for_the_policy_proof() {
     let env = operator["spec"]["template"]["spec"]["containers"][0]["env"]
         .as_sequence()
         .unwrap();
-    let find = |name: &str| env.iter().find(|variable| variable["name"] == name).cloned();
+    let find = |name: &str| {
+        env.iter()
+            .find(|variable| variable["name"] == name)
+            .cloned()
+    };
     let pod_ip = find("ALIEN_OPERATOR_POD_IP").expect("the pod address variable");
     assert_eq!(pod_ip["valueFrom"]["fieldRef"]["fieldPath"], "status.podIP");
     let address = find(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS).expect("the address");

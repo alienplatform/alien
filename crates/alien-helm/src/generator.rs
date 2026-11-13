@@ -7661,6 +7661,18 @@ spec:
         - protocol: TCP
           port: 988
     {{- end }}
+    {{- if eq (default "" .Values.basePlatform) "aws" }}
+    # EKS Pod Identity: the Operator's cloud credentials come from the Pod Identity agent
+    # on the node (AWS_CONTAINER_CREDENTIALS_FULL_URI, 169.254.170.23:80, fd00:ec2::23 on IPv6).
+    - to:
+        - ipBlock:
+            cidr: 169.254.170.23/32
+        - ipBlock:
+            cidr: fd00:ec2::23/128
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
     {{- with .Values.runtime.networkPolicy.egress.extraRules }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -11361,6 +11373,37 @@ infrastructureExistingSecret: customer-bindings
             "    egress:\n      ports: []\n",
         );
         assert_eq!(explicit.last().unwrap(), &vec![9443]);
+    }
+
+    #[test]
+    fn a_restricted_aws_policy_allows_the_pod_identity_agent_and_nothing_else_open() {
+        let files = sample_chart_files();
+        let policy = |platform: &str| {
+            let values = format!(
+                "management:\n  token: test-credential\n  url: https://manager.example.test\nbasePlatform: {platform}\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n"
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("restricted aws policy");
+            let found = serde_yaml::Deserializer::from_str(&rendered.stdout)
+                .map(|d| serde_yaml::Value::deserialize(d).unwrap())
+                .find(|d| d["kind"] == "NetworkPolicy")
+                .unwrap();
+            found
+        };
+        let aws = policy("aws");
+        let rules = aws["spec"]["egress"].as_sequence().unwrap();
+        for rule in rules {
+            assert!(!rule.as_mapping().unwrap().is_empty());
+        }
+        let agent = rules
+            .iter()
+            .find(|r| r["to"][0]["ipBlock"]["cidr"] == "169.254.170.23/32")
+            .expect("pod identity rule");
+        assert_eq!(agent["to"][1]["ipBlock"]["cidr"], "fd00:ec2::23/128");
+        assert_eq!(agent["ports"][0]["port"], 80);
+        // Other platforms get no Pod Identity rule.
+        let gcp = serde_yaml::to_string(&policy("gcp")).unwrap();
+        assert!(!gcp.contains("169.254.170.23"));
     }
 
     #[test]
