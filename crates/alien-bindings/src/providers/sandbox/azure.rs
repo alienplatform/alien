@@ -1236,7 +1236,7 @@ impl AzureSandbox {
             .await
         {
             Ok(sandbox) => Ok(Some(sandbox)),
-            Err(error) if is_not_found(&error) => Ok(None),
+            Err(error) if is_not_found(&error) || is_malformed_id(&error) => Ok(None),
             Err(error) => Err(Self::failed(operation, error)),
         }
     }
@@ -1899,6 +1899,20 @@ fn is_refusal(error: &AlienError<ClientErrorData>) -> bool {
 /// Reads the status the client carries rather than the rendered message: `AlienError`'s `Display`
 /// walks the whole source chain and the data plane puts the response body in it, so a path or a
 /// trace id containing "404" would otherwise turn a throttle into "gone".
+/// The data plane names its sandboxes with GUIDs and answers a read of any other id with a 400
+/// whose only validation error is the `id`. Such an id is a caller's own key, so no sandbox has it.
+fn is_malformed_id(error: &AlienError<ClientErrorData>) -> bool {
+    matches!(
+        &error.error,
+        Some(ClientErrorData::InvalidInput { message, .. }) if message.contains("\"errors\":{\"id\":")
+    ) || matches!(
+        &error.error,
+        Some(ClientErrorData::HttpResponseError { http_status, http_response_text, .. })
+            if *http_status == 400
+                && http_response_text.as_deref().is_some_and(|t| t.contains("\"errors\":{\"id\":"))
+    )
+}
+
 fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
     // Both variants, because the client wraps: `create_azure_http_error_with_context` builds the
     // `HttpResponseError` carrying the status and then returns
@@ -1915,6 +1929,7 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use alien_azure_clients::azure::sandbox_data_plane::EgressHostRule;
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
@@ -2494,6 +2509,14 @@ mod tests {
     /// The discriminating case. A throttle whose body mentions 404 — a trace id, an inner code, a
     /// path — must not read as "the sandbox is gone": that starts a second sandbox while the
     /// first keeps running, reporting a live sandbox as terminated.
+    #[test]
+    fn an_id_the_data_plane_cannot_parse_names_no_sandbox() {
+        let body = r#"{"title":"One or more validation errors occurred.","status":400,"errors":{"id":["The input was not valid."]}}"#;
+        assert!(is_malformed_id(&http_error(400, body)));
+        assert!(!is_malformed_id(&http_error(400, r#"{"errors":{"cpu":["bad"]}}"#)));
+        assert!(!is_malformed_id(&http_error(500, body)));
+    }
+
     #[test]
     fn only_the_status_decides_whether_a_sandbox_is_gone() {
         assert!(is_not_found(&http_error(404, "SandboxNotFound")));
