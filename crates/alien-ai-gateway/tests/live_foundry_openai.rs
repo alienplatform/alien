@@ -45,29 +45,31 @@ async fn live_responses_web_search_and_embeddings() {
     let base = serve(build_router(vec![foundry_route()])).await;
     let client = reqwest::Client::new();
 
-    let resp = client
-        .post(format!("{base}/llm/v1/responses"))
-        .json(&json!({
-            "model": "gpt-5.5",
-            "input": "Use web search: what is the latest stable version of the Rust programming language? Answer in one sentence.",
-            "tools": [{"type": "web_search"}],
-        }))
-        .send()
-        .await
-        .expect("responses request");
-    let status = resp.status();
-    let text = resp.text().await.unwrap();
-    eprintln!("responses status={status} body={text}");
-    assert!(status.is_success(), "Responses failed: {status}: {text}");
-    let body: Value = serde_json::from_str(&text).unwrap();
-    let used_search = body["output"]
-        .as_array()
-        .map(|items| items.iter().any(|i| i["type"] == "web_search_call"))
-        .unwrap_or(false);
-    assert!(
-        used_search,
-        "the response must contain a web_search_call item"
-    );
+    for model in ["gpt-5.5", "gpt-5.6-sol"] {
+        let resp = client
+            .post(format!("{base}/llm/v1/responses"))
+            .json(&json!({
+                "model": model,
+                "input": "Use web search: what is the latest stable version of the Rust programming language? Answer in one sentence.",
+                "tools": [{"type": "web_search"}],
+            }))
+            .send()
+            .await
+            .expect("responses request");
+        let status = resp.status();
+        let text = resp.text().await.unwrap();
+        eprintln!("{model} responses status={status} body={text}");
+        assert!(status.is_success(), "Responses failed: {status}: {text}");
+        let body: Value = serde_json::from_str(&text).unwrap();
+        let used_search = body["output"]
+            .as_array()
+            .map(|items| items.iter().any(|i| i["type"] == "web_search_call"))
+            .unwrap_or(false);
+        assert!(
+            used_search,
+            "the response must contain a web_search_call item"
+        );
+    }
 
     let resp = client
         .post(format!("{base}/llm/v1/embeddings"))
