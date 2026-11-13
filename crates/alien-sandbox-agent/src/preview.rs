@@ -65,29 +65,71 @@ const HOP_BY_HOP: [&str; 8] = [
     "upgrade",
 ];
 
-/// Headers that belong to the agent or the cloud edge, never to the code inside.
-const STRIPPED: [&str; 4] = [
-    alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER,
-    alien_core::sandbox_image::PREVIEW_PORT_HEADER,
-    "x-sandbox-routing-token",
-    "x-sandbox-port",
-];
+/// Headers that belong to the cloud edge, never to the code inside. Every `x-alien-*` header is
+/// the agent's and is stripped too.
+const STRIPPED: [&str; 2] = ["x-sandbox-routing-token", "x-sandbox-port"];
+
+/// How the caller's own bearer reaches the code inside a previewed port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallerAuth {
+    /// `Authorization` belongs to the agent (the Kubernetes route); it is dropped.
+    Drop,
+    /// The caller's bearer is `Authorization` on this backend. `X-Alien-Caller-Authorization` is
+    /// also accepted, but both at once is ambiguous and refused.
+    Authorization,
+    /// The cloud edge consumes `Authorization` (GCP), so whatever arrives there is not the
+    /// caller's and is ignored. The caller's bearer is in `X-Alien-Caller-Authorization`.
+    EdgeConsumesAuthorization,
+}
+
+impl CallerAuth {
+    /// The mode for this sandbox, from the header its backend names for the caller's bearer.
+    pub fn from_env() -> Self {
+        match std::env::var(alien_core::sandbox_image::ENV_CALLER_AUTHORIZATION_HEADER) {
+            Ok(name)
+                if name.eq_ignore_ascii_case(
+                    alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER,
+                ) =>
+            {
+                Self::EdgeConsumesAuthorization
+            }
+            _ => Self::Authorization,
+        }
+    }
+}
 
 /// Forwards `request` to `127.0.0.1:{port}` with `path_and_query` as its target. `close_at` is
 /// the unix time an upgraded stream is closed at.
 ///
-/// `pass_authorization` is the one header contract difference left between backends: where the
-/// capability travels in `Authorization` (the Kubernetes route) it is the agent's, so it is
-/// dropped; where the capability has its own header the caller's `Authorization` belongs to the
-/// code inside and is forwarded untouched. The preview capability and port headers and the cloud
-/// edge's routing headers are never forwarded.
+/// `caller_auth` is the one header contract difference left between backends (see
+/// [`CallerAuth`]). Whatever the mode, the caller's bearer reaches the code inside as
+/// `Authorization` only, and every `x-alien-*` header and the cloud edge's routing headers are
+/// stripped.
 pub async fn forward(
     mut request: Request<Body>,
     port: u16,
     path_and_query: String,
     close_at: i64,
-    pass_authorization: bool,
+    caller_auth: CallerAuth,
 ) -> Response<Body> {
+    let caller_bearer = {
+        let headers = request.headers();
+        let own = headers.get(header::AUTHORIZATION);
+        let caller = headers.get(alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER);
+        match caller_auth {
+            CallerAuth::Drop => None,
+            CallerAuth::Authorization => match (own, caller) {
+                (Some(_), Some(_)) => {
+                    return fail(
+                        StatusCode::BAD_REQUEST,
+                        "send the bearer in one header, not both Authorization and X-Alien-Caller-Authorization",
+                    )
+                }
+                (own, caller) => own.or(caller).cloned(),
+            },
+            CallerAuth::EdgeConsumesAuthorization => caller.cloned(),
+        }
+    };
     let upgrading = request
         .headers()
         .get(header::UPGRADE)
@@ -130,7 +172,7 @@ pub async fn forward(
         if lower == "host" || lower == "content-length" {
             continue;
         }
-        if lower == header::AUTHORIZATION.as_str() && !pass_authorization {
+        if lower == header::AUTHORIZATION.as_str() || lower.starts_with("x-alien-") {
             continue;
         }
         if STRIPPED.contains(&lower) {
@@ -144,6 +186,11 @@ pub async fn forward(
         head.extend_from_slice(name.as_str().as_bytes());
         head.extend_from_slice(b": ");
         head.extend_from_slice(value.as_bytes());
+        head.extend_from_slice(b"\r\n");
+    }
+    if let Some(bearer) = caller_bearer {
+        head.extend_from_slice(b"Authorization: ");
+        head.extend_from_slice(bearer.as_bytes());
         head.extend_from_slice(b"\r\n");
     }
     if !body.is_empty() || !matches!(parts.method.as_str(), "GET" | "HEAD") {
@@ -394,7 +441,7 @@ mod tests {
         )
         .await;
         let request = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let response = forward(request, port, "/".to_string(), i64::MAX, false).await;
+        let response = forward(request, port, "/".to_string(), i64::MAX, CallerAuth::Drop).await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await

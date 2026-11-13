@@ -2071,6 +2071,74 @@ async fn transport_preview_forwards_the_callers_authorization_and_hides_the_capa
     assert_eq!(seen.lock().unwrap().len(), 1, "refused calls reach nothing");
 }
 
+/// The caller puts its bearer under the header its backend names (`caller_authorization_header`).
+/// Whichever it is, the daemon sees it as `Authorization` and never sees an `x-alien-*` header.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn transport_preview_delivers_the_callers_bearer_under_either_backend_header() {
+    let _env = PREVIEW_ENV.lock().await;
+    let (base, _dir) = transport_agent().await;
+    let (port, seen) = upstream_server().await;
+    std::env::set_var("ALIEN_SANDBOX_PREVIEW_PORTS", format!("{port},8971"));
+    let granted: serde_json::Value = grant(&base, "sandbox-a", port).await.json().await.unwrap();
+    let capability = granted["capability"].as_str().expect("a capability");
+    let call = |headers: &[(&str, &str)]| {
+        let mut request = reqwest::Client::new()
+            .get(format!("{base}/v1/preview/{port}/"))
+            .header("x-alien-preview-port", port.to_string())
+            .header("x-alien-preview-capability", capability);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        async move { request.send().await.expect("responds") }
+    };
+    let last = || seen.lock().unwrap().last().unwrap().to_ascii_lowercase();
+
+    // A backend whose header is `Authorization` (the default).
+    std::env::remove_var("ALIEN_SANDBOX_CALLER_AUTHORIZATION_HEADER");
+    assert_eq!(
+        call(&[("authorization", "Bearer plain")]).await.status(),
+        200
+    );
+    assert!(last().contains("authorization: bearer plain"));
+    // Both headers at once is ambiguous: refused, and nothing reaches the daemon.
+    let before = seen.lock().unwrap().len();
+    let both = call(&[
+        ("authorization", "Bearer one"),
+        ("x-alien-caller-authorization", "Bearer two"),
+    ])
+    .await;
+    assert_eq!(both.status(), 400);
+    assert_eq!(seen.lock().unwrap().len(), before);
+
+    // GCP: the edge consumed `Authorization`, so the caller's bearer is in the X-Alien header and
+    // anything in `Authorization` is ignored.
+    std::env::set_var(
+        "ALIEN_SANDBOX_CALLER_AUTHORIZATION_HEADER",
+        "x-alien-caller-authorization",
+    );
+    let ok = call(&[
+        ("authorization", "Bearer edge-jwt"),
+        ("x-alien-caller-authorization", "Bearer daemon-secret"),
+    ])
+    .await;
+    assert_eq!(ok.status(), 200);
+    let head = last();
+    assert!(
+        head.contains("authorization: bearer daemon-secret"),
+        "{head}"
+    );
+    assert!(!head.contains("edge-jwt"), "{head}");
+    assert!(!head.contains("x-alien-"), "{head}");
+    // With no caller bearer, the daemon gets no Authorization at all (not the edge's).
+    assert_eq!(
+        call(&[("authorization", "Bearer edge-jwt")]).await.status(),
+        200
+    );
+    assert!(!last().contains("authorization"), "{}", last());
+    std::env::remove_var("ALIEN_SANDBOX_CALLER_AUTHORIZATION_HEADER");
+}
+
 /// An upgrade carries the caller's `Authorization` to the daemon too.
 #[tokio::test]
 #[cfg(target_os = "linux")]

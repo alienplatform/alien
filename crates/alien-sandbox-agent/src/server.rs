@@ -1097,7 +1097,14 @@ async fn preview(
         Some(query) => format!("/{rest}?{query}"),
         None => format!("/{rest}"),
     };
-    Ok(crate::preview::forward(request, port, target, claims.expires_at, false).await)
+    Ok(crate::preview::forward(
+        request,
+        port,
+        target,
+        claims.expires_at,
+        crate::preview::CallerAuth::Drop,
+    )
+    .await)
 }
 
 /// The preview route where the capability has its own header (`x-alien-preview-capability`), so
@@ -1149,7 +1156,14 @@ fn preview_by_header(
     };
     async move {
         let expires_at = verdict?;
-        Ok(crate::preview::forward(request, port, target, expires_at, true).await)
+        Ok(crate::preview::forward(
+            request,
+            port,
+            target,
+            expires_at,
+            crate::preview::CallerAuth::from_env(),
+        )
+        .await)
     }
 }
 
