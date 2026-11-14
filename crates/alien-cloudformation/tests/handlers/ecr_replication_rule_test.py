@@ -124,6 +124,12 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(self.invoke()["Status"], "SUCCESS")
         self.assertEqual(self.written(), [foreign_same_prefix])
 
+    def test_spaces_around_regions_are_trimmed_and_blank_entries_skipped(self):
+        self.event["ResourceProperties"]["Regions"] = [" us-east-2", "eu-west-1 ", "  ", "us-east-2"]
+        self.invoke()
+        destinations = self.written()[-1]["destinations"]
+        self.assertEqual([d["region"] for d in destinations], ["us-east-2", "eu-west-1"])
+
     def test_duplicate_regions_are_written_once(self):
         self.event["ResourceProperties"]["Regions"] = ["us-east-2", "us-east-2"]
         self.invoke()

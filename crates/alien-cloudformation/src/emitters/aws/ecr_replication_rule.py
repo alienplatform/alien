@@ -77,6 +77,10 @@ def handler(event, context):
         if event["RequestType"] != "Delete":
             regions = []
             for region in properties.get("Regions") or []:
+                # A comma separated input may carry spaces ('us-east-2, eu-west-1').
+                region = region.strip()
+                if not region:
+                    continue
                 if not REGION.match(region):
                     raise ValueError("'%s' is not a supported AWS region name" % region)
                 if region not in regions:
