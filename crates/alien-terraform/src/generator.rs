@@ -584,7 +584,7 @@ pub(crate) fn render_terraform_module(
     // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
     // Making its subnets depend on those roles creates a Terraform cycle.
     if target == TerraformTarget::Aws {
-        apply_aws_network_iam_dependency(stack, &mut per_resource);
+        apply_aws_network_iam_dependency(stack, &shared_locals, &mut per_resource);
     }
     if matches!(platform, alien_core::Platform::Azure) {
         emit_azure_setup_resource_role_definitions(&mut per_resource, stack, &stack_settings)?;
@@ -1689,6 +1689,7 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
 /// role trusting a cluster placed in it, are skipped to avoid a cycle.
 fn apply_aws_network_iam_dependency(
     stack: &Stack,
+    locals: &IndexMap<String, Expression>,
     per_resource: &mut IndexMap<String, TfFragment>,
 ) {
     const IAM_TYPES: [&str; 4] = [
@@ -1740,6 +1741,10 @@ fn apply_aws_network_iam_dependency(
             let body = hcl::format::to_string(&resource.body).ok()?;
             Some((address, body))
         })
+        // A grant can also reach the network through a local.
+        .chain(locals.iter().filter_map(|(name, value)| {
+            Some((format!("local.{name}"), hcl::format::to_string(value).ok()?))
+        }))
         .collect();
     let direct_dependencies: IndexMap<&str, Vec<&str>> = rendered
         .iter()
