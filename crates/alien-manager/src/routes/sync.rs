@@ -5922,13 +5922,14 @@ async fn agent_sync(
         commands_url: Some(state.config.commands_base_url()),
         target_operations_bundle_set,
         target_dynamic_containers,
-        // Charts this manager serves name the image. A manager without charts
-        // uses the one its store reported for this deployment.
-        target_operator_image: state
-            .charts
-            .as_ref()
-            .map(|charts| charts.deployed_operator_image(&state.config.base_url()))
-            .or(reconciled_operator_image),
+        // Charts this manager serves name the image only when it is set to
+        // update older Operators. Otherwise the one its store reported for
+        // this deployment goes out, if any.
+        target_operator_image: crate::routes::charts::ChartSettings::sync_target_image(
+            state.charts.as_deref(),
+            &state.config.base_url(),
+            reconciled_operator_image,
+        ),
         signed_config,
     })
     .into_response()

@@ -177,7 +177,7 @@ async fn build_standalone_server(
         .charts(alien_manager::routes::charts::ChartSettings::new(
             toml_config.operator.image.clone(),
             toml_config.operator.insecure_registry,
-        ))
+        ).with_update_older_operators(toml_config.operator.update_older_operators))
         .bundle_signing_key(bundle_signing_key)
         .ephemeral_state_dir(ephemeral_state_dir)
         .with_standalone_defaults(toml_config)
