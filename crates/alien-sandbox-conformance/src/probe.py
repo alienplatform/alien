@@ -143,7 +143,16 @@ def observe(probe):
     except http.client.HTTPException:
         return {"outcome": "protocolFailed"}
     except OSError as error:
-        if error.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EACCES, errno.EPERM):
+        if error.errno in (
+            errno.ENETUNREACH,
+            errno.EHOSTUNREACH,
+            errno.EACCES,
+            errno.EPERM,
+            errno.ETIMEDOUT,
+            errno.ENETDOWN,
+            errno.EHOSTDOWN,
+            errno.ECONNABORTED,
+        ):
             return network_failure("unreachable")
         raise
 

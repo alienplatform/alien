@@ -220,8 +220,14 @@ pub(super) async fn bootstrap_environment(
     sandbox: &Sandbox,
     namespace: &str,
 ) -> Result<Option<Vec<k8s_openapi::api::core::v1::EnvVar>>> {
+    // Every mode: where the API server is, so the agent's startup gate can prove it is dropped.
+    let kube_api = kube_api_environment(ctx, sandbox).await?;
+    let mut common = vec![kube_api];
+    if let Some(public) = public_probe_environment(&sandbox.egress) {
+        common.push(public);
+    }
     if sandbox.egress != SandboxEgress::Internet {
-        return Ok(Some(Vec::new()));
+        return Ok(Some(common));
     }
     let name = kubernetes_resource_name(&ctx.resource_prefix, SANDBOX_EGRESS_GATEWAY_ID);
     let client = ctx
@@ -269,23 +275,147 @@ pub(super) async fn bootstrap_environment(
                 resource_id: Some(sandbox.id.clone()),
             })
         })?;
-    Ok(Some(
-        [
-            ("ALIEN_SANDBOX_EGRESS", "internet".into()),
-            ("ALIEN_SANDBOX_EGRESS_GATEWAY", format!("{address}:3128")),
-            (
-                "ALIEN_SANDBOX_EGRESS_AUDIENCE",
-                format!("{}/{}", ctx.resource_prefix, sandbox.id),
-            ),
-        ]
+    let mut variables: Vec<(&str, String)> = vec![
+        ("ALIEN_SANDBOX_EGRESS", "internet".into()),
+        ("ALIEN_SANDBOX_EGRESS_GATEWAY", format!("{address}:3128")),
+        (
+            "ALIEN_SANDBOX_EGRESS_AUDIENCE",
+            format!("{}/{}", ctx.resource_prefix, sandbox.id),
+        ),
+    ];
+    // A root-boot pod has no NET_ADMIN, so the agent cannot install firewall rules inside it.
+    // NetworkPolicy and the gateway enforce the egress limit outside the pod.
+    if sandbox.image_user == Some(0) {
+        variables.push((
+            alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER,
+            "networkpolicy".into(),
+        ));
+    }
+    let mut environment: Vec<EnvVar> = variables
         .into_iter()
         .map(|(name, value)| EnvVar {
             name: name.into(),
             value: Some(value),
             value_from: None,
         })
-        .collect(),
-    ))
+        .collect();
+    environment.extend(common);
+    Ok(Some(environment))
+}
+
+fn host_port(address: &str, port: i32) -> String {
+    if address.contains(':') {
+        format!("[{address}]:{port}")
+    } else {
+        format!("{address}:{port}")
+    }
+}
+
+/// The API server addresses a pod must not reach: the `default/kubernetes` Service's ClusterIP
+/// and port, and every endpoint address and port of the `kubernetes` EndpointSlice, which a pod
+/// can reach directly without the ClusterIP. Pods have service links off, so they cannot learn
+/// either from their environment.
+pub(super) fn kube_api_targets(
+    service: &k8s_openapi::api::core::v1::Service,
+    slice: &k8s_openapi::api::discovery::v1::EndpointSlice,
+) -> Result<Vec<String>> {
+    let mut targets = Vec::new();
+    let spec = service.spec.as_ref();
+    let cluster_ips = spec
+        .map(|spec| {
+            spec.cluster_ips
+                .iter()
+                .flatten()
+                .chain(spec.cluster_ip.iter())
+                .filter(|ip| ip.parse::<std::net::IpAddr>().is_ok())
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let ports = spec
+        .and_then(|spec| spec.ports.as_ref())
+        .map(|ports| ports.iter().map(|port| port.port).collect::<Vec<_>>())
+        .unwrap_or_default();
+    for ip in &cluster_ips {
+        for port in &ports {
+            targets.push(host_port(ip, *port));
+        }
+    }
+    let slice_ports: Vec<i32> = slice
+        .ports
+        .iter()
+        .flatten()
+        .filter_map(|port| port.port)
+        .collect();
+    for endpoint in &slice.endpoints {
+        for address in &endpoint.addresses {
+            for port in &slice_ports {
+                targets.push(host_port(address, *port));
+            }
+        }
+    }
+    if cluster_ips.is_empty() || ports.is_empty() {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "The default/kubernetes Service has no ClusterIP or port".into(),
+            resource_id: None,
+        }));
+    }
+    if slice_ports.is_empty() || slice.endpoints.iter().all(|e| e.addresses.is_empty()) {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "The default/kubernetes EndpointSlice has no API server endpoint".into(),
+            resource_id: None,
+        }));
+    }
+    targets.sort();
+    targets.dedup();
+    Ok(targets)
+}
+
+/// The public probe target, only where direct public egress must be dropped: `none`, and
+/// `internet` (whose traffic goes through the gateway). Any other policy may allow it.
+fn public_probe_environment(egress: &SandboxEgress) -> Option<EnvVar> {
+    matches!(egress, SandboxEgress::None | SandboxEgress::Internet).then(|| EnvVar {
+        name: alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC.into(),
+        value: Some(alien_core::sandbox_image::MUST_DROP_PUBLIC_PROBE.into()),
+        value_from: None,
+    })
+}
+
+/// `ALIEN_SANDBOX_MUST_DROP_KUBE_API`, read from the cluster. Failing to read it fails the
+/// pool: a pod without the target would skip the most important check.
+async fn kube_api_environment(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+) -> Result<EnvVar> {
+    let client = ctx
+        .service_provider
+        .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
+        .await?;
+    let context = || {
+        ErrorData::CloudPlatformError {
+        message: "Failed to read the Kubernetes API server address (the default/kubernetes Service and EndpointSlice), so sandboxes are refused: the startup gate fails closed without it. The Operator needs get access to both; the chart grants it with a Role and RoleBinding in the default namespace, so an installer that cannot write to default must grant it another way".into(),
+        resource_id: Some(sandbox.id.clone()),
+    }
+    };
+    let service = client
+        .get_service("default", "kubernetes")
+        .await
+        .map_err(|error| error.context(context()))?;
+    let slice = client
+        .get_endpoint_slice("default", "kubernetes")
+        .await
+        .map_err(|error| error.context(context()))?;
+    let targets = kube_api_targets(&service, &slice).map_err(|error| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: error.message,
+            resource_id: Some(sandbox.id.clone()),
+        })
+    })?;
+    Ok(EnvVar {
+        name: alien_core::sandbox_image::ENV_MUST_DROP_KUBE_API.into(),
+        value: Some(targets.join(",")),
+        value_from: None,
+    })
 }
 
 #[cfg(all(test, feature = "local"))]
@@ -470,7 +600,14 @@ mod tests {
         let private_service = server
             .mock_async(|when, then| {
                 when.method(GET).path("/api/v1/namespaces/default/services/kubernetes");
-                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"kubernetes"},"spec":{"clusterIP":"10.96.0.1"}}));
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"kubernetes"},"spec":{"clusterIP":"10.96.0.1","ports":[{"port":443}]}}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/apis/discovery.k8s.io/v1/namespaces/default/endpointslices/kubernetes");
+                then.status(200).json_body(json!({"apiVersion":"discovery.k8s.io/v1","kind":"EndpointSlice","metadata":{"name":"kubernetes"},"addressType":"IPv4","endpoints":[{"addresses":["172.16.0.2"]},{"addresses":["172.16.0.3"]}],"ports":[{"port":6443}]}));
             })
             .await;
         assert!(crate::core::k8s_network::cluster_denied_ranges(&ctx)
@@ -528,7 +665,44 @@ mod tests {
                 .as_deref(),
             Some("test/subject")
         );
-        service.assert_async().await;
+        assert_eq!(
+            environment
+                .iter()
+                .find(|env| env.name == "ALIEN_SANDBOX_MUST_DROP_KUBE_API")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("10.96.0.1:443,172.16.0.2:6443,172.16.0.3:6443")
+        );
+        // A non-root image keeps its in-pod enforcement and gets no enforcer setting.
+        assert!(!environment
+            .iter()
+            .any(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER"));
+        let mut root_sandbox = sandbox.clone();
+        root_sandbox.image_user = Some(0);
+        let root_environment = bootstrap_environment(&ctx, &root_sandbox, "test-ns")
+            .await
+            .unwrap()
+            .unwrap();
+        let enforcers: Vec<_> = root_environment
+            .iter()
+            .filter(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER")
+            .collect();
+        assert_eq!(enforcers.len(), 1);
+        assert_eq!(enforcers[0].value.as_deref(), Some("networkpolicy"));
+        // The gateway lane probes the public address too.
+        assert!(environment
+            .iter()
+            .any(|env| env.name == "ALIEN_SANDBOX_MUST_DROP_PUBLIC"
+                && env.value.as_deref() == Some("1.1.1.1:443")));
+        service.assert_hits_async(2).await;
+    }
+
+    #[test]
+    fn the_public_probe_is_set_only_where_direct_public_egress_is_dropped() {
+        assert!(public_probe_environment(&SandboxEgress::None).is_some());
+        assert!(public_probe_environment(&SandboxEgress::Internet).is_some());
+        assert!(public_probe_environment(&SandboxEgress::Allow).is_none());
     }
 
     /// A gateway image that mounts its configuration and replica secret.
@@ -1094,5 +1268,21 @@ mod tests {
             );
         }
         assert!(cluster_domain(Some("bad domain"), None).is_err());
+    }
+
+    #[test]
+    fn kube_api_targets_cover_the_cluster_ip_and_every_endpoint() {
+        use k8s_openapi::api::{core::v1::Service, discovery::v1::EndpointSlice};
+        let service: Service = serde_json::from_value(json!({"metadata":{"name":"kubernetes"},"spec":{"clusterIP":"10.96.0.1","clusterIPs":["10.96.0.1","fd00::1"],"ports":[{"port":443}]}})).unwrap();
+        let slice: EndpointSlice = serde_json::from_value(json!({"metadata":{"name":"kubernetes"},"addressType":"IPv4","endpoints":[{"addresses":["172.16.0.2"]}],"ports":[{"port":6443}]})).unwrap();
+        assert_eq!(
+            kube_api_targets(&service, &slice).unwrap(),
+            ["10.96.0.1:443", "172.16.0.2:6443", "[fd00::1]:443"]
+        );
+        let empty: EndpointSlice = serde_json::from_value(
+            json!({"metadata":{"name":"kubernetes"},"addressType":"IPv4","endpoints":[]}),
+        )
+        .unwrap();
+        assert!(kube_api_targets(&service, &empty).is_err());
     }
 }

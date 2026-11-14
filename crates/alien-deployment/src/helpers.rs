@@ -2751,11 +2751,17 @@ mod tests {
     fn held_set_matches_delivery() {
         let mut stack = make_single_function_stack("reader");
         for id in ["bystander", "dependent"] {
-            let entry = make_single_function_stack(id).resources.shift_remove(id).unwrap();
+            let entry = make_single_function_stack(id)
+                .resources
+                .shift_remove(id)
+                .unwrap();
             stack.resources.insert(id.to_string(), entry);
         }
         stack.resources.get_mut("dependent").unwrap().dependencies =
-            vec![alien_core::ResourceRef::new(Worker::RESOURCE_TYPE, "reader")];
+            vec![alien_core::ResourceRef::new(
+                Worker::RESOURCE_TYPE,
+                "reader",
+            )];
         stack.inputs = vec![serde_json::from_value(serde_json::json!({
             "id": "apiKey", "kind": "secret", "providedBy": ["deployer"],
             "required": true, "label": "API key", "description": "",
@@ -2797,7 +2803,10 @@ mod tests {
                 .values()
                 .any(|value| value.contains("input-api-key"))
         };
-        assert!(carries_secret("reader"), "delivery reaches the targeted Worker");
+        assert!(
+            carries_secret("reader"),
+            "delivery reaches the targeted Worker"
+        );
         assert!(!carries_secret("bystander"));
         assert_eq!(
             held,

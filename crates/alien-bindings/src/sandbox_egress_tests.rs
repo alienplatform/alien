@@ -288,7 +288,8 @@ async fn a_binding_rendered_before_the_key_changed_signs_with_the_current_key() 
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts.next().unwrap()).unwrap()).unwrap();
     assert_eq!(header["kid"], "key-2");
     let payload = parts.next().unwrap();
-    let signature = Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts.next().unwrap()).unwrap()).unwrap();
+    let signature =
+        Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts.next().unwrap()).unwrap()).unwrap();
     let signed = &token[..token.rfind('.').unwrap()];
     assert!(payload.len() > 0);
     rotated

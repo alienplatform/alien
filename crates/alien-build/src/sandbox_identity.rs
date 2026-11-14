@@ -476,16 +476,24 @@ mod tests {
                 );
                 let mut planned = sandbox.clone();
                 planned.image_user = marker;
-                if matches!(platform, Platform::Local | Platform::Kubernetes)
-                    && expected == 0
-                    && !user.is_empty()
-                {
+                if platform == Platform::Local && expected == 0 && !user.is_empty() {
                     assert_eq!(
                         planned.validate_for_platform(platform).unwrap_err().code,
                         "SANDBOX_CAPABILITY_UNSUPPORTED"
                     );
                 } else {
+                    // Kubernetes boots a root image now (bounded capabilities, none or internet
+                    // egress). What it still refuses is checked below.
                     planned.validate_for_platform(platform).unwrap();
+                }
+                if platform == Platform::Kubernetes && marker == Some(0) {
+                    // A root image with the in-guest `allow` limit is still refused there.
+                    let mut allowed = planned.clone();
+                    allowed.egress = alien_core::SandboxEgress::Allow;
+                    assert_eq!(
+                        allowed.validate_for_platform(platform).unwrap_err().code,
+                        "SANDBOX_CAPABILITY_UNSUPPORTED"
+                    );
                 }
             }
         }

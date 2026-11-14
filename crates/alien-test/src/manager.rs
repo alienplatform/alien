@@ -169,9 +169,9 @@ impl TestManager {
             .map(|s| s.trim_end_matches('/').to_string());
         let has_ngrok_token = external_public_url.is_none()
             && std::env::var("NGROK_AUTHTOKEN")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .is_some();
+                .ok()
+                .filter(|s| !s.is_empty())
+                .is_some();
         let ngrok_tunnel = if has_ngrok_token {
             info!(%port, "Starting ephemeral ngrok tunnel for command callbacks");
             let tunnel = crate::ngrok::start_tunnel(port)
