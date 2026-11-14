@@ -706,6 +706,14 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
                 resource_name: operation.to_string(),
             };
         }
+        // A role without the action gets a 403 AccessDeniedException. Callers branch on this to
+        // fall back when an older role lacks a newer permission.
+        if *http_status == 403 {
+            return ErrorData::RemoteAccessDenied {
+                resource_type: "MicrovmImage".to_string(),
+                resource_name: operation.to_string(),
+            };
+        }
         // While any session started from an image is running, the service refuses to delete the
         // image with a 400, "Cannot delete microvm image with running microvms.". AWS ends every
         // session within eight hours, so this also clears without any change on the caller's
@@ -1178,6 +1186,51 @@ mod tests {
             .await
             .expect_err("a failed later page must not return partial inventory");
         assert!(unavailable.hits_async().await > 0);
+    }
+
+    /// A role without `lambda:UpdateMicrovmImageVersion` gets a 403. Callers fall back on
+    /// `RemoteAccessDenied`, so the raw response has to arrive as that error.
+    #[tokio::test]
+    async fn an_access_denied_response_is_remote_access_denied() {
+        let server = MockServer::start_async().await;
+        let denied = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH).path(format!(
+                    "/{API_VERSION}/microvm-images/test-image/versions/1.0"
+                ));
+                then.status(403)
+                    .header("x-amzn-ErrorType", "AccessDeniedException")
+                    .json_body(serde_json::json!({"message": "not authorized"}));
+            })
+            .await;
+        let client = LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "111122223333".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("lambda".to_string(), server.base_url())]),
+                }),
+            }),
+        );
+        let error = client
+            .update_microvm_image_version(
+                "test-image",
+                "1.0",
+                MicrovmImageVersionStatus::Inactive,
+            )
+            .await
+            .expect_err("403 must fail");
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. })),
+            "{error:?}"
+        );
+        assert!(denied.hits_async().await >= 1);
     }
 
     /// The refusal AWS returned live when teardown deleted an image that was still settling.

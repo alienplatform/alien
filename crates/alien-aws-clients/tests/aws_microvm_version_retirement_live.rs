@@ -7,10 +7,10 @@
 //! can remove them even after a failed run.
 //!
 //! ```text
-//! PROBE_STATE=/tmp/alien2697-probe.json cargo test -p alien-aws-clients \
+//! PROBE_STATE=$HOME/alien2697-probe.json cargo test -p alien-aws-clients \
 //!   --test aws_microvm_version_retirement_live setup_probe_image -- --ignored --nocapture
 //! # run the probe that reads PROBE_IMAGE_ARN / PROBE_VERSION_OLD / PROBE_VERSION_NEW
-//! PROBE_STATE=/tmp/alien2697-probe.json cargo test -p alien-aws-clients \
+//! PROBE_STATE=$HOME/alien2697-probe.json cargo test -p alien-aws-clients \
 //!   --test aws_microvm_version_retirement_live cleanup_probe_resources -- --ignored --nocapture
 //! ```
 
@@ -37,19 +37,70 @@ struct State {
     image: Option<String>,
 }
 
-fn state_path() -> String {
-    std::env::var("PROBE_STATE").unwrap_or_else(|_| "/tmp/alien2697-probe.json".to_string())
+/// The state file must be named explicitly and live under the user's home directory, so a path
+/// another local user can write to is never trusted.
+fn state_path() -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(
+        std::env::var("PROBE_STATE").expect("set PROBE_STATE to a file under your home directory"),
+    );
+    let home = std::path::PathBuf::from(std::env::var("HOME").expect("HOME"));
+    assert!(
+        path.is_absolute()
+            && path.starts_with(&home)
+            && !path.components().any(|c| c.as_os_str() == ".."),
+        "PROBE_STATE must be an absolute path under {}",
+        home.display()
+    );
+    path
+}
+
+/// Every resource name the probe creates starts with this prefix; cleanup refuses anything else.
+fn is_probe_name(name: &str) -> bool {
+    name.starts_with("alien2697-")
 }
 
 fn load() -> State {
-    std::fs::read_to_string(state_path())
+    use std::os::unix::fs::MetadataExt;
+    let path = state_path();
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return State::default();
+    };
+    assert_eq!(
+        meta.uid(),
+        // SAFETY: getuid has no preconditions.
+        unsafe { libc_getuid() },
+        "{} is owned by another user",
+        path.display()
+    );
+    let state: State = std::fs::read_to_string(&path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for name in [&state.bucket, &state.role, &state.image]
+        .into_iter()
+        .flatten()
+    {
+        assert!(is_probe_name(name), "{name} is not a probe resource");
+    }
+    state
+}
+
+extern "C" {
+    #[link_name = "getuid"]
+    fn libc_getuid() -> u32;
 }
 
 fn save(state: &State) {
-    std::fs::write(state_path(), serde_json::to_string_pretty(state).unwrap()).unwrap();
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(state_path())
+        .unwrap();
+    file.write_all(serde_json::to_string_pretty(state).unwrap().as_bytes())
+        .unwrap();
 }
 
 fn provider() -> AwsCredentialProvider {
@@ -443,7 +494,13 @@ async fn show_probe_versions() {
     let lambda = LambdaMicrovmsClient::new(Client::new(), provider());
     for v in lambda.list_microvm_image_versions(&image).await.unwrap() {
         let ver = v.image_version.clone().unwrap();
-        let got = lambda.get_microvm_image_version(&image, &ver).await.unwrap();
-        println!("version {ver} state={:?} status={:?} reason={:?}", got.state, got.status, got.state_reason);
+        let got = lambda
+            .get_microvm_image_version(&image, &ver)
+            .await
+            .unwrap();
+        println!(
+            "version {ver} state={:?} status={:?} reason={:?}",
+            got.state, got.status, got.state_reason
+        );
     }
 }
