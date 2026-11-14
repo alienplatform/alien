@@ -13,6 +13,8 @@
 //!   pod-security.kubernetes.io/enforce=restricted
 //! # The non-root test needs the same image layered with a non-root exec uid:
 //! #   layer-agent.sh <agent> <contract-image> <tag> 1001
+//! # On a cluster that enforces NetworkPolicy (the startup gate needs it), also set
+//! # ALIEN_ROOT_BOOT_KIND_ENFORCES_POLICY=1: the tests attach a deny policy to their pods.
 //! ALIEN_ROOT_BOOT_KIND_CONTEXT=kind-<name> ALIEN_ROOT_BOOT_KIND_IMAGE=<image> \
 //!   ALIEN_ROOT_BOOT_KIND_NONROOT_IMAGE=<non-root image> \
 //!   ALIEN_ROOT_BOOT_KIND_BASELINE_NAMESPACE=sbx-baseline \
@@ -170,6 +172,22 @@ async fn start(
         )]),
     );
     pod.metadata.name = Some(format!("{}-{:x}", sandbox.id, rand::random::<u32>()));
+    if std::env::var_os("ALIEN_ROOT_BOOT_KIND_ENFORCES_POLICY").is_some() {
+        // The startup gate holds the ENTRYPOINT back until the cluster really drops egress, so on
+        // a cluster that enforces NetworkPolicy the pod needs the deny policy the Operator would
+        // attach. Deny all egress and ingress for these pods.
+        let policy = format!(
+            r#"{{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{{"name":"root-boot-kind-deny","namespace":"{namespace}"}},"spec":{{"podSelector":{{"matchLabels":{{"alien.dev/deployment":"root-boot-kind"}}}},"policyTypes":["Egress","Ingress"]}}}}"#
+        );
+        let applied = Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "printf '%s' '{policy}' | kubectl --context {context} apply -f -"
+            ))
+            .output()
+            .expect("kubectl apply");
+        assert!(applied.status.success(), "deny policy applied");
+    }
     let created = pods.create_pod(namespace, &pod).await?;
     let name = created.metadata.name.clone().unwrap();
     let uid = created.metadata.uid.clone().unwrap();
