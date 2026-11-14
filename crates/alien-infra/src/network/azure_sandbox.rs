@@ -385,9 +385,9 @@ async fn validate_sandbox_nsg(
         let destination = rule.destination_address_prefix.as_deref().unwrap_or("");
         let single_destination = rule.destination_address_prefixes.is_empty();
         let tcp = rule.protocol == SecurityRulePropertiesFormatProtocol::Tcp;
-        let gateway = gateway_ips.iter().find(|ip| {
-            destination == ip.as_str() || destination == format!("{ip}/32")
-        });
+        let gateway = gateway_ips
+            .iter()
+            .find(|ip| destination == ip.as_str() || destination == format!("{ip}/32"));
         if !unrestricted_source(rule) || !single_destination || rule.priority >= 110 {
             return Err(invalid(
                 resource,
