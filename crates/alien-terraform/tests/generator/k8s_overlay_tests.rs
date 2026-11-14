@@ -9,8 +9,8 @@
 //! `terraform fmt -check` + `terraform validate` against the cloud providers.
 
 use super::helpers::{
-    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input, render,
-    snapshot_module,
+    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input,
+    prepare_for_target, render, snapshot_module,
 };
 use alien_core::{
     ArtifactRegistry, AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection,
@@ -18,7 +18,7 @@ use alien_core::{
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
+    PermissionsConfig, Postgres, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
     ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
@@ -1531,35 +1531,226 @@ fn aks_adds_a_kata_node_pool_only_when_the_stack_has_a_sandbox() {
     assert_terraform_valid(&module, "aks_kata_node_pool");
 }
 
-/// An existing cluster brings its own network, so the registration of a module that can attach
-/// to one sends a `network` setting only when it creates the cluster.
-#[test]
-fn kubernetes_modules_register_a_network_only_when_they_create_the_cluster() {
-    let stack = Stack::new("eks-network-registration".to_string())
-        .add(
-            KubernetesCluster::new("kubernetes".to_string())
-                .provider(KubernetesClusterProvider::Eks)
-                .ownership(KubernetesClusterOwnership::Managed)
-                .namespace("default".to_string())
-                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+fn app_workload() -> Container {
+    Container::new("app".to_string())
+        .code(ContainerCode::Image {
+            image: "example.com/app:latest".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.5".to_string(),
+            desired: "0.5".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "512Mi".to_string(),
+            desired: "512Mi".to_string(),
+        })
+        .permissions("app".to_string())
+        .build()
+}
+
+fn declared_cluster(ownership: KubernetesClusterOwnership) -> KubernetesCluster {
+    KubernetesCluster::new("kubernetes".to_string())
+        .provider(KubernetesClusterProvider::Eks)
+        .ownership(ownership)
+        .namespace("default".to_string())
+        .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+        .build()
+}
+
+/// What the source stack adds to the one workload every case here deploys.
+enum Source {
+    Workload,
+    Database,
+    GatedDatabase,
+}
+
+/// An EKS module for `source`, rendered from the stack the preflights prepare for it, the way
+/// `alien render` does: the network and cluster are the ones the mutations add.
+async fn render_prepared_eks(source: Source) -> alien_terraform::ModuleFiles {
+    let mut builder =
+        Stack::new("eks-network-gate".to_string()).permission("app", PermissionProfile::new());
+    if matches!(source, Source::GatedDatabase) {
+        builder = builder.inputs(vec![gate_input(
+            "databaseEnabled",
+            "Enable the database",
+            "Whether to create the database.",
+        )]);
+    }
+    builder = builder.add(app_workload(), ResourceLifecycle::Live);
+    builder = match source {
+        Source::Workload => builder,
+        Source::Database => builder.add(
+            Postgres::new("db".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        ),
+        Source::GatedDatabase => builder.add_enabled_when(
+            Postgres::new("db".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "databaseEnabled",
+        ),
+    };
+    let stack = prepare_for_target(builder.build(), TerraformTarget::Eks).await;
+    render(&stack, TerraformTarget::Eks, StackSettings::default())
+}
+
+/// A stack that declares a cluster and has a `default-network` in it: one the stack declares
+/// itself, or one marked as the network mutation's. (Template validation rejects a stack that
+/// declares these; a stack a manager prepares can carry them.)
+fn render_declared_cluster(
+    cluster: KubernetesClusterOwnership,
+    network_added_by_preflight: Option<bool>,
+) -> alien_terraform::ModuleFiles {
+    let mut builder = Stack::new("eks-declared".to_string());
+    if network_added_by_preflight.is_some() {
+        builder = builder.add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
                 .build(),
             ResourceLifecycle::Frozen,
-        )
+        );
+    }
+    let mut stack = builder
+        .add(declared_cluster(cluster), ResourceLifecycle::Frozen)
         .build();
-    let module = render(&stack, TerraformTarget::Eks, StackSettings::default());
-    let locals = module.get("locals.tf").expect("locals should render");
-    let settings = locals
-        .lines()
-        .find(|line| line.contains("deployment_settings"))
-        .expect("locals should define deployment_settings");
-    assert!(
-        settings.contains(
-            r#"jsondecode(var.kubernetes_cluster_mode == "create" ? jsonencode({ network = jsondecode("#
-        ),
-        "network must be registered only for a created cluster: {settings}"
+    if network_added_by_preflight == Some(true) {
+        let entry = stack
+            .resources
+            .get_mut("default-network")
+            .expect("the network was added");
+        entry.display_name = Some(alien_core::PREPARED_NETWORK_DISPLAY_NAME.to_string());
+        entry.description = Some(alien_core::PREPARED_NETWORK_DESCRIPTION.to_string());
+    }
+    render(&stack, TerraformTarget::Eks, StackSettings::default())
+}
+
+fn compact(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+const CREATE_GATE: &str = "var.kubernetes_cluster_mode == \"create\"";
+/// The network gate with no database: a created cluster, or a network the deployer requests in
+/// the advanced settings.
+const NETWORK_GATE: &str =
+    "(var.kubernetes_cluster_mode == \"create\" || local.deployment_requests_network)";
+
+/// An existing cluster is already attached to a network, and the manager prepares a stack with
+/// none for it, so the module must neither create a VPC nor register `default-network` unless it
+/// creates the cluster. It must also register the cluster as `existing`, not `managed`.
+#[tokio::test]
+async fn eks_creates_and_registers_a_default_network_only_with_a_created_cluster() {
+    let module = render_prepared_eks(Source::Workload).await;
+    let network = compact(
+        module
+            .get("default_network.tf")
+            .expect("default_network.tf"),
     );
     assert!(
-        !settings.contains("endpointAccess = var.endpoint_access, network ="),
-        "network must not be registered unconditionally: {settings}"
+        network.contains(&format!(
+            "count = {NETWORK_GATE} ? var.network_mode == \"create-new\" ? 1 : 0 : 0"
+        )),
+        "{network}"
+    );
+    let locals = compact(module.get("locals.tf").expect("locals.tf"));
+    assert!(
+        locals.contains(&format!(
+            "deployment_resources = concat({NETWORK_GATE} ? [{{ id = \"default-network\""
+        )),
+        "{locals}"
+    );
+    assert!(
+        locals.contains(&format!(
+            "ownership = {CREATE_GATE} ? \"managed\" : \"existing\""
+        )),
+        "{locals}"
+    );
+    let settings = locals
+        .split("deployment_settings")
+        .nth(1)
+        .expect("locals should define deployment_settings");
+    assert!(
+        settings.contains(&format!(
+            "jsondecode({CREATE_GATE} ? jsonencode({{ network = jsondecode("
+        )),
+        "network must be registered only for a created cluster: {settings}"
+    );
+    assert_terraform_valid(&module, "eks_network_gated_on_cluster_mode");
+}
+
+/// The manager still gives a stack with a cloud database a network of its own for an existing
+/// cluster (`kubernetes_requires_cloud_network`), so that network stays in every mode.
+#[tokio::test]
+async fn eks_keeps_the_default_network_for_a_stack_with_a_database() {
+    let module = render_prepared_eks(Source::Database).await;
+    assert_network_in_every_mode(&module);
+}
+
+/// The manager drops a declined frozen resource before it prepares the stack, so a database
+/// behind `enabled_when` keeps the network only while its input is on.
+#[tokio::test]
+async fn eks_keeps_the_default_network_only_while_a_gated_database_is_accepted() {
+    let module = render_prepared_eks(Source::GatedDatabase).await;
+    let gate = format!(
+        "({CREATE_GATE} || local.deployment_requests_network || var.input_database_enabled)"
+    );
+    let network = compact(
+        module
+            .get("default_network.tf")
+            .expect("default_network.tf"),
+    );
+    assert!(
+        network.contains(&format!(
+            "count = {gate} ? var.network_mode == \"create-new\" ? 1 : 0 : 0"
+        )),
+        "{network}"
+    );
+    let locals = compact(module.get("locals.tf").expect("locals.tf"));
+    assert!(
+        locals.contains(&format!(
+            "deployment_resources = concat({gate} ? [{{ id = \"default-network\""
+        )),
+        "{locals}"
+    );
+    assert_terraform_valid(&module, "eks_network_gated_on_database_input");
+}
+
+/// A network the stack declares is always expected, whatever the cluster mode.
+#[test]
+fn eks_keeps_a_default_network_the_stack_declares() {
+    let module = render_declared_cluster(KubernetesClusterOwnership::Existing, Some(false));
+    assert_network_in_every_mode(&module);
+}
+
+/// A cluster the stack declares as `managed` makes the manager expect the network, so it stays
+/// in every mode; for a declared `existing` cluster the added network follows the cluster mode.
+#[test]
+fn eks_follows_the_ownership_of_a_cluster_the_stack_declares() {
+    let managed = render_declared_cluster(KubernetesClusterOwnership::Managed, Some(true));
+    assert_network_in_every_mode(&managed);
+
+    let existing = render_declared_cluster(KubernetesClusterOwnership::Existing, Some(true));
+    let locals = compact(existing.get("locals.tf").expect("locals.tf"));
+    assert!(
+        locals.contains(&format!(
+            "deployment_resources = concat({NETWORK_GATE} ? [{{ id = \"default-network\""
+        )),
+        "{locals}"
+    );
+}
+
+fn assert_network_in_every_mode(module: &alien_terraform::ModuleFiles) {
+    let locals = compact(module.get("locals.tf").expect("locals.tf"));
+    assert!(
+        locals.contains("deployment_resources = [ { id = \"default-network\""),
+        "{locals}"
+    );
+    let network = module
+        .get("default_network.tf")
+        .expect("default_network.tf");
+    assert!(
+        !network.contains("var.kubernetes_cluster_mode"),
+        "{network}"
     );
 }

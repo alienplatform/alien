@@ -1,5 +1,6 @@
 ---
 source: crates/alien-terraform/tests/generator/helpers.rs
+assertion_line: 262
 expression: buf
 ---
 === versions.tf ===
@@ -269,6 +270,7 @@ locals {
   deployment_region            = data.aws_region.current.region
   deployment_management_config = null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_requests_network  = nonsensitive(sensitive(try(local.advanced_settings.network, null) != null))
   generated_kubernetes_exposure = {
     mode = "generated"
     route = {
@@ -316,7 +318,7 @@ locals {
       type = "kubernetes-cluster"
       importData = {
         provider           = "eks"
-        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "managed"
+        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "existing"
         namespace          = var.kubernetes_namespace
         clusterName        = local.kubernetes_cluster_name
         clusterId          = local.kubernetes_cluster_name
