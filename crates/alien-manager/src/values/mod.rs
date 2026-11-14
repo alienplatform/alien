@@ -226,14 +226,18 @@ impl ValueStore {
         // the retry reads the source again and adds the slots that have no
         // marker yet (keeping the versions already recorded).
         let complete = ValueSlot::moved(&set_complete_key(&key));
-        if self.backend.get(to, &complete).await?.is_none() {
-            let existing = self.recorded_slots(to, &key).await?;
+        let marked = if self.backend.get(to, &complete).await?.is_none() {
+            // The set is built from the markers this call writes plus the ones an
+            // earlier attempt left, never by reading back what was just written.
+            let mut set = self.recorded_slots(to, &key).await?;
             for stored in self.list(from).await? {
-                if existing.iter().all(|(name, _)| name != stored.slot.as_str()) {
+                if set.iter().all(|(name, _)| name != stored.slot.as_str()) {
                     self.write_marker(to, &key, &stored.slot, stored.updated_at)
                         .await?;
+                    set.push((stored.slot.as_str().to_string(), stored.updated_at));
                 }
             }
+            set.sort_by(|a, b| a.0.cmp(&b.0));
             self.backend
                 .put(
                     to,
@@ -245,8 +249,10 @@ impl ValueStore {
                     },
                 )
                 .await?;
-        }
-        let marked = self.recorded_slots(to, &key).await?;
+            set
+        } else {
+            self.recorded_slots(to, &key).await?
+        };
         let mut copied = Vec::new();
         let mut removable = Vec::new();
         for (name, version) in marked {
@@ -848,6 +854,70 @@ mod tests {
         assert!(store.list(&reg).await.unwrap().is_empty());
         // A further retry still reports both.
         assert_eq!(store.move_scope(&reg, &dep, "claim").await.unwrap().len(), 2);
+    }
+
+    /// A backend whose prefix reads are eventually consistent while `stale` is
+    /// set: the last match is missing, as a query without a consistent read can
+    /// miss a write the store has acknowledged. Point reads are always current.
+    struct StalePrefixReads {
+        inner: super::backend::KvValueBackend,
+        stale: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl super::backend::ValueBackend for StalePrefixReads {
+        async fn put(&self, s: &ValueScope, v: &StoredValue) -> Result<()> {
+            self.inner.put(s, v).await
+        }
+        async fn put_if_absent(&self, s: &ValueScope, v: &StoredValue) -> Result<bool> {
+            self.inner.put_if_absent(s, v).await
+        }
+        async fn get(&self, s: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>> {
+            self.inner.get(s, slot).await
+        }
+        async fn delete(&self, s: &ValueScope, slot: &ValueSlot) -> Result<()> {
+            self.inner.delete(s, slot).await
+        }
+        async fn list(&self, s: &ValueScope) -> Result<Vec<StoredValue>> {
+            self.inner.list(s).await
+        }
+        async fn list_prefix(&self, s: &ValueScope, p: &str) -> Result<Vec<StoredValue>> {
+            let mut found = self.inner.list_prefix(s, p).await?;
+            if p.starts_with("moved:") && self.stale.load(std::sync::atomic::Ordering::SeqCst) {
+                found.pop();
+            }
+            Ok(found)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_move_covers_every_slot_even_when_a_prefix_read_is_stale() {
+        use std::sync::atomic::Ordering;
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let dir = tempfile::tempdir().unwrap();
+        let kv = LocalKv::single_process(dir.path().join("kv")).await.unwrap();
+        let backend = Arc::new(StalePrefixReads {
+            inner: sealed_backend(Arc::new(kv)).1,
+            stale: std::sync::atomic::AtomicBool::new(true),
+        });
+        let store = ValueStore::new(backend.clone());
+        let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
+        for name in ["env:A", "env:B", "env:C"] {
+            store
+                .put(&reg, &slot(name), ValueKind::Plain, name.into())
+                .await
+                .unwrap();
+        }
+        let held = store.move_scope(&reg, &dep, "claim").await.unwrap();
+        assert_eq!(held.len(), 3);
+        // Every slot was copied before the source was emptied.
+        for name in ["env:A", "env:B", "env:C"] {
+            assert!(store.get(&dep, &slot(name)).await.unwrap().is_some(), "{name}");
+        }
+        assert!(store.list(&reg).await.unwrap().is_empty());
+        // A retry reads the markers consistently and never deletes an uncopied source.
+        backend.stale.store(false, Ordering::SeqCst);
+        assert_eq!(store.move_scope(&reg, &dep, "claim").await.unwrap().len(), 3);
     }
 
     #[tokio::test]
