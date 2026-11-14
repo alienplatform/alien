@@ -110,6 +110,24 @@ impl AzureSandbox {
         for name in ["NO_PROXY", "no_proxy"] {
             environment.insert(name.into(), "localhost,127.0.0.1".into());
         }
+        // The gateway answers its first connect slowly (measured 7-20 s), so a packaged agent
+        // proves the path itself before the ENTRYPOINT starts: the gateway must connect and the
+        // public canaries must drop, retried for up to 60 s, and the workload never starts if
+        // they do not. The variables are reserved, so a caller cannot have set them.
+        if self.agent {
+            for (name, value) in [
+                ("ALIEN_SANDBOX_STARTUP_EGRESS_GATE", "1"),
+                ("ALIEN_SANDBOX_STARTUP_GATE_VNET", "1"),
+                ("ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS", "60"),
+                ("ALIEN_SANDBOX_EGRESS_GATEWAY", manager.gateway_authority()),
+                (
+                    alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC,
+                    "1.1.1.1:443,1.1.1.1:8443",
+                ),
+            ] {
+                environment.insert(name.into(), value.into());
+            }
+        }
         labels.insert(IDENTITY_LABEL.into(), identity.clone());
         // The gateway has no policy for this identity yet and denies all outbound requests.
         // Create publishes the policy only after Azure returns the expected floor and label.
