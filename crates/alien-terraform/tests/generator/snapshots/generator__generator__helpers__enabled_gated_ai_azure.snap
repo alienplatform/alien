@@ -548,7 +548,7 @@ resource "azurerm_cognitive_deployment" "fixture_gpt-4_1" {
 
   sku {
     name     = "GlobalStandard"
-    capacity = 1
+    capacity = 50
   }
 
   depends_on = [
@@ -569,7 +569,7 @@ resource "azurerm_cognitive_deployment" "fixture_model-router" {
 
   sku {
     name     = "GlobalStandard"
-    capacity = 1
+    capacity = 50
   }
 
   depends_on = [
