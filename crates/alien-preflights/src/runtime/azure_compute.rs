@@ -252,17 +252,23 @@ pub struct ComputeRoom {
 }
 
 impl ComputeRoom {
-    /// `None` when either read fails: selection then stays on the plain catalog pick and the
-    /// quota check reports what it can read.
+    /// The reason as text when either read fails: selection then stays on the plain catalog
+    /// pick, and the caller says why it could not use quota.
     pub async fn read(
         skus: &dyn ResourceSkusApi,
         usages: &dyn ComputeUsagesApi,
         region: &str,
-    ) -> Option<Self> {
-        Some(Self {
+    ) -> Result<Self, String> {
+        Ok(Self {
             region: region.to_string(),
-            skus: skus.list_resource_skus(region).await.ok()?,
-            usages: usages.list_compute_usages(region).await.ok()?,
+            skus: skus
+                .list_resource_skus(region)
+                .await
+                .map_err(|err| format!("reading the VM SKUs failed: {err}"))?,
+            usages: usages
+                .list_compute_usages(region)
+                .await
+                .map_err(|err| format!("reading the compute usages failed: {err}"))?,
         })
     }
 
@@ -585,6 +591,41 @@ mod tests {
     use httpmock::{Method::GET, MockServer};
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn a_failed_usage_read_is_reported_with_its_reason() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path_contains("/providers/Microsoft.Compute/skus");
+                then.status(200).json_body(json!({"value": []}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path_contains("/locations/eastus2/usages");
+                then.status(403);
+            })
+            .await;
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".into(), server.base_url())]),
+        });
+        let skus = AzureResourceSkusClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        );
+        let usages =
+            AzureComputeUsagesClient::new(reqwest::Client::new(), AzureTokenCache::new(config));
+        let reason = match ComputeRoom::read(&skus, &usages, "eastus2").await {
+            Ok(_) => panic!("the usage read is denied"),
+            Err(reason) => reason,
+        };
+        assert!(
+            reason.starts_with("reading the compute usages failed"),
+            "{reason}"
+        );
+    }
 
     fn skus() -> Vec<ResourceSku> {
         serde_json::from_str(include_str!("fixtures/azure-compute-skus.json")).unwrap()
