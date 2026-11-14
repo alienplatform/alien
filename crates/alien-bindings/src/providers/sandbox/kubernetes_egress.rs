@@ -55,13 +55,24 @@ impl KubernetesSandbox {
                 reason: "could not deliver the policy to the Kubernetes sandbox agent".into(),
             })?;
         if response.status() != reqwest::StatusCode::NO_CONTENT {
+            let status = response.status();
+            // The agent's refusal names the failed step and cause (never a secret); logs of an
+            // isolated pod may not be readable, so this is where the operator learns them.
+            // Read through the bounded reader: an oversized or stalled body gives no detail.
+            let detail = super::agent_protocol::error_body(response, "policy delivery")
+                .await
+                .unwrap_or_default();
+            let detail: String = detail.chars().take(300).collect();
+            let reason = if detail.trim().is_empty() {
+                format!("Kubernetes sandbox agent refused policy delivery: {status}")
+            } else {
+                format!(
+                    "Kubernetes sandbox agent refused policy delivery: {status}: {}",
+                    detail.trim()
+                )
+            };
             return Err(AlienError::new(
-                ErrorData::SandboxEgressGatewayUnavailable {
-                    reason: format!(
-                        "Kubernetes sandbox agent refused policy delivery: {}",
-                        response.status()
-                    ),
-                },
+                ErrorData::SandboxEgressGatewayUnavailable { reason },
             ));
         }
         Ok(())
