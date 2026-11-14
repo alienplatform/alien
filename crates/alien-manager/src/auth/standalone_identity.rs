@@ -121,6 +121,11 @@ impl StandaloneRuntimeIdentity {
     /// The deployment a rerun key is minted for. A key that rewrites or removes
     /// the installation is not issued while it is being removed, as on the
     /// hosted manager; the Operator's own sync keeps working then.
+    ///
+    /// A retained installation gets none either. Its manager routes do not
+    /// confine a deployment key to the erase: redeploy and retry accept it, and
+    /// either would restart an installation whose access was revoked. Erasing
+    /// retained data is the setup workflow's job, which uses the setup token.
     async fn setup_deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
         let record = self.load(id).await?;
         if matches!(record.status.as_str(), "deleting" | "deleted" | "retained") {
