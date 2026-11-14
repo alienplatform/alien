@@ -381,7 +381,22 @@ fn frozen_addition_excused_while_gated_off(
     let Some(Some(gate)) = users.next() else {
         return false;
     };
-    users.all(|other| other == Some(gate)) && gate_is_off(gate, id)
+    // A retained resource may link the identity without running under its profile (a worker of
+    // another profile that links `app-sa`). It would start without the identity, so the
+    // identity is in use unless every linker carries the same off gate.
+    let linked_by_other = new_stack
+        .linkers(&alien_core::ResourceRef::new(
+            ServiceAccount::RESOURCE_TYPE,
+            id,
+        ))
+        .iter()
+        .any(|linker| {
+            new_stack
+                .resources
+                .get(linker.id())
+                .is_none_or(|user| user.enabled_when.as_deref() != Some(gate))
+        });
+    !linked_by_other && users.all(|other| other == Some(gate)) && gate_is_off(gate, id)
 }
 
 /// Frozen resources of `new_stack` that the installed stack lacks and that the update leaves
@@ -2174,6 +2189,36 @@ mod azure_storage_settings_tests {
             assert!(identity_added(
                 &errors(default_true, &config(Some(false))).await
             ));
+        }
+
+        #[tokio::test]
+        async fn an_identity_a_retained_worker_links_is_an_addition() {
+            // An ungated worker of another profile links `app-sa` while every `app` worker is
+            // gated off: dropping the identity would start it without the link.
+            let linking = alien_core::Worker::new("linker".to_string())
+                .permissions("base".to_string())
+                .link(&ServiceAccount::new("app-sa".to_string()).build())
+                .code(alien_core::WorkerCode::Image {
+                    image: "example.com/app:latest".to_string(),
+                })
+                .build();
+            let mut new = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            new.resources.insert(
+                "linker".to_string(),
+                alien_core::ResourceEntry {
+                    config: alien_core::Resource::new(linking),
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                    description: None,
+                    display_name: None,
+                },
+            );
+            assert!(identity_added(&errors(new.clone(), &config(None)).await));
+            assert!(
+                unused_frozen_additions(&base(), &new, &config(None), Platform::Aws).is_empty()
+            );
         }
 
         #[tokio::test]
