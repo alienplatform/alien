@@ -197,6 +197,7 @@ pub async fn validate_azure_sandbox_network(
         ));
     }
     let gateway_cidr = gateway_cidrs.first().ok_or_else(missing)?;
+    validate_gateway_ips(resource, &declared.gateway_ips, gateway_cidr)?;
     let private_id = format!("{id}/subnets/{private}");
     if unique.contains(&private_id.to_ascii_lowercase()) {
         return Err(invalid(
@@ -280,7 +281,7 @@ pub async fn validate_azure_sandbox_network(
             group,
             network_parent,
             properties,
-            gateway_cidr,
+            &declared.gateway_ips,
         )
         .await?;
     }
@@ -315,6 +316,7 @@ pub async fn validate_azure_sandbox_network(
     Ok(AzureSandboxNetwork {
         sandbox_cidrs: sandbox_cidrs.into_iter().collect(),
         gateway_cidrs: gateway_cidrs.into_iter().collect(),
+        gateway_ips: declared.gateway_ips.clone(),
         workload_cidrs: workload_cidrs.into_iter().collect(),
         vpc_cidrs: vpc_cidrs.into_iter().collect(),
         ..declared.clone()
@@ -327,7 +329,7 @@ async fn validate_sandbox_nsg(
     group: &str,
     network_parent: &str,
     properties: &SubnetPropertiesFormat,
-    gateway_cidr: &str,
+    gateway_ips: &[String],
 ) -> Result<()> {
     let missing = || {
         invalid(
@@ -366,36 +368,55 @@ async fn validate_sandbox_nsg(
         .iter()
         .map(|rule| rule.properties.as_ref().ok_or_else(missing))
         .collect::<Result<_>>()?;
-    let mut allowed = 0;
+    // The exact rule set the setup emits: a proxy-port allow per gateway IP, the platform
+    // resolver on port 53, and the platform/range/Internet denies. Any other allow is a bypass.
+    let mut gateways_allowed = BTreeSet::new();
+    let mut dns_allowed = 0;
     for rule in rules.iter().filter(|rule| {
         rule.direction == SecurityRuleDirection::Outbound
             && rule.access == SecurityRuleAccess::Allow
     }) {
-        let ports: BTreeSet<_> = rule
+        let ports: BTreeSet<&str> = rule
             .destination_port_ranges
             .iter()
             .map(String::as_str)
+            .chain(rule.destination_port_range.as_deref())
             .collect();
-        if rule.priority != 100
-            || rule.protocol != SecurityRulePropertiesFormatProtocol::Tcp
-            || !unrestricted_source(rule)
-            || rule.destination_address_prefix.as_deref() != Some(gateway_cidr)
-            || !rule.destination_address_prefixes.is_empty()
-            || rule.destination_port_range.is_some()
-            // Deployments that have not taken the proxy-only rule yet still carry 3128 and 3129.
-            || (ports != BTreeSet::from(["3128"]) && ports != BTreeSet::from(["3128", "3129"]))
-        {
+        let destination = rule.destination_address_prefix.as_deref().unwrap_or("");
+        let single_destination = rule.destination_address_prefixes.is_empty();
+        let tcp = rule.protocol == SecurityRulePropertiesFormatProtocol::Tcp;
+        let gateway = gateway_ips.iter().find(|ip| {
+            destination == ip.as_str() || destination == format!("{ip}/32")
+        });
+        if !unrestricted_source(rule) || !single_destination || rule.priority >= 110 {
             return Err(invalid(
                 resource,
                 "Sandbox NSG permits traffic outside the gateway proxy port",
             ));
         }
-        allowed += 1;
+        match gateway {
+            Some(ip) if tcp && ports == BTreeSet::from(["3128"]) => {
+                if !gateways_allowed.insert(ip.clone()) {
+                    return Err(invalid(resource, "Sandbox NSG repeats a gateway allow"));
+                }
+            }
+            None if destination == "168.63.129.16" && ports == BTreeSet::from(["53"]) => {
+                dns_allowed += 1;
+            }
+            _ => {
+                return Err(invalid(
+                    resource,
+                    "Sandbox NSG permits traffic outside the gateway proxy port",
+                ));
+            }
+        }
     }
-    if allowed != 1
+    if gateways_allowed.len() != gateway_ips.len()
+        || dns_allowed != 1
         || ![
-            ("AzurePlatformIMDS", 101),
-            ("AzurePlatformDNS", 140),
+            ("AzurePlatformIMDS", 103),
+            ("VirtualNetwork", 110),
+            ("Internet", 128),
             ("*", 300),
         ]
         .iter()
@@ -491,3 +512,40 @@ fn cloud_error(resource: &str, operation: &str) -> ErrorData {
 #[cfg(test)]
 #[path = "azure_sandbox_tests.rs"]
 pub(crate) mod tests;
+
+/// The setup-created gateway VMs have static NICs: exactly two distinct addresses inside the
+/// gateway subnet. An empty list means setup predates the VMs, so no gateway can be reached.
+fn validate_gateway_ips(resource: &str, ips: &[String], cidr: &str) -> Result<()> {
+    let bad = |message: &str| invalid(resource, message);
+    if ips.is_empty() {
+        return Err(bad(
+            "The deployment has no egress gateway VMs; re-run setup to create them",
+        ));
+    }
+    let parsed: BTreeSet<std::net::Ipv4Addr> = ips
+        .iter()
+        .map(|ip| ip.parse())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|_| bad("A gateway VM address is not an IPv4 address"))?;
+    if ips.len() != 2 || parsed.len() != 2 {
+        return Err(bad("Setup must register exactly two distinct gateway VMs"));
+    }
+    let (base, bits) = cidr
+        .split_once('/')
+        .and_then(|(b, n)| {
+            Some((
+                b.parse::<std::net::Ipv4Addr>().ok()?,
+                n.parse::<u32>().ok()?,
+            ))
+        })
+        .filter(|(_, n)| *n <= 32)
+        .ok_or_else(|| bad("The gateway subnet prefix is not an IPv4 range"))?;
+    let mask = u32::MAX.checked_shl(32 - bits).unwrap_or(0);
+    if parsed
+        .iter()
+        .any(|ip| u32::from(*ip) & mask != u32::from(base) & mask)
+    {
+        return Err(bad("A gateway VM address is outside the gateway subnet"));
+    }
+    Ok(())
+}

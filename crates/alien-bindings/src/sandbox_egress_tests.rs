@@ -212,6 +212,10 @@ impl Harness {
         let router = Router::new()
             .route("/v1/policies", put(policy_request).delete(policy_request))
             .route("/v1/policies/record", axum::routing::get(policy_record))
+            .route(
+                "/v1/protocol",
+                axum::routing::get(|| async { axum::Json(serde_json::json!({"protocol": 1})) }),
+            )
             .with_state(state.clone());
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
@@ -717,8 +721,10 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
     let mut config = h.config.clone();
     config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
         dns: "replicas.invalid".into(),
+        addresses: vec![],
         port,
         count: 2,
+        min_protocol: 0,
     });
     let mut manager = SandboxEgressManager::with_endpoints(
         config,
@@ -759,4 +765,69 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
     second.refuse.store(true, Ordering::SeqCst);
     assert!(manager.update("box-1", &wide).await.is_err());
     server.abort();
+}
+
+#[test]
+fn static_replica_addresses_are_the_write_targets_without_dns() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let h = Harness::new().await;
+        let mut config = h.config.clone();
+        config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+            dns: String::new(),
+            addresses: vec!["10.0.3.4".into(), "10.0.3.5".into()],
+            port: 3129,
+            count: 2,
+            min_protocol: 0,
+        });
+        let manager = SandboxEgressManager::with_endpoints(
+            config,
+            h.vault.clone(),
+            h.manager.gateway.clone(),
+            h.manager.admin_url.to_string(),
+        )
+        .unwrap();
+        let targets = manager.write_targets().await.unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets[0].ends_with("10.0.3.4:3129") && targets[1].ends_with("10.0.3.5:3129"));
+    });
+}
+
+#[tokio::test]
+async fn a_gateway_older_than_the_binding_needs_is_refused_with_a_rerun_setup_message() {
+    let h = Harness::new().await;
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+    let with = |min_protocol: u32| {
+        let mut config = h.config.clone();
+        config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+            dns: String::new(),
+            addresses: vec!["127.0.0.1".into()],
+            port: h.manager.admin_url.port().unwrap(),
+            count: 1,
+            min_protocol,
+        });
+        SandboxEgressManager::with_endpoints(
+            config,
+            h.vault.clone(),
+            h.manager.gateway.clone(),
+            h.manager.admin_url.to_string(),
+        )
+        .unwrap()
+    };
+    with(1)
+        .update("box-1", &policy)
+        .await
+        .expect("a gateway at protocol 1 serves protocol 1");
+    let error = with(2).update("box-1", &policy).await.unwrap_err();
+    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE");
+    assert!(
+        error
+            .to_string()
+            .contains("re-run setup to update the egress gateway"),
+        "{error}"
+    );
 }

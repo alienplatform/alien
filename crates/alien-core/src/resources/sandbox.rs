@@ -1256,9 +1256,10 @@ impl Sandbox {
                 && matches!(self.azure_image(), Ok(AzureSandboxImage::Catalog(_)))
             {
                 return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
-                    capability: "preview (a catalog image runs without the Alien agent that issues \
+                    capability:
+                        "preview (a catalog image runs without the Alien agent that issues \
                                  the capability; build the sandbox from source)"
-                        .to_string(),
+                            .to_string(),
                     platform: platform.to_string(),
                 }));
             }
@@ -2042,7 +2043,10 @@ mod tests {
         assert!(azure.pause_resume);
         // A snapshot id has nothing to consume it on any backend.
         assert!(!azure.snapshot);
-        assert!(azure.preview, "the in-sandbox agent issues a port-scoped capability");
+        assert!(
+            azure.preview,
+            "the in-sandbox agent issues a port-scoped capability"
+        );
 
         let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
         assert!(!aws.snapshot, "AWS has no user-callable sandbox snapshot");
@@ -2806,9 +2810,9 @@ mod tests {
             .validate_for_platform(Platform::Aws)
             .expect("Lambda terminates the MicroVM at maximumDurationInSeconds");
 
-        sandbox
-            .validate_for_platform(Platform::Azure)
-            .expect("the binding stamps a deadline label and the controller's reaper deletes by it");
+        sandbox.validate_for_platform(Platform::Azure).expect(
+            "the binding stamps a deadline label and the controller's reaper deletes by it",
+        );
 
         for platform in [Platform::Local] {
             let error = sandbox

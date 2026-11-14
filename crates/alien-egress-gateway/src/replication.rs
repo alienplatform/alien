@@ -137,6 +137,25 @@ impl Replication {
         }
         Err(denied("invalid replica signature"))
     }
+    /// The selected route identifies our source interface even on multi-homed containers.
+    /// UDP connect sends no packet; it avoids an extra configured replica identifier.
+    async fn is_self(ip: IpAddr, port: u16) -> Result<bool> {
+        let socket = tokio::net::UdpSocket::bind("0.0.0.0:0")
+            .await
+            .into_alien_error()
+            .context(unavailable("identify replica address"))?;
+        socket
+            .connect(SocketAddr::new(ip, port))
+            .await
+            .into_alien_error()
+            .context(unavailable("route to replica"))?;
+        Ok(socket
+            .local_addr()
+            .into_alien_error()
+            .context(unavailable("read replica address"))?
+            .ip()
+            == ip)
+    }
     async fn peers(&self) -> Result<Vec<SocketAddr>> {
         let Some(service) = &self.service else {
             return Ok(Vec::new());
@@ -153,7 +172,13 @@ impl Replication {
             }
             addresses.sort();
             addresses.dedup();
-            return Ok(addresses);
+            let mut peers = Vec::new();
+            for address in addresses {
+                if !(address.port() == self.port && Self::is_self(address.ip(), address.port()).await?) {
+                    peers.push(address);
+                }
+            }
+            return Ok(peers);
         }
         let crate::config::Peers::Dns(service) = service else {
             unreachable!()
@@ -189,24 +214,7 @@ impl Replication {
             .filter_map(|record| record.data.ip_addr())
             .filter(IpAddr::is_ipv4)
         {
-            // The selected route identifies our source interface even on multi-homed containers.
-            // UDP connect sends no packet; it avoids an extra configured replica identifier.
-            let socket = tokio::net::UdpSocket::bind("0.0.0.0:0")
-                .await
-                .into_alien_error()
-                .context(unavailable("identify replica address"))?;
-            socket
-                .connect(SocketAddr::new(ip, self.port))
-                .await
-                .into_alien_error()
-                .context(unavailable("route to replica"))?;
-            if socket
-                .local_addr()
-                .into_alien_error()
-                .context(unavailable("read replica address"))?
-                .ip()
-                != ip
-            {
+            if !Self::is_self(ip, self.port).await? {
                 peers.push(SocketAddr::new(ip, service.port));
             }
         }
@@ -428,6 +436,27 @@ mod tests {
     };
     use std::collections::HashMap;
     use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn static_peers_never_include_this_replica() {
+        let resolver = TokioResolver::builder_with_config(
+            ResolverConfig::default(),
+            TokioRuntimeProvider::default(),
+        )
+        .build()
+        .unwrap();
+        let own = Replication::new(
+            Some(crate::config::Peers::Static(crate::config::StaticPeers {
+                r#static: vec!["127.0.0.1:3129".into(), "192.0.2.7:3129".into()],
+            })),
+            vec![[7; 32]],
+            3129,
+            resolver,
+        )
+        .unwrap();
+        let peers = own.peers().await.unwrap();
+        assert_eq!(peers, vec!["192.0.2.7:3129".parse::<SocketAddr>().unwrap()]);
+    }
 
     #[tokio::test]
     async fn authoritative_empty_peer_dns_is_empty_but_discovery_failures_are_errors() {

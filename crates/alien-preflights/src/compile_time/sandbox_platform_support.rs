@@ -64,8 +64,22 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         sandbox.id()
                     ));
                 }
+                // Azure hosts the gateway as two VMs that setup creates in the deployment's VNet,
+                // and the sandbox reaches it through the agent's startup gate. A catalog image
+                // runs no agent, so nothing inside it could prove or use that path.
+                if platform == Platform::Azure
+                    && sandbox.egress == SandboxEgress::Internet
+                    && matches!(sandbox.azure_image(), Ok(AzureSandboxImage::Catalog(_)))
+                {
+                    return Some(format!(
+                        "Sandbox '{}': SANDBOX_EGRESS_GATEWAY_UNAVAILABLE: egress internet on Azure \
+                         needs an image with the Alien sandbox agent, and a catalog image has none; \
+                         use an OCI registry image or a Dockerfile",
+                        sandbox.id()
+                    ));
+                }
                 if sandbox.egress == SandboxEgress::Internet
-                    && !matches!(platform, Platform::Aws | Platform::Kubernetes)
+                    && !matches!(platform, Platform::Aws | Platform::Kubernetes | Platform::Azure)
                 {
                     return Some(format!(
                         "Sandbox '{}': SANDBOX_EGRESS_GATEWAY_UNAVAILABLE: {platform} does not yet \

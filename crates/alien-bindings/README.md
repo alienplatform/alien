@@ -53,11 +53,33 @@ rediscover manager assignment without exposing a non-refreshing provider.
 
 ## Azure sandbox gateway recovery
 
-Gateway-backed Azure `internet` plans remain unavailable until automatic hosting
-is complete. Azure runs no Alien agent and cannot restore a policy after all
-gateway replicas lose their in-memory state. Proxy requests then receive HTTP
-403 with reason `no policy` until the application reapplies its current policy
-with `updateEgress`, or `getOrCreate` with an explicit `egress` argument.
+Azure `internet` egress is hosted by two gateway VMs that the setup package creates
+in the deployment's VNet (a gateway subnet whose NSG admits only the sandbox and
+workload subnets, with the deployment's NAT for the fixed outbound IP). Sandbox
+subnets have no NAT and no route out, so the gateway is the only way to the
+internet. It needs an image with the Alien sandbox agent: a catalog image is
+refused at plan time, and the agent proves the gateway path before the ENTRYPOINT
+starts.
+
+Accepted limitations of this version:
+
+- **Frozen.** The gateway VMs come from setup, and a gateway image update rides a
+  setup re-run. The binding checks the gateway's protocol version through the admin
+  API and refuses with "re-run setup to update the egress gateway" when it cannot
+  serve it. The admin protocol stays backward compatible.
+- **Patching.** The VMs use platform-orchestrated patching (`AutomaticByPlatform`),
+  so Azure patches the OS and they sit in an availability set so a reboot takes one
+  gateway down at a time. The binding's replica write tolerates one VM down. The
+  gateway container image is pinned by setup and is updated only by a setup re-run.
+- **Gateway identity.** Each VM's managed identity reads only two Key Vault secrets
+  (`sandbox-egress-gateway-config`, `sandbox-egress-replica-secret`), never the
+  signing key. The container reaches the identity endpoint through the docker bridge
+  to fetch them.
+
+The gateway keeps its policy in memory. After all gateway replicas lose their state,
+proxy requests receive HTTP 403 with reason `no policy` until the application
+reapplies its current policy with `updateEgress`, or `getOrCreate` with an explicit
+`egress` argument.
 
 For an existing sandbox, `getOrCreate` without `egress` must preserve the stored
 policy, including its absence after total state loss. Defaults apply only when

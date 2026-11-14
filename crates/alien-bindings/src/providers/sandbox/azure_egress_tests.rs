@@ -90,6 +90,40 @@ fn provider(manager: SandboxEgressManager, corrupt: bool) -> (AzureSandbox, Reco
 }
 
 #[tokio::test]
+async fn an_agent_sandbox_boots_behind_a_60s_gateway_startup_gate() {
+    let h = Harness::new().await;
+    let mut sandbox = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::Internet,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_egress_manager(Arc::new(h.reopen().await), None);
+    sandbox.agent = true;
+    let mut env = BTreeMap::new();
+    let mut labels = BTreeMap::from([(
+        SANDBOX_EXPIRY_LABEL.to_string(),
+        (chrono::Utc::now().timestamp_millis() + 600_000).to_string(),
+    )]);
+    sandbox
+        .prepare_identity(&mut env, &mut labels)
+        .await
+        .unwrap();
+    assert_eq!(env["ALIEN_SANDBOX_STARTUP_EGRESS_GATE"], "1");
+    assert_eq!(env["ALIEN_SANDBOX_STARTUP_GATE_VNET"], "1");
+    assert_eq!(env["ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS"], "60");
+    assert!(env["ALIEN_SANDBOX_EGRESS_GATEWAY"].contains(':'));
+    assert_eq!(
+        env["ALIEN_SANDBOX_MUST_DROP_PUBLIC"],
+        "1.1.1.1:443,1.1.1.1:8443"
+    );
+}
+
+#[tokio::test]
 async fn durable_identity_drives_create_reconnect_update_and_termination() {
     let h = Harness::new().await;
     let (sandbox, record, request) = provider(h.reopen().await, false);
@@ -142,14 +176,10 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
     assert_eq!(floor.default_action, "Allow");
     assert_eq!(floor.traffic_inspection.as_deref(), Some("Partial"));
     assert_eq!(floor.host_rules[0].pattern, "127.0.0.1:3128");
-    assert_eq!(floor.host_rules.len(), 3);
-    assert_eq!(floor.host_rules[1].action, "Allow");
-    assert_eq!(
-        floor.host_rules[1].pattern,
-        h.reopen().await.gateway_admin_authority()
-    );
-    assert_eq!(floor.host_rules[2].action, "Deny");
-    assert_eq!(floor.host_rules[2].pattern, "*");
+    // No rule for the gateway admin port: the sandbox must not reach it at all.
+    assert_eq!(floor.host_rules.len(), 2);
+    assert_eq!(floor.host_rules[1].action, "Deny");
+    assert_eq!(floor.host_rules[1].pattern, "*");
 
     // Reopening the manager loses all in-process state; the provider label remains authoritative.
     let reopened = AzureSandbox {
@@ -170,7 +200,10 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
         })
         .await
         .unwrap();
-    assert_eq!(preserved.sandbox.sandbox_id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
+    assert_eq!(
+        preserved.sandbox.sandbox_id,
+        "571fa784-7be7-5d9e-9cff-8e9a11414684"
+    );
     assert_eq!(h.policy(&id), Some(empty));
     let resolved = reopened
         .get_or_create(CreateSandboxRequest {
@@ -180,15 +213,24 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
         })
         .await
         .unwrap();
-    assert_eq!(resolved.sandbox.sandbox_id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
+    assert_eq!(
+        resolved.sandbox.sandbox_id,
+        "571fa784-7be7-5d9e-9cff-8e9a11414684"
+    );
     assert_eq!(h.policy(&id), Some(RuntimePolicy::Internet));
     record.lock().unwrap().as_mut().unwrap().state = Some("Suspended".into());
     reopened
-        .update_egress("571fa784-7be7-5d9e-9cff-8e9a11414684", RuntimePolicy::Allow { allow: vec![] })
+        .update_egress(
+            "571fa784-7be7-5d9e-9cff-8e9a11414684",
+            RuntimePolicy::Allow { allow: vec![] },
+        )
         .await
         .unwrap();
     assert_eq!(h.policy(&id), Some(RuntimePolicy::Allow { allow: vec![] }));
-    reopened.terminate("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap();
+    reopened
+        .terminate("571fa784-7be7-5d9e-9cff-8e9a11414684")
+        .await
+        .unwrap();
     assert!(record.lock().unwrap().is_none());
     assert_eq!(h.policy(&id), None);
 }
@@ -211,7 +253,11 @@ async fn total_gateway_state_loss_requires_an_explicit_policy() {
 
     // Reconnect must not replay the resource default or the earlier create-time policy.
     h.refuse_writes(true);
-    assert!(sandbox.get("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap().is_some());
+    assert!(sandbox
+        .get("571fa784-7be7-5d9e-9cff-8e9a11414684")
+        .await
+        .unwrap()
+        .is_some());
     let found = sandbox
         .get_or_create(CreateSandboxRequest {
             sandbox_id: Some("571fa784-7be7-5d9e-9cff-8e9a11414684".into()),
@@ -219,7 +265,10 @@ async fn total_gateway_state_loss_requires_an_explicit_policy() {
         })
         .await
         .unwrap();
-    assert_eq!(found.sandbox.sandbox_id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
+    assert_eq!(
+        found.sandbox.sandbox_id,
+        "571fa784-7be7-5d9e-9cff-8e9a11414684"
+    );
     assert_eq!(h.policy(&id), None);
     h.refuse_writes(false);
 
@@ -238,7 +287,10 @@ async fn total_gateway_state_loss_requires_an_explicit_policy() {
         .await
         .unwrap();
     assert_eq!(h.policy(&id), Some(empty));
-    sandbox.terminate("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap();
+    sandbox
+        .terminate("571fa784-7be7-5d9e-9cff-8e9a11414684")
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -275,7 +327,10 @@ async fn a_changed_native_floor_is_refused_before_policy_updates() {
         .host_rules
         .reverse();
     let error = sandbox
-        .update_egress("571fa784-7be7-5d9e-9cff-8e9a11414684", RuntimePolicy::Internet)
+        .update_egress(
+            "571fa784-7be7-5d9e-9cff-8e9a11414684",
+            RuntimePolicy::Internet,
+        )
         .await
         .unwrap_err();
     assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
@@ -286,7 +341,10 @@ async fn a_changed_native_floor_is_refused_before_policy_updates() {
         })
     );
     // Teardown still revokes and deletes a sandbox whose floor no longer matches.
-    sandbox.terminate("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap();
+    sandbox
+        .terminate("571fa784-7be7-5d9e-9cff-8e9a11414684")
+        .await
+        .unwrap();
     assert_eq!(h.policy(&id), None);
 }
 
@@ -345,7 +403,7 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         ("/enforcementMode", serde_json::json!("Audit")),
         ("/http/enforcementMode", serde_json::json!("Audit")),
         ("/http/defaultAction", serde_json::json!("Deny")),
-        ("/http/hostRules/2/action", serde_json::json!("Allow")),
+        ("/http/hostRules/1/action", serde_json::json!("Allow")),
         ("/hostRules/0/pattern", serde_json::json!("*")),
         ("/http", serde_json::json!(null)),
     ];
@@ -354,7 +412,10 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         *altered.pointer_mut(path).unwrap() = value;
         record.lock().unwrap().as_mut().unwrap().egress_policy =
             Some(serde_json::from_value(altered).unwrap());
-        let error = sandbox.get("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap_err();
+        let error = sandbox
+            .get("571fa784-7be7-5d9e-9cff-8e9a11414684")
+            .await
+            .unwrap_err();
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{path}");
     }
     for path in ["", "/http"] {
@@ -362,10 +423,20 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         altered.pointer_mut(path).unwrap()["bypass"] = serde_json::json!(true);
         record.lock().unwrap().as_mut().unwrap().egress_policy =
             Some(serde_json::from_value(altered).unwrap());
-        let error = sandbox.get("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap_err();
+        let error = sandbox
+            .get("571fa784-7be7-5d9e-9cff-8e9a11414684")
+            .await
+            .unwrap_err();
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{path}/bypass");
     }
     record.lock().unwrap().as_mut().unwrap().egress_policy = Some(expected);
-    assert!(sandbox.get("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap().is_some());
-    sandbox.terminate("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap();
+    assert!(sandbox
+        .get("571fa784-7be7-5d9e-9cff-8e9a11414684")
+        .await
+        .unwrap()
+        .is_some());
+    sandbox
+        .terminate("571fa784-7be7-5d9e-9cff-8e9a11414684")
+        .await
+        .unwrap();
 }

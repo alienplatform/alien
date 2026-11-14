@@ -67,17 +67,13 @@ impl AzureSandbox {
         // Full/default-Deny inspects the inner CONNECT destination and rejects the gateway.
         // Partial requires default-Allow. The ordered catch-all blocks other HTTP requests;
         // setup's NSG allows the linked gateway ports and denies platform DNS/IMDS and other
-        // traffic. The admin port is reachable through the link but requires an admin JWT.
+        // traffic. The gateway admin port has no rule and is not reachable from sandboxes.
         Some(EgressPolicy {
             default_action: "Allow".into(),
             traffic_inspection: Some("Partial".into()),
             host_rules: vec![
                 EgressHostRule {
                     pattern: manager.gateway_authority().into(),
-                    action: "Allow".into(),
-                },
-                EgressHostRule {
-                    pattern: manager.gateway_admin_authority().into(),
                     action: "Allow".into(),
                 },
                 EgressHostRule {
@@ -113,6 +109,24 @@ impl AzureSandbox {
         }
         for name in ["NO_PROXY", "no_proxy"] {
             environment.insert(name.into(), "localhost,127.0.0.1".into());
+        }
+        // The gateway answers its first connect slowly (measured 7-20 s), so a packaged agent
+        // proves the path itself before the ENTRYPOINT starts: the gateway must connect and the
+        // public canaries must drop, retried for up to 60 s, and the workload never starts if
+        // they do not. The variables are reserved, so a caller cannot have set them.
+        if self.agent {
+            for (name, value) in [
+                ("ALIEN_SANDBOX_STARTUP_EGRESS_GATE", "1"),
+                ("ALIEN_SANDBOX_STARTUP_GATE_VNET", "1"),
+                ("ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS", "60"),
+                ("ALIEN_SANDBOX_EGRESS_GATEWAY", manager.gateway_authority()),
+                (
+                    alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC,
+                    "1.1.1.1:443,1.1.1.1:8443",
+                ),
+            ] {
+                environment.insert(name.into(), value.into());
+            }
         }
         labels.insert(IDENTITY_LABEL.into(), identity.clone());
         // The gateway has no policy for this identity yet and denies all outbound requests.

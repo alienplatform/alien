@@ -102,23 +102,6 @@ async fn executor_with(
         .with_dependency(
             Network::new("network".into()).settings(settings).build(),
             network,
-        )
-        .with_stack_resource(
-            Container::new(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into())
-                .permissions("default".into())
-                .code(ContainerCode::Image {
-                    image: "example.invalid/gateway:1".into(),
-                })
-                .cpu(alien_core::ResourceSpec {
-                    min: "0.25".into(),
-                    desired: "0.25".into(),
-                })
-                .memory(alien_core::ResourceSpec {
-                    min: "512Mi".into(),
-                    desired: "512Mi".into(),
-                })
-                .build(),
-            ResourceLifecycle::Live,
         );
     builder = match vault {
         TestVault::Local(directory) => builder.with_dependency(
@@ -224,6 +207,11 @@ async fn actual_controller_initializes_shared_key_and_publishes_only_after_netwo
         .as_array()
         .unwrap()
         .contains(&serde_json::json!("198.18.0.0/16")));
+    // The two gateway VMs have no service name: peers are their static admin addresses.
+    assert_eq!(
+        config["peers"],
+        serde_json::json!({"static": ["10.0.6.4:3129", "10.0.6.5:3129"]})
+    );
     assert_eq!(config["keys"][0]["kid"], gateway.kid);
     assert!(config["keys"][0].get("privateKey").is_none());
     // The gateway reads its replica secret from its own vault entry; none is embedded.
