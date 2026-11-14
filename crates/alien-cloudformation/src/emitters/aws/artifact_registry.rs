@@ -3,7 +3,8 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        required_logical_id, resource_config, stack_name, tags, PARAM_MANAGING_ROLE_ARN,
+        required_logical_id, resource_config, service_trust_policy, stack_name, tags,
+        PARAM_MANAGING_ROLE_ARN,
     },
     template::{CfExpression, CfResource},
 };
@@ -15,7 +16,7 @@ pub struct AwsArtifactRegistryEmitter;
 impl CfEmitter for AwsArtifactRegistryEmitter {
     fn emit_resources(&self, ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         let registry = resource_config::<ArtifactRegistry>(ctx, ArtifactRegistry::RESOURCE_TYPE)?;
-        registry.validate_aws_replication()?;
+        let replication = replication_resources(ctx, registry)?;
         let logical_id = required_logical_id(ctx)?;
         let repository_id = format!("{logical_id}Repository");
         let pull_role_id = format!("{logical_id}PullRole");
@@ -53,7 +54,9 @@ impl CfEmitter for AwsArtifactRegistryEmitter {
         pull_role.depends_on.push(repository_id.clone());
         push_role.depends_on.push(repository_id);
 
-        Ok(vec![repository, pull_role, push_role])
+        let mut resources = vec![repository, pull_role, push_role];
+        resources.extend(replication);
+        Ok(resources)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -247,4 +250,361 @@ fn ecr_lifecycle_policy() -> CfExpression {
             ),
         ])]),
     )])
+}
+
+/// ECR replication for the regions the registry's owner declares. Lambda only
+/// pulls from ECR in its own region, so the images must exist there. The rule
+/// covers this registry's repository prefix only. No repository creation
+/// template is written: replicas use the ECR defaults for tag immutability and
+/// lifecycle (an accepted limitation), and cross-account pull grants are
+/// written on each replica by the registry binding. Replication configuration
+/// is one per account and region: only a stack that declares regions writes it, and it keeps
+/// every rule that is not this registry's.
+// Existing rules are never read at generation time: the custom resource below reads and keeps
+// them when it writes, so a rule added after the template was generated is kept too.
+fn replication_resources(
+    ctx: &EmitContext<'_>,
+    registry: &ArtifactRegistry,
+) -> Result<Vec<CfResource>> {
+    let from_input = registry.replication_regions_input.as_deref();
+    if registry.replication_regions.is_empty() && from_input.is_none() {
+        return Ok(Vec::new());
+    }
+    if from_input.is_some() && !registry.replication_regions.is_empty() {
+        return Err(alien_error::AlienError::new(
+            alien_core::ErrorData::GenericError {
+                message: format!(
+                    "Artifact registry '{}': set either replicationRegions or a regions input, not both",
+                    registry.id()
+                ),
+            },
+        ));
+    }
+    for region in &registry.replication_regions {
+        let valid = !region.is_empty()
+            && region
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !valid {
+            return Err(alien_error::AlienError::new(
+                alien_core::ErrorData::GenericError {
+                    message: format!(
+                        "Artifact registry '{}': '{region}' is not an AWS region name",
+                        registry.id()
+                    ),
+                },
+            ));
+        }
+    }
+    if let Some(input_id) = from_input {
+        let input = crate::generator::stack_inputs_for_platform(ctx.stack, deployment_platform(ctx))
+            .into_iter()
+            .find(|input| input.id == input_id);
+        if let Some(input) = input {
+            if input.kind != alien_core::StackInputKind::StringList {
+                return Err(alien_error::AlienError::new(
+                    alien_core::ErrorData::GenericError {
+                        message: format!(
+                            "Artifact registry '{}': the regions input '{input_id}' must be a list of strings (StringList), not {:?}",
+                            registry.id(),
+                            input.kind
+                        ),
+                    },
+                ));
+            }
+        }
+    }
+    let conditional = match from_input {
+        Some(input_id) => replication_input_is_conditional(ctx.stack, deployment_platform(ctx), input_id)
+            .ok_or_else(|| {
+                alien_error::AlienError::new(alien_core::ErrorData::GenericError {
+                    message: format!(
+                        "Artifact registry '{}': the regions input '{input_id}' is not a deployer-provided input of this template",
+                        registry.id()
+                    ),
+                })
+            })?,
+        None => false,
+    };
+    let regions = match from_input {
+        Some(input_id) => CfExpression::list((0..=MAX_REPLICATION_REGION_SLOTS).map(|slot| {
+            let region = if slot == MAX_REPLICATION_REGION_SLOTS {
+                CfExpression::from(format!(
+                    "too-many-regions-at-most-{MAX_REPLICATION_REGION_SLOTS}-are-supported"
+                ))
+            } else {
+                replication_slot_region(input_id, conditional, slot)
+            };
+            if slot == 0 {
+                // The whole resource is conditional on slot 0, so a nested
+                // condition on it could never be false.
+                region
+            } else {
+                CfExpression::if_(
+                    replication_slot_condition(input_id, slot),
+                    region,
+                    CfExpression::no_value(),
+                )
+            }
+        })),
+        None => CfExpression::list(
+            registry
+                .replication_regions
+                .iter()
+                .map(|region| CfExpression::from(region.as_str())),
+        ),
+    };
+    let logical_id = required_logical_id(ctx)?;
+    // ECR keeps one replication configuration per account and region, and writing it replaces
+    // every rule; deleting the native resource clears all of them. A native resource would
+    // therefore drop rules that other tools or other registries wrote, whatever was read when
+    // the template was generated. This custom resource reads the rules at the moment of the
+    // write, keeps all that are not this registry's unchanged, and on delete removes only this
+    // registry's rule (see ecr_replication_rule.py).
+    let log_id = format!("{logical_id}ReplicationLogs");
+    let role_id = format!("{logical_id}ReplicationRole");
+    let function_id = format!("{logical_id}ReplicationFunction");
+    let mut logs = CfResource::new(log_id.clone(), "AWS::Logs::LogGroup".to_string());
+    logs.properties.insert(
+        "RetentionInDays".to_string(),
+        CfExpression::Integer(alien_core::AWS_LOG_RETENTION_DAYS.into()),
+    );
+    let mut role = CfResource::new(role_id.clone(), "AWS::IAM::Role".to_string());
+    role.properties.insert(
+        "AssumeRolePolicyDocument".to_string(),
+        service_trust_policy(["lambda.amazonaws.com"]),
+    );
+    role.properties.insert(
+        "Policies".to_string(),
+        CfExpression::list([CfExpression::object([
+            ("PolicyName", CfExpression::from("replication-rules")),
+            (
+                "PolicyDocument",
+                CfExpression::object([
+                    ("Version", CfExpression::from("2012-10-17")),
+                    (
+                        "Statement",
+                        CfExpression::list([
+                            CfExpression::object([
+                                ("Effect", CfExpression::from("Allow")),
+                                (
+                                    "Action",
+                                    CfExpression::list([
+                                        CfExpression::from("ecr:DescribeRegistry"),
+                                        CfExpression::from("ecr:PutReplicationConfiguration"),
+                                    ]),
+                                ),
+                                ("Resource", CfExpression::from("*")),
+                            ]),
+                            // The first replication configuration in an account creates the
+                            // ECR replication service-linked role. The grant is a permission
+                            // (not a template resource) because the role may already exist,
+                            // and creating it twice fails the stack. It is limited to that
+                            // one service.
+                            CfExpression::object([
+                                ("Effect", CfExpression::from("Allow")),
+                                ("Action", CfExpression::from("iam:CreateServiceLinkedRole")),
+                                (
+                                    "Resource",
+                                    CfExpression::sub("arn:${AWS::Partition}:iam::${AWS::AccountId}:role/aws-service-role/replication.ecr.amazonaws.com/AWSServiceRoleForECRReplication"),
+                                ),
+                                (
+                                    "Condition",
+                                    CfExpression::object([(
+                                        "StringEquals",
+                                        CfExpression::object([(
+                                            "iam:AWSServiceName",
+                                            CfExpression::from("replication.ecr.amazonaws.com"),
+                                        )]),
+                                    )]),
+                                ),
+                            ]),
+                            CfExpression::object([
+                                ("Effect", CfExpression::from("Allow")),
+                                (
+                                    "Action",
+                                    CfExpression::list([
+                                        CfExpression::from("logs:CreateLogStream"),
+                                        CfExpression::from("logs:PutLogEvents"),
+                                    ]),
+                                ),
+                                ("Resource", CfExpression::get_att(&log_id, "Arn")),
+                            ]),
+                        ]),
+                    ),
+                ]),
+            ),
+        ])]),
+    );
+    let mut function = CfResource::new(function_id.clone(), "AWS::Lambda::Function".to_string());
+    function.properties.insert(
+        "LoggingConfig".to_string(),
+        CfExpression::object([("LogGroup", CfExpression::ref_(&log_id))]),
+    );
+    function
+        .properties
+        .insert("Role".to_string(), CfExpression::get_att(&role_id, "Arn"));
+    function
+        .properties
+        .insert("Runtime".to_string(), CfExpression::from("python3.13"));
+    function
+        .properties
+        .insert("Handler".to_string(), CfExpression::from("index.handler"));
+    function
+        .properties
+        .insert("Timeout".to_string(), CfExpression::from(60u8));
+    function.properties.insert(
+        "Code".to_string(),
+        CfExpression::object([("ZipFile", CfExpression::from(REPLICATION_HANDLER))]),
+    );
+    function.properties.insert("Tags".to_string(), tags(ctx));
+    role.properties.insert("Tags".to_string(), tags(ctx));
+    logs.properties.insert("Tags".to_string(), tags(ctx));
+    function.depends_on.push(log_id.clone());
+
+    let mut configuration = CfResource::new(
+        format!("{logical_id}Replication"),
+        "Custom::EcrReplicationRule".to_string(),
+    );
+    configuration.properties.insert(
+        "ServiceToken".to_string(),
+        CfExpression::get_att(&function_id, "Arn"),
+    );
+    configuration
+        .properties
+        .insert("Prefix".to_string(), stack_name(registry.id()));
+    configuration.properties.insert(
+        "RegistryId".to_string(),
+        CfExpression::ref_("AWS::AccountId"),
+    );
+    configuration
+        .properties
+        .insert("Regions".to_string(), regions);
+
+    let mut resources = vec![logs, role, function, configuration];
+    if let Some(input_id) = from_input {
+        // No region answered: write nothing, so an install that leaves the
+        // input empty keeps whatever replication its account already has.
+        for resource in &mut resources {
+            resource.condition = Some(replication_slot_condition(input_id, 0));
+        }
+    }
+    let repository = format!("{logical_id}Repository");
+    for resource in &mut resources {
+        resource.depends_on.push(repository.clone());
+    }
+    Ok(resources)
+}
+
+const REPLICATION_HANDLER: &str = include_str!("ecr_replication_rule.py");
+
+/// Region slots a deployer-provided list can fill. CloudFormation cannot loop
+/// over a parameter, so the template reserves this many destinations. An
+/// eleventh region makes one more destination whose region name is an error
+/// message, so ECR rejects the stack instead of dropping a region silently
+/// (template rules cannot count list members).
+pub(crate) const MAX_REPLICATION_REGION_SLOTS: usize = 10;
+
+pub(crate) fn replication_slot_condition(input_id: &str, slot: usize) -> String {
+    format!(
+        "{}ReplicaRegion{slot}Set",
+        crate::generator::stack_input_parameter_name_for_id(input_id)
+    )
+}
+
+/// The platform the template's parameters are scoped to: on EKS the cloud is AWS but inputs
+/// apply to the Kubernetes deployment, so the lookup must use the same scope as the parameters.
+fn deployment_platform(ctx: &EmitContext<'_>) -> alien_core::Platform {
+    if ctx.targets_kubernetes {
+        alien_core::Platform::Kubernetes
+    } else {
+        ctx.platform
+    }
+}
+
+/// Whether the input is a conditional String parameter (`Some(true)`), a plain list parameter
+/// (`Some(false)`), or not a parameter of this template at all (`None`). It reads the same
+/// filtered input list that builds the parameters, so a controlling input that does not apply
+/// on this platform changes the answer for the parameter and the replication slots together.
+pub(crate) fn replication_input_is_conditional(
+    stack: &alien_core::Stack,
+    platform: alien_core::Platform,
+    input_id: &str,
+) -> Option<bool> {
+    crate::generator::stack_inputs_for_platform(stack, platform)
+        .into_iter()
+        .find(|input| input.id == input_id)
+        .map(|input| input.when.is_some())
+}
+
+/// The slot's region from the input list. The list is padded with empty
+/// entries first, because `Fn::Select` past the end fails the whole operation
+/// and conditions are evaluated on every create and update. A conditional input is a String
+/// parameter and `Fn::Join` only accepts a list, so it is padded directly.
+pub(crate) fn replication_slot_region(
+    input_id: &str,
+    conditional: bool,
+    slot: usize,
+) -> CfExpression {
+    let parameter = crate::generator::stack_input_parameter_name_for_id(input_id);
+    let padding = (0..=MAX_REPLICATION_REGION_SLOTS + 1).map(|_| CfExpression::from(""));
+    let first = if conditional {
+        CfExpression::ref_(parameter)
+    } else {
+        CfExpression::join(",", CfExpression::ref_(parameter))
+    };
+    let padded = CfExpression::object([(
+        "Fn::Split",
+        CfExpression::list([
+            CfExpression::from(","),
+            CfExpression::join(",", CfExpression::list(std::iter::once(first).chain(padding))),
+        ]),
+    )]);
+    CfExpression::object([(
+        "Fn::Select",
+        CfExpression::list([CfExpression::Integer(slot as i64), padded]),
+    )])
+}
+
+/// The slot's condition: it has a region and, for a conditional input, the input applies.
+pub(crate) fn replication_slot_condition_expression(
+    input_id: &str,
+    conditional: bool,
+    slot: usize,
+) -> CfExpression {
+    let has_region = CfExpression::not(CfExpression::equals(
+        replication_slot_region(input_id, conditional, slot),
+        CfExpression::from(""),
+    ));
+    if !conditional {
+        return has_region;
+    }
+    let applies = format!(
+        "{}Applies",
+        crate::generator::stack_input_parameter_name_for_id(input_id)
+    );
+    CfExpression::and([
+        CfExpression::object([("Condition", CfExpression::from(applies))]),
+        has_region,
+    ])
+}
+
+#[cfg(test)]
+mod replication_handler_tests {
+    #[test]
+    fn handler_keeps_foreign_rules_through_create_update_and_delete() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let output = std::process::Command::new("python3")
+            .arg("-I")
+            .arg(root.join("tests/handlers/ecr_replication_rule_test.py"))
+            .arg(root.join("src/emitters/aws/ecr_replication_rule.py"))
+            .output()
+            .expect("Python is required for the embedded replication handler test");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

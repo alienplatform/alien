@@ -40,6 +40,8 @@ pub use test::*;
 pub use alien_core::crontab_to_eventbridge;
 
 mod certificate_wait;
+#[cfg(feature = "aws")]
+mod ecr_region;
 mod readiness_probe;
 pub use readiness_probe::*;
 

@@ -51,6 +51,12 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "replicationRegionsInput": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

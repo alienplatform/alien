@@ -319,6 +319,93 @@
           }
         }
       },
+      // Instances launch only into the stack's own VPC: its subnets, and the network
+      // interfaces created in them. Without a VPC setup knows (the account's default VPC),
+      // ${awsVpcId} renders as "*".
+      {
+        "label": "vpc-pinned-launch-network",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+            ],
+            "condition": {
+              "StringLike": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"
+            ],
+            "condition": {
+              "StringLike": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}"
+              }
+            }
+          }
+        }
+      },
+      // A network management creates itself gets its VPC ID only at runtime, but every subnet
+      // in it carries the stack's tags from creation. An interface the launch creates has no
+      // tags yet; an existing one must be the stack's.
+      {
+        "label": "vpc-tagged-launch-subnets",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "vpc-tagged-launch-interfaces",
+        "grant": {
+          "actions": ["ec2:RunInstances"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*"],
+            "condition": {
+              "StringEqualsIfExists": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}"
+              }
+            }
+          }
+        }
+      },
+      // The machine image and the root volume the launch creates.
       {
         "grant": {
           "actions": ["ec2:RunInstances"]
@@ -327,16 +414,12 @@
           "stack": {
             "resources": [
               "arn:aws:ec2:${awsRegion}::image/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
             ]
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}::image/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:subnet/*",
-              "arn:aws:ec2:${awsRegion}:${awsAccountId}:network-interface/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:volume/*"
             ]
           }
@@ -420,6 +503,17 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
+              // A group created without subnets would land in the default VPC. It joins only
+              // the stack's own target groups, and never classic load balancers or traffic sources.
+              "Null": {
+                "autoscaling:VPCZoneIdentifiers": "false",
+                "autoscaling:LoadBalancerNames": "true",
+                "autoscaling:TrafficSourceIdentifiers": "true"
+              },
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}",
+                "autoscaling:TargetGroupARNs": "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+              },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
@@ -431,6 +525,17 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
+              // A group created without subnets would land in the default VPC. It joins only
+              // the stack's own target groups, and never classic load balancers or traffic sources.
+              "Null": {
+                "autoscaling:VPCZoneIdentifiers": "false",
+                "autoscaling:LoadBalancerNames": "true",
+                "autoscaling:TrafficSourceIdentifiers": "true"
+              },
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}",
+                "autoscaling:TargetGroupARNs": "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+              },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
@@ -454,7 +559,14 @@
                 "autoscaling:LaunchTemplateVersionSpecified": "true"
               },
               "Null": {
-                "autoscaling:LaunchConfigurationName": "true"
+                "autoscaling:LaunchConfigurationName": "true",
+                "autoscaling:VPCZoneIdentifiers": "false",
+                "autoscaling:LoadBalancerNames": "true",
+                "autoscaling:TrafficSourceIdentifiers": "true"
+              },
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}",
+                "autoscaling:TargetGroupARNs": "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
               },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -471,7 +583,14 @@
                 "autoscaling:LaunchTemplateVersionSpecified": "true"
               },
               "Null": {
-                "autoscaling:LaunchConfigurationName": "true"
+                "autoscaling:LaunchConfigurationName": "true",
+                "autoscaling:VPCZoneIdentifiers": "false",
+                "autoscaling:LoadBalancerNames": "true",
+                "autoscaling:TrafficSourceIdentifiers": "true"
+              },
+              "ForAllValues:StringLike": {
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}",
+                "autoscaling:TargetGroupARNs": "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
               },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -486,7 +605,6 @@
         "grant": {
           "actions": [
             "autoscaling:DeleteAutoScalingGroup",
-            "autoscaling:UpdateAutoScalingGroup",
             "autoscaling:SetDesiredCapacity",
             "autoscaling:StartInstanceRefresh",
             "autoscaling:TerminateInstanceInAutoScalingGroup",
@@ -518,7 +636,47 @@
           }
         }
       },
+      // Updates may not name subnets: AWS does not check an update's new subnets against the
+      // caller's RunInstances grant, so only creates may name them.
+      {
+        "label": "legacy-role-asg-update",
+        "grant": {
+          "actions": ["autoscaling:UpdateAutoScalingGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "Null": {
+                "autoscaling:VPCZoneIdentifiers": "true"
+              },
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "Null": {
+                "autoscaling:VPCZoneIdentifiers": "true"
+              },
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
       // Capacity-only updates omit the version key; template changes supply it.
+      // Updates never move a group to other subnets: AWS does not check the new subnets
+      // against the caller's RunInstances grant, so only creates may name subnets.
       {
         "label": "bounded-role-asg-update",
         "grant": {
@@ -534,7 +692,8 @@
                 "autoscaling:LaunchTemplateVersionSpecified": "true"
               },
               "Null": {
-                "autoscaling:LaunchConfigurationName": "true"
+                "autoscaling:LaunchConfigurationName": "true",
+                "autoscaling:VPCZoneIdentifiers": "true"
               },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -551,7 +710,8 @@
                 "autoscaling:LaunchTemplateVersionSpecified": "true"
               },
               "Null": {
-                "autoscaling:LaunchConfigurationName": "true"
+                "autoscaling:LaunchConfigurationName": "true",
+                "autoscaling:VPCZoneIdentifiers": "true"
               },
               "StringEquals": {
                 "aws:ResourceTag/${stackTag}": "${stackPrefix}",
@@ -598,10 +758,12 @@
           }
         }
       },
-      // ELB target groups are used for ASG health checks only.
+      // ELB target groups were used for ASG health checks only. Tags are written only while
+      // creating a group: the name prefix alone would also match another stack whose name
+      // starts with this one's.
       {
         "grant": {
-          "actions": ["elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:AddTags"]
+          "actions": ["elasticloadbalancing:CreateTargetGroup"]
         },
         "binding": {
           "stack": {
@@ -621,6 +783,37 @@
             ],
             "condition": {
               "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["elasticloadbalancing:AddTags"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "elasticloadbalancing:CreateAction": "CreateTargetGroup",
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "elasticloadbalancing:CreateAction": "CreateTargetGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }

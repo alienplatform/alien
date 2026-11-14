@@ -15,6 +15,7 @@ pub mod helpers;
 pub mod key;
 pub mod kubernetes_cluster;
 pub mod kv;
+mod management_network;
 pub mod network;
 pub mod open_search;
 pub mod queue;

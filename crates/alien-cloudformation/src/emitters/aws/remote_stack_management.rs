@@ -14,6 +14,7 @@ use crate::{
             CONDITION_HAS_MANAGEMENT_EXTERNAL_ID, PARAM_MANAGEMENT_EXTERNAL_ID,
             PARAM_MANAGING_ROLE_ARN, SIGNING_SETTINGS_DENY_SID,
         },
+        management_network::{fill_network_scope, network_scope},
         service_account::permission_context,
     },
     template::{CfExpression, CfResource},
@@ -247,9 +248,10 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let boundary_arn = "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${AWS::StackName}-deployment-management-boundary";
-    let context = permission_context()
+    let mut context = permission_context()
         .with_aws_permissions_boundary_arn(boundary_arn)
         .with_signing(ctx.stack_settings);
+    context.aws_network = network_scope(ctx);
 
     if let Some(profile) = ctx.stack.management().profile() {
         for permission_set_ref in global_permission_refs(ctx, profile) {
@@ -356,6 +358,7 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
             &CfExpression::sub(boundary_arn),
             &CfExpression::ref_(&boundary_id),
         );
+        fill_network_scope(document, ctx);
     }
     Ok(documents)
 }

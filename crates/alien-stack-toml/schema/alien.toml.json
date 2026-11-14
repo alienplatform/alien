@@ -90,6 +90,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "replication-regions-input": {
+          "description": "AWS-only: id of a deployer-provided string-list stack input that names the\nregions to replicate to. CloudFormation reads the list at deploy time, so\nthe template reserves a fixed number of region slots. Empty answers write\nno replication configuration, so existing installs render unchanged.",
+          "type": "string"
         }
       },
       "required": [],

@@ -372,11 +372,16 @@
           }
         }
       },
-      // AWS authorizes CreateSecurityGroup against the target VPC as well as the new group, so the
-      // create cannot be tag-conditioned; the CreateTags-on-create grant below stamps the ownership
-      // tags so every later change is tag-scoped.
+      // AWS authorizes CreateSecurityGroup against the target VPC as well as the new group. The
+      // CreateTags-on-create grant below stamps the ownership tags so every later change is
+      // tag-scoped.
+      // The VPC and the new group must be the stack's own: its known VPC, or for a network
+      // management creates itself, the VPC carrying the stack's tags. AWS supplies ec2:VpcID
+      // only for the VPC and ec2:Vpc only for the new group, and always does, so IfExists checks
+      // each against the stack's VPC. Without a VPC setup knows (the account's default VPC),
+      // ${awsVpcId} renders as "*".
       {
-        "label": "create-redis-security-group",
+        "label": "vpc-pinned-create-redis-security-group",
         "description": "Create the dedicated Redis security group.",
         "grant": {
           "actions": ["ec2:CreateSecurityGroup"]
@@ -386,13 +391,67 @@
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ]
+            ],
+            "condition": {
+              "StringLikeIfExists": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}",
+                "ec2:VpcID": "${awsVpcId}"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ]
+            ],
+            "condition": {
+              "StringLikeIfExists": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}",
+                "ec2:VpcID": "${awsVpcId}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "vpc-tagged-create-redis-security-group-vpc",
+        "description": "Create the dedicated Redis security group.",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "vpc-tagged-create-redis-security-group",
+        "description": "Create the dedicated Redis security group.",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"]
           }
         }
       },
