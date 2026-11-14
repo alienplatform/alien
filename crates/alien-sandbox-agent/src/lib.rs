@@ -14,6 +14,7 @@ pub mod preview_capability;
 #[cfg(unix)]
 pub mod privilege;
 pub mod server;
+pub mod startup_gate;
 pub mod validate;
 
 #[cfg(unix)]
@@ -33,3 +34,5 @@ pub mod native_token;
 
 #[cfg(target_os = "linux")]
 pub mod protected_files;
+#[cfg(target_os = "linux")]
+pub mod read_only_mounts;

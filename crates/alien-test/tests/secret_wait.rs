@@ -94,7 +94,11 @@ async fn snapshot(manager: &Arc<TestManager>, id: &str) -> anyhow::Result<Snapsh
     let meta = resp.runtime_metadata.clone().unwrap_or_default();
     let waiting = meta["resourcesWaitingForSecrets"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let secret_names = meta["deployerSecrets"]
         .as_array()
@@ -106,7 +110,11 @@ async fn snapshot(manager: &Arc<TestManager>, id: &str) -> anyhow::Result<Snapsh
         .unwrap_or_default();
     let mut worker_status = std::collections::BTreeMap::new();
     let mut release_marker = std::collections::BTreeMap::new();
-    if let Some(resources) = resp.stack_state.as_ref().and_then(|s| s["resources"].as_object()) {
+    if let Some(resources) = resp
+        .stack_state
+        .as_ref()
+        .and_then(|s| s["resources"].as_object())
+    {
         for (rid, r) in resources {
             worker_status.insert(rid.clone(), r["status"].as_str().unwrap_or("?").to_string());
             if let Some(marker) = r["config"]["environment"]["PROOF_RELEASE"].as_str() {
@@ -134,7 +142,10 @@ async fn wait_for<F: Fn(&Snapshot) -> bool>(
     let mut last = String::new();
     loop {
         let s = snapshot(manager, id).await?;
-        let line = format!("{} waiting={:?} resources={:?} marker={:?}", s.status, s.waiting, s.worker_status, s.release_marker);
+        let line = format!(
+            "{} waiting={:?} resources={:?} marker={:?}",
+            s.status, s.waiting, s.worker_status, s.release_marker
+        );
         if line != last {
             println!("[{:>5.1}s] {line}", start.elapsed().as_secs_f32());
             last = line.clone();
@@ -230,7 +241,10 @@ async fn aws_install_continues_while_waiting_for_a_secret() {
             .expect("manager"),
     );
 
-    let stack = stack(&image, vec![secret_input("proofSecret", "PROOF_SECRET", &["reader"])]);
+    let stack = stack(
+        &image,
+        vec![secret_input("proofSecret", "PROOF_SECRET", &["reader"])],
+    );
     let deployment = alien_test::e2e::create_release_and_deployment(
         &manager,
         Platform::Aws,
@@ -257,26 +271,47 @@ async fn aws_install_continues_while_waiting_for_a_secret() {
         println!("setup_target done after {:?}", started.elapsed());
 
         // 1. While the secret is missing: only `reader` waits, `bystander` installs.
-        let (held, took) = wait_for(&manager, &deployment.id, "bystander running while reader waits", Duration::from_secs(900), |s| {
-            s.worker_status.get("bystander").map(String::as_str) == Some("running")
-                && s.waiting == vec!["reader".to_string()]
-        })
+        let (held, took) = wait_for(
+            &manager,
+            &deployment.id,
+            "bystander running while reader waits",
+            Duration::from_secs(900),
+            |s| {
+                s.worker_status.get("bystander").map(String::as_str) == Some("running")
+                    && s.waiting == vec!["reader".to_string()]
+            },
+        )
         .await?;
-        println!("HELD_STATE after {took:?}: {:?} {:?}", held.waiting, held.worker_status);
+        println!(
+            "HELD_STATE after {took:?}: {:?} {:?}",
+            held.waiting, held.worker_status
+        );
         anyhow::ensure!(
             held.worker_status.get("reader").map(String::as_str) != Some("running"),
             "reader must not run before its secret exists"
         );
-        let name = held.secret_names.first().cloned().expect("secret location name");
+        let name = held
+            .secret_names
+            .first()
+            .cloned()
+            .expect("secret location name");
 
         // 2. Write the secret; the reader follows.
         let written = Instant::now();
         write_secret(&config, &name, "proof-value-not-a-real-secret").await?;
-        let (_, to_running) = wait_for(&manager, &deployment.id, "running", Duration::from_secs(900), |s| {
-            s.status == "running" && s.waiting.is_empty()
-        })
+        let (_, to_running) = wait_for(
+            &manager,
+            &deployment.id,
+            "running",
+            Duration::from_secs(900),
+            |s| s.status == "running" && s.waiting.is_empty(),
+        )
         .await?;
-        println!("RUNNING {:?} after the secret was written ({:?} since write)", to_running, written.elapsed());
+        println!(
+            "RUNNING {:?} after the secret was written ({:?} since write)",
+            to_running,
+            written.elapsed()
+        );
         Ok(())
     }
     .await;
@@ -286,7 +321,10 @@ async fn aws_install_continues_while_waiting_for_a_secret() {
     println!("destroy requested: {:?}", destroy.is_ok());
     let cleanup =
         alien_test::setup::teardown_target(&config, Platform::Aws, &deployment.id, &manager).await;
-    println!("teardown outcome: {:?}", cleanup.as_ref().map(|_| ()).map_err(|e| e.to_string()));
+    println!(
+        "teardown outcome: {:?}",
+        cleanup.as_ref().map(|_| ()).map_err(|e| e.to_string())
+    );
     delete_proof_secrets(&config).await;
     outcome.expect("secret wait proof");
     cleanup.expect("teardown");
@@ -328,7 +366,10 @@ async fn aws_update_waits_only_for_readers_and_takes_a_newer_release() {
         Platform::Aws,
         DeploymentModel::Push,
         &release1,
-        format!("e2e-secret-update-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+        format!(
+            "e2e-secret-update-{}",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        ),
         None,
     )
     .await
@@ -345,17 +386,27 @@ async fn aws_update_waits_only_for_readers_and_takes_a_newer_release() {
             manager.management_config(),
         )
         .await?;
-        let (held, _) = wait_for(&manager, &deployment.id, "first install held", Duration::from_secs(900), |s| {
-            s.waiting == vec!["reader".to_string()]
-                && s.worker_status.get("bystander").map(String::as_str) == Some("running")
-        })
+        let (held, _) = wait_for(
+            &manager,
+            &deployment.id,
+            "first install held",
+            Duration::from_secs(900),
+            |s| {
+                s.waiting == vec!["reader".to_string()]
+                    && s.worker_status.get("bystander").map(String::as_str) == Some("running")
+            },
+        )
         .await?;
         let name = held.secret_names.first().cloned().expect("secret name");
         println!("SECRET_NAME={name}");
         write_secret(&config, &name, "first-value").await?;
-        wait_for(&manager, &deployment.id, "first release running", Duration::from_secs(900), |s| {
-            s.status == "running" && s.waiting.is_empty()
-        })
+        wait_for(
+            &manager,
+            &deployment.id,
+            "first release running",
+            Duration::from_secs(900),
+            |s| s.status == "running" && s.waiting.is_empty(),
+        )
         .await?;
         println!("FIRST_RELEASE_RUNNING");
 
@@ -368,12 +419,23 @@ async fn aws_update_waits_only_for_readers_and_takes_a_newer_release() {
             .await
             .map_err(|e| anyhow::anyhow!("point at release 2: {e}"))?;
         let started = Instant::now();
-        let (mid, _) = wait_for(&manager, &deployment.id, "bystander takes release 2 while reader waits", Duration::from_secs(600), |s| {
-            s.waiting == vec!["reader".to_string()]
-                && s.release_marker.get("bystander").map(String::as_str) == Some("2")
-        })
+        let (mid, _) = wait_for(
+            &manager,
+            &deployment.id,
+            "bystander takes release 2 while reader waits",
+            Duration::from_secs(600),
+            |s| {
+                s.waiting == vec!["reader".to_string()]
+                    && s.release_marker.get("bystander").map(String::as_str) == Some("2")
+            },
+        )
         .await?;
-        println!("UPDATE_HELD after {:?}: {:?} {:?}", started.elapsed(), mid.waiting, mid.release_marker);
+        println!(
+            "UPDATE_HELD after {:?}: {:?} {:?}",
+            started.elapsed(),
+            mid.waiting,
+            mid.release_marker
+        );
         anyhow::ensure!(
             mid.release_marker.get("reader").map(String::as_str) == Some("1")
                 && mid.worker_status.get("reader").map(String::as_str) == Some("running"),
@@ -389,20 +451,35 @@ async fn aws_update_waits_only_for_readers_and_takes_a_newer_release() {
             .await
             .map_err(|e| anyhow::anyhow!("point at release 3: {e}"))?;
         let newer = Instant::now();
-        wait_for(&manager, &deployment.id, "newer release reaches bystander while waiting", Duration::from_secs(600), |s| {
-            s.waiting == vec!["reader".to_string()]
-                && s.release_marker.get("bystander").map(String::as_str) == Some("3")
-        })
+        wait_for(
+            &manager,
+            &deployment.id,
+            "newer release reaches bystander while waiting",
+            Duration::from_secs(600),
+            |s| {
+                s.waiting == vec!["reader".to_string()]
+                    && s.release_marker.get("bystander").map(String::as_str) == Some("3")
+            },
+        )
         .await?;
-        println!("NEWER_RELEASE_TAKEN_WHILE_WAITING after {:?}", newer.elapsed());
+        println!(
+            "NEWER_RELEASE_TAKEN_WHILE_WAITING after {:?}",
+            newer.elapsed()
+        );
 
         // Write the secret again: reader follows to release 3.
         write_secret(&config, &name, "second-value").await?;
-        wait_for(&manager, &deployment.id, "reader on release 3", Duration::from_secs(600), |s| {
-            s.status == "running"
-                && s.waiting.is_empty()
-                && s.release_marker.values().all(|m| m == "3")
-        })
+        wait_for(
+            &manager,
+            &deployment.id,
+            "reader on release 3",
+            Duration::from_secs(600),
+            |s| {
+                s.status == "running"
+                    && s.waiting.is_empty()
+                    && s.release_marker.values().all(|m| m == "3")
+            },
+        )
         .await?;
         let current = manager
             .client()
@@ -414,7 +491,10 @@ async fn aws_update_waits_only_for_readers_and_takes_a_newer_release() {
             .current_release_id
             .clone();
         println!("CURRENT_RELEASE={current:?} expected={r3}");
-        anyhow::ensure!(current.as_deref() == Some(r3.as_str()), "current release should be release 3");
+        anyhow::ensure!(
+            current.as_deref() == Some(r3.as_str()),
+            "current release should be release 3"
+        );
         Ok(())
     }
     .await;
@@ -423,7 +503,10 @@ async fn aws_update_waits_only_for_readers_and_takes_a_newer_release() {
     println!("destroy requested: {:?}", destroy.is_ok());
     let cleanup =
         alien_test::setup::teardown_target(&config, Platform::Aws, &deployment.id, &manager).await;
-    println!("teardown outcome: {:?}", cleanup.as_ref().map(|_| ()).map_err(|e| e.to_string()));
+    println!(
+        "teardown outcome: {:?}",
+        cleanup.as_ref().map(|_| ()).map_err(|e| e.to_string())
+    );
     delete_proof_secrets(&config).await;
     outcome.expect("update proof");
     cleanup.expect("teardown");

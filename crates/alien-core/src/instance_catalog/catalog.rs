@@ -5003,7 +5003,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D2s_v6",
         gpu: None,
         nested_virt: true,
-        auto_select: false,
+        auto_select: true,
     },
     InstanceTypeSpec {
         name: "Standard_D4s_v6",
@@ -5019,7 +5019,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D4s_v6",
         gpu: None,
         nested_virt: true,
-        auto_select: false,
+        auto_select: true,
     },
     InstanceTypeSpec {
         name: "Standard_D8s_v6",
@@ -5035,7 +5035,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D8s_v6",
         gpu: None,
         nested_virt: true,
-        auto_select: false,
+        auto_select: true,
     },
     InstanceTypeSpec {
         name: "Standard_D16s_v6",
@@ -5051,7 +5051,7 @@ pub(super) static CATALOG: &[InstanceTypeSpec] = &[
         machine_type: "Standard_D16s_v6",
         gpu: None,
         nested_virt: true,
-        auto_select: false,
+        auto_select: true,
     },
     InstanceTypeSpec {
         name: "Standard_D32s_v6",

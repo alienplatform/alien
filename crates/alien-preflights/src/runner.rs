@@ -191,6 +191,76 @@ impl PreflightRunner {
         Ok(PreflightSummary::from_results(results))
     }
 
+    /// At first setup on Azure, automatic selection picks the first machine series, in catalog
+    /// order, whose family and regional quota have room for the pool's machines. Only pools
+    /// that are not installed yet get a quota-aware choice; an installed pool keeps its machine.
+    /// Returns the settings to plan with, or `None` when nothing changes. When no series has
+    /// room the settings stay as they were, so the quota check reports the refusal, and a
+    /// warning names the series checked.
+    #[cfg(feature = "runtime-checks")]
+    async fn choose_machines_with_room(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+        client_config: &ClientConfig,
+        results: &mut Vec<CheckResult>,
+    ) -> Result<Option<DeploymentConfig>> {
+        use crate::runtime::azure_compute::ComputeRoom;
+        use alien_core::{ComputeCluster, Container};
+        if stack_state.platform != Platform::Azure
+            || !stack.resources.values().any(|entry| {
+                entry.config.downcast_ref::<Container>().is_some()
+                    || entry.config.downcast_ref::<ComputeCluster>().is_some()
+            })
+        {
+            return Ok(None);
+        }
+        let Some(azure) = client_config.azure_config() else {
+            return Ok(None);
+        };
+        let Ok(http) = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+        else {
+            return Ok(None);
+        };
+        let skus = alien_azure_clients::AzureResourceSkusClient::new(
+            http.clone(),
+            alien_azure_clients::AzureTokenCache::new(azure.clone()),
+        );
+        let usages = alien_azure_clients::AzureComputeUsagesClient::new(
+            http,
+            alien_azure_clients::AzureTokenCache::new(azure.clone()),
+        );
+        let region = azure.region.as_deref().unwrap_or("eastus");
+        let Some(room) = ComputeRoom::read(&skus, &usages, region).await else {
+            return Ok(None);
+        };
+        let ledger = crate::runtime::azure_compute::PoolQuotaLedger::new(&room, stack_state);
+        let chosen = crate::mutations::ComputeClusterMutation.choose_pool_machines(
+            stack.clone(),
+            stack_state,
+            config,
+            &ledger,
+        )?;
+        for (pool, asked) in ledger.without_room() {
+            let checked: Vec<String> = asked
+                .iter()
+                .map(|(series, machines)| format!("{series} ({machines} machines)"))
+                .collect();
+            results.push(
+                CheckResult::with_warnings(vec![format!(
+                    "No VM series has enough free quota in {region} for pool '{pool}'. Checked: {}.",
+                    checked.join(", ")
+                )])
+                .with_check_description("Automatic machine selection".into()),
+            );
+        }
+        Ok(Some(chosen))
+    }
+
     /// Apply all stack mutations to a stack.
     ///
     /// Mutations are evaluated incrementally: each mutation's `should_run()` is checked
@@ -488,6 +558,10 @@ impl PreflightRunner {
 
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
+        let chosen_config = self
+            .choose_machines_with_room(&stack, stack_state, config, client_config, &mut all_results)
+            .await?;
+        let config = chosen_config.as_ref().unwrap_or(config);
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
         // Drop the comparison projection before later awaits so it does not enlarge
         // the deployment future and exhaust the runner's worker stack.

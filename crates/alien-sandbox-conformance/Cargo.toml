@@ -7,7 +7,7 @@ publish = false
 description = "Live sandbox egress conformance probes"
 
 [features]
-live = ["dep:alien-bindings", "dep:alien-error", "dep:futures", "dep:tokio", "dep:serde_json"]
+live = ["dep:alien-bindings", "dep:alien-core", "dep:alien-error", "dep:futures", "dep:reqwest", "dep:sha2", "dep:tokio", "dep:tokio-tungstenite", "dep:serde_json"]
 aws = ["live", "alien-bindings/aws"]
 gcp = ["live", "alien-bindings/gcp"]
 azure = ["live", "alien-bindings/azure"]
@@ -23,7 +23,11 @@ required-features = ["live"]
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
 alien-bindings = { workspace = true, optional = true }
+alien-core = { workspace = true, optional = true }
 alien-error = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true, features = ["rustls-tls-webpki-roots"] }
+sha2 = { workspace = true, optional = true }
+tokio-tungstenite = { version = "0.30", optional = true, features = ["rustls-tls-webpki-roots"] }
 futures = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true, features = ["rt-multi-thread", "macros", "time"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }

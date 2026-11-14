@@ -719,7 +719,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                             && match &updated_daemon.code {
                                 DaemonCode::Source { src, toolchain } => {
                                     commands_receiver::receiver_reads_capability_file(
-                                        src, toolchain, &settings.get_targets(),
+                                        src,
+                                        toolchain,
+                                        &settings.get_targets(),
                                     )
                                     .await
                                 }
@@ -1134,7 +1136,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                             let reads_capability_file = match &containers_group[0].1.code {
                                 ContainerCode::Source { src, toolchain } => {
                                     commands_receiver::receiver_reads_capability_file(
-                                        src, toolchain, &settings.get_targets(),
+                                        src,
+                                        toolchain,
+                                        &settings.get_targets(),
                                     )
                                     .await
                                 }
@@ -2246,12 +2250,11 @@ impl SandboxAgentLayering {
         contract: alien_core::sandbox_image::GCP_AGENT_PLATFORM,
         image_command_env: true,
     };
-    /// The pod runs as the image's own non-root user, which the layered image ends with.
-    /// Supervised startup of the base command (`ALIEN_SANDBOX_IMAGE_COMMAND`) means a root
-    /// agent that starts the command under the image identity and later drops sessions to
-    /// the exec identity (uid-split). A pod is not allowed to run as root and the pod is
-    /// the isolation boundary, so the setting keeps one meaning by not being set here: the
-    /// agent refuses it without root, and the base image's own command is not started.
+    /// The image ends as the base's own user. Supervised startup of the base command
+    /// (`ALIEN_SANDBOX_IMAGE_COMMAND`) is deliberately not baked in: the pod sets it, together
+    /// with the root user and the bounded capability set, only for a declaration whose image
+    /// user is root, so the one image serves both modes. Amd64 only: the Operator refuses an
+    /// arm64 node selector for a sandbox.
     const KUBERNETES: Self = Self {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::KUBERNETES_SANDBOX,
@@ -7456,10 +7459,12 @@ mod sandbox_build_tests {
                     (uid == 0 && !legacy_default) || platform == Platform::Azure;
                 if matches!(platform, Platform::Local | Platform::Kubernetes) {
                     let admitted = sandbox.validate_for_platform(platform);
-                    if uid == 0 && !user.is_empty() {
+                    if platform == Platform::Local && uid == 0 && !user.is_empty() {
                         assert_eq!(admitted.unwrap_err().code, "SANDBOX_CAPABILITY_UNSUPPORTED");
                     } else {
-                        admitted.expect("absent USER must retain the released non-root runtime");
+                        // Kubernetes admits a root image now (bounded boot capabilities, `none`
+                        // egress here); Local still refuses it above.
+                        admitted.expect("this image must be admitted on the platform");
                     }
                 }
                 assert_eq!(sandbox.image_user, requires_new_reader.then_some(uid));
@@ -8273,9 +8278,9 @@ mod sandbox_push_tests {
         // The agent refuses this setting unless it runs as root with uid-split isolation, which
         // a pod (non-root, platform isolation) never does: the pool pods would exit at start.
         assert!(
-            !environment
-                .iter()
-                .any(|entry| entry.as_str().is_some_and(|e| e.starts_with("ALIEN_SANDBOX_IMAGE_COMMAND"))),
+            !environment.iter().any(|entry| entry
+                .as_str()
+                .is_some_and(|e| e.starts_with("ALIEN_SANDBOX_IMAGE_COMMAND"))),
             "{environment:?}"
         );
     }

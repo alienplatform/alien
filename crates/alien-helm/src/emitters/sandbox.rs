@@ -58,6 +58,94 @@ gvisor
 {{- end -}}
 "#;
 
+/// Helm helper naming the namespace of sandbox pods: `sandbox.namespace` when the administrator
+/// set one, otherwise the release namespace, where they have always run.
+const SANDBOX_NAMESPACE_HELPER: &str = r#"{{- define "deployment.sandboxNamespace" -}}
+{{- default .Release.Namespace (dig "namespace" "" (default dict .Values.sandbox)) -}}
+{{- end -}}
+"#;
+
+/// The operator's rights in a separate sandbox namespace, and nowhere else: pods and Secrets for
+/// the sandboxes, and events to report why a pod is not ready. Renders nothing while
+/// `sandbox.namespace` is unset, when the release Role already covers the release namespace.
+/// There is no ClusterRole: the administrator's namespace is the only place these rights apply.
+const SANDBOX_NAMESPACE_RBAC_TEMPLATE: &str = "sandbox-namespace-rbac.yaml";
+const SANDBOX_NAMESPACE_RBAC: &str = r#"{{- $sandboxNamespace := dig "namespace" "" (default dict .Values.sandbox) -}}
+{{- if and $sandboxNamespace (ne $sandboxNamespace .Release.Namespace) -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.fullname" . | trunc 52 | trimSuffix "-" }}-sandbox
+  namespace: {{ $sandboxNamespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.fullname" . | trunc 52 | trimSuffix "-" }}-sandbox
+  namespace: {{ $sandboxNamespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.managerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.fullname" . | trunc 52 | trimSuffix "-" }}-sandbox
+{{- end }}
+"#;
+
+/// The Operator reads where the API server is (the `default/kubernetes` Service and the
+/// EndpointSlice of the same name) and tells each sandbox pod, so the pod's startup check can
+/// prove those addresses are dropped. Two named objects, read only, in `default`.
+const KUBE_API_DISCOVERY_RBAC_TEMPLATE: &str = "sandbox-kube-api-discovery-rbac.yaml";
+const KUBE_API_DISCOVERY_RBAC: &str = r#"{{- /* Both objects live in `default`, shared by every install on the cluster, so the name carries a hash of the full release namespace and name (the prefixes alone can collide once truncated). */ -}}
+{{- $suffix := printf "kube-api-%s" (printf "%s/%s/%s" .Release.Namespace .Release.Name (include "deployment.fullname" .) | sha256sum | trunc 8) -}}
+{{- $name := printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: default
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["kubernetes"]
+    verbs: ["get"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    resourceNames: ["kubernetes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: default
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.managerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+"#;
+
 #[derive(Debug, Default)]
 pub struct SandboxEmitter;
 
@@ -87,12 +175,28 @@ impl HelmEmitter for SandboxEmitter {
             .insert(BROKER_RBAC_TEMPLATE.to_string(), broker_rbac());
         fragment.extra_templates.insert(
             RUNTIME_CLASS_HELPER_TEMPLATE.to_string(),
-            RUNTIME_CLASS_HELPER.to_string(),
+            format!("{RUNTIME_CLASS_HELPER}{SANDBOX_NAMESPACE_HELPER}"),
+        );
+        fragment.extra_templates.insert(
+            SANDBOX_NAMESPACE_RBAC_TEMPLATE.to_string(),
+            SANDBOX_NAMESPACE_RBAC.to_string(),
+        );
+        fragment.extra_templates.insert(
+            KUBE_API_DISCOVERY_RBAC_TEMPLATE.to_string(),
+            KUBE_API_DISCOVERY_RBAC.to_string(),
         );
         if network_policy_is_the_only_bound(&sandbox.egress) {
             fragment.extra_templates.insert(
                 "sandbox-cni-probe.yaml".to_string(),
                 super::sandbox_cni::template(true),
+            );
+        }
+        // Only a root-boot image needs a namespace that admits Pod Security `baseline`, and only
+        // then does the install check for one. A non-root sandbox renders exactly what it did.
+        if sandbox.image_user == Some(0) {
+            fragment.extra_templates.insert(
+                super::sandbox_root_boot_check::TEMPLATE.to_string(),
+                super::sandbox_root_boot_check::template(),
             );
         }
         Ok(fragment)
@@ -129,7 +233,7 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
         .iter()
         .map(|linker| {
             format!(
-                r#"        - podSelector:
+                r#"        - {{{{ $peerNamespace }}}}podSelector:
             matchLabels:
               {{{{ $scopeKey }}}}: {{{{ $scopeValue | quote }}}}
               {{{{ printf "%s/resource" (trimSuffix "/deployment" $scopeKey) }}}}: "{id}"
@@ -149,7 +253,7 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
         // Runtime pods carry the operator's resource prefix as their deployment label.
         SandboxEgress::Internet => r#"  egress:
     - to:
-        - podSelector:
+        - {{ $peerNamespace }}podSelector:
             matchLabels:
               {{ $scopeKey }}: {{ $scopeValue | quote }}
               {{ printf "%s/resource" (trimSuffix "/deployment" $scopeKey) }}: sandbox-egress-gateway
@@ -191,11 +295,15 @@ fn network_policy(sandbox: &Sandbox, stack: &Stack) -> Result<String> {
     Ok(format!(
         r#"{dns_values}{{{{- $scopeKey := default "alien.dev/deployment" .Values.logCollector.scope.deploymentLabelKey -}}}}
 {{{{- $scopeValue := include "deployment.serviceAccountPrefix" . -}}}}
+{{{{- $peerNamespace := "" -}}}}
+{{{{- if ne (include "deployment.sandboxNamespace" .) .Release.Namespace -}}}}
+{{{{- $peerNamespace = printf "namespaceSelector:\n            matchLabels:\n              kubernetes.io/metadata.name: %s\n          " .Release.Namespace -}}}}
+{{{{- end -}}}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: alien-sbx-{id}
-  namespace: {{{{ .Release.Namespace }}}}
+  namespace: {{{{ include "deployment.sandboxNamespace" . }}}}
   labels:
     {{{{- include "deployment.labels" . | nindent 4 }}}}
 spec:
@@ -207,7 +315,7 @@ spec:
     - Egress
   ingress:
     - from:
-        - podSelector:
+        - {{{{ $peerNamespace }}}}podSelector:
             matchLabels:
               app.kubernetes.io/name: {{{{ include "deployment.name" . }}}}
               app.kubernetes.io/instance: {{{{ .Release.Name }}}}
@@ -266,4 +374,40 @@ roleRef:
   name: {{ $name }}
 "#
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{SandboxCode, SandboxLifecyclePolicy};
+
+    /// Under `internet` the gateway peer must be selectable in the release namespace when the
+    /// sandbox pods live elsewhere, like the operator and linker peers.
+    #[test]
+    fn the_gateway_peer_follows_the_release_namespace() {
+        let sandbox = Sandbox::new("agent".to_string())
+            .code(SandboxCode::Image {
+                image: "example.invalid/agent:1".to_string(),
+                bundled_from: None,
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(300),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("s".to_string()).build();
+        let policy = network_policy(&sandbox, &stack).expect("policy renders");
+        let gateway = policy
+            .split("sandbox-egress-gateway")
+            .next()
+            .expect("gateway peer present");
+        assert!(
+            gateway
+                .rsplit("- to:")
+                .next()
+                .is_some_and(|peer| peer.contains("{{ $peerNamespace }}podSelector")),
+            "{policy}"
+        );
+    }
 }

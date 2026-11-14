@@ -1643,8 +1643,10 @@ async fn sandbox_broker_router(
         return None;
     }
 
-    let namespace = config.namespace.clone()?;
-    match alien_infra::BrokerState::in_cluster(namespace).await {
+    let caller_namespace = config.namespace.clone()?;
+    let namespace =
+        alien_infra::configured_sandbox_namespace().unwrap_or_else(|| caller_namespace.clone());
+    match alien_infra::BrokerState::in_cluster(caller_namespace, namespace).await {
         Ok(state) => Some(alien_infra::broker_router_with_authorization(
             state,
             Arc::new(OperatorBrokerAuthorization {

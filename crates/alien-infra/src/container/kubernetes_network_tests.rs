@@ -405,3 +405,22 @@ fn node_local_dns_is_reachable_only_from_inside_the_cluster() {
     assert!(resolver_rule(Some("nameserver 10.0.0.2\nsearch corp.example\n")).is_none());
     assert!(resolver_rule(None).is_none());
 }
+
+#[test]
+fn a_sandbox_source_is_matched_in_the_sandbox_namespace_only() {
+    let target = container("target", "primary");
+    let stack = source_stack(&target);
+    let configured = || Some("sandboxes".to_string());
+    assert_eq!(
+        sandbox_source_namespace(&stack, "session-source", configured()),
+        configured()
+    );
+    assert_eq!(
+        sandbox_source_namespace(&stack, "linked", configured()),
+        None
+    );
+    assert_eq!(
+        sandbox_source_namespace(&stack, "session-source", None),
+        None
+    );
+}
