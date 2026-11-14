@@ -352,6 +352,10 @@ fn exec_args(release: &str, namespace: &str, ask: &Ask) -> Vec<String> {
     args
 }
 
+/// How long to wait for kubectl, so a stalled cluster connection ends in a
+/// clear reason instead of hanging the command.
+const EXEC_DEADLINE: std::time::Duration = std::time::Duration::from_secs(90);
+
 async fn exec_once(
     release: &str,
     namespace: &str,
@@ -370,13 +374,18 @@ async fn exec_once(
         .args(exec_args(release, namespace, ask))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
-    let output = command.output().await.map_err(|error| {
-        ExecFailure::Reason(if error.kind() == std::io::ErrorKind::NotFound {
-            "kubectl is not installed".to_string()
-        } else {
-            "kubectl could not run".to_string()
-        })
-    })?;
+    let output = tokio::time::timeout(EXEC_DEADLINE, command.output())
+        .await
+        .map_err(|_| {
+            ExecFailure::Reason("the cluster did not answer within 90 seconds".to_string())
+        })?
+        .map_err(|error| {
+            ExecFailure::Reason(if error.kind() == std::io::ErrorKind::NotFound {
+                "kubectl is not installed".to_string()
+            } else {
+                "kubectl could not run".to_string()
+            })
+        })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let lower = stderr.to_ascii_lowercase();

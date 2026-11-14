@@ -72,6 +72,39 @@ fn socket_path() -> PathBuf {
         .join("setup-credential.sock")
 }
 
+fn cache_path() -> PathBuf {
+    socket_path().with_file_name("last-key.json")
+}
+
+/// The last key issued, if it is still unexpired. Unreadable or expired means none.
+fn load_cached(path: &Path) -> Option<Issued> {
+    let issued: Issued = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    (issued.expires_at > Utc::now()).then_some(issued)
+}
+
+/// Written with owner-only permissions, in the private directory of the socket.
+#[cfg(unix)]
+fn save_cached(path: &Path, issued: Option<&Issued>) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let Some(issued) = issued else { return };
+    let Ok(bytes) = serde_json::to_vec(&serde_json::json!({
+        "token": issued.token,
+        "expiresAt": issued.expires_at,
+    })) else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+    {
+        let _ = file.write_all(&bytes);
+    }
+}
+
 /// What the command prints on success. Not `Debug`: it holds a key.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -327,7 +360,9 @@ pub async fn serve(db: std::sync::Arc<OperatorDb>, cancel: tokio_util::sync::Can
     };
     // One request at a time: each one revokes the previous key at the manager.
     // The last key issued is kept here, in memory only, for `--reuse`.
-    let busy = std::sync::Arc::new(tokio::sync::Mutex::new(None::<Issued>));
+    // The pod's emptyDir keeps it across an Operator restart, so a status call
+    // after a restart does not replace the key an update is still using.
+    let busy = std::sync::Arc::new(tokio::sync::Mutex::new(load_cached(&cache_path())));
     loop {
         let stream = tokio::select! {
             _ = cancel.cancelled() => break,
@@ -351,6 +386,7 @@ pub async fn serve(db: std::sync::Arc<OperatorDb>, cancel: tokio_util::sync::Can
                 || mint(&db),
             )
             .await;
+            save_cached(&cache_path(), last.as_ref());
             if let Ok(bytes) = serde_json::to_vec(&answer) {
                 let _ = stream.write_all(&bytes).await;
             }
@@ -590,16 +626,37 @@ mod tests {
         };
         // B is cached (a newer run minted it after A): A was refused, B is returned, no mint.
         let mut last = Some(issued("key-b", 10));
-        let answer = answer_for(&mut last, true, Some(key_fingerprint("key-a").as_str()), Utc::now(), mint("key-c")).await;
+        let answer = answer_for(
+            &mut last,
+            true,
+            Some(key_fingerprint("key-a").as_str()),
+            Utc::now(),
+            mint("key-c"),
+        )
+        .await;
         assert_eq!(answer.credential.as_deref(), Some("key-b"));
         assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 0);
         // The refused key is the cached one: a new key is minted.
-        let answer = answer_for(&mut last, true, Some(key_fingerprint("key-b").as_str()), Utc::now(), mint("key-c")).await;
+        let answer = answer_for(
+            &mut last,
+            true,
+            Some(key_fingerprint("key-b").as_str()),
+            Utc::now(),
+            mint("key-c"),
+        )
+        .await;
         assert_eq!(answer.credential.as_deref(), Some("key-c"));
         assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
         // Nothing cached: mints.
         let mut none = None;
-        let answer = answer_for(&mut none, true, Some(key_fingerprint("key-x").as_str()), Utc::now(), mint("key-d")).await;
+        let answer = answer_for(
+            &mut none,
+            true,
+            Some(key_fingerprint("key-x").as_str()),
+            Utc::now(),
+            mint("key-d"),
+        )
+        .await;
         assert_eq!(answer.credential.as_deref(), Some("key-d"));
     }
 
@@ -632,6 +689,19 @@ mod tests {
         .await;
         assert_eq!(answer.error.as_deref(), Some("refused"));
         assert!(answer.credential.is_none());
+    }
+
+    #[test]
+    fn a_cached_key_survives_a_restart_until_it_expires() {
+        let dir = std::env::temp_dir().join(format!("sc-cache-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("last-key.json");
+        assert!(load_cached(&path).is_none());
+        save_cached(&path, Some(&issued("kept", 10)));
+        assert_eq!(load_cached(&path).unwrap().token, "kept");
+        save_cached(&path, Some(&issued("old", -1)));
+        assert!(load_cached(&path).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

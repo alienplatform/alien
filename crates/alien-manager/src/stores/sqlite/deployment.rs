@@ -1494,9 +1494,23 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn set_redeploy(
         &self,
-        _caller: &crate::auth::Subject,
+        caller: &crate::auth::Subject,
         id: &str,
     ) -> Result<(), AlienError> {
+        // An installation that is being removed or whose access was revoked
+        // (retained) is not restarted, whatever key asks: only an explicit
+        // erase moves it on. This also covers keys issued before removal began.
+        if let Some(current) = self.get_deployment(caller, id).await? {
+            if matches!(
+                current.status.as_str(),
+                "retention-required" | "retained" | "delete-pending" | "deleting" | "deleted"
+            ) {
+                return Err(AlienError::new(ErrorData::DeploymentRemoving {
+                    deployment_id: id.to_string(),
+                })
+                .into_generic());
+            }
+        }
         let sql = Query::update()
             .table(Deployments::Table)
             .value(Deployments::Status, "update-pending")
