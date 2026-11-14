@@ -663,10 +663,7 @@
       {
         "label": "legacy-role-asg-management",
         "grant": {
-          "actions": [
-            "autoscaling:DeleteAutoScalingGroup",
-            "autoscaling:SetDesiredCapacity"
-          ]
+          "actions": ["autoscaling:DeleteAutoScalingGroup", "autoscaling:SetDesiredCapacity"]
         },
         "binding": {
           "stack": {
