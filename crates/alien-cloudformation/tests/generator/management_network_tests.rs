@@ -6,10 +6,17 @@ use super::helpers::{custom_resource_registration, render_built_ins_template};
 use alien_cloudformation::{CfExpression, CloudFormationTarget};
 use alien_core::{
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
-    ResourceLifecycle, Stack, StackSettings,
+    ResourceLifecycle, SetupManagement, Stack, StackSettings,
 };
 
 fn management_policies(network: NetworkSettings) -> (String, String) {
+    management_policies_with(network, SetupManagement::Manual)
+}
+
+fn management_policies_with(
+    network: NetworkSettings,
+    setup_management: SetupManagement,
+) -> (String, String) {
     let stack = Stack::new("vpcscope".to_string())
         .management(ManagementPermissions::extend(
             PermissionProfile::new().global(["compute-cluster/management", "container/provision"]),
@@ -29,6 +36,7 @@ fn management_policies(network: NetworkSettings) -> (String, String) {
         &stack,
         StackSettings {
             network: Some(network),
+            setup_management,
             ..StackSettings::default()
         },
         custom_resource_registration(),
@@ -124,4 +132,27 @@ fn the_default_vpc_keeps_the_account_wide_reach() {
     assert_no_placeholder(&policies);
     assert!(policies.contains(r#"vpc/${StackVpcId}"#), "{policies}");
     assert!(!policies.contains(r#"{"Ref":"VpcId"}"#), "{policies}");
+}
+
+/// An automatic package leaves the network to the runtime, so the template has no network to
+/// name: management may launch and create security groups only in a VPC and subnets that carry
+/// the stack's tags.
+#[test]
+fn a_network_management_creates_scopes_management_by_its_tags() {
+    let (policies, yaml) = management_policies_with(
+        NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        },
+        SetupManagement::Automatic,
+    );
+    dump("automatic-create", &yaml);
+    assert_no_placeholder(&policies);
+    assert!(!policies.contains("DefaultNetwork"), "{policies}");
+    assert!(!policies.contains(r#""Ref":"VpcId""#), "{policies}");
+    let launch = r#"{"Action":["ec2:RunInstances"],"Condition":{"StringEquals":{"aws:ResourceTag/deployment":{"Fn::Sub":"${AWS::StackName}"}"#;
+    assert!(
+        policies.contains(launch),
+        "launches need the stack's subnet tags: {policies}"
+    );
 }

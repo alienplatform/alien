@@ -16,7 +16,7 @@ use crate::{
     },
     template::CfExpression,
 };
-use alien_core::{import::EmitContext, NetworkSettings, Sandbox, SandboxEgress};
+use alien_core::{import::EmitContext, Network, NetworkSettings, Platform, Sandbox, SandboxEgress};
 use alien_permissions::AwsNetworkScope;
 
 const VPC_PLACEHOLDER: &str = "vpc-0a1e0000000000000";
@@ -32,8 +32,30 @@ fn subnet_placeholders() -> Vec<String> {
         .collect()
 }
 
+/// The stack's network when setup does not create or name it: an automatic package leaves the
+/// network to the runtime, so the template has no network resources or parameters to name.
+fn network_left_to_runtime<'a>(ctx: &EmitContext<'a>) -> Option<&'a Network> {
+    let (_, entry) = ctx
+        .stack
+        .resources()
+        .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())?;
+    (!alien_core::emits_package_scaffolding(
+        entry,
+        ctx.stack_settings.setup_management,
+        Platform::Aws,
+    ))
+    .then(|| entry.config.downcast_ref::<Network>())
+    .flatten()
+}
+
 /// The network scope to render the management policy with, when the stack has an AWS network.
 pub(crate) fn network_scope(ctx: &EmitContext<'_>) -> Option<AwsNetworkScope> {
+    if let Some(network) = network_left_to_runtime(ctx) {
+        // Management creates a new network with the stack's tags. An existing or default VPC
+        // named only in the runtime's settings keeps the previous wildcards.
+        return matches!(network.settings, NetworkSettings::Create { .. })
+            .then_some(AwsNetworkScope::StackTagged);
+    }
     let (_, network) = default_network(ctx)?;
     match network.settings {
         NetworkSettings::Create { .. }
@@ -103,6 +125,9 @@ fn fill(
 /// The VPC ID and the subnet ID list, per network mode. The account's default VPC is not known
 /// to CloudFormation, so that mode renders `*`.
 fn network_expressions(ctx: &EmitContext<'_>) -> Option<(CfExpression, CfExpression)> {
+    if network_left_to_runtime(ctx).is_some() {
+        return None;
+    }
     let (network_id, network) = default_network(ctx)?;
     let any = || CfExpression::from("*");
     let any_list = || CfExpression::list([any()]);
