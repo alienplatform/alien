@@ -190,6 +190,7 @@ async fn target(
         management_config,
         None,
         true,
+        true,
     )
     .await
     {

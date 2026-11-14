@@ -154,6 +154,10 @@ pub struct AgentSyncRequest {
     /// Absent for Operators that predate the pod security profile settings.
     #[serde(default)]
     pub supports_pod_security: bool,
+    /// Absent for Operators that predate the `commandsCapabilityFile` and
+    /// `runtimeIdentityExchange` settings.
+    #[serde(default)]
+    pub supports_credential_capabilities: bool,
     #[serde(default)]
     pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Current deployment state as reported by the agent.
@@ -2835,6 +2839,7 @@ pub(in crate::routes) mod tests {
                 None,
                 Some(manager.operator_capability()),
                 true,
+                true,
             )
             .await
             .unwrap_or_else(|_| panic!("pull target"));
@@ -3076,6 +3081,7 @@ pub(in crate::routes) mod tests {
             release,
             None,
             Some(manager.operator_capability()),
+            true,
             true,
         )
         .await
@@ -4442,6 +4448,154 @@ pub(in crate::routes) mod tests {
         assert!(!super::downgrade_container_security(&mut stack));
     }
 
+    /// Field names (serialized) the Container, Daemon and Worker of Operator
+    /// v3.3.31 and v3.3.62 accept; both deny unknown fields. Copied from the
+    /// structs at those tags. To cover a newer release, add its field lists
+    /// here and assert the same for it.
+    const OLD_CONTAINER_FIELDS: &[&str] = &[
+        "id",
+        "links",
+        "ports",
+        "kubernetesSecretMounts",
+        "publicEndpoints",
+        "egress",
+        "tunnel",
+        "kubernetesLivenessProbe",
+        "kubernetesReadinessProbe",
+        "security",
+        "cluster",
+        "code",
+        "cpu",
+        "memory",
+        "resourceChoices",
+        "gpu",
+        "ephemeralStorage",
+        "persistentStorage",
+        "replicas",
+        "autoscaling",
+        "stateful",
+        "environment",
+        "pool",
+        "permissions",
+        "healthCheck",
+        "command",
+        "commandsEnabled",
+        "stopGracePeriodSeconds",
+        "priority",
+    ];
+    const OLD_DAEMON_FIELDS: &[&str] = &[
+        "id",
+        "links",
+        "publicEndpoints",
+        "healthCheck",
+        "cluster",
+        "permissions",
+        "code",
+        "cpu",
+        "memory",
+        "pool",
+        "command",
+        "stopGracePeriodSeconds",
+        "priority",
+        "runtime",
+        "environment",
+        "commandsEnabled",
+    ];
+    const OLD_WORKER_FIELDS: &[&str] = &[
+        "id",
+        "links",
+        "triggers",
+        "publicEndpoints",
+        "permissions",
+        "code",
+        "memoryMb",
+        "timeoutSeconds",
+        "environment",
+        "commandsEnabled",
+        "concurrencyLimit",
+        "readinessProbe",
+    ];
+
+    fn credential_capability_stack() -> alien_core::Stack {
+        use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Worker, WorkerCode};
+        let container = Container::new("c".to_string())
+            .code(ContainerCode::Image {
+                image: "img".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("p".to_string())
+            .commands_enabled(true)
+            .commands_capability_file(true)
+            .build();
+        let daemon = Daemon::new("d".to_string())
+            .permissions("p".to_string())
+            .code(DaemonCode::Image {
+                image: "img".to_string(),
+            })
+            .commands_enabled(true)
+            .commands_capability_file(true)
+            .build();
+        let mut worker = Worker::new("w".to_string())
+            .permissions("p".to_string())
+            .code(WorkerCode::Image {
+                image: "img".to_string(),
+            })
+            .build();
+        worker.runtime_identity_exchange = true;
+        alien_core::Stack::new("app".to_string())
+            .add(container, alien_core::ResourceLifecycle::Live)
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build()
+    }
+
+    #[test]
+    fn credential_capabilities_are_dropped_for_older_operators() {
+        let mut stack = credential_capability_stack();
+        // An older Operator reports neither support flag.
+        super::downgrade_container_security(&mut stack);
+        assert!(super::downgrade_credential_capabilities(&mut stack));
+        let json = serde_json::to_value(&stack).unwrap();
+        for (id, entry) in json["resources"].as_object().unwrap() {
+            let config = entry["config"].as_object().unwrap();
+            let allowed = match id.as_str() {
+                "c" => OLD_CONTAINER_FIELDS,
+                "d" => OLD_DAEMON_FIELDS,
+                _ => OLD_WORKER_FIELDS,
+            };
+            for key in config.keys().filter(|key| *key != "type") {
+                assert!(
+                    allowed.contains(&key.as_str()),
+                    "{id}: {key} is unknown to older Operators"
+                );
+            }
+        }
+        assert!(!super::downgrade_credential_capabilities(&mut stack));
+    }
+
+    #[test]
+    fn credential_capabilities_are_kept_for_operators_that_read_them() {
+        let stack = credential_capability_stack();
+        let text = serde_json::to_string(&stack).unwrap();
+        assert!(text.contains("commandsCapabilityFile"));
+        assert!(text.contains("runtimeIdentityExchange"));
+    }
+
+    #[test]
+    fn a_request_without_the_flag_is_an_older_operator() {
+        let request: AgentSyncRequest =
+            serde_json::from_value(serde_json::json!({ "deploymentId": "dep_1" })).unwrap();
+        assert!(!request.supports_credential_capabilities);
+    }
+
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
             image_registry: None,
@@ -5556,6 +5710,7 @@ async fn agent_sync(
                     management_config,
                     agent_token,
                     req.supports_pod_security,
+                    req.supports_credential_capabilities,
                 )
                 .await
                 {
@@ -5879,6 +6034,28 @@ fn downgrade_container_security(stack: &mut alien_core::Stack) -> bool {
     removed
 }
 
+/// Drop `commandsCapabilityFile` (containers, daemons) and
+/// `runtimeIdentityExchange` (workers). Operators that predate them reject
+/// the whole target for an unknown field. Without the settings a command
+/// receiver is treated as built before capability files, so the target gets
+/// its commands-only key as `ALIEN_COMMANDS_TOKEN` (see `build_pull_target`),
+/// and a worker keeps the runtime credentials it read before identity
+/// exchange: what older Operators do today. Returns whether anything was
+/// removed.
+fn downgrade_credential_capabilities(stack: &mut alien_core::Stack) -> bool {
+    let mut removed = false;
+    for (_, entry) in stack.resources_mut() {
+        if let Some(container) = entry.config.downcast_mut::<alien_core::Container>() {
+            removed |= std::mem::take(&mut container.commands_capability_file);
+        } else if let Some(daemon) = entry.config.downcast_mut::<alien_core::Daemon>() {
+            removed |= std::mem::take(&mut daemon.commands_capability_file);
+        } else if let Some(worker) = entry.config.downcast_mut::<alien_core::Worker>() {
+            removed |= std::mem::take(&mut worker.runtime_identity_exchange);
+        }
+    }
+    removed
+}
+
 /// The management identity a pull deployment's target renders with; see
 /// [`crate::loops::deployment::resolve_deployment_management_config`] and
 /// [`ManagementRenderer::PullTarget`].
@@ -5903,6 +6080,7 @@ pub(crate) async fn build_pull_target(
     management_config: Option<alien_core::ManagementConfig>,
     agent_token: Option<String>,
     operator_supports_pod_security: bool,
+    operator_supports_credential_capabilities: bool,
 ) -> Result<TargetDeployment, Response> {
     let release_stack_platform = release_stack_platform(deployment.platform);
     let management_platform = management_platform(deployment.platform, deployment.base_platform);
@@ -5953,6 +6131,14 @@ pub(crate) async fn build_pull_target(
             deployment_id = %deployment.id,
             release_id = %r.id,
             "Operator predates pod security profiles; delivering the release without the settings it cannot read. Upgrade the Operator to apply them."
+        );
+    }
+
+    if !operator_supports_credential_capabilities && downgrade_credential_capabilities(&mut stack) {
+        tracing::info!(
+            deployment_id = %deployment.id,
+            release_id = %r.id,
+            "Operator predates the credential capability settings; delivering the release without them. Upgrade the Operator to use them."
         );
     }
 

@@ -3293,6 +3293,10 @@
               "session": {
                 "type": "string"
               },
+              "supportsCredentialCapabilities": {
+                "type": "boolean",
+                "description": "Absent for Operators that predate the `commandsCapabilityFile` and\n`runtimeIdentityExchange` settings."
+              },
               "supportsExecutionClaims": {
                 "type": "boolean"
               },
