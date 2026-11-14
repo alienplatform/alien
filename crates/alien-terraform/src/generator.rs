@@ -4509,7 +4509,12 @@ fn locals_body(
             if setup_only {
                 expr::raw("false")
             } else {
-                expr::raw("try(local.advanced_settings.network, null) != null")
+                // The advanced settings variables are sensitive, and the gate feeds resource
+                // counts and non-sensitive outputs, so it drops the mark (a plain value cannot
+                // be passed to nonsensitive() directly).
+                expr::raw(
+                    "nonsensitive(sensitive(try(local.advanced_settings.network, null) != null))",
+                )
             },
         ));
     }

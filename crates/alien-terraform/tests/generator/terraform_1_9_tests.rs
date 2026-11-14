@@ -261,6 +261,14 @@ run "{name}" {{
 {variables}
   }}
   assert {{
+    condition     = !issensitive(local.deployment_requests_network)
+    error_message = "the network gate reaches non-sensitive resource counts and outputs and must not carry the sensitive mark of the advanced settings"
+  }}
+  assert {{
+    condition     = !issensitive(local.deployment_resources)
+    error_message = "the registration resources reach a non-sensitive output and must not carry a sensitive mark"
+  }}
+  assert {{
     condition     = toset([for r in local.deployment_resources : r.id]) == {ids}
     error_message = "{what}"
   }}
