@@ -144,6 +144,9 @@ impl TfEmitter for AzureSandboxEmitter {
                         )]),
                     ),
                     attr("schema_validation_enabled", Expression::Bool(false)),
+                    // Azure stores the subnet id lower-cased, so without this every plan shows an
+                    // in-place update that changes only the case.
+                    attr("ignore_casing", Expression::Bool(true)),
                     attr(
                         "depends_on",
                         Expression::Array(vec![
