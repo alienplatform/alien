@@ -294,11 +294,16 @@ where
         Err(ExecFailure::UsageError) if *ask != Ask::New => exec(Ask::New)
             .await
             .map(|(token, expires_at)| (token, expires_at, false)),
-        // The reused key ran out on the way, or clocks differ: ask once more,
-        // for a new key, instead of failing.
-        Err(ExecFailure::Expired) if *ask != Ask::New => exec(Ask::New)
-            .await
-            .map(|(token, expires_at)| (token, expires_at, true)),
+        // The reused key ran out on the way, or clocks differ: ask once more
+        // instead of failing, for anything but that key. A newer key a
+        // concurrent run holds stays valid; a new one is minted only when the
+        // expired key is the one the Operator holds.
+        Err(ExecFailure::Expired(returned)) if *ask != Ask::New => exec(match returned {
+            Some(fingerprint) => Ask::ReuseExcept(fingerprint),
+            None => Ask::New,
+        })
+        .await
+        .map(|(token, expires_at)| (token, expires_at, true)),
         Err(failure) => Err(failure),
     }
 }
@@ -306,8 +311,9 @@ where
 enum ExecFailure {
     /// The command did not accept its arguments.
     UsageError,
-    /// The key came back already expired.
-    Expired,
+    /// The key came back already expired. Carries its fingerprint when the
+    /// Operator printed one.
+    Expired(Option<String>),
     Reason(String),
     Stderr(String),
 }
@@ -316,7 +322,7 @@ impl ExecFailure {
     fn reason(self, release: &str, namespace: &str) -> String {
         match self {
             Self::UsageError => "the installed Operator is too old to issue one".into(),
-            Self::Expired => "the key the Operator returned had already expired".into(),
+            Self::Expired(_) => "the key the Operator returned had already expired".into(),
             Self::Reason(reason) => reason,
             Self::Stderr(stderr) => failure_reason(&stderr, release, namespace),
         }
@@ -380,7 +386,7 @@ async fn exec_once(
             return Err(ExecFailure::UsageError);
         }
         if lower.contains("setup-credential: expired") {
-            return Err(ExecFailure::Expired);
+            return Err(ExecFailure::Expired(None));
         }
         return Err(ExecFailure::Stderr(stderr));
     }
@@ -391,7 +397,9 @@ async fn exec_once(
         .and_then(|line| serde_json::from_str(line).ok())
         .ok_or_else(|| ExecFailure::Reason("the Operator returned an unreadable answer".into()))?;
     if printed.credential.is_empty() || printed.expires_at <= Utc::now() {
-        return Err(ExecFailure::Expired);
+        return Err(ExecFailure::Expired(
+            (!printed.credential.is_empty()).then(|| key_fingerprint(&printed.credential)),
+        ));
     }
     Ok((printed.credential, printed.expires_at))
 }
@@ -919,7 +927,7 @@ mod tests {
             let first = asks.lock().unwrap().len() == 1;
             async move {
                 if first {
-                    Err(ExecFailure::Expired)
+                    Err(ExecFailure::Expired(Some(key_fingerprint("old"))))
                 } else {
                     live()
                 }
@@ -928,7 +936,11 @@ mod tests {
         .await;
         let (_, _, asked_again) = got.ok().unwrap();
         assert!(asked_again);
-        assert_eq!(*asks.lock().unwrap(), vec![Ask::Reuse, Ask::New]);
+        // The expired key is named, so a newer key a concurrent run holds is not revoked.
+        assert_eq!(
+            *asks.lock().unwrap(),
+            vec![Ask::Reuse, Ask::ReuseExcept(key_fingerprint("old"))]
+        );
     }
 
     #[tokio::test]
@@ -936,7 +948,7 @@ mod tests {
         let asks = std::sync::Mutex::new(0);
         let got = fetch_with(&Ask::Reuse, |_| {
             *asks.lock().unwrap() += 1;
-            async { Err(ExecFailure::Expired) }
+            async { Err(ExecFailure::Expired(None)) }
         })
         .await;
         assert!(got.is_err());
