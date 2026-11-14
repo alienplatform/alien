@@ -100,8 +100,16 @@ API delays deletion, but does not extend the signed identity. Existing native
 modes retain their lifetime behavior, and per-create timeout requests remain
 unsupported.
 
-The native transport uses Partial inspection, exact gateway proxy/admin host
-rules, and an ordered catch-all deny, together with setup-owned subnet rules.
+The native transport uses Partial inspection with one catch-all `*` deny, together with
+setup-owned subnet rules. The deny closes the :80/:443 interposer (a connect there succeeds,
+and the platform answers an empty 403 with no origin data); the subnet NSG allows only the
+gateway's proxy port and drops every other public port, other private address and the
+gateway admin port. Each layer was proven alone on a live setup: with the NSG's Internet
+deny removed, :80/:443 stay contained and other ports leak; with the policy removed the
+NSG drops everything. Azure refuses a `host:port` rule pattern, and an IP host rule would
+not open a TCP port, so the policy carries no gateway rule. The packaged agent's startup
+gate proves the gateway connects and that public canaries on ports the interposer does not
+answer (8443 and 8080) drop, retrying for 60 s, before the ENTRYPOINT starts.
 The binding requires the `default` VNet connection and checks the effective
 policy and identity label before granting access. A trusted holder of Azure's
 raw Data Owner credential can create a sandbox outside this binding and omit
