@@ -121,10 +121,18 @@ fn payload(length: usize, salt: u8) -> Vec<u8> {
         .collect()
 }
 
-pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Result<Report> {
+fn validate(suite: &Suite) -> Result<()> {
     if !matches!(suite.metadata_backend.as_str(), "aws" | "gcp" | "azure") {
         return Err(invalid("metadataBackend must be aws, gcp or azure"));
     }
+    if suite.ports.is_empty() {
+        return Err(invalid("ports must list at least one port"));
+    }
+    Ok(())
+}
+
+pub async fn run(bindings: &Bindings, suite: Suite, journal_path: &Path) -> Result<Report> {
+    validate(&suite)?;
     let mut journal = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -845,4 +853,22 @@ async fn egress_checks(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn suite(ports: &str) -> Suite {
+        serde_json::from_str(&format!(
+            r#"{{"backend":"b","revision":"r","binding":"x","metadataBackend":"aws","ports":{ports}}}"#
+        ))
+        .expect("suite parses")
+    }
+
+    #[test]
+    fn empty_ports_are_rejected_before_any_sandbox_is_created() {
+        assert!(validate(&suite("[]")).is_err());
+        assert!(validate(&suite("[8080]")).is_ok());
+    }
 }
