@@ -345,6 +345,19 @@ impl TokenStore for SqliteTokenStore {
             .context(failed())?;
         // The earlier setup tokens go in the same transaction as the new one is
         // stored, so two reruns never both hold a live token.
+        let mut revoked = Vec::new();
+        let mut rows = tx
+            .query(
+                "SELECT id FROM tokens WHERE type = ?1 AND deployment_id = ?2",
+                (type_name.clone(), deployment_id.to_owned()),
+            )
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        while let Some(row) = rows.next().await.into_alien_error().context(failed())? {
+            revoked.push(RowParser::new(&row).string(0, "id")?);
+        }
+        drop(rows);
         tx.execute(
             "DELETE FROM tokens WHERE type = ?1 AND deployment_id = ?2",
             (type_name.clone(), deployment_id.to_owned()),
@@ -369,6 +382,21 @@ impl TokenStore for SqliteTokenStore {
         .into_alien_error()
         .context(failed())?;
         tx.commit().await.into_alien_error().context(failed())?;
+        // The manager has no audit store, so every mint is recorded as a
+        // structured event at info level. It names the key by id and its
+        // non-secret prefix, never the key itself.
+        tracing::info!(
+            target: "audit",
+            event = "setup_key_minted",
+            deployment_id = %deployment_id,
+            issuer = %token_type,
+            token_id = %id,
+            key_prefix = %key_prefix,
+            created_at = %now.to_rfc3339(),
+            expires_at = %expires_at.to_rfc3339(),
+            revoked_token_ids = ?revoked,
+            "Setup key minted"
+        );
         Ok(TokenRecord {
             id,
             token_type,
