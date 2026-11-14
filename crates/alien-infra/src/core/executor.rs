@@ -869,6 +869,17 @@ impl StackExecutor {
         )
     }
 
+    /// The management role waits for a network only to read its VPC and subnet IDs into its
+    /// policy at setup (a preflight edge, not part of its config). The role never uses the
+    /// network, so the edge must not keep the network from being deleted while the role stays.
+    fn management_reads_network(
+        resource: &StackResourceState,
+        dependency: &StackResourceState,
+    ) -> bool {
+        resource.config.resource_type().as_ref() == "remote-stack-management"
+            && dependency.config.resource_type().as_ref() == "network"
+    }
+
     /// Whether a dependency only orders permission grants after identity creation.
     /// Config dependencies, including an interrupted update's old config, still
     /// describe actual use and must preserve deletion order.
@@ -884,7 +895,7 @@ impl StackExecutor {
                 Self::grant_edge(
                     resource.config.resource_type().as_ref(),
                     dependency.config.resource_type().as_ref(),
-                )
+                ) || Self::management_reads_network(resource, dependency)
             })
             && !resource
                 .config
