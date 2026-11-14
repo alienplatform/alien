@@ -24,7 +24,7 @@ use crate::{
 /// The Key Vault secret holding the gateway configuration (see `alien-infra` `GATEWAY_CONFIG`).
 pub(super) const CONFIG_SECRET: &str = "sandbox-egress-gateway-config";
 /// Key Vault Secrets User.
-const SECRETS_USER_ROLE: &str = "4633458b-17de-406a-b3bd-a2b9d9b2a8d5";
+const SECRETS_USER_ROLE: &str = "4633458b-17de-408a-b874-0445c86b69e6";
 /// Host indices of the two gateway addresses inside the gateway subnet.
 pub(super) const GATEWAY_HOSTS: [usize; 2] = [4, 5];
 
@@ -142,6 +142,12 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
                     expr::raw("var.azure_resource_group_name"),
                 ),
                 attr("location", expr::raw("var.azure_location")),
+                // The default computer name derives from the resource name, which has
+                // underscores; Azure rejects them.
+                attr(
+                    "computer_name",
+                    Expression::String(format!("alien-egress-gateway-{index}")),
+                ),
                 attr("size", Expression::String("Standard_B2s".into())),
                 attr(
                     "availability_set_id",
@@ -345,5 +351,7 @@ mod tests {
         assert_eq!(CONFIG_SECRET, "sandbox-egress-gateway-config");
         assert_ne!(SANDBOX_EGRESS_REPLICA_SECRET, "sandbox-egress-signing-key");
         assert_eq!(GATEWAY_HOSTS, [4, 5]);
+        // Key Vault Secrets User, a built-in role Azure defines.
+        assert_eq!(SECRETS_USER_ROLE, "4633458b-17de-408a-b874-0445c86b69e6");
     }
 }

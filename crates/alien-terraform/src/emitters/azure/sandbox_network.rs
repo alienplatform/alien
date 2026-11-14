@@ -235,7 +235,7 @@ fn nsg_rules(fragment: &mut TfFragment, label: &str, network: &str) {
     // Azure's platform metadata/DNS addresses need their service tags: ordinary range denies
     // do not apply to these platform services. The gateway uses a numeric internal address.
     for (name, priority, destination) in [
-        ("metadata", 101, "AzurePlatformIMDS"),
+        ("metadata", 103, "AzurePlatformIMDS"),
         ("vnet", 110, "VirtualNetwork"),
         ("unspecified", 120, "0.0.0.0/8"),
         ("private_10", 121, "10.0.0.0/8"),
@@ -665,6 +665,18 @@ mod proxy_rule_tests {
                 .build(),
         )
         .unwrap()
+    }
+
+    /// Azure refuses two rules with one priority and direction, and priorities below 100.
+    #[test]
+    fn every_rule_has_its_own_priority_of_at_least_100() {
+        let rendered = rendered_rules();
+        let mut seen = std::collections::BTreeSet::new();
+        for line in rendered.lines().filter(|l| l.trim_start().starts_with("priority")) {
+            let value: i64 = line.rsplit('=').next().unwrap().trim().parse().unwrap();
+            assert!(value >= 100, "{line}");
+            assert!(seen.insert(value), "duplicate priority {value}:\n{rendered}");
+        }
     }
 
     /// Blocks of one rule, so assertions cannot match across rules.
