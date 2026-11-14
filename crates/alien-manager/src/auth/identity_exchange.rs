@@ -173,6 +173,19 @@ pub trait RuntimeIdentityVerifier: Send + Sync {
         Err(ErrorData::unauthorized("Setup credentials are unavailable").into_generic())
     }
 
+    /// Issue a setup key to a caller that holds the deployment group's install
+    /// credential, for an installation whose Operator already enrolled and so
+    /// retired the deployment's own key. The key is made for one deployment,
+    /// lives 15 minutes, and replaces the deployment's earlier setup keys. The
+    /// implementation refuses while the Operator holds no live key, because
+    /// then the install key is still current. By default no key is issued.
+    async fn issue_setup_credential_for_group(
+        &self,
+        _deployment: &DeploymentRecord,
+    ) -> Result<IssuedSetupCredential, AlienError> {
+        Err(ErrorData::unauthorized("Setup credentials are unavailable").into_generic())
+    }
+
     /// Issue a one-hour, one-use enrollment code for this deployment's operator.
     /// The caller is already authorized to update the deployment.
     async fn issue_enrollment_code(

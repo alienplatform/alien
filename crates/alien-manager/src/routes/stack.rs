@@ -602,7 +602,11 @@ async fn stack_import_as(
         let activates_setup_reservation = is_pending_setup_reservation(&existing, &release.id);
         match setup_registration_replay(&existing.setup_metadata, &setup_metadata) {
             SetupRegistrationReplay::Exact => {
-                let deployment_token = response_deployment_token(&subject, &existing);
+                let (deployment_token, deployment_token_expires_at) =
+                    match response_token(&state, &subject, &req, &existing).await {
+                        Ok(token) => token,
+                        Err(response) => return response,
+                    };
                 let Some(stack_settings) = existing.stack_settings else {
                     return ErrorData::internal("imported deployment is missing stack_settings")
                         .into_response();
@@ -612,7 +616,7 @@ async fn stack_import_as(
                     Json(StackImportResponse {
                         deployment_id: existing.id,
                         deployment_token,
-                        deployment_token_expires_at: None,
+                        deployment_token_expires_at,
                         stack_settings,
                         stack_state,
                     }),
@@ -655,7 +659,11 @@ async fn stack_import_as(
             || (!activates_setup_reservation && !can_reconcile_after_import(&existing)))
             && is_idempotent_import(&existing, &stack_state, &release.id, &req)
         {
-            let deployment_token = response_deployment_token(&subject, &existing);
+            let (deployment_token, deployment_token_expires_at) =
+                    match response_token(&state, &subject, &req, &existing).await {
+                        Ok(token) => token,
+                        Err(response) => return response,
+                    };
             let Some(stack_settings) = existing.stack_settings else {
                 return ErrorData::internal("imported deployment is missing stack_settings")
                     .into_response();
@@ -666,7 +674,7 @@ async fn stack_import_as(
                 Json(StackImportResponse {
                     deployment_id: existing.id,
                     deployment_token,
-                    deployment_token_expires_at: None,
+                    deployment_token_expires_at,
                     stack_settings,
                     stack_state,
                 }),
@@ -805,7 +813,11 @@ async fn stack_import_as(
             Err(e) => return e.into_response(),
         };
 
-        let deployment_token = response_deployment_token(&subject, &updated);
+        let (deployment_token, deployment_token_expires_at) =
+            match response_token(&state, &subject, &req, &updated).await {
+                Ok(token) => token,
+                Err(response) => return response,
+            };
         let stack_settings = match updated.stack_settings {
             Some(settings) => settings,
             None => {
@@ -818,7 +830,7 @@ async fn stack_import_as(
             Json(StackImportResponse {
                 deployment_id: updated.id,
                 deployment_token,
-                deployment_token_expires_at: None,
+                deployment_token_expires_at,
                 stack_settings,
                 stack_state,
             }),
@@ -987,6 +999,40 @@ fn response_deployment_token(subject: &Subject, deployment: &DeploymentRecord) -
             Some(subject.bearer_token.clone())
         }
         _ => deployment.deployment_token.clone(),
+    }
+}
+
+/// The token the import answers with, and when it expires.
+///
+/// An enrolled Operator retires the deployment's own key, so a rerun by the
+/// deployment group's install credential gets no token. A caller that says it
+/// accepts a short-lived one then gets a 15-minute setup key instead, which
+/// the caller uses for this run only. Callers that do not say so, and every
+/// other kind of caller, get what they always got.
+async fn response_token(
+    state: &AppState,
+    subject: &Subject,
+    req: &StackImportRequest,
+    deployment: &DeploymentRecord,
+) -> Result<(Option<String>, Option<chrono::DateTime<chrono::Utc>>), Response> {
+    let token = response_deployment_token(subject, deployment);
+    if token.is_some()
+        || !req.accepts_short_lived_deployment_token
+        || subject.role != Role::DeploymentGroupDeployer
+    {
+        return Ok((token, None));
+    }
+    let Some(verifier) = state.runtime_identity.as_ref() else {
+        return Ok((None, None));
+    };
+    match verifier.issue_setup_credential_for_group(deployment).await {
+        Ok(issued) => Ok((Some(issued.token), Some(issued.expires_at))),
+        Err(error) if error.retryable => {
+            Err(AlienError::new(ErrorData::AuthenticationUnavailable).into_response())
+        }
+        // No live Operator key: the install key is still current, or there is
+        // no Operator. The response is what it was before.
+        Err(_) => Ok((None, None)),
     }
 }
 

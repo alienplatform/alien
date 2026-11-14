@@ -169,6 +169,29 @@ impl SqliteRuntimeIdentityStore {
         Ok(Some((code, expires_at)))
     }
 
+    /// Whether the deployment's operator holds a key rotated within
+    /// [`LIVE_KEY_WINDOW`]. With no key the answer is false.
+    pub async fn operator_key_is_live(
+        &self,
+        deployment_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool, AlienError> {
+        let Some(row) = self
+            .row(
+                "SELECT expires_at FROM runtime_daily_keys WHERE deployment_id = ?1",
+                [deployment_id],
+            )
+            .await?
+        else {
+            return Ok(false);
+        };
+        let expires_at = RowParser::new(&row)
+            .i64(0, "expires_at")
+            .ok()
+            .and_then(|seconds| DateTime::from_timestamp(seconds, 0));
+        Ok(operator_key_is_live(expires_at, now))
+    }
+
     /// The deployment a still-unused, unexpired token-made `code` belongs to,
     /// when that deployment now has an operator key. This is why `enroll`
     /// refused it; no other refusal is reported here.

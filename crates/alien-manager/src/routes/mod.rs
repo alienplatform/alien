@@ -92,6 +92,10 @@ pub struct AppState {
     pub import_registry: Arc<alien_infra::ImporterRegistry>,
     /// Chart settings; `Some` serves Helm charts at `/v2/charts/...`.
     pub charts: Option<Arc<charts::ChartSettings>>,
+    /// Identity verifier of a manager that enrolls operators. Stack import
+    /// asks it for a short-lived key when the caller accepts one; `None`
+    /// issues none.
+    pub runtime_identity: Option<Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier>>,
     /// Release channels; `None` sends every release to every deployment.
     pub release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     /// Signer lists, pending changes and signed config; `None` turns the

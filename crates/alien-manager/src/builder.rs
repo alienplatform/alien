@@ -920,6 +920,7 @@ impl AlienManagerBuilder {
             }
             (charts, _) => charts,
         };
+        let runtime_identity = self.runtime_identity_verifier.clone();
         let extra_routes = if let Some(verifier) = self.runtime_identity_verifier {
             let credentials = self.runtime_credentials.clone().ok_or_else(|| {
                 ErrorData::bad_request("Identity exchange requires runtime credentials")
@@ -985,6 +986,7 @@ impl AlienManagerBuilder {
             self.dev_status_tx,
             self.import_registry,
             charts,
+            runtime_identity,
             self.release_channels,
             self.signing,
             self.bundle_signing_key,
@@ -1205,6 +1207,7 @@ async fn finalize(
     dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
+    runtime_identity: Option<Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier>>,
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
     signing: Option<Arc<dyn crate::traits::SigningStore>>,
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
@@ -1252,6 +1255,7 @@ async fn finalize(
         import_registry: import_registry_override
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         charts,
+        runtime_identity,
         release_channels: release_channels.clone(),
         signing: signing.clone(),
         bundle_signing_key,

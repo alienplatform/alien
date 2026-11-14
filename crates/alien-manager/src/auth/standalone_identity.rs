@@ -442,6 +442,33 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
         })
     }
 
+    async fn issue_setup_credential_for_group(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<IssuedSetupCredential, AlienError> {
+        let tokens = self.tokens.as_ref().ok_or_else(refused)?;
+        let now = self.now();
+        if !self
+            .store
+            .operator_key_is_live(&deployment.id, now)
+            .await
+            .map_err(|_| unavailable())?
+        {
+            return Err(refused());
+        }
+        let record = self.setup_deployment(&deployment.id).await?;
+        let expires_at = now + SETUP_CREDENTIAL_LIFETIME;
+        let (raw, key_prefix, key_hash) = crate::ids::generate_token(TokenType::Setup.prefix());
+        tokens
+            .create_setup_token(&record.id, &key_prefix, &key_hash, expires_at)
+            .await
+            .map_err(|_| unavailable())?;
+        Ok(IssuedSetupCredential {
+            token: raw,
+            expires_at,
+        })
+    }
+
     async fn issue_enrollment_code(
         &self,
         deployment: &DeploymentRecord,
@@ -852,6 +879,51 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_group_install_credential_gets_a_setup_key_only_once_the_operator_holds_a_key() {
+        let (verifier, _directory) = verifier(
+            vec![
+                record("dep-1", Platform::Kubernetes, None),
+                record("dep-2", Platform::Kubernetes, None),
+            ],
+            Arc::new(Utc::now),
+            None,
+        )
+        .await;
+        enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
+        let tokens = verifier.tokens.clone().unwrap();
+
+        // dep-2 has no Operator key, so its install key is still current.
+        assert!(verifier
+            .issue_setup_credential_for_group(&record("dep-2", Platform::Kubernetes, None))
+            .await
+            .is_err());
+
+        let first = verifier
+            .issue_setup_credential_for_group(&record("dep-1", Platform::Kubernetes, None))
+            .await
+            .unwrap();
+        let second = verifier
+            .issue_setup_credential_for_group(&record("dep-1", Platform::Kubernetes, None))
+            .await
+            .unwrap();
+        let lifetime = first.expires_at - Utc::now();
+        assert!(lifetime > Duration::minutes(14) && lifetime < Duration::minutes(16));
+        // At most one setup key is live per deployment.
+        assert!(tokens
+            .validate_token(&sha256_hash(&first.token))
+            .await
+            .unwrap()
+            .is_none());
+        let live = tokens
+            .validate_token(&sha256_hash(&second.token))
+            .await
+            .unwrap()
+            .expect("the newest key is live");
+        assert_eq!(live.token_type, TokenType::Setup);
+        assert_eq!(live.deployment_id.as_deref(), Some("dep-1"));
     }
 
     #[tokio::test]
