@@ -138,7 +138,13 @@ pub struct SandboxEgressGateway {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxEgressReplicas {
     /// Name that resolves, through the workload's DNS search path, to every ready replica.
+    /// Ignored when `addresses` is set.
+    #[serde(default)]
     pub dns: String,
+    /// Fixed replica IPs (static NICs, as on Azure's setup-created gateway VMs). When set,
+    /// no DNS lookup happens and every listed address must acknowledge a write.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<String>,
     /// Admin port on each replica.
     pub port: u16,
     /// Replicas the gateway runs. A write refuses when fewer are resolvable.

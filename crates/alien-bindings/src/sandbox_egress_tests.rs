@@ -717,6 +717,7 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
     let mut config = h.config.clone();
     config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
         dns: "replicas.invalid".into(),
+        addresses: vec![],
         port,
         count: 2,
     });
@@ -759,4 +760,29 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
     second.refuse.store(true, Ordering::SeqCst);
     assert!(manager.update("box-1", &wide).await.is_err());
     server.abort();
+}
+
+#[test]
+fn static_replica_addresses_are_the_write_targets_without_dns() {
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    rt.block_on(async {
+        let h = Harness::new().await;
+        let mut config = h.config.clone();
+        config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+            dns: String::new(),
+            addresses: vec!["10.0.3.4".into(), "10.0.3.5".into()],
+            port: 3129,
+            count: 2,
+        });
+        let manager = SandboxEgressManager::with_endpoints(
+            config,
+            h.vault.clone(),
+            h.manager.gateway.clone(),
+            h.manager.admin_url.to_string(),
+        )
+        .unwrap();
+        let targets = manager.write_targets().await.unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets[0].ends_with("10.0.3.4:3129") && targets[1].ends_with("10.0.3.5:3129"));
+    });
 }
