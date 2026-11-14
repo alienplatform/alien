@@ -63,6 +63,12 @@ const RETIRED_VERSION_DELETE_MARGIN_MINUTES: i64 = 30;
 const IMAGE_VERSION_QUOTA: usize = 50;
 /// Most retired versions marked inactive in one pass.
 const MAX_RETIREMENTS_PER_PASS: usize = 10;
+
+/// How long a replaced version stays ACTIVE before it is retired. A dependent whose own config
+/// did not change picks up the new binding at its next binding comparison (every 330 s), and a
+/// failed read skips a window, so the grace covers many windows. Nothing here can see which
+/// binding a dependent's Lambda actually runs.
+const RETIRE_GRACE_MINUTES: i64 = 60;
 /// How long to leave retiring alone after AWS refused it for a missing grant, so a role that
 /// predates the grant is not asked on every pass.
 const RETIRE_DENIED_BACKOFF_HOURS: i64 = 6;
@@ -1498,7 +1504,12 @@ impl AwsSandboxController {
         let unknown: Vec<RetiredVersion> = succeeded
             .iter()
             .filter(|version| !self.retired_versions.iter().any(|e| &e.version == *version))
-            .map(|version| RetiredVersion::new(version.clone()))
+            .map(|version| {
+                let mut entry = RetiredVersion::new(version.clone());
+                // Not replaced just now, so no dependent is still catching up to a newer binding.
+                entry.retired_at -= chrono::Duration::minutes(RETIRE_GRACE_MINUTES);
+                entry
+            })
             .collect();
         self.retired_versions.splice(0..0, unknown);
 
@@ -1513,9 +1524,16 @@ impl AwsSandboxController {
         });
         if !retire_backoff && self.dependents_on_current_binding(ctx, resource_id) {
             let mut retired = 0;
+            let now_for_grace = chrono::Utc::now();
             let keep = self.retired_versions.len().saturating_sub(1);
             for entry in self.retired_versions.iter_mut().take(keep) {
                 if entry.inactive_at.is_some() {
+                    continue;
+                }
+                // Too recently replaced for every dependent to have picked up the new binding.
+                if now_for_grace
+                    < entry.retired_at + chrono::Duration::minutes(RETIRE_GRACE_MINUTES)
+                {
                     continue;
                 }
                 if retired == MAX_RETIREMENTS_PER_PASS {
@@ -6636,6 +6654,27 @@ mod tests {
             .iter()
             .all(|v| v.inactive_at.is_none()));
         assert!(controller.retire_denied_at.is_some());
+    }
+
+    /// A dependent whose config did not change can still run the previous binding until its
+    /// next comparison, so a version replaced minutes ago is not retired yet, whatever its
+    /// dependents' saved config says.
+    #[tokio::test]
+    async fn a_version_replaced_minutes_ago_is_not_retired_yet() {
+        let mut client = ready_client(&[
+            ("1.0", "SUCCESSFUL"),
+            ("2.0", "SUCCESSFUL"),
+            ("3.0", "SUCCESSFUL"),
+        ]);
+        client.expect_update_microvm_image_version().never();
+        client.expect_delete_microvm_image_version().never();
+        let mut old = retired("1.0", None);
+        old.retired_at = chrono::Utc::now() - chrono::Duration::minutes(10);
+        let controller = tick_ready_over(client, vec![old, retired("2.0", None)]).await;
+        assert!(controller
+            .retired_versions
+            .iter()
+            .all(|v| v.inactive_at.is_none()));
     }
 
     /// A sandbox-only release leaves dependents' config unchanged, and they pick up the new
