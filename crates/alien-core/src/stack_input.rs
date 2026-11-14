@@ -775,14 +775,14 @@ impl<'a> InputAnswers<'a> {
                 .filter_map(|item| item.as_str().map(str::to_string))
                 .collect(),
             Some(serde_json::Value::String(text)) => text.split(',').map(str::to_string).collect(),
-            Some(_) => Vec::new(),
-            None => match &definition.default {
+            Some(serde_json::Value::Null) | None => match &definition.default {
                 Some(StackInputDefaultValue::StringList(items)) => items.clone(),
                 Some(StackInputDefaultValue::String(text)) => {
                     text.split(',').map(str::to_string).collect()
                 }
                 _ => Vec::new(),
             },
+            Some(_) => Vec::new(),
         };
         Some(
             entries

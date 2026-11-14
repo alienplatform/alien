@@ -328,6 +328,16 @@ pub async fn handle_update_pending(
             input_values: &config.input_values,
         })?;
     persisted_gate_answers.extend(new_declines);
+    persisted_gate_answers.extend(crate::pending::default_frozen_gate_declines(
+        crate::pending::FrozenGateFixityCheck {
+            persisted: &persisted_gate_answers,
+            stack: &target_stack,
+            still_frozen_gating: &frozen_gating,
+            existing_resource_ids: &existing_resource_ids,
+            input_values: &config.input_values,
+        },
+        current.platform,
+    ));
 
     // Drop gated setup resources the deployer declined, BEFORE the
     // preflights: the frozen-compatibility check compares against the
@@ -363,8 +373,8 @@ pub async fn handle_update_pending(
         .and_then(|metadata| metadata.setup_update_authorization.as_ref());
     info!(
         authorization_present = setup_update_authorization.is_some(),
-        authorization_release_id = setup_update_authorization
-            .map(|authorization| authorization.release_id.as_str()),
+        authorization_release_id =
+            setup_update_authorization.map(|authorization| authorization.release_id.as_str()),
         target_release_id,
         "setup update authorization recorded for the update"
     );
