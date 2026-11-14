@@ -835,7 +835,7 @@ async fn automatic(
 
 /// A portal-created automatic setup runs as the management identity, which holds no flow log
 /// grants, yet carries direct setup's authority. It must create nothing (the create would be
-/// denied and fail the network), and its delete looks for nothing.
+/// denied and fail the network).
 #[tokio::test]
 async fn an_automatic_setup_run_by_the_management_identity_creates_no_flow_log_objects() {
     let cloud = Arc::new(Mutex::new(Cloud::default()));
@@ -892,6 +892,40 @@ async fn an_automatic_setup_run_with_installer_credentials_still_creates_and_lat
         cloud.lock().unwrap().calls,
         [
             "DeleteFlowLogs fl-1".to_string(),
+            format!("DeleteRolePolicy {NAME} flow-logs-delivery"),
+            format!("DeleteRole {NAME}"),
+            format!("DeleteLogGroup {NAME}"),
+            "DeleteVpc vpc-1".to_string(),
+        ]
+    );
+}
+
+/// A flow log an installer's run created whose record was lost is still found by its tags and
+/// deleted before the VPC when the management identity deletes an automatic deployment.
+#[tokio::test]
+async fn an_automatic_delete_finds_tagged_flow_log_objects_without_a_record() {
+    let cloud = Arc::new(Mutex::new(Cloud {
+        log_groups: vec![(NAME.to_string(), ours())],
+        roles: vec![(NAME.to_string(), ours())],
+        flow_logs: vec![("fl-7".to_string(), "earlier-token".to_string())],
+        ..Default::default()
+    }));
+    let mut controller = creating_flow_logs();
+    controller.vpc_id = Some("vpc-1".to_string());
+    controller.flow_logs = None;
+    let mut runtime = automatic(&cloud, controller, false).await;
+    runtime.delete().expect("delete starts");
+    runtime
+        .run_until_terminal()
+        .await
+        .expect("delete finishes");
+    assert_eq!(runtime.status(), ResourceStatus::Deleted);
+    let cloud = cloud.lock().unwrap();
+    assert!(cloud.log_groups.is_empty() && cloud.roles.is_empty() && cloud.flow_logs.is_empty());
+    assert_eq!(
+        cloud.calls,
+        [
+            "DeleteFlowLogs fl-7".to_string(),
             format!("DeleteRolePolicy {NAME} flow-logs-delivery"),
             format!("DeleteRole {NAME}"),
             format!("DeleteLogGroup {NAME}"),
