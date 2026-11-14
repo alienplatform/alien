@@ -519,7 +519,7 @@ pub(crate) async fn publish_aws_config(
     // A sandbox that does not own the entry publishes nothing and forgets its digest: the owner
     // may rewrite the entry, so the digest says nothing about what is stored if this sandbox
     // becomes the owner again.
-    let Some(value) = gateway_config(ctx, key, &facts.vpc_cidrs) else {
+    let Some(value) = gateway_config(ctx, key, &facts.vpc_cidrs, aws_gateway_peers()) else {
         *published = None;
         return Ok(());
     };
@@ -841,10 +841,15 @@ pub(crate) async fn publish_azure_config(
     ctx: &crate::core::ResourceControllerContext<'_>,
     key: &GatewayPublicKey,
     vpc_cidrs: &[String],
+    gateway_ips: &[String],
     published: &mut Option<String>,
     replica_secret_ready: &mut bool,
 ) -> Result<()> {
-    let Some(value) = gateway_config(ctx, key, vpc_cidrs) else {
+    // The setup-created gateway VMs have no service name: peers are their static addresses.
+    let peers = serde_json::json!({
+        "static": gateway_ips.iter().map(|ip| format!("{ip}:3129")).collect::<Vec<_>>()
+    });
+    let Some(value) = gateway_config(ctx, key, vpc_cidrs, peers) else {
         *published = None;
         return Ok(());
     };
@@ -986,6 +991,12 @@ pub(crate) fn kubernetes_vault_secret_name(
     ))
 }
 
+/// AWS gateways discover each other through the service name.
+#[cfg(feature = "aws")]
+fn aws_gateway_peers() -> serde_json::Value {
+    serde_json::json!({"dns": format!("{}.svc", alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID), "port": 3129})
+}
+
 /// The configuration the shared-key owner publishes, without the replica secret. Other
 /// sandboxes publish nothing.
 #[cfg(any(feature = "aws", feature = "azure"))]
@@ -993,6 +1004,7 @@ fn gateway_config(
     ctx: &crate::core::ResourceControllerContext<'_>,
     key: &GatewayPublicKey,
     vpc_cidrs: &[String],
+    peers: serde_json::Value,
 ) -> Option<serde_json::Value> {
     let ids = internet_sandbox_ids(ctx.desired_stack);
     if alien_core::sandbox_egress::sandbox_egress_key_owner(ctx.desired_stack)
@@ -1030,7 +1042,7 @@ fn gateway_config(
         "listen": "0.0.0.0:3128", "admin": "0.0.0.0:3129",
         "audiences": audiences, "defaultPolicies": {}, "keys": [key],
         "deniedRanges": denied,
-        "peers": {"dns": format!("{}.svc", alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID), "port": 3129},
+        "peers": peers,
         "credentials": []
     }))
 }

@@ -104,7 +104,15 @@ pub(super) async fn publish_config(
             ))
         }
     };
-    egress::publish_azure_config(ctx, key, &facts.vpc_cidrs, published, replica_secret_ready).await
+    egress::publish_azure_config(
+        ctx,
+        key,
+        &facts.vpc_cidrs,
+        &gateway_addresses(ctx)?,
+        published,
+        replica_secret_ready,
+    )
+    .await
 }
 
 /// Setup's Network resource id and its controller state.

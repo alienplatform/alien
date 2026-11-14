@@ -1733,9 +1733,9 @@ mod tests {
             // Every group is listed: a session whose deadline label has passed is deleted, a
             // future label or no label is kept, and only a gateway group's 24-hour ceiling
             // reaps the unlabelled session.
+            // An Internet sandbox always gets the gateway container from the mutations.
             for (egress, with_gateway) in [
                 (SandboxEgress::Internet, true),
-                (SandboxEgress::Internet, false),
                 (SandboxEgress::Allow, false),
                 (SandboxEgress::None, false),
             ] {
@@ -1780,27 +1780,6 @@ mod tests {
                     .platform(Platform::Azure)
                     .resource_lifecycle(ResourceLifecycle::Frozen)
                     .service_provider(provider_with(client));
-                if with_gateway {
-                    builder = builder.with_stack_resource(
-                        alien_core::Container::new(
-                            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
-                        )
-                        .permissions("default".into())
-                        .code(alien_core::ContainerCode::Image {
-                            image: "example.invalid/gateway:1".into(),
-                        })
-                        .cpu(alien_core::ResourceSpec {
-                            min: "0.25".into(),
-                            desired: "0.25".into(),
-                        })
-                        .memory(alien_core::ResourceSpec {
-                            min: "512Mi".into(),
-                            desired: "512Mi".into(),
-                        })
-                        .build(),
-                        ResourceLifecycle::Live,
-                    );
-                }
                 let mut run = builder.build().await.unwrap();
                 run.step().await.expect("ready tick");
                 if gateway {
