@@ -57,6 +57,12 @@ import {
   SetupManagement$outboundSchema,
 } from "./setupmanagement.js";
 import {
+  StackSigning,
+  StackSigning$inboundSchema,
+  StackSigning$Outbound,
+  StackSigning$outboundSchema,
+} from "./stacksigning.js";
+import {
   TelemetryMode,
   TelemetryMode$inboundSchema,
   TelemetryMode$outboundSchema,
@@ -126,6 +132,7 @@ export type StackSettings = {
    * Whether setup remains a separate administrator operation.
    */
   setupManagement?: SetupManagement | undefined;
+  signing?: StackSigning | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -155,6 +162,7 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
     ).optional(),
     quotaWarningOverrides: z.array(z.string()).optional(),
     setupManagement: SetupManagement$inboundSchema.optional(),
+    signing: z.nullable(StackSigning$inboundSchema).optional(),
     telemetry: TelemetryMode$inboundSchema.optional(),
     updates: UpdatesMode$inboundSchema.optional(),
   });
@@ -175,6 +183,7 @@ export type StackSettings$Outbound = {
   publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   quotaWarningOverrides?: Array<string> | undefined;
   setupManagement?: string | undefined;
+  signing?: StackSigning$Outbound | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -200,6 +209,7 @@ export const StackSettings$outboundSchema: z.ZodType<
   ).optional(),
   quotaWarningOverrides: z.array(z.string()).optional(),
   setupManagement: SetupManagement$outboundSchema.optional(),
+  signing: z.nullable(StackSigning$outboundSchema).optional(),
   telemetry: TelemetryMode$outboundSchema.optional(),
   updates: UpdatesMode$outboundSchema.optional(),
 });

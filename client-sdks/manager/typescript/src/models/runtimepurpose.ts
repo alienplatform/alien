@@ -39,13 +39,6 @@ export type RuntimePurposeOperatorOperations = {
 };
 
 /**
- * Connect the recorded operator tunnel.
- */
-export type RuntimePurposeOperatorTunnel = {
-  type: "operatorTunnel";
-};
-
-/**
  * Pull deployment images through the registry receiver.
  */
 export type RuntimePurposeRegistryPull = {
@@ -73,7 +66,6 @@ export type RuntimePurpose =
   | RuntimePurposeTelemetry
   | RuntimePurposeOperatorSync
   | RuntimePurposeRegistryPull
-  | RuntimePurposeOperatorTunnel
   | RuntimePurposeOperatorOperations
   | RuntimePurposeOperationRelay
   | RuntimePurposeReceiveCommands;
@@ -152,29 +144,6 @@ export function runtimePurposeOperatorOperationsToJSON(
 }
 
 /** @internal */
-export type RuntimePurposeOperatorTunnel$Outbound = {
-  type: "operatorTunnel";
-};
-
-/** @internal */
-export const RuntimePurposeOperatorTunnel$outboundSchema: z.ZodType<
-  RuntimePurposeOperatorTunnel$Outbound,
-  RuntimePurposeOperatorTunnel
-> = z.object({
-  type: z.literal("operatorTunnel"),
-});
-
-export function runtimePurposeOperatorTunnelToJSON(
-  runtimePurposeOperatorTunnel: RuntimePurposeOperatorTunnel,
-): string {
-  return JSON.stringify(
-    RuntimePurposeOperatorTunnel$outboundSchema.parse(
-      runtimePurposeOperatorTunnel,
-    ),
-  );
-}
-
-/** @internal */
 export type RuntimePurposeRegistryPull$Outbound = {
   type: "registryPull";
 };
@@ -242,7 +211,6 @@ export type RuntimePurpose$Outbound =
   | RuntimePurposeTelemetry$Outbound
   | RuntimePurposeOperatorSync$Outbound
   | RuntimePurposeRegistryPull$Outbound
-  | RuntimePurposeOperatorTunnel$Outbound
   | RuntimePurposeOperatorOperations$Outbound
   | RuntimePurposeOperationRelay$Outbound
   | RuntimePurposeReceiveCommands$Outbound;
@@ -255,7 +223,6 @@ export const RuntimePurpose$outboundSchema: z.ZodType<
   z.lazy(() => RuntimePurposeTelemetry$outboundSchema),
   z.lazy(() => RuntimePurposeOperatorSync$outboundSchema),
   z.lazy(() => RuntimePurposeRegistryPull$outboundSchema),
-  z.lazy(() => RuntimePurposeOperatorTunnel$outboundSchema),
   z.lazy(() => RuntimePurposeOperatorOperations$outboundSchema),
   z.lazy(() => RuntimePurposeOperationRelay$outboundSchema),
   z.lazy(() => RuntimePurposeReceiveCommands$outboundSchema),

@@ -18,8 +18,8 @@ use serde::Deserialize;
 use super::{
     identity_exchange::{
         IdentityEnrollmentRequest, IdentityEnrollmentResponse, IdentityExchangeRequest,
-        IdentityRotationRequest, IdentityRotationResponse, RuntimeIdentityProof,
-        RuntimeIdentityVerifier, VerifiedRuntimeIdentity,
+        IdentityRotationRequest, IdentityRotationResponse, IssuedSetupCredential,
+        RuntimeIdentityProof, RuntimeIdentityVerifier, VerifiedRuntimeIdentity,
     },
     runtime_capability::{RuntimeGrant, RuntimePurpose},
     Subject,
@@ -27,10 +27,15 @@ use super::{
 use crate::{
     error::ErrorData,
     stores::sqlite::{runtime_identity::DailyKeyState, SqliteRuntimeIdentityStore},
-    traits::{CredentialResolver, DeploymentRecord, DeploymentStore},
+    traits::{
+        token_store::TokenType, CredentialResolver, DeploymentRecord, DeploymentStore, TokenStore,
+    },
 };
 
 const OPERATOR: &str = "operator";
+
+/// How long a setup key lives.
+const SETUP_CREDENTIAL_LIFETIME: chrono::Duration = chrono::Duration::minutes(15);
 
 /// Reads one deployment for the verifier, with system authority.
 #[async_trait]
@@ -49,6 +54,8 @@ pub struct StandaloneRuntimeIdentity {
     store: Arc<SqliteRuntimeIdentityStore>,
     deployments: Arc<dyn DeploymentLookup>,
     credentials: Arc<dyn CredentialResolver>,
+    /// Where setup keys are stored. Without it no setup key is issued.
+    tokens: Option<Arc<dyn TokenStore>>,
     gcp: GcpIdentityTokenVerifier,
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     #[cfg(test)]
@@ -74,11 +81,18 @@ impl StandaloneRuntimeIdentity {
             store,
             deployments: Arc::new(deployments),
             credentials,
+            tokens: None,
             gcp: GcpIdentityTokenVerifier::with_clock(clock.clone())?,
             clock,
             #[cfg(test)]
             sts_transport: None,
         })
+    }
+
+    /// Issue setup keys into `tokens`.
+    pub fn with_token_store(mut self, tokens: Arc<dyn TokenStore>) -> Self {
+        self.tokens = Some(tokens);
+        self
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -104,6 +118,20 @@ impl StandaloneRuntimeIdentity {
 
     /// The deployment for its enrolled Operator. The Operator finishes a deletion and
     /// reports it, including after a restart, so only a deleted deployment is refused.
+    /// The deployment a rerun key is minted for. A key that rewrites or removes
+    /// the installation is not issued while it is being removed, as on the
+    /// hosted manager; the Operator's own sync keeps working then.
+    async fn setup_deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
+        let record = self.load(id).await?;
+        if matches!(record.status.as_str(), "deleting" | "deleted" | "retained") {
+            return Err(AlienError::new(ErrorData::DeploymentRemoving {
+                deployment_id: record.id.clone(),
+            })
+            .into_generic());
+        }
+        Ok(record)
+    }
+
     async fn operator_deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
         let record = self.load(id).await?;
         if record.status == "deleted" {
@@ -386,6 +414,34 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
         }
     }
 
+    async fn issue_setup_credential(
+        &self,
+        deployment_id: &str,
+        operator_key: &str,
+    ) -> Result<IssuedSetupCredential, AlienError> {
+        let tokens = self.tokens.as_ref().ok_or_else(refused)?;
+        let now = self.now();
+        // Only the deployment's own live Operator key is accepted. A setup key
+        // or a deployment token is not a daily key, so neither can chain.
+        let state = self
+            .store
+            .verify_key(deployment_id, operator_key, now)
+            .await
+            .map_err(|_| unavailable())?
+            .ok_or_else(refused)?;
+        let record = self.setup_deployment(&state.deployment_id).await?;
+        let expires_at = now + SETUP_CREDENTIAL_LIFETIME;
+        let (raw, key_prefix, key_hash) = crate::ids::generate_token(TokenType::Setup.prefix());
+        tokens
+            .create_setup_token(&record.id, &key_prefix, &key_hash, expires_at)
+            .await
+            .map_err(|_| unavailable())?;
+        Ok(IssuedSetupCredential {
+            token: raw,
+            expires_at,
+        })
+    }
+
     async fn issue_enrollment_code(
         &self,
         deployment: &DeploymentRecord,
@@ -549,8 +605,10 @@ mod tests {
         let db = SqliteDatabase::new(&directory.path().join("manager.db").to_string_lossy())
             .await
             .unwrap();
+        let db = Arc::new(db);
         let mut verifier = StandaloneRuntimeIdentity {
-            store: Arc::new(SqliteRuntimeIdentityStore::new(Arc::new(db))),
+            store: Arc::new(SqliteRuntimeIdentityStore::new(db.clone())),
+            tokens: Some(Arc::new(crate::stores::sqlite::SqliteTokenStore::new(db))),
             deployments: Arc::new(Deployments(
                 records.into_iter().map(|r| (r.id.clone(), r)).collect(),
             )),
@@ -779,6 +837,173 @@ mod tests {
             )
             .await
             .is_ok());
+    }
+
+    /// Enroll `key` for `deployment` and return the verifier's view of the world.
+    async fn enroll_operator(verifier: &StandaloneRuntimeIdentity, deployment: &str, key: &str) {
+        let (code, _) = verifier
+            .issue_enrollment_code(&record(deployment, Platform::Kubernetes, None))
+            .await
+            .unwrap();
+        verifier
+            .enroll(&IdentityEnrollmentRequest {
+                code,
+                initial_key_hash: sha256_hash(key),
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_operator_key_mints_one_short_lived_key_for_its_own_deployment_only() {
+        let (verifier, _directory) = verifier(
+            vec![
+                record("dep-1", Platform::Kubernetes, None),
+                record("dep-2", Platform::Kubernetes, None),
+            ],
+            Arc::new(Utc::now),
+            None,
+        )
+        .await;
+        enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
+        enroll_operator(&verifier, "dep-2", "ax_day_v1_two").await;
+        let tokens = verifier.tokens.clone().unwrap();
+
+        let before = Utc::now();
+        let first = verifier
+            .issue_setup_credential("dep-1", "ax_day_v1_one")
+            .await
+            .unwrap();
+        let lifetime = first.expires_at - before;
+        assert!(
+            lifetime >= Duration::minutes(15) && lifetime < Duration::minutes(16),
+            "{lifetime}"
+        );
+        let record = tokens
+            .validate_token(&sha256_hash(&first.token))
+            .await
+            .unwrap()
+            .expect("the key is live");
+        assert_eq!(record.token_type, TokenType::Setup);
+        assert_eq!(record.deployment_id.as_deref(), Some("dep-1"));
+
+        // A second mint replaces the first: at most one is live.
+        let second = verifier
+            .issue_setup_credential("dep-1", "ax_day_v1_one")
+            .await
+            .unwrap();
+        assert!(tokens
+            .validate_token(&sha256_hash(&first.token))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(tokens
+            .validate_token(&sha256_hash(&second.token))
+            .await
+            .unwrap()
+            .is_some());
+        // Another deployment's setup key is untouched.
+        let other = verifier
+            .issue_setup_credential("dep-2", "ax_day_v1_two")
+            .await
+            .unwrap();
+        assert!(tokens
+            .validate_token(&sha256_hash(&second.token))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(tokens
+            .validate_token(&sha256_hash(&other.token))
+            .await
+            .unwrap()
+            .is_some());
+
+        // Refused: another deployment's key, a made-up key, a setup key itself.
+        for (deployment, key) in [
+            ("dep-1", "ax_day_v1_two"),
+            ("dep-2", "ax_day_v1_one"),
+            ("dep-1", "ax_day_v1_unknown"),
+            ("dep-1", second.token.as_str()),
+            ("dep-unknown", "ax_day_v1_one"),
+        ] {
+            assert!(
+                verifier
+                    .issue_setup_credential(deployment, key)
+                    .await
+                    .is_err(),
+                "{deployment} accepted a refused key"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_setup_key_is_refused_once_it_expires() {
+        let (verifier, _directory) = verifier(
+            vec![record("dep-1", Platform::Kubernetes, None)],
+            Arc::new(Utc::now),
+            None,
+        )
+        .await;
+        let tokens = verifier.tokens.clone().unwrap();
+        tokens
+            .create_setup_token(
+                "dep-1",
+                "ax_setup_exp",
+                &sha256_hash("expired"),
+                Utc::now() - Duration::seconds(1),
+            )
+            .await
+            .unwrap();
+        assert!(tokens
+            .validate_token(&sha256_hash("expired"))
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// The verifier can only issue into a token store it was given.
+    #[tokio::test]
+    async fn no_token_store_means_no_setup_key() {
+        let (mut verifier, _directory) = verifier(
+            vec![record("dep-1", Platform::Kubernetes, None)],
+            Arc::new(Utc::now),
+            None,
+        )
+        .await;
+        enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
+        verifier.tokens = None;
+        assert!(verifier
+            .issue_setup_credential("dep-1", "ax_day_v1_one")
+            .await
+            .is_err());
+    }
+
+    /// A deployment being removed gets no rerun key, and the Operator is told why, while its
+    /// own sync keeps working (see the next test).
+    #[tokio::test]
+    async fn no_rerun_key_is_issued_while_a_deployment_is_being_removed() {
+        for (status, issued) in [
+            ("running", true),
+            ("delete-pending", true),
+            ("delete-failed", true),
+            ("deleting", false),
+            ("retained", false),
+        ] {
+            let mut deployment = record("dep-1", Platform::Kubernetes, None);
+            deployment.status = status.into();
+            let (verifier, _directory) = verifier(vec![deployment], Arc::new(Utc::now), None).await;
+            enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
+            let outcome = verifier
+                .issue_setup_credential("dep-1", "ax_day_v1_one")
+                .await;
+            match (issued, outcome) {
+                (true, Ok(_)) => {}
+                (false, Err(error)) => {
+                    assert_eq!(error.code, "DEPLOYMENT_REMOVING", "{status}")
+                }
+                (_, other) => panic!("{status}: unexpected {:?}", other.map(|_| ())),
+            }
+        }
     }
 
     /// An enrolled Operator finishes a deletion, so it keeps its sync authority while the

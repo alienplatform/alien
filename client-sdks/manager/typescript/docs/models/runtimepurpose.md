@@ -29,14 +29,6 @@ const value: models.RuntimePurposeRegistryPull = {
 };
 ```
 
-### `models.RuntimePurposeOperatorTunnel`
-
-```typescript
-const value: models.RuntimePurposeOperatorTunnel = {
-  type: "operatorTunnel",
-};
-```
-
 ### `models.RuntimePurposeOperatorOperations`
 
 ```typescript
