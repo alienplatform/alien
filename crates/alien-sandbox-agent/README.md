@@ -403,6 +403,21 @@ Images must be linux/amd64 and their container must keep running in the foregrou
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
 Alien stops the create at the FAILED state and names this as the likely cause.
 
+## Preview on GCP
+
+Preview is refused at plan time on GCP Agent Platform (declare no preview ports). For a root-supervisor
+workload the preview boundary has to be a capability that the sandbox agent itself verifies, and the
+platform gives no place to anchor one:
+- Google's edge JWT is scoped to the whole sandbox, not to a port, and the same token is accepted on
+  `:execute`. Holding it is command access, so it cannot stand in for a port-scoped capability.
+- The Agent Platform sandbox template has no env, args, label, volume or secret field, and a sandbox
+  carries no metadata the guest can read. There is no channel to hand a per-deployment trust root
+  (a signing key or a public key) to the agent at boot.
+- Egress `none` blocks DNS, so the agent cannot fetch a trust root (for example a key set) at runtime.
+
+Preview can be offered once the platform adds a per-deployment value that the guest can read and a
+preview holder cannot write.
+
 Egress `none` (`internetAccess: false`) blocks TCP to public addresses, the metadata server and DNS
 resolution, measured on the default network placement. The platform has no client token on create,
 so a retried create can leave an extra sandbox; `get_or_create` reuses a running sandbox with the
