@@ -110,13 +110,23 @@ ACR_USER=$(jq -r .username <<<"$creds"); ACR_PASS=$(jq -r '.passwords[0].value' 
 REGISTRY="$ACR.azurecr.io"
 echo "$ACR_PASS" | docker login "$REGISTRY" -u "$ACR_USER" --password-stdin >/dev/null
 
-# 2. Images: the conformance fixture with the agent layered on (root ENTRYPOINT), the gateway
-#    from this branch, and (later) the driver.
+# 2. Images: the conformance fixture assembled with the agent the way a release does (root
+#    ENTRYPOINT), the gateway from this branch, and (later) the driver.
 echo "== images"
 IMAGE="$REGISTRY/fixture-agent:root"
-docker build -q -t "$REGISTRY/fixture-base:1" "$REPO/crates/alien-sandbox-conformance/contract" >/dev/null
-sh "$REPO/crates/alien-sandbox-conformance/contract/layer-agent.sh" "$AGENT_BINARY" "$REGISTRY/fixture-base:1" "$IMAGE" >/dev/null
-docker push -q "$IMAGE" >/dev/null
+# A throwaway plain-HTTP registry holds the base and the agent image the assembler reads.
+docker rm -f "$P-localreg" >/dev/null 2>&1 || true
+docker run -d --name "$P-localreg" -p 5000:5000 registry:2 >/dev/null
+docker build -q -t localhost:5000/fixture:base "$REPO/crates/alien-sandbox-conformance/contract" >/dev/null
+docker push -q localhost:5000/fixture:base >/dev/null
+agentimg="$WORK/agent-image"; rm -rf "$agentimg"; mkdir -p "$agentimg"
+cp "$AGENT_BINARY" "$agentimg/alien-sandbox-agent"
+printf 'FROM scratch\nCOPY alien-sandbox-agent /usr/local/bin/alien-sandbox-agent\n' > "$agentimg/Dockerfile"
+docker build -q -t localhost:5000/agent:dev "$agentimg" >/dev/null
+docker push -q localhost:5000/agent:dev >/dev/null
+(cd "$REPO" && ACR_USER="$ACR_USER" ACR_PASS="$ACR_PASS" cargo run -q -p alien-build --example azure-sandbox-assemble -- \
+  localhost:5000/fixture:base localhost:5000/agent:dev "$IMAGE")
+docker rm -f "$P-localreg" >/dev/null
 gw="$WORK/gateway-image"; rm -rf "$gw"; mkdir -p "$gw"
 cp "$GATEWAY_BINARY" "$gw/alien-egress-gateway"
 printf 'FROM scratch\nCOPY alien-egress-gateway /alien-egress-gateway\nENTRYPOINT ["/alien-egress-gateway"]\n' > "$gw/Dockerfile"
