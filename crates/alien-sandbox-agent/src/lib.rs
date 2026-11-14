@@ -1,5 +1,6 @@
 pub mod children;
 pub mod confine;
+pub mod control_key;
 pub mod error;
 pub mod exec;
 pub mod files;

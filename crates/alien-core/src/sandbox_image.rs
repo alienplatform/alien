@@ -40,6 +40,19 @@ pub const CALLER_AUTHORIZATION_HEADER: &str = "x-alien-caller-authorization";
 /// (`authorization` when unset). Set on backends whose edge replaces `Authorization`.
 pub const ENV_CALLER_AUTHORIZATION_HEADER: &str = "ALIEN_SANDBOX_CALLER_AUTHORIZATION_HEADER";
 
+/// Header carrying the agent's control key on routes reached through the edge.
+///
+/// The edge credential a preview holder receives is execute-capable for the whole sandbox and the
+/// edge routes it to any declared port, the agent's own included. So the agent authorizes every
+/// control request itself, with a key only the binding can derive.
+pub const CONTROL_KEY_HEADER: &str = "x-alien-control-key";
+
+/// Envelope field carrying the same key where the transport can set no headers (`:execute`).
+pub const CONTROL_KEY_FIELD: &str = "controlKey";
+
+/// Shortest control key the agent accepts, in characters.
+pub const CONTROL_KEY_MIN_LEN: usize = 32;
+
 /// Longest a preview capability lives, in seconds. A grant never outlives the session either.
 pub const PREVIEW_CAPABILITY_MAX_SECONDS: i64 = 15 * 60;
 

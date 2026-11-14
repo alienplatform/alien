@@ -101,6 +101,8 @@ pub struct AgentState {
     pub gateway_egress: Option<Arc<crate::gateway_egress::GatewayEgress>>,
     /// Issues and verifies preview capabilities where the agent is the issuer (transport mode).
     pub preview: crate::preview_capability::PreviewAuthority,
+    /// The key the binding installed, which control requests must present under transport.
+    pub control: crate::control_key::ControlKey,
     /// The agent's own executable, which the validate hook runs as the exec identity
     pub agent_binary: PathBuf,
 }
@@ -287,6 +289,8 @@ struct EnvelopeHead {
     v: Option<u32>,
     /// Which operation the body carries. Absent or unknown is refused, never defaulted.
     op: Option<String>,
+    /// The control key, for a transport that cannot set headers. See [`crate::control_key`].
+    control_key: Option<String>,
 }
 
 /// Builds the agent's router.
@@ -316,6 +320,7 @@ pub fn router(state: Arc<AgentState>) -> Router {
             &hook_path("terminate"),
             get(hook_lifecycle).post(hook_lifecycle),
         )
+        .route("/v1/control-key", post(control_key_install))
         .route("/v1/exec", post(run_command))
         .route("/v1/files", get(read_file).put(write_file))
         .route("/v1/jobs/start", post(job_start))
@@ -909,7 +914,7 @@ async fn job_cancel(
 async fn agent_platform(
     State(state): State<Arc<AgentState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     body: Bytes,
 ) -> std::result::Result<Response, ApiError> {
     let head: EnvelopeHead = serde_json::from_slice(&body).map_err(|error| {
@@ -917,6 +922,16 @@ async fn agent_platform(
             reason: format!("envelope is not valid JSON: {error}"),
         }))
     })?;
+    // Here the key is the envelope's field and nothing else: a header on this route is the
+    // caller's, so it is dropped before the handlers read the one they trust.
+    headers.remove(alien_core::sandbox_image::CONTROL_KEY_HEADER);
+    if let Some(key) = head
+        .control_key
+        .as_deref()
+        .and_then(|key| axum::http::HeaderValue::from_str(key).ok())
+    {
+        headers.insert(alien_core::sandbox_image::CONTROL_KEY_HEADER, key);
+    }
 
     let requested = head.v.ok_or_else(|| {
         ApiError::from(AlienError::new(ErrorData::RequestInvalid {
@@ -1014,6 +1029,14 @@ async fn agent_platform(
             .await?
             .into_response())
         }
+        "controlKeyInstall" => Ok(control_key_install(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
         "previewGrant" => Ok(preview_grant(
             State(state),
             ConnectInfo(peer),
@@ -1242,6 +1265,42 @@ async fn preview_grant(
     }
 }
 
+#[derive(Deserialize)]
+struct ControlKeyInstall {
+    key: String,
+}
+
+/// Installs the control key for this boot. Reached over the cloud-authenticated path by the
+/// binding, before it hands out anything a preview holder could use; one boot has one key.
+async fn control_key_install(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<ControlKeyInstall>,
+) -> std::result::Result<Response, ApiError> {
+    if !matches!(state.authorization, AgentAuthorization::Transport) {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "this sandbox does not take a control key".to_string(),
+        });
+    }
+    // Once a key is installed, installing needs it: an old preview holder cannot replace it.
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    match state.control.install(&request.key) {
+        crate::control_key::Install::Installed | crate::control_key::Install::Unchanged => {
+            Ok(Json(serde_json::json!({})).into_response())
+        }
+        crate::control_key::Install::Conflict => Err(ApiError {
+            status: StatusCode::CONFLICT,
+            message: "a different control key is installed on this boot".to_string(),
+        }),
+        crate::control_key::Install::Malformed => Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "the control key is not a valid key".to_string(),
+        }),
+    }
+}
+
 async fn authorize(
     state: &AgentState,
     peer: SocketAddr,
@@ -1273,6 +1332,17 @@ async fn authorize_control(
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
                 message: "the agent does not serve the code it is running".to_string(),
+            });
+        }
+        // The edge admits any holder of its credential to this port, so reaching the agent proves
+        // nothing once a key is installed.
+        let presented = headers
+            .get(alien_core::sandbox_image::CONTROL_KEY_HEADER)
+            .and_then(|value| value.to_str().ok());
+        if !state.control.admits(presented) {
+            return Err(ApiError {
+                status: StatusCode::UNAUTHORIZED,
+                message: "a valid agent credential is required".to_string(),
             });
         }
         return Ok(());

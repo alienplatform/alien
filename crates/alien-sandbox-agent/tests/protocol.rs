@@ -83,6 +83,7 @@ impl Agent {
             jobs: JobRegistry::new(),
             interactive: Default::default(),
             preview: Default::default(),
+            control: Default::default(),
             agent_binary: agent_binary(),
         });
 
@@ -470,6 +471,7 @@ async fn transport_authorization_needs_no_capability() {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -520,6 +522,7 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -616,6 +619,7 @@ async fn the_validate_hook_passes_and_leaves_the_session_root_empty() {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     })
     .await
@@ -646,6 +650,7 @@ async fn the_validate_hook_refuses_a_caller_running_as_the_exec_identity() {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     }))
     .await;
@@ -696,6 +701,7 @@ async fn the_validate_hook_refuses_a_caller_without_a_capability() {
         interactive: Default::default(),
         // A check that ran would answer 500 on this, so a 401 is the refusal and not a failed check.
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: root.join("no-such-agent"),
     }))
     .await;
@@ -743,6 +749,7 @@ async fn the_validate_hook_names_the_file_check_when_the_session_root_is_not_wri
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     })
     .await;
@@ -785,6 +792,7 @@ async fn the_validate_hook_names_the_identity_check_when_the_probe_cannot_run_as
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     }))
     .await;
@@ -1030,6 +1038,7 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     });
 
@@ -1285,6 +1294,7 @@ async fn root_image_cannot_call_control_routes() {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     });
     let base = serve(state).await;
@@ -1980,6 +1990,7 @@ async fn transport_agent_listening_on(own_ports: &[u16]) -> (String, TempDir) {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: agent_binary(),
     });
     state.preview.set_own_ports(own_ports);
@@ -2474,4 +2485,166 @@ async fn transport_preview_never_reaches_the_agents_own_listener() {
         assert_eq!(response.status(), 403, "route {port}");
     }
     assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+const CONTROL_KEY: &str = "k-0123456789abcdef0123456789abcdef-control";
+
+async fn envelope(base: &str, body: serde_json::Value) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{base}/"))
+        .json(&body)
+        .send()
+        .await
+        .expect("responds")
+}
+
+#[cfg(target_os = "linux")]
+async fn install_control_key(base: &str, key: &str) -> reqwest::Response {
+    envelope(
+        base,
+        json!({"v": 1, "op": "controlKeyInstall", "key": key, "controlKey": key}),
+    )
+    .await
+}
+
+/// The edge credential a preview holder carries reaches every port, the agent's included, so the
+/// agent must refuse a control request that does not carry the key the binding installed.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn an_installed_control_key_is_required_by_every_control_route() {
+    let _env = PREVIEW_ENV.lock().await;
+    let (base, _dir) = transport_agent().await;
+    let exec = json!({"command": ["true"], "timeoutMs": 5000});
+
+    // Before an install the agent behaves as it always has.
+    let open = reqwest::Client::new()
+        .post(format!("{base}/v1/exec"))
+        .json(&exec)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(open.status(), 200);
+
+    assert_eq!(install_control_key(&base, CONTROL_KEY).await.status(), 200);
+
+    let direct = |key: Option<&str>| {
+        let mut request = reqwest::Client::new()
+            .post(format!("{base}/v1/exec"))
+            .json(&exec);
+        if let Some(key) = key {
+            request = request.header("x-alien-control-key", key);
+        }
+        async move { request.send().await.unwrap().status() }
+    };
+    assert_eq!(direct(None).await, 401, "no key");
+    assert_eq!(direct(Some("not-the-key")).await, 401, "wrong key");
+    assert_eq!(direct(Some(CONTROL_KEY)).await, 200, "right key");
+
+    // Through the envelope the key is a body field, and a header alone does not count there.
+    let via_envelope = |field: Option<&str>| {
+        let mut body = json!({"v": 1, "op": "exec", "command": ["true"], "timeoutMs": 5000});
+        if let Some(key) = field {
+            body["controlKey"] = json!(key);
+        }
+        let base = base.clone();
+        async move { envelope(&base, body).await.status() }
+    };
+    assert_eq!(via_envelope(None).await, 401);
+    assert_eq!(via_envelope(Some("wrong-wrong-wrong")).await, 401);
+    assert_eq!(via_envelope(Some(CONTROL_KEY)).await, 200);
+    let header_only = reqwest::Client::new()
+        .post(format!("{base}/"))
+        .header("x-alien-control-key", CONTROL_KEY)
+        .json(&json!({"v": 1, "op": "exec", "command": ["true"], "timeoutMs": 5000}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(header_only.status(), 401);
+
+    // Files, jobs and the grant are control routes too.
+    for body in [
+        json!({"v": 1, "op": "readFile", "path": "x"}),
+        json!({"v": 1, "op": "jobPoll", "jobId": "j", "sinceSeq": 0}),
+        json!({"v": 1, "op": "previewGrant", "sandbox": "s", "port": 8080, "declaredPorts": [8080]}),
+    ] {
+        assert_eq!(envelope(&base, body).await.status(), 401);
+    }
+}
+
+/// A preview capability is for the previewed port only: it never opens a control route, and a
+/// preview request needs no control key because the capability is its credential.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn a_preview_capability_never_authorizes_a_control_route() {
+    let _env = PREVIEW_ENV.lock().await;
+    let (base, _dir) = transport_agent().await;
+    let (port, _seen) = upstream_server().await;
+    std::env::set_var("ALIEN_SANDBOX_PREVIEW_PORTS", format!("{port},8971"));
+    assert_eq!(install_control_key(&base, CONTROL_KEY).await.status(), 200);
+    let granted: serde_json::Value = envelope(
+        &base,
+        json!({"v": 1, "op": "previewGrant", "sandbox": "sandbox-a", "port": port, "controlKey": CONTROL_KEY}),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    let capability = granted["capability"].as_str().expect("a capability").to_string();
+
+    let preview = reqwest::Client::new()
+        .get(format!("{base}/v1/preview/{port}/"))
+        .header("x-alien-preview-port", port.to_string())
+        .header("x-alien-preview-capability", &capability)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), 200, "the capability is the preview credential");
+
+    // The holder presents the capability everywhere it can think of; no control route admits it.
+    let client = reqwest::Client::new();
+    let attempts = [
+        client
+            .post(format!("{base}/v1/exec"))
+            .header("x-alien-preview-capability", &capability)
+            .header("x-alien-control-key", &capability)
+            .header("authorization", format!("Bearer {capability}"))
+            .json(&json!({"command": ["id"], "timeoutMs": 5000})),
+        client
+            .get(format!("{base}/v1/files?path=x"))
+            .header("x-alien-preview-capability", &capability),
+        client
+            .post(format!("{base}/"))
+            .json(&json!({"v": 1, "op": "exec", "command": ["id"], "timeoutMs": 5000, "controlKey": capability})),
+    ];
+    for attempt in attempts {
+        assert_eq!(attempt.send().await.unwrap().status(), 401);
+    }
+}
+
+/// The key is installed once per boot. Installing it again needs the key, and a different key is
+/// refused, so an old preview holder cannot replace the binding's key.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn the_control_key_installs_once_and_cannot_be_replaced() {
+    let (base, _dir) = transport_agent().await;
+    assert_eq!(
+        install_control_key(&base, "too-short").await.status(),
+        400,
+        "a short key is refused"
+    );
+    assert_eq!(install_control_key(&base, CONTROL_KEY).await.status(), 200);
+    assert_eq!(install_control_key(&base, CONTROL_KEY).await.status(), 200, "same key again");
+    let other = "z-9999999999999999999999999999999999-other";
+    let replace = envelope(
+        &base,
+        json!({"v": 1, "op": "controlKeyInstall", "key": other}),
+    )
+    .await;
+    assert_eq!(replace.status(), 401, "replacing needs the installed key");
+    let replace = envelope(
+        &base,
+        json!({"v": 1, "op": "controlKeyInstall", "key": other, "controlKey": CONTROL_KEY}),
+    )
+    .await;
+    assert_eq!(replace.status(), 409, "even with the installed key");
 }

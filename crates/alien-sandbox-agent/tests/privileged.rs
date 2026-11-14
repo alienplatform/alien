@@ -252,6 +252,7 @@ fn agent_state(root: &Path) -> AgentState {
         jobs: JobRegistry::new(),
         interactive: Default::default(),
         preview: Default::default(),
+        control: Default::default(),
         agent_binary: PathBuf::from(env!("CARGO_BIN_EXE_alien-sandbox-agent")),
     }
 }
