@@ -118,9 +118,9 @@ pub async fn status_command(
     args: StatusArgs,
     embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
-    rerun_credential::with_one_new_key_retry(|new_key, in_cluster| {
+    rerun_credential::with_one_new_key_retry(|refused, in_cluster| {
         let args = args.clone();
-        async move { status_command_with(args, embedded_config, &in_cluster, new_key).await }
+        async move { status_command_with(args, embedded_config, &in_cluster, refused).await }
     })
     .await
 }
@@ -129,7 +129,7 @@ async fn status_command_with(
     args: StatusArgs,
     embedded_config: Option<&DeployCliConfig>,
     in_cluster: &InClusterUse,
-    new_key: bool,
+    refused: Option<String>,
 ) -> Result<()> {
     let tracker = DeploymentTracker::new()?;
 
@@ -150,11 +150,17 @@ async fn status_command_with(
                 kubeconfig: args.kubeconfig.clone(),
                 kube_context: args.kube_context.clone(),
             };
-            let rerun = if new_key {
-                rerun_credential::resolve_new_key(explicit, tracked, &access, cli_name, "status")
+            let rerun = match &refused {
+                Some(refused) => {
+                    rerun_credential::resolve_after_refusal(
+                        explicit, tracked, &access, cli_name, "status", refused,
+                    )
                     .await?
-            } else {
-                rerun_credential::resolve(explicit, tracked, &access, cli_name, "status").await?
+                }
+                None => {
+                    rerun_credential::resolve(explicit, tracked, &access, cli_name, "status")
+                        .await?
+                }
             };
             in_cluster.note(&args.name, &rerun);
             Some(rerun.token)

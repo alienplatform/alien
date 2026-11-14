@@ -36,6 +36,11 @@ struct SetupCredentialArgs {
     /// new one (which revokes the last). For read-only commands.
     #[arg(long)]
     reuse: bool,
+    /// With `--reuse`: the id (first 12 characters) of a key the caller was
+    /// refused. It is never returned again; a new key is issued if it is the
+    /// one cached.
+    #[arg(long, requires = "reuse")]
+    refused: Option<String>,
 }
 
 /// What the command sends the Operator over the socket.
@@ -43,6 +48,14 @@ struct SetupCredentialArgs {
 struct Request {
     #[serde(default)]
     reuse: bool,
+    #[serde(default)]
+    refused: Option<String>,
+}
+
+/// The part of a key that names it without being usable: the manager stores the
+/// same 12 characters as the key's prefix.
+pub(crate) fn key_id(key: &str) -> String {
+    key.chars().take(12).collect()
 }
 
 /// Where the running Operator listens. The directory is local to the container
@@ -86,6 +99,8 @@ pub(crate) enum Failure {
     NotRunning,
     /// The socket is not the Operator's own: another owner, or open to others.
     UnsafeSocket,
+    /// The key came back already expired (it ran out on the way, or clocks differ).
+    Expired,
 }
 
 impl Failure {
@@ -97,6 +112,7 @@ impl Failure {
             "removing" => Self::Removing,
             "not-running" => Self::NotRunning,
             "socket-unsafe" => Self::UnsafeSocket,
+            "expired" => Self::Expired,
             _ => Self::Unavailable,
         }
     }
@@ -110,6 +126,7 @@ impl Failure {
             Self::Removing => "removing",
             Self::NotRunning => "not-running",
             Self::UnsafeSocket => "socket-unsafe",
+            Self::Expired => "expired",
         }
     }
 }
@@ -161,8 +178,11 @@ async fn run(args: SetupCredentialArgs) -> Result<String, Failure> {
         .await
         .map_err(|_| Failure::Unavailable)?
         .map_err(|_| Failure::NotRunning)?;
-        let request = serde_json::to_vec(&Request { reuse: args.reuse })
-            .map_err(|_| Failure::Unavailable)?;
+        let request = serde_json::to_vec(&Request {
+            reuse: args.reuse,
+            refused: args.refused.clone(),
+        })
+        .map_err(|_| Failure::Unavailable)?;
         {
             use tokio::io::AsyncWriteExt;
             stream
@@ -318,7 +338,14 @@ pub async fn serve(db: std::sync::Arc<OperatorDb>, cancel: tokio_util::sync::Can
             let mut stream = stream;
             let request = read_request(&mut stream).await;
             let mut last = busy.lock().await;
-            let answer = answer_for(&mut last, request.reuse, Utc::now(), || mint(&db)).await;
+            let answer = answer_for(
+                &mut last,
+                request.reuse,
+                request.refused.as_deref(),
+                Utc::now(),
+                || mint(&db),
+            )
+            .await;
             if let Ok(bytes) = serde_json::to_vec(&answer) {
                 let _ = stream.write_all(&bytes).await;
             }
@@ -345,12 +372,13 @@ async fn read_request(stream: &mut tokio::net::UnixStream) -> Request {
 }
 
 /// The key to answer with: the last one issued when `reuse` is set and it has
-/// not expired (a status call takes seconds, so even a nearly expired key
+/// not expired and is not the `refused` one (a status call takes seconds, so even a nearly expired key
 /// serves it), otherwise a new one, which becomes the last. An expired key is
 /// dead already, so replacing it revokes nothing that still works.
 async fn answer_for<F, Fut>(
     last: &mut Option<Issued>,
     reuse: bool,
+    refused: Option<&str>,
     now: DateTime<Utc>,
     mint: F,
 ) -> Answer
@@ -359,7 +387,12 @@ where
     Fut: std::future::Future<Output = Result<Issued, Failure>>,
 {
     if reuse {
-        if let Some(issued) = last.as_ref().filter(|i| i.expires_at > now) {
+        // A key the caller was refused is dead: hand out the cached one only
+        // if it is a different key (a newer run replaced it).
+        if let Some(issued) = last
+            .as_ref()
+            .filter(|i| i.expires_at > now && refused != Some(key_id(&i.token).as_str()))
+        {
             return Answer {
                 credential: Some(issued.token.clone()),
                 expires_at: Some(issued.expires_at),
@@ -444,8 +477,10 @@ async fn request(
 
 fn print(issued: Issued) -> Result<String, Failure> {
     let now = Utc::now();
-    if issued.token.is_empty() || issued.expires_at <= now || issued.expires_at > now + MAX_LIFETIME
-    {
+    if issued.expires_at <= now {
+        return Err(Failure::Expired);
+    }
+    if issued.token.is_empty() || issued.expires_at > now + MAX_LIFETIME {
         return Err(Failure::Unavailable);
     }
     serde_json::to_string(&Printed {
@@ -515,33 +550,74 @@ mod tests {
         };
         let mut last = None;
         // Nothing cached: reuse mints.
-        let first = answer_for(&mut last, true, Utc::now(), mint("one", 15)).await;
+        let first = answer_for(&mut last, true, None, Utc::now(), mint("one", 15)).await;
         assert_eq!(first.credential.as_deref(), Some("one"));
         // Plenty left: the cached key, no mint.
-        let again = answer_for(&mut last, true, Utc::now(), mint("two", 15)).await;
+        let again = answer_for(&mut last, true, None, Utc::now(), mint("two", 15)).await;
         assert_eq!(again.credential.as_deref(), Some("one"));
         assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
         // A plain request always mints, and the new key is the one reused after.
-        let newer = answer_for(&mut last, false, Utc::now(), mint("two", 15)).await;
+        let newer = answer_for(&mut last, false, None, Utc::now(), mint("two", 15)).await;
         assert_eq!(newer.credential.as_deref(), Some("two"));
-        let reused = answer_for(&mut last, true, Utc::now(), mint("three", 15)).await;
+        let reused = answer_for(&mut last, true, None, Utc::now(), mint("three", 15)).await;
         assert_eq!(reused.credential.as_deref(), Some("two"));
         // Under two minutes left: still the cached key, nothing minted.
         let late = Utc::now() + chrono::Duration::minutes(14);
-        let kept = answer_for(&mut last, true, late, mint("three", 15)).await;
+        let kept = answer_for(&mut last, true, None, late, mint("three", 15)).await;
         assert_eq!(kept.credential.as_deref(), Some("two"));
         assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 2);
         // Expired: reuse mints a new one.
         let expired = Utc::now() + chrono::Duration::minutes(16);
-        let fresh = answer_for(&mut last, true, expired, mint("three", 15)).await;
+        let fresh = answer_for(&mut last, true, None, expired, mint("three", 15)).await;
         assert_eq!(fresh.credential.as_deref(), Some("three"));
         assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
+    async fn a_refused_key_is_replaced_only_when_it_is_the_cached_one() {
+        let mints = std::sync::atomic::AtomicUsize::new(0);
+        let mint = |token: &'static str| {
+            let mints = &mints;
+            move || async move {
+                mints.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(issued(token, 15))
+            }
+        };
+        // B is cached (a newer run minted it after A): A was refused, B is returned, no mint.
+        let mut last = Some(issued("key-b", 10));
+        let answer = answer_for(&mut last, true, Some("key-a"), Utc::now(), mint("key-c")).await;
+        assert_eq!(answer.credential.as_deref(), Some("key-b"));
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // The refused key is the cached one: a new key is minted.
+        let answer = answer_for(&mut last, true, Some("key-b"), Utc::now(), mint("key-c")).await;
+        assert_eq!(answer.credential.as_deref(), Some("key-c"));
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Nothing cached: mints.
+        let mut none = None;
+        let answer = answer_for(&mut none, true, Some("key-x"), Utc::now(), mint("key-d")).await;
+        assert_eq!(answer.credential.as_deref(), Some("key-d"));
+    }
+
+    #[test]
+    fn refused_needs_reuse_and_an_expired_key_has_its_own_code() {
+        assert!(SetupCredentialArgs::try_parse_from(["x", "--refused", "ax_dep_12345"]).is_err());
+        let args =
+            SetupCredentialArgs::try_parse_from(["x", "--reuse", "--refused", "ax_dep_12345"])
+                .unwrap();
+        assert_eq!(args.refused.as_deref(), Some("ax_dep_12345"));
+        assert_eq!(key_id("ax_dep_1234567890"), "ax_dep_12345");
+        let gone = Issued {
+            token: "k".into(),
+            expires_at: Utc::now() - chrono::Duration::seconds(1),
+        };
+        assert_eq!(print(gone), Err(Failure::Expired));
+        assert_eq!(Failure::from_code("expired"), Failure::Expired);
+    }
+
+    #[tokio::test]
     async fn a_failed_mint_keeps_the_cached_key_and_reports_the_code() {
         let mut last = Some(issued("kept", -1));
-        let answer = answer_for(&mut last, true, Utc::now(), || async {
+        let answer = answer_for(&mut last, true, None, Utc::now(), || async {
             Err::<Issued, _>(Failure::Refused)
         })
         .await;
