@@ -215,12 +215,16 @@ fn probe_from(
 /// Set by the Azure backend: the sandbox sits in a VNet, not a cluster, so there is no API
 /// server to try. The gateway is the positive control and the listed public addresses must drop.
 pub const ENV_STARTUP_GATE_VNET: &str = "ALIEN_SANDBOX_STARTUP_GATE_VNET";
+/// The VNet gate's positive control (the gateway's proxy authority). It is not
+/// `ALIEN_SANDBOX_EGRESS_GATEWAY`: that variable makes the agent install its in-guest transparent
+/// redirect, which the Azure guest kernel cannot run.
+pub const ENV_STARTUP_GATE_CONTROL: &str = "ALIEN_SANDBOX_STARTUP_GATE_CONTROL";
 /// Overrides how long the gate waits (seconds). Azure's first gateway connect can take ~20 s.
 pub const ENV_STARTUP_GATE_BOUND_SECS: &str = "ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS";
 
 fn probe_vnet(public: Option<&str>, control: Option<String>) -> Result<Probe, String> {
     let Some(control) = control.filter(|control| !control.trim().is_empty()) else {
-        return Err("ALIEN_SANDBOX_EGRESS_GATEWAY is not set: a VNet sandbox with `internet` egress needs the gateway as its positive control".into());
+        return Err("ALIEN_SANDBOX_STARTUP_GATE_CONTROL is not set: a VNet sandbox with `internet` egress needs the gateway as its positive control".into());
     };
     let blocked: Vec<String> = public
         .unwrap_or_default()
@@ -256,7 +260,7 @@ fn probe_from_env() -> Result<Probe, String> {
             std::env::var(alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC)
                 .ok()
                 .as_deref(),
-            std::env::var("ALIEN_SANDBOX_EGRESS_GATEWAY").ok(),
+            std::env::var(ENV_STARTUP_GATE_CONTROL).ok(),
         );
     }
     probe_from(

@@ -116,7 +116,10 @@ async fn an_agent_sandbox_boots_behind_a_60s_gateway_startup_gate() {
     assert_eq!(env["ALIEN_SANDBOX_STARTUP_EGRESS_GATE"], "1");
     assert_eq!(env["ALIEN_SANDBOX_STARTUP_GATE_VNET"], "1");
     assert_eq!(env["ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS"], "60");
-    assert!(env["ALIEN_SANDBOX_EGRESS_GATEWAY"].contains(':'));
+    assert!(env["ALIEN_SANDBOX_STARTUP_GATE_CONTROL"].contains(':'));
+    // That variable makes the agent install its in-guest transparent redirect, which the Azure
+    // kernel cannot run (no nftables, no `ip rule`); the agent would never become ready.
+    assert!(!env.contains_key("ALIEN_SANDBOX_EGRESS_GATEWAY"));
     assert_eq!(
         env["ALIEN_SANDBOX_MUST_DROP_PUBLIC"],
         "1.1.1.1:8443,1.1.1.1:8080"

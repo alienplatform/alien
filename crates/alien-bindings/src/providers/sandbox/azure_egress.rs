@@ -115,7 +115,10 @@ impl AzureSandbox {
                 ("ALIEN_SANDBOX_STARTUP_EGRESS_GATE", "1"),
                 ("ALIEN_SANDBOX_STARTUP_GATE_VNET", "1"),
                 ("ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS", "60"),
-                ("ALIEN_SANDBOX_EGRESS_GATEWAY", manager.gateway_authority()),
+                (
+                    "ALIEN_SANDBOX_STARTUP_GATE_CONTROL",
+                    manager.gateway_authority(),
+                ),
                 (
                     alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC,
                     // Not :443 or :80: Azure's interposer accepts TCP there and answers 403, so a
