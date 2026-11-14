@@ -142,12 +142,15 @@ impl PermissionContext {
         }
     }
 
-    /// The stack's subnet IDs, or `*` when they are unknown or tag-scoped.
+    /// The stack's subnet IDs, or `*` when they are unknown or tag-scoped. A known VPC with
+    /// no subnets yields one empty ID, which matches no subnet, as CloudFormation and
+    /// Terraform render a blank subnet list.
     pub fn aws_subnet_ids(&self) -> Vec<String> {
         match &self.aws_network {
-            Some(AwsNetworkScope::Vpc { subnet_ids, .. }) if !subnet_ids.is_empty() => {
-                subnet_ids.clone()
+            Some(AwsNetworkScope::Vpc { subnet_ids, .. }) if subnet_ids.is_empty() => {
+                vec![String::new()]
             }
+            Some(AwsNetworkScope::Vpc { subnet_ids, .. }) => subnet_ids.clone(),
             _ => vec!["*".to_string()],
         }
     }

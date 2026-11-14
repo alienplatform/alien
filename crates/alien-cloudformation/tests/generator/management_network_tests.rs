@@ -6,7 +6,7 @@ use super::helpers::{custom_resource_registration, render_built_ins_template};
 use alien_cloudformation::{CfExpression, CloudFormationTarget};
 use alien_core::{
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
-    ResourceLifecycle, SetupManagement, Stack, StackSettings,
+    ResourceLifecycle, ResourceRef, SetupManagement, Stack, StackSettings,
 };
 
 fn management_policies(network: NetworkSettings) -> (String, String) {
@@ -17,6 +17,18 @@ fn management_policies_with(
     network: NetworkSettings,
     setup_management: SetupManagement,
 ) -> (String, String) {
+    let (template, yaml) = management_template(network, setup_management, false);
+    (policies_of(&template), yaml)
+}
+
+/// The stack setup renders, optionally with the executor edge from management to the network
+/// that preflights add for direct setup.
+fn management_template(
+    network: NetworkSettings,
+    setup_management: SetupManagement,
+    management_waits_for_network: bool,
+) -> (alien_cloudformation::CfTemplate, String) {
+    let management = RemoteStackManagement::new("management".to_string()).build();
     let stack = Stack::new("vpcscope".to_string())
         .management(ManagementPermissions::extend(
             PermissionProfile::new().global(["compute-cluster/management", "container/provision"]),
@@ -26,13 +38,18 @@ fn management_policies_with(
                 .settings(network.clone())
                 .build(),
             ResourceLifecycle::Frozen,
-        )
-        .add(
-            RemoteStackManagement::new("management".to_string()).build(),
+        );
+    let stack = if management_waits_for_network {
+        stack.add_with_dependencies(
+            management,
             ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Network::RESOURCE_TYPE, "default-network")],
         )
-        .build();
-    let (template, yaml) = render_built_ins_template(
+    } else {
+        stack.add(management, ResourceLifecycle::Frozen)
+    }
+    .build();
+    render_built_ins_template(
         &stack,
         StackSettings {
             network: Some(network),
@@ -43,7 +60,10 @@ fn management_policies_with(
         CloudFormationTarget::Aws,
         "aws",
         "management network scope",
-    );
+    )
+}
+
+fn policies_of(template: &alien_cloudformation::CfTemplate) -> String {
     let policies: Vec<&CfExpression> = template
         .resources
         .values()
@@ -56,10 +76,34 @@ fn management_policies_with(
         .filter_map(|resource| resource.properties.get("PolicyDocument"))
         .collect();
     assert!(!policies.is_empty(), "management policies render");
-    (
-        serde_json::to_string(&policies).expect("policies serialize"),
-        yaml,
-    )
+    serde_json::to_string(&policies).expect("policies serialize")
+}
+
+/// Direct setup orders management after the network so its policy names the finished network.
+/// Generated setup already orders the policies through their references to the network, so the
+/// edge changes nothing in the template, in every network mode and for automatic packages,
+/// which emit no network.
+#[test]
+fn management_waiting_for_the_network_leaves_the_template_unchanged() {
+    for setup_management in [SetupManagement::Manual, SetupManagement::Automatic] {
+        for network in [
+            NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            },
+            NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-0123456789abcdef0".to_string(),
+                public_subnet_ids: vec![],
+                private_subnet_ids: vec!["subnet-0bbbbbbbbbbbbbbbb".to_string()],
+                security_group_ids: vec![String::new()],
+            },
+            NetworkSettings::UseDefault,
+        ] {
+            let (_, without) = management_template(network.clone(), setup_management, false);
+            let (_, with) = management_template(network.clone(), setup_management, true);
+            assert_eq!(without, with, "{setup_management:?} {network:?}");
+        }
+    }
 }
 
 fn dump(name: &str, yaml: &str) {

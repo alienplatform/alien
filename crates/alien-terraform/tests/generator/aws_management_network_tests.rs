@@ -338,3 +338,58 @@ fn aws_management_policy_with_blank_existing_subnets_names_none() {
     );
     assert_scoped(&documents, EXISTING_VPC, &[]);
 }
+
+/// Direct setup orders management after the network so its policy names the finished network.
+/// The module already orders the policies through their references to the network, so the edge
+/// changes nothing, in every network mode and for automatic packages, which emit no network.
+#[test]
+fn aws_management_waiting_for_the_network_leaves_the_module_unchanged() {
+    for setup_management in [
+        alien_core::SetupManagement::Manual,
+        alien_core::SetupManagement::Automatic,
+    ] {
+        for settings in [
+            NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            },
+            NetworkSettings::ByoVpcAws {
+                vpc_id: EXISTING_VPC.to_string(),
+                public_subnet_ids: vec![],
+                private_subnet_ids: vec!["subnet-0e0000000000priv1".to_string()],
+                security_group_ids: vec![String::new()],
+            },
+            NetworkSettings::UseDefault,
+        ] {
+            let module = |waits: bool| {
+                let mut stack = stack(settings.clone());
+                if waits {
+                    stack
+                        .resources
+                        .get_mut("management")
+                        .expect("management")
+                        .dependencies
+                        .push(alien_core::ResourceRef::new(Network::RESOURCE_TYPE, "net"));
+                }
+                render(
+                    &stack,
+                    TerraformTarget::Aws,
+                    StackSettings {
+                        network: Some(settings.clone()),
+                        setup_management,
+                        ..StackSettings::default()
+                    },
+                )
+            };
+            let (without, with) = (module(false), module(true));
+            for (path, contents) in without.iter() {
+                assert_eq!(
+                    Some(contents),
+                    with.files.get(path).map(String::as_str),
+                    "{path}: {setup_management:?} {settings:?}"
+                );
+            }
+            assert_eq!(without, with, "{setup_management:?} {settings:?}");
+        }
+    }
+}

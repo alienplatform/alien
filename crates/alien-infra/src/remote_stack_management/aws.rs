@@ -631,9 +631,13 @@ fn emit_aws_remote_stack_management_heartbeat(
 }
 
 /// The stack's network, for the management policy: the VPC and subnet IDs once they are known
-/// (the installer named them, or the network exists), the stack's tags for a network the
-/// Alien network controller is still to create, and nothing for the account's default VPC
-/// before it is discovered, which keeps the account-wide reach.
+/// (the installer named them, or the network is Running), the stack's tags for a network the
+/// Alien network controller has not finished creating, and nothing for the account's default
+/// VPC before it is discovered, which keeps the account-wide reach.
+///
+/// IDs come from the network controller only once the network is Running: before that its
+/// subnet list can be partial (the VPC exists before its subnets, sandbox gateway subnets come
+/// last), and a policy pinned to part of the network would deny the rest of it.
 pub(crate) fn aws_network_scope(ctx: &ResourceControllerContext<'_>) -> Option<AwsNetworkScope> {
     use crate::core::state_utils::StackResourceStateExt;
 
@@ -642,11 +646,16 @@ pub(crate) fn aws_network_scope(ctx: &ResourceControllerContext<'_>) -> Option<A
         .resources
         .iter()
         .find_map(|(id, entry)| entry.config.downcast_ref::<Network>().map(|n| (id, n)))?;
-    let controller = ctx.state.resources.get(network_id).and_then(|state| {
-        state
-            .get_internal_controller_typed::<crate::network::AwsNetworkController>()
-            .ok()
-    });
+    let controller = ctx
+        .state
+        .resources
+        .get(network_id)
+        .filter(|state| state.status == ResourceStatus::Running)
+        .and_then(|state| {
+            state
+                .get_internal_controller_typed::<crate::network::AwsNetworkController>()
+                .ok()
+        });
     // Sandbox gateway subnets hold the internal load balancers that link sandboxes to
     // containers.
     let gateway_subnet_ids = || {
@@ -2236,6 +2245,15 @@ mod tests {
         lifecycle: ResourceLifecycle,
         created: Option<crate::network::AwsNetworkController>,
     ) -> Option<AwsNetworkScope> {
+        network_scope_at(settings, lifecycle, created, ResourceStatus::Running).await
+    }
+
+    async fn network_scope_at(
+        settings: alien_core::NetworkSettings,
+        lifecycle: ResourceLifecycle,
+        created: Option<crate::network::AwsNetworkController>,
+        status: ResourceStatus,
+    ) -> Option<AwsNetworkScope> {
         let mut executor = SingleControllerExecutor::builder()
             .resource(RemoteStackManagement::new("management".to_string()).build())
             .resource_lifecycle(ResourceLifecycle::Frozen)
@@ -2252,7 +2270,7 @@ mod tests {
             .expect("executor builds");
         if let Some(created) = created {
             let mut saved = executor.stack_state().resources["default-network"].clone();
-            saved.status = ResourceStatus::Running;
+            saved.status = status;
             saved
                 .set_internal_controller(Some(Box::new(created)))
                 .unwrap();
@@ -2331,6 +2349,134 @@ mod tests {
         )
         .await;
         assert_eq!(scope, Some(AwsNetworkScope::StackTagged));
+    }
+
+    /// A network still being created has a VPC before its subnets, and sandbox gateway
+    /// subnets last. Management must not be pinned to that partial list: until the network is
+    /// Running, a network Alien creates is named by the stack's tags and the default VPC is
+    /// left open, as before it was discovered.
+    #[tokio::test]
+    async fn a_network_still_being_created_is_not_pinned_to_its_partial_ids() {
+        let mut partial = crate::network::AwsNetworkController::mock_ready("vpc-1", 2);
+        partial.public_subnet_ids.clear();
+        partial.private_subnet_ids.clear();
+        for status in [
+            ResourceStatus::Provisioning,
+            ResourceStatus::ProvisionFailed,
+        ] {
+            let scope = network_scope_at(
+                alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                },
+                ResourceLifecycle::Frozen,
+                Some(partial.clone()),
+                status,
+            )
+            .await;
+            assert_eq!(scope, Some(AwsNetworkScope::StackTagged), "{status:?}");
+            let scope = network_scope_at(
+                alien_core::NetworkSettings::UseDefault,
+                ResourceLifecycle::Live,
+                Some(partial.clone()),
+                status,
+            )
+            .await;
+            assert_eq!(scope, None, "{status:?}");
+        }
+    }
+
+    /// A named VPC whose subnet lists are blank renders a subnet condition that matches no
+    /// subnet, as CloudFormation and Terraform do, never one that matches every subnet.
+    #[tokio::test]
+    async fn a_named_vpc_without_subnets_allows_no_subnet() {
+        let executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .with_stack_resource(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(alien_core::NetworkSettings::ByoVpcAws {
+                        vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                        public_subnet_ids: vec![],
+                        private_subnet_ids: vec![],
+                        security_group_ids: vec![String::new()],
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .management_permissions(alien_core::permissions::ManagementPermissions::extend(
+                alien_core::PermissionProfile::new().global([
+                    alien_core::PermissionSetReference::from("compute-cluster/management"),
+                    alien_core::PermissionSetReference::from("container/provision"),
+                ]),
+            ))
+            .build()
+            .await
+            .expect("executor builds");
+        let text = executor
+            .with_context(|ctx| {
+                AwsRemoteStackManagementController::default()
+                    .planned_management_policy_documents(ctx, "stack-management")
+            })
+            .expect("policies render")
+            .join("\n");
+        for expected in [
+            r#""elasticloadbalancing:Subnet":[""]"#,
+            r#""autoscaling:VPCZoneIdentifiers":[""]"#,
+        ] {
+            assert!(text.contains(expected), "{expected} missing from {text}");
+        }
+        for open in [
+            r#""elasticloadbalancing:Subnet":["*"]"#,
+            r#""autoscaling:VPCZoneIdentifiers":["*"]"#,
+        ] {
+            assert!(!text.contains(open), "{open} in {text}");
+        }
+    }
+
+    /// A network that gains or changes subnets (an edited subnet list, an internet sandbox
+    /// adding gateway subnets) changes the revision, so the next direct setup run rewrites the
+    /// management policy for it.
+    #[tokio::test]
+    async fn a_changed_network_changes_the_management_revision() {
+        async fn revision(private_subnet_ids: Vec<&str>) -> String {
+            SingleControllerExecutor::builder()
+                .resource(RemoteStackManagement::new("management".to_string()).build())
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .controller(AwsRemoteStackManagementController::default())
+                .platform(Platform::Aws)
+                .with_stack_resource(
+                    alien_core::Network::new("default-network".to_string())
+                        .settings(alien_core::NetworkSettings::ByoVpcAws {
+                            vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                            public_subnet_ids: vec![],
+                            private_subnet_ids: private_subnet_ids
+                                .into_iter()
+                                .map(str::to_string)
+                                .collect(),
+                            security_group_ids: vec![String::new()],
+                        })
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .management_permissions(alien_core::permissions::ManagementPermissions::extend(
+                    alien_core::PermissionProfile::new().global([
+                        alien_core::PermissionSetReference::from("compute-cluster/management"),
+                    ]),
+                ))
+                .build()
+                .await
+                .expect("executor builds")
+                .with_context(super::super::management_permissions_revision)
+                .expect("revision")
+                .expect("the stack has a management profile")
+        }
+        let one = revision(vec!["subnet-0aaaaaaaaaaaaaaa1"]).await;
+        assert_eq!(one, revision(vec!["subnet-0aaaaaaaaaaaaaaa1"]).await);
+        let two = revision(vec!["subnet-0aaaaaaaaaaaaaaa1", "subnet-0aaaaaaaaaaaaaaa2"]).await;
+        assert_ne!(one, two);
     }
 
     /// What direct setup installs on the management role names the stack's VPC and subnets.

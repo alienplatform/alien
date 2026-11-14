@@ -194,6 +194,23 @@ impl InfrastructureDependenciesMutation {
             ));
         }
 
+        // The AWS management policy names the stack's VPC and subnets, read from the network
+        // once it is Running. Setup creates the two together only when the network is Frozen;
+        // a Live network is created later by management itself, so ordering it first would
+        // wait on a resource setup never runs.
+        if platform == Platform::Aws && resource_type == &RemoteStackManagement::RESOURCE_TYPE {
+            dependencies.extend(
+                stack
+                    .resources
+                    .iter()
+                    .filter(|(_, entry)| {
+                        entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                            && entry.config.resource_type() == Network::RESOURCE_TYPE
+                    })
+                    .map(|(id, _)| ResourceRef::new(Network::RESOURCE_TYPE, id.clone())),
+            );
+        }
+
         // AWS workload roles need setup's boundary before create, and must be
         // deleted before setup removes that policy.
         if !is_infrastructure_resource
@@ -1003,6 +1020,59 @@ mod tests {
                 platform == Platform::Aws
             );
             assert!(result.resources["management"].dependencies.is_empty());
+        }
+    }
+
+    /// The AWS management policy is rendered from the network setup creates, so management
+    /// waits for it. A network management creates itself later is never waited for.
+    #[tokio::test]
+    async fn aws_management_waits_for_the_network_setup_creates() {
+        for (platform, lifecycle, waits) in [
+            (Platform::Aws, ResourceLifecycle::Frozen, true),
+            (Platform::Aws, ResourceLifecycle::Live, false),
+            (Platform::Gcp, ResourceLifecycle::Frozen, false),
+            (Platform::Azure, ResourceLifecycle::Frozen, false),
+        ] {
+            let stack = Stack::new("test-stack".to_string())
+                .add(
+                    RemoteStackManagement::new("management".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    Network::new("default-network".to_string())
+                        .settings(NetworkSettings::Create {
+                            cidr: None,
+                            availability_zones: 2,
+                        })
+                        .build(),
+                    lifecycle,
+                )
+                .build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let result = InfrastructureDependenciesMutation
+                .mutate(stack, &StackState::new(platform), &config)
+                .await
+                .unwrap();
+            let network = ResourceRef::new(Network::RESOURCE_TYPE, "default-network");
+            assert_eq!(
+                result.resources["management"]
+                    .dependencies
+                    .contains(&network),
+                waits,
+                "{platform:?} {lifecycle:?}"
+            );
+            assert!(
+                !result.resources["default-network"]
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.id() == "management"),
+                "{platform:?} {lifecycle:?}: the network must not wait for management"
+            );
         }
     }
 

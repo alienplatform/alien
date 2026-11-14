@@ -1638,6 +1638,15 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             if dependency.id() == resource_id {
                 continue;
             }
+            // Management waits for the network only so direct setup renders its policy from
+            // the finished network. The module's policies reference the network's IDs, which
+            // already orders them; the edge would also take management's IAM out of the
+            // network's destroy-IAM-last ordering.
+            if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+                && dependency.resource_type() == &Network::RESOURCE_TYPE
+            {
+                continue;
+            }
             // Remote Bindings is an executor-ordering dependency: direct setup must create the
             // identity before a resource controller can attach its exact grant. Generated setup
             // expresses that relationship on the grant resource itself, which depends on both
