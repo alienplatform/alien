@@ -605,7 +605,7 @@ mod tests {
         server
             .mock_async(|when, then| {
                 when.method(GET).path_contains("/locations/eastus2/usages");
-                then.status(403);
+                then.status(200).body("not json");
             })
             .await;
         let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
@@ -618,12 +618,16 @@ mod tests {
         let usages =
             AzureComputeUsagesClient::new(reqwest::Client::new(), AzureTokenCache::new(config));
         let reason = match ComputeRoom::read(&skus, &usages, "eastus2").await {
-            Ok(_) => panic!("the usage read is denied"),
+            Ok(_) => panic!("the usage read fails"),
             Err(reason) => reason,
         };
         assert!(
             reason.starts_with("reading the compute usages failed"),
             "{reason}"
+        );
+        assert!(
+            reason.contains("Azure ListComputeUsages: JSON parse error for eastus2"),
+            "the reason keeps the underlying failure: {reason}"
         );
     }
 
