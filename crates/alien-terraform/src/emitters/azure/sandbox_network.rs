@@ -538,6 +538,7 @@ fn emit_gateway_subnet_nsg(
             "3129",
         );
     }
+    peer_rules(fragment, &label, network);
     inbound_rule(
         fragment,
         &label,
@@ -572,6 +573,22 @@ fn emit_gateway_subnet_nsg(
         ));
     }
     Ok(())
+}
+
+/// The two gateway VMs synchronize policies over the authenticated admin port, and only from
+/// each other's static addresses.
+fn peer_rules(fragment: &mut TfFragment, label: &str, network: &str) {
+    for (index, host) in GATEWAY_HOSTS.iter().enumerate() {
+        inbound_rule(
+            fragment,
+            label,
+            &format!("peer_{index}"),
+            210 + index as i64,
+            "Allow",
+            gateway_ip(network, *host),
+            "3129",
+        );
+    }
 }
 
 fn inbound_rule(
@@ -742,6 +759,29 @@ mod proxy_rule_tests {
 #[cfg(test)]
 mod gateway_inbound_tests {
     use super::*;
+
+    #[test]
+    fn each_gateway_may_reach_the_admin_port_of_its_peer_only_by_its_own_address() {
+        let mut fragment = TfFragment::default();
+        peer_rules(&mut fragment, "gw", "net");
+        let rendered = hcl::to_string(
+            &hcl::Body::builder()
+                .add_blocks(fragment.resource_blocks)
+                .build(),
+        )
+        .unwrap();
+        for (index, host) in GATEWAY_HOSTS.iter().enumerate() {
+            assert!(rendered.contains(&format!("\"peer_{index}\"")), "{rendered}");
+            assert!(
+                rendered.contains(&format!(
+                    "cidrhost(azurerm_subnet.net_sandbox_gateway.address_prefixes[0], {host})"
+                )),
+                "{rendered}"
+            );
+        }
+        assert_eq!(rendered.matches("destination_port_range = \"3129\"").count(), 2);
+        assert_eq!(rendered.matches("\"Allow\"").count(), 2);
+    }
 
     fn render(access: &str, port: &str) -> String {
         let mut fragment = TfFragment::default();
