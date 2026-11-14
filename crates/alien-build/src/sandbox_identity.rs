@@ -369,7 +369,7 @@ mod tests {
             .unwrap();
         if let Some(saved) = saved {
             layer = layer
-                .data_with_owner(IMAGE_COMMAND_PATH, saved.as_bytes(), 0o600, 0, 0)
+                .data_with_owner(IMAGE_COMMAND_PATH, saved.as_bytes(), 0o444, 0, 0)
                 .unwrap();
         }
         Image::builder()

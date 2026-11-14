@@ -217,7 +217,7 @@ pub(crate) async fn build_sandbox_agent_image(
                         .blob_cache(cache.clone())
                         .compression(dockdash::LayerCompression::Gzip)
                 })
-                .and_then(|layer| layer.data_with_owner(IMAGE_COMMAND_PATH, &command, 0o600, 0, 0))
+                .and_then(|layer| layer.data_with_owner(IMAGE_COMMAND_PATH, &command, 0o444, 0, 0))
                 .and_then(|layer| {
                     layer.data_with_owner("/etc/passwd", passwd.as_bytes(), 0o644, 0, 0)
                 })
@@ -716,6 +716,7 @@ mod tests {
             .await
             .expect("group");
         assert_eq!(at_exec_id(&group), vec!["node:x:1000:"]);
+        let protocol_for_command = protocol.clone();
         assert_eq!(
             pushed_file(&target, protocol, AGENT_PATH).await.as_deref(),
             Some("#!/bin/sh\nexit 0\n")
@@ -733,6 +734,27 @@ mod tests {
             entry(AGENT_PATH),
             (AGENT_PATH.to_string(), 0, 0, AGENT_MODE)
         );
+        // The agent runs as a non-root user when the image's own user is not root, so the saved
+        // command is root-owned but readable by every user. It holds the image's command, user,
+        // working directory and environment only.
+        assert_eq!(
+            entry(IMAGE_COMMAND_PATH),
+            (IMAGE_COMMAND_PATH.to_string(), 0, 0, 0o444)
+        );
+        let saved: serde_json::Value = serde_json::from_str(
+            &pushed_file(&target, protocol_for_command, IMAGE_COMMAND_PATH)
+                .await
+                .expect("saved command"),
+        )
+        .unwrap();
+        let mut keys: Vec<&str> = saved
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["command", "env", "user", "workingDirectory"]);
         assert_eq!(
             entry(GCP_AGENT_PLATFORM.session_root),
             (

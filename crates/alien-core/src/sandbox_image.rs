@@ -533,7 +533,7 @@ ENV RUST_LOG={GCP_AGENT_LOG_FILTER} \
 # inherited base CMD values cannot become agent arguments or a second shell process.
 RUN mkdir -p /opt/alien \
  && printf '%s\n' '{empty_image_command}' > {IMAGE_COMMAND_PATH} \
- && chmod 0600 {IMAGE_COMMAND_PATH}
+ && chmod 0444 {IMAGE_COMMAND_PATH}
 
 {entrypoint}
 CMD []
