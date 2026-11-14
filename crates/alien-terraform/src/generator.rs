@@ -139,6 +139,10 @@ pub struct TerraformRegistration {
     pub setup_target: String,
     pub setup_fingerprint: String,
     pub setup_fingerprint_version: u32,
+    /// Emit a `<provider_name>_destroy_guard` resource. Set it only when the
+    /// pinned provider version has that resource; older callers omit it.
+    #[serde(default)]
+    pub destroy_guard: bool,
 }
 
 impl TerraformRegistration {
@@ -5470,6 +5474,34 @@ fn helm_install_body(
         "runtime",
         helm_body,
     )));
+    // Terraform destroys a resource before the ones it depends on, so this guard
+    // goes first, while the Operator still runs. Its Delete detaches the
+    // deployment, or stops the destroy with the order to follow when retained
+    // data blocks that. Creating it changes nothing.
+    if registration.destroy_guard {
+        resources.push(Structure::Block(resource_block(
+            &format!("{}_destroy_guard", registration.provider_name),
+            "this",
+            [
+                attr("management_url", expr::raw("var.management_url")),
+                attr(
+                    "deployment_id",
+                    expr::raw(format!("{provider_resource}.this.deployment_id")),
+                ),
+                attr(
+                    "deployment_token",
+                    expr::raw(format!("{provider_resource}.this.deployment_token")),
+                ),
+                attr(
+                    "depends_on",
+                    Expression::Array(vec![
+                        expr::raw(format!("{provider_resource}.this")),
+                        expr::raw("helm_release.runtime"),
+                    ]),
+                ),
+            ],
+        )));
+    }
     Body::from(resources)
 }
 
@@ -5856,6 +5888,7 @@ fn readme_md(
         input_sections.push(readme_kubernetes_inputs(
             target,
             registration.is_some(),
+            registration.is_some_and(|r| r.destroy_guard),
             helm_install,
             product_remote_operator,
             requires_remote_operator_collector_token,
@@ -6081,6 +6114,7 @@ fn readme_network_inputs(
 fn readme_kubernetes_inputs(
     target: TerraformTarget,
     has_registration: bool,
+    destroy_guard: bool,
     helm_install: Option<&TerraformHelmInstall>,
     product_remote_operator: bool,
     requires_remote_operator_collector_token: bool,
@@ -6097,6 +6131,7 @@ fn readme_kubernetes_inputs(
         }
         _ => "",
     };
+    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow: delete the deployment with its data erased, wait until that finishes, then run `terraform destroy` again. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, contact your vendor.";
     let helm = if has_registration && helm_install.is_some() {
         if product_remote_operator {
             let collector_token_requirement = if requires_remote_operator_collector_token {
@@ -6112,6 +6147,11 @@ fn readme_kubernetes_inputs(
         }
     } else {
         String::new()
+    };
+    let helm = if destroy_guard && !helm.is_empty() {
+        format!("{helm}{guard_note}")
+    } else {
+        helm
     };
     let exposure = if target == TerraformTarget::Eks {
         "\n- `custom_domain_name`, `custom_domain_certificate_arn`: optional EKS public route hostname and ACM certificate ARN. Leave empty to use the generated load balancer hostname."
@@ -6335,6 +6375,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             setup_target: "kubernetes".to_string(),
             setup_fingerprint: "product-test".to_string(),
             setup_fingerprint_version: 1,
+            destroy_guard: false,
         }
     }
 
@@ -6492,6 +6533,7 @@ data "aws_eks_cluster" "target" { name = "validation-only" }
             setup_target: "aws".to_string(),
             setup_fingerprint: "fp-test".to_string(),
             setup_fingerprint_version: 1,
+            destroy_guard: false,
         };
 
         let versions = render_body(versions_body(
