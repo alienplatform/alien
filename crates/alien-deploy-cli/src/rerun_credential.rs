@@ -98,6 +98,21 @@ pub async fn resolve(
     .await
 }
 
+/// Like `resolve`, but always asks the Operator for a new key. `status` uses
+/// it once after the key it reused was refused (an admin deleted it, say).
+pub async fn resolve_new_key(
+    explicit: Option<String>,
+    tracked: &TrackedDeployment,
+    access: &KubeAccess,
+    cli_name: &str,
+    verb: &str,
+) -> Result<RerunToken> {
+    resolve_inner(explicit, tracked, access, cli_name, verb, false, |release, namespace, reuse| async move {
+        fetch(&release, &namespace, access, reuse).await
+    })
+    .await
+}
+
 /// `status` only reads, so it asks the Operator for the key it last issued
 /// instead of a new one: a new key would revoke the one a running deploy, down
 /// or Terraform apply is using. `deploy` and `down` always get a new key, so a
@@ -118,6 +133,22 @@ where
     F: FnOnce(String, String, bool) -> Fut,
     Fut: std::future::Future<Output = std::result::Result<(String, DateTime<Utc>), String>>,
 {
+    resolve_inner(explicit, tracked, access, cli_name, verb, reuses_key(verb), fetch).await
+}
+
+async fn resolve_inner<F, Fut>(
+    explicit: Option<String>,
+    tracked: &TrackedDeployment,
+    access: &KubeAccess,
+    cli_name: &str,
+    verb: &str,
+    reuse: bool,
+    fetch: F,
+) -> Result<RerunToken>
+where
+    F: FnOnce(String, String, bool) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<(String, DateTime<Utc>), String>>,
+{
     if let Some(token) = explicit {
         return Ok(RerunToken {
             token,
@@ -130,7 +161,7 @@ where
     let mut missing_install = None;
     if tracked.platform == "kubernetes" {
         let (release, namespace) = helm_target(tracked, access);
-        match fetch(release.clone(), namespace.clone(), reuses_key(verb)).await {
+        match fetch(release.clone(), namespace.clone(), reuse).await {
             Ok((token, expires_at)) => {
                 return Ok(RerunToken {
                     token,
@@ -387,6 +418,11 @@ impl InClusterUse {
         }
     }
 
+    /// Whether this run authenticated with a key from the Operator.
+    pub fn used_in_cluster_key(&self) -> bool {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).in_cluster.is_some()
+    }
+
     /// Replace a refusal with what it means for this run.
     pub fn explain(&self, error: AlienError<ErrorData>) -> AlienError<ErrorData> {
         let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -404,6 +440,29 @@ impl InClusterUse {
             Some((name, _)) if is_unauthorized(&error) => took_over(name),
             _ => error,
         }
+    }
+}
+
+/// Run `attempt(new_key, state)` for a read-only command. If the key it reused
+/// from the Operator is refused (401: it was revoked, by an admin or anything
+/// else), run it once more with a new key. The refused key was the only live
+/// one, so the new one revokes nothing that still works. There is no second
+/// retry: a second refusal is explained as usual.
+pub async fn with_one_new_key_retry<T, F, Fut>(mut attempt: F) -> Result<T>
+where
+    F: FnMut(bool, std::sync::Arc<InClusterUse>) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let first = std::sync::Arc::new(InClusterUse::default());
+    match attempt(false, first.clone()).await {
+        Err(error) if is_unauthorized(&error) && first.used_in_cluster_key() => {
+            let second = std::sync::Arc::new(InClusterUse::default());
+            attempt(true, second.clone())
+                .await
+                .map_err(|error| second.explain(error))
+        }
+        Err(error) => Err(first.explain(error)),
+        Ok(value) => Ok(value),
     }
 }
 
@@ -621,6 +680,56 @@ mod tests {
             explained.message,
             "A newer update of \"prod\" started and took over; this run stopped. Your deployment keeps running."
         );
+    }
+
+    fn unauthorized() -> AlienError<ErrorData> {
+        let mut error = AlienError::new(ErrorData::GenericError {
+            message: "refused".into(),
+        });
+        error.http_status_code = Some(401);
+        error
+    }
+
+    #[tokio::test]
+    async fn status_mints_once_after_the_reused_key_is_refused_and_then_succeeds() {
+        let calls = std::sync::Mutex::new(Vec::new());
+        let result = with_one_new_key_retry(|new_key, usage| {
+            calls.lock().unwrap().push(new_key);
+            async move {
+                usage.mark("prod", None);
+                if new_key { Ok("done") } else { Err(unauthorized()) }
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap(), "done");
+        assert_eq!(*calls.lock().unwrap(), vec![false, true]);
+    }
+
+    #[tokio::test]
+    async fn a_second_refusal_gives_the_normal_message_and_no_further_mint() {
+        let calls = std::sync::Mutex::new(Vec::new());
+        let result: Result<()> = with_one_new_key_retry(|new_key, usage| {
+            calls.lock().unwrap().push(new_key);
+            async move {
+                usage.mark("prod", None);
+                Err(unauthorized())
+            }
+        })
+        .await;
+        assert!(result.unwrap_err().message.contains("took over"));
+        assert_eq!(*calls.lock().unwrap(), vec![false, true]);
+    }
+
+    #[tokio::test]
+    async fn a_refused_key_that_was_not_from_the_operator_is_not_retried() {
+        let calls = std::sync::Mutex::new(0);
+        let result: Result<()> = with_one_new_key_retry(|_, _| {
+            *calls.lock().unwrap() += 1;
+            async { Err(unauthorized()) }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(*calls.lock().unwrap(), 1);
     }
 
     #[test]
