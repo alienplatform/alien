@@ -218,6 +218,7 @@ async fn cloudformation_runs_the_pinned_verifier_and_limits_management() {
             "NoUnsignedBuilds",
             "NoSharingInstallDataWithOutsiders",
             "OnlyTheDeploymentSyncWritesVaultValues",
+            "NeverTheDeployersSecrets",
             "OnlySetupChangesWhatRolesMayDo",
             "OnlySetupChangesTheVerifier",
             "OnlySetupChangesTheseLimits",

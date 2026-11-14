@@ -3290,12 +3290,10 @@ mod tests {
             image: "manager.example.com/app@sha256:abc".to_string(),
         };
         assert!(
-            image_needing_pull_secret(&code, Some("https://manager.example.com"), false)
-                .is_some()
+            image_needing_pull_secret(&code, Some("https://manager.example.com"), false).is_some()
         );
         assert!(
-            image_needing_pull_secret(&code, Some("https://manager.example.com"), true)
-                .is_none()
+            image_needing_pull_secret(&code, Some("https://manager.example.com"), true).is_none()
         );
     }
 

@@ -972,10 +972,13 @@ async fn an_azure_lease_that_asks_for_it_creates_through_the_manager() {
         resource_id: "agent".to_string(),
     };
     let sandbox = route
-        .create(&std::collections::BTreeMap::from([(
-            "A".to_string(),
-            "b".to_string(),
-        )]))
+        .create(
+            &std::collections::BTreeMap::from([("A".to_string(), "b".to_string())]),
+            &std::collections::BTreeMap::from([
+                ("alienRequestKey".to_string(), "k-1".to_string()),
+                ("alienExpiresAtMs".to_string(), "1700000000000".to_string()),
+            ]),
+        )
         .await
         .expect("the manager creates the sandbox");
     assert_eq!(sandbox.id, "s1");
@@ -987,6 +990,7 @@ async fn an_azure_lease_that_asks_for_it_creates_through_the_manager() {
     );
     assert_eq!(
         sent[0].1,
-        json!({"deploymentId": DEPLOYMENT_ID, "resourceId": "agent", "env": {"A": "b"}})
+        json!({"deploymentId": DEPLOYMENT_ID, "resourceId": "agent", "env": {"A": "b"},
+                "labels": {"alienRequestKey": "k-1", "alienExpiresAtMs": "1700000000000"}})
     );
 }

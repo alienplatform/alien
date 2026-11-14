@@ -1322,6 +1322,8 @@ pub fn check_sandbox_template(
     let expected_limits = std::collections::HashMap::from([
         ("cpu".to_string(), limits.cpu),
         ("memory".to_string(), limits.memory),
+        // The disk ceiling the controller sends, the signed sandbox's own quantity string.
+        ("ephemeral-storage".to_string(), limits.disk),
     ]);
     if resources.requests.is_some() || resources.limits != Some(expected_limits) {
         return Err(refused(
@@ -1917,7 +1919,7 @@ pub fn check_sandbox_disk_image(
 /// built from `base`, a reference with the signed digest (`image_id`, which the state check finds
 /// in the install's own group by the label of `base`), at the signed size, under the signed egress policy and idle behaviour, with no group
 /// network connection. The caller's environment variables are free: they go to code that holds no
-/// cloud identity. Labels are limited to the two the provider sets itself. The body is rebuilt
+/// cloud identity. Labels are limited to the agent transport, a well-formed expiry and a well-formed request key. The body is rebuilt
 /// with the client's own function and must equal the request, so nothing else can ride along.
 pub fn check_sandbox_create(
     sandbox: &alien_core::Sandbox,
@@ -1967,7 +1969,10 @@ pub fn check_sandbox_create(
     let environment = string_map("environment")?;
     let labels = string_map("labels")?;
     for (key, value) in &labels {
-        let allowed = (key == alien_core::SANDBOX_EXPIRY_LABEL && value.parse::<u64>().is_ok())
+        let allowed = (key == alien_core::SANDBOX_EXPIRY_LABEL
+            && alien_core::is_valid_sandbox_expiry(value))
+            || (key == alien_core::SANDBOX_REQUEST_KEY_LABEL
+                && alien_core::is_valid_request_key(value))
             || (key == AGENT_TRANSPORT_LABEL && value == AGENT_TRANSPORT_VERSION);
         if !allowed {
             return Err(refused(format!("the sandbox carries label '{key}'")));

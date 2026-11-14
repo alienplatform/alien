@@ -116,6 +116,22 @@ impl AgentAuthorization {
     }
 }
 
+/// Variables the platform sets in the agent's own environment that name a credential endpoint.
+/// Azure's sandbox runtime sets the managed identity pair even when no identity is attached, and
+/// the endpoint answers 401; the guest must still never be handed the means to ask.
+const PLATFORM_CREDENTIAL_VARIABLES: [&str; 5] = [
+    "IDENTITY_ENDPOINT",
+    "IDENTITY_HEADER",
+    "IDENTITY_SERVER_THUMBPRINT",
+    "MSI_ENDPOINT",
+    "MSI_SECRET",
+];
+
+/// Whether a variable of the agent's own environment may reach the boot process and commands.
+fn is_inherited_native_variable(name: &str) -> bool {
+    !name.starts_with("ALIEN_SANDBOX_") && !PLATFORM_CREDENTIAL_VARIABLES.contains(&name)
+}
+
 impl AgentState {
     /// Azure's create-time environment includes user variables and gateway proxy settings.
     /// Preserve those defaults without letting agent configuration become a child contract.
@@ -123,7 +139,7 @@ impl AgentState {
         #[cfg(unix)]
         if matches!(self.authorization, AgentAuthorization::NativeFile(_)) {
             for (name, value) in std::env::vars() {
-                if !name.starts_with("ALIEN_SANDBOX_") {
+                if is_inherited_native_variable(&name) {
                     env.entry(name).or_insert(value);
                 }
             }
@@ -1059,6 +1075,24 @@ async fn preview(
         AgentAuthorization::Transport => {
             return preview_by_header(&state, request, port, rest).await
         }
+        #[cfg(unix)]
+        AgentAuthorization::NativeFile(boot_token) => {
+            // The boot token is the control credential. A caller that sends it here would hand it
+            // to the daemon, and the daemon is not the agent's peer: refuse before any connection.
+            let presented = request
+                .headers()
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "));
+            if presented.is_some_and(|value| boot_token.accepts(value)) {
+                return Err(ApiError {
+                    status: StatusCode::FORBIDDEN,
+                    message: "the agent's control credential is not a preview credential"
+                        .to_string(),
+                });
+            }
+            return preview_by_header(&state, request, port, rest).await;
+        }
         _ => {
             return Err(ApiError {
                 status: StatusCode::NOT_FOUND,
@@ -1204,7 +1238,10 @@ async fn preview_grant(
     headers: HeaderMap,
     Json(request): Json<PreviewGrantRequest>,
 ) -> std::result::Result<Response, ApiError> {
-    if !matches!(state.authorization, AgentAuthorization::Transport) {
+    if !matches!(
+        state.authorization,
+        AgentAuthorization::Transport | AgentAuthorization::NativeFile(_)
+    ) {
         return Err(ApiError {
             status: StatusCode::NOT_FOUND,
             message: "this sandbox does not issue preview capabilities".to_string(),
@@ -1429,4 +1466,38 @@ async fn run_egress_hook(
         .set_gateway(&bootstrap.gateway, &bootstrap.audience, &hook.microvm_id)
         .await?;
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod native_environment_tests {
+    use super::is_inherited_native_variable;
+
+    #[test]
+    fn platform_credential_variables_never_reach_the_guest() {
+        for name in [
+            "IDENTITY_ENDPOINT",
+            "IDENTITY_HEADER",
+            "IDENTITY_SERVER_THUMBPRINT",
+            "MSI_ENDPOINT",
+            "MSI_SECRET",
+            "ALIEN_SANDBOX_PORT",
+        ] {
+            assert!(
+                !is_inherited_native_variable(name),
+                "{name} must be stripped"
+            );
+        }
+    }
+
+    #[test]
+    fn user_and_proxy_variables_are_still_inherited() {
+        for name in [
+            "HTTPS_PROXY",
+            "APP_TOKEN",
+            "IDENTITY",
+            "MY_IDENTITY_ENDPOINT",
+        ] {
+            assert!(is_inherited_native_variable(name), "{name} must pass");
+        }
+    }
 }

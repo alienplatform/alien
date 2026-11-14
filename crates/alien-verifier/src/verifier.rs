@@ -1683,6 +1683,13 @@ mod tests {
             r.environment = [("ANY".to_string(), "thing".to_string())].into();
         });
         check(&group, &signed, &own_env, None).expect("another environment");
+        let keyed = request(&|r| {
+            r.labels.insert(
+                alien_core::SANDBOX_REQUEST_KEY_LABEL.into(),
+                "3f2a9c-Key_01".into(),
+            );
+        });
+        check(&group, &signed, &keyed, None).expect("a signed create carrying both labels");
 
         let mut with_field = signed_body.clone();
         with_field["identity"] = json!({"type": "SystemAssigned"});
@@ -1805,6 +1812,60 @@ mod tests {
                 None,
             ),
             (
+                "an overlong request key",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels.insert(
+                        alien_core::SANDBOX_REQUEST_KEY_LABEL.into(),
+                        "a".repeat(65),
+                    );
+                }),
+                None,
+            ),
+            (
+                "a request key outside the safe charset",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels.insert(
+                        alien_core::SANDBOX_REQUEST_KEY_LABEL.into(),
+                        "a/b c".into(),
+                    );
+                }),
+                None,
+            ),
+            (
+                "an empty request key",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels
+                        .insert(alien_core::SANDBOX_REQUEST_KEY_LABEL.into(), String::new());
+                }),
+                None,
+            ),
+            (
+                "a zero expiry",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels
+                        .insert(alien_core::SANDBOX_EXPIRY_LABEL.into(), "0".into());
+                }),
+                None,
+            ),
+            (
+                "a negative expiry",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels
+                        .insert(alien_core::SANDBOX_EXPIRY_LABEL.into(), "-5".into());
+                }),
+                None,
+            ),
+            (
                 "a non-numeric expiry",
                 group.clone(),
                 signed.clone(),
@@ -1856,7 +1917,8 @@ mod tests {
                 "displayName": name,
                 "customContainerEnvironment": {
                     "customContainerSpec": {"imageUri": image},
-                    "resources": {"limits": {"cpu": limits.cpu, "memory": limits.memory}},
+                    "resources": {"limits": {"cpu": limits.cpu, "memory": limits.memory,
+                                           "ephemeral-storage": limits.disk}},
                     "ports": [{"port": alien_core::sandbox_image::GCP_AGENT_PLATFORM.port,
                                "protocol": "TCP"}]
                 },
@@ -1874,6 +1936,16 @@ mod tests {
         open_egress["egressControlConfig"] = json!({"internetAccess": true});
         let mut other_limits = template(signed);
         other_limits["customContainerEnvironment"]["resources"]["limits"]["cpu"] = json!("64");
+        let mut other_disk = template(signed);
+        other_disk["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"] =
+            json!("1Gi");
+        let mut no_disk = template(signed);
+        no_disk["customContainerEnvironment"]["resources"]["limits"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ephemeral-storage");
+        let mut extra_limit = template(signed);
+        extra_limit["customContainerEnvironment"]["resources"]["limits"]["gpu"] = json!("1");
         let mut command = template(signed);
         command["customContainerEnvironment"]["customContainerSpec"]["command"] = json!(["sh"]);
         let mut other_port = template(signed);
@@ -1894,6 +1966,9 @@ mod tests {
             ("another display name", "123", other_name),
             ("open egress", "123", open_egress),
             ("other limits", "123", other_limits),
+            ("another disk ceiling", "123", other_disk),
+            ("no disk ceiling", "123", no_disk),
+            ("an extra limit", "123", extra_limit),
             ("a command", "123", command),
             ("another port", "123", other_port),
             ("a state", "123", state),

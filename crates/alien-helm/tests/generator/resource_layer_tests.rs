@@ -1380,6 +1380,17 @@ fn the_cni_probe_runs_its_clients_on_the_nodes_sessions_use() {
     };
     assert_eq!(env("PROBE_NODE_SELECTOR"), r#"{"pool":"sandboxes"}"#);
     assert!(env("PROBE_TOLERATIONS").contains("\"key\":\"sandbox\""));
+    // Node consolidation must not evict the probe's pods mid-run (EKS Auto Mode did).
+    assert_eq!(
+        probe["spec"]["template"]["metadata"]["annotations"]["karpenter.sh/do-not-disrupt"],
+        "true"
+    );
+    assert!(
+        serde_yaml::to_string(&probe)
+            .unwrap()
+            .contains("\"annotations\": {\"karpenter.sh/do-not-disrupt\": \"true\"}"),
+        "the probe's own pods carry the annotation"
+    );
 }
 
 fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<String> {

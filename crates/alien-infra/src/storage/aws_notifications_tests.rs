@@ -5,8 +5,8 @@ use crate::{
     storage::{AwsStorageController, AwsStorageState},
 };
 use alien_aws_clients::s3::{
-    EventBridgeConfiguration, FilterRule, LambdaFunctionConfiguration, MockS3Api, NotificationFilter,
-    S3KeyFilter, TopicConfiguration,
+    EventBridgeConfiguration, FilterRule, LambdaFunctionConfiguration, MockS3Api,
+    NotificationFilter, S3KeyFilter, TopicConfiguration,
 };
 use alien_core::{Platform, Queue, ResourceStatus, StorageNotification};
 use std::sync::{
