@@ -1,9 +1,9 @@
-//! A release that adds the optional registry-regions input keeps installed instances updating.
+//! A release that adds the optional registry-regions input keeps installed stacks updating.
 //!
-//! The "before" fixture is the setup-owned part of an instance stack as the SDK wrote it before
+//! The "before" fixture is the setup-owned part of a stack as the SDK wrote it before
 //! the registry took its replication regions from a deployer input; "after" is the same stack
 //! once it does. Both were generated with the SDK from the authored stack file (Live workloads
-//! dropped). An installed instance recorded the "before" shape, so the first update after the
+//! dropped). An installed stack recorded the "before" shape, so the first update after the
 //! release compares it with the "after" shape. Each test prepares both with the real mutations
 //! and runs the update compatibility checks, as an update does.
 
@@ -24,11 +24,11 @@ fn fixture(name: &str) -> Stack {
 }
 
 fn before() -> Stack {
-    fixture("private_instance_stack_before_registry_regions")
+    fixture("installed_stack_before_registry_regions")
 }
 
 fn after() -> Stack {
-    fixture("private_instance_stack_after_registry_regions")
+    fixture("installed_stack_after_registry_regions")
 }
 
 fn deployment_config(regions: Option<serde_json::Value>) -> DeploymentConfig {
@@ -85,7 +85,7 @@ async fn update_errors_between(
 }
 
 #[tokio::test]
-async fn an_installed_instance_takes_the_release_when_no_regions_are_listed() {
+async fn an_installed_stack_takes_the_release_when_no_regions_are_listed() {
     for answer in [None, Some(json!([]))] {
         let errors = update_errors(answer.clone()).await;
         assert!(
@@ -96,7 +96,7 @@ async fn an_installed_instance_takes_the_release_when_no_regions_are_listed() {
 }
 
 #[tokio::test]
-async fn listing_regions_on_an_installed_instance_asks_for_a_setup_update() {
+async fn listing_regions_on_an_installed_stack_asks_for_a_setup_update() {
     let errors = update_errors(Some(json!(["us-west-2"]))).await;
     assert!(
         errors

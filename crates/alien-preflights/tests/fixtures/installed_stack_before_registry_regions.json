@@ -1,12 +1,12 @@
 {
-  "id": "alien-manager",
+  "id": "example-stack",
   "inputs": [
     {
       "default": {
         "type": "boolean",
         "value": true
       },
-      "description": "Encrypt the secret values of the deployments this instance manages with a key in your own cloud account.",
+      "description": "Encrypt the secret values of the deployments this stack manages with a key in your own cloud account.",
       "env": [],
       "id": "valuesKey",
       "kind": "boolean",
@@ -15,27 +15,11 @@
         "deployer"
       ],
       "required": false
-    },
-    {
-      "default": {
-        "type": "stringList",
-        "value": []
-      },
-      "description": "AWS regions other than this instance's own where Lambda functions of your deployments run (up to 10). Images are copied there automatically. Leave empty if all deployments run in this region.",
-      "env": [],
-      "id": "deploymentRegions",
-      "kind": "stringList",
-      "label": "Deployment regions",
-      "providedBy": [
-        "deployer"
-      ],
-      "required": false,
-      "validation": {}
     }
   ],
   "permissions": {
     "profiles": {
-      "manager": {
+      "app": {
         "artifact-registry": [
           "artifact-registry/pull",
           "artifact-registry/push",
@@ -48,9 +32,6 @@
         "kv": [
           "kv/data-read",
           "kv/data-write"
-        ],
-        "management-sa": [
-          "service-account/impersonate"
         ],
         "telemetry-storage": [
           "storage/data-read",
@@ -66,7 +47,6 @@
     "artifact-registry": {
       "config": {
         "id": "artifact-registry",
-        "replicationRegionsInput": "deploymentRegions",
         "type": "artifact-registry"
       },
       "dependencies": [],
@@ -88,38 +68,6 @@
       "config": {
         "id": "kv",
         "type": "kv"
-      },
-      "dependencies": [],
-      "lifecycle": "frozen"
-    },
-    "management-sa": {
-      "config": {
-        "id": "management-sa",
-        "stackPermissionSets": [
-          {
-            "description": "Assume target installation management roles that trust this manager",
-            "id": "private-manager/target-role-impersonation",
-            "platforms": {
-              "aws": [
-                {
-                  "binding": {
-                    "stack": {
-                      "resources": [
-                        "arn:aws:iam::*:role/*-management"
-                      ]
-                    }
-                  },
-                  "grant": {
-                    "actions": [
-                      "sts:AssumeRole"
-                    ]
-                  }
-                }
-              ]
-            }
-          }
-        ],
-        "type": "service-account"
       },
       "dependencies": [],
       "lifecycle": "frozen"
