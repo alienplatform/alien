@@ -281,7 +281,7 @@ pub async fn validate_azure_sandbox_network(
             group,
             network_parent,
             properties,
-            gateway_cidr,
+            &declared.gateway_ips,
         )
         .await?;
     }
@@ -329,7 +329,7 @@ async fn validate_sandbox_nsg(
     group: &str,
     network_parent: &str,
     properties: &SubnetPropertiesFormat,
-    gateway_cidr: &str,
+    gateway_ips: &[String],
 ) -> Result<()> {
     let missing = || {
         invalid(
@@ -368,36 +368,55 @@ async fn validate_sandbox_nsg(
         .iter()
         .map(|rule| rule.properties.as_ref().ok_or_else(missing))
         .collect::<Result<_>>()?;
-    let mut allowed = 0;
+    // The exact rule set the setup emits: a proxy-port allow per gateway IP, the platform
+    // resolver on port 53, and the platform/range/Internet denies. Any other allow is a bypass.
+    let mut gateways_allowed = BTreeSet::new();
+    let mut dns_allowed = 0;
     for rule in rules.iter().filter(|rule| {
         rule.direction == SecurityRuleDirection::Outbound
             && rule.access == SecurityRuleAccess::Allow
     }) {
-        let ports: BTreeSet<_> = rule
+        let ports: BTreeSet<&str> = rule
             .destination_port_ranges
             .iter()
             .map(String::as_str)
+            .chain(rule.destination_port_range.as_deref())
             .collect();
-        if rule.priority != 100
-            || rule.protocol != SecurityRulePropertiesFormatProtocol::Tcp
-            || !unrestricted_source(rule)
-            || rule.destination_address_prefix.as_deref() != Some(gateway_cidr)
-            || !rule.destination_address_prefixes.is_empty()
-            || rule.destination_port_range.is_some()
-            // Deployments that have not taken the proxy-only rule yet still carry 3128 and 3129.
-            || (ports != BTreeSet::from(["3128"]) && ports != BTreeSet::from(["3128", "3129"]))
-        {
+        let destination = rule.destination_address_prefix.as_deref().unwrap_or("");
+        let single_destination = rule.destination_address_prefixes.is_empty();
+        let tcp = rule.protocol == SecurityRulePropertiesFormatProtocol::Tcp;
+        let gateway = gateway_ips.iter().find(|ip| {
+            destination == ip.as_str() || destination == format!("{ip}/32")
+        });
+        if !unrestricted_source(rule) || !single_destination || rule.priority >= 110 {
             return Err(invalid(
                 resource,
                 "Sandbox NSG permits traffic outside the gateway proxy port",
             ));
         }
-        allowed += 1;
+        match gateway {
+            Some(ip) if tcp && ports == BTreeSet::from(["3128"]) => {
+                if !gateways_allowed.insert(ip.clone()) {
+                    return Err(invalid(resource, "Sandbox NSG repeats a gateway allow"));
+                }
+            }
+            None if destination == "168.63.129.16" && ports == BTreeSet::from(["53"]) => {
+                dns_allowed += 1;
+            }
+            _ => {
+                return Err(invalid(
+                    resource,
+                    "Sandbox NSG permits traffic outside the gateway proxy port",
+                ));
+            }
+        }
     }
-    if allowed != 1
+    if gateways_allowed.len() != gateway_ips.len()
+        || dns_allowed != 1
         || ![
-            ("AzurePlatformIMDS", 101),
-            ("AzurePlatformDNS", 140),
+            ("AzurePlatformIMDS", 103),
+            ("VirtualNetwork", 110),
+            ("Internet", 128),
             ("*", 300),
         ]
         .iter()
