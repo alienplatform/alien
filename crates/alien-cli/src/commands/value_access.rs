@@ -20,7 +20,11 @@ const MAX_VALUES_PER_REQUEST: usize = 100;
 
 /// Platform error codes that mean the deployment's manager does not store
 /// values, so the older path applies.
-const OLD_PATH_CODES: [&str; 2] = ["VALUES_NOT_SERVED_BY_MANAGER", "VALUE_SCOPE_NOT_AVAILABLE"];
+const OLD_PATH_CODES: [&str; 3] = [
+    "VALUES_NOT_SERVED_BY_MANAGER",
+    "VALUE_SCOPE_NOT_AVAILABLE",
+    "SETUP_VALUES_NOT_SERVED_BY_MANAGER",
+];
 
 /// A value to store.
 #[derive(Clone)]
@@ -317,8 +321,84 @@ pub(crate) async fn store_deployment_values(
         Reply::Granted(grant) => grant,
         Reply::OldPath => return Ok(StoredValues::OldPath),
     };
-    let refs = put_values(&grant, deployment_id, writes).await?;
+    let refs = put_values(&grant, &format!("dep:{deployment_id}"), writes).await?;
     Ok(StoredValues::Stored(refs))
+}
+
+/// A setup link that waits for its values: the answers are in the manager under
+/// the link's scope, and activating the link lists what the manager reported.
+#[derive(Debug)]
+pub(crate) struct PendingLinkValues {
+    pub link_id: String,
+    /// One entry per written slot (`slot`, `kind`, `digest`, `updatedAt`, and
+    /// `targetResources` for an environment variable that names targets).
+    pub value_slots: Vec<Value>,
+}
+
+/// Reserves a setup link for the group and stores `writes` in the manager that
+/// will deploy it. Returns `None` when the platform or its manager does not
+/// store setup values, so the caller sends them the older way. A manager that
+/// stores them and refuses a write is an error: the values never go elsewhere.
+pub(crate) async fn store_setup_link_values(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    group_id: &str,
+    writes: &[ValueWrite],
+    targets: &std::collections::HashMap<String, Vec<String>>,
+    platforms: &[String],
+    release_channel: Option<&str>,
+) -> Result<Option<PendingLinkValues>> {
+    if writes.is_empty() {
+        return Ok(None);
+    }
+    let slots: Vec<&str> = writes.iter().map(|write| write.slot.as_str()).collect();
+    let mut request = json!({ "slots": slots });
+    if !platforms.is_empty() {
+        request["platforms"] = json!(platforms);
+    }
+    if let Some(channel) = release_channel {
+        request["releaseChannel"] = json!(channel);
+    }
+    let (status, body) = platform_request(
+        client,
+        reqwest::Method::POST,
+        &format!("/v1/deployment-groups/{group_id}/pending-tokens"),
+        workspace,
+        Some(&request),
+    )
+    .await?;
+    let grant = match interpret_reply(status, &body)? {
+        Reply::Granted(grant) => grant,
+        Reply::OldPath => return Ok(None),
+    };
+    let link_id = serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|body| {
+            body.get("linkId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: "the pending link answer has no linkId".to_string(),
+                url: None,
+            })
+        })?;
+    let refs = put_values(&grant, &format!("link:{link_id}"), writes).await?;
+    let value_slots = refs
+        .into_iter()
+        .map(|reference| {
+            let mut entry = json!(reference);
+            if let Some(target) = targets.get(&reference.slot) {
+                entry["targetResources"] = json!(target);
+            }
+            entry
+        })
+        .collect();
+    Ok(Some(PendingLinkValues {
+        link_id,
+        value_slots,
+    }))
 }
 
 /// Values and tokens go to the URL this names, so it must be a TLS endpoint,
@@ -427,13 +507,8 @@ async fn delete_values(
     Ok(())
 }
 
-async fn put_values(
-    grant: &Grant,
-    deployment_id: &str,
-    writes: &[ValueWrite],
-) -> Result<Vec<ValueRef>> {
+async fn put_values(grant: &Grant, scope: &str, writes: &[ValueWrite]) -> Result<Vec<ValueRef>> {
     let manager = manager_client(grant)?;
-    let scope = format!("dep:{deployment_id}");
 
     let mut refs = Vec::with_capacity(writes.len());
     for chunk in writes.chunks(MAX_VALUES_PER_REQUEST) {
@@ -449,7 +524,7 @@ async fn put_values(
         };
         let stored = manager
             .put_values()
-            .scope(&scope)
+            .scope(scope)
             .body(body)
             .send()
             .await
@@ -681,7 +756,7 @@ mod tests {
             kind: ValueKind::Secret,
             value: VALUE.to_string(),
         };
-        put_values(&grant, "dep_1", &[write])
+        put_values(&grant, "dep:dep_1", &[write])
             .await
             .expect_err("a redirect is an error, not a second request");
 

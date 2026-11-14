@@ -871,6 +871,10 @@ pub struct QueryRequest {
     pub exclusive_start_key: Option<HashMap<String, AttributeValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scan_index_forward: Option<bool>,
+    /// Read the latest committed writes. A query is eventually consistent
+    /// unless this is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consistent_read: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
