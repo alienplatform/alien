@@ -97,7 +97,41 @@ impl StackMutation for InfrastructureDependenciesMutation {
             }
         }
 
+        if platform == Platform::Aws {
+            add_management_network_dependency(&mut stack);
+        }
+
         Ok(stack)
+    }
+}
+
+/// The AWS management policy names the stack's VPC and subnets, read from the network once it
+/// is Running, so management waits for a network setup creates. Setup creates the two together
+/// only when the network is Frozen; a Live network is created later by management itself. A
+/// network that already waits for management (through a resource that waits for it) is left
+/// unordered rather than made a cycle; management then names it by its tags (or not at all, for
+/// the default VPC) until the next setup run.
+fn add_management_network_dependency(stack: &mut Stack) {
+    let Some(management_id) = remote_stack_management_id(stack).map(str::to_string) else {
+        return;
+    };
+    let management = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, management_id.clone());
+    let networks: Vec<ResourceRef> = stack
+        .resources
+        .iter()
+        .filter(|(id, entry)| {
+            entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                && entry.config.resource_type() == Network::RESOURCE_TYPE
+                && !depends_on(stack, id, &management)
+        })
+        .map(|(id, _)| ResourceRef::new(Network::RESOURCE_TYPE, id.clone()))
+        .collect();
+    if let Some(entry) = stack.resources.get_mut(&management_id) {
+        for network in networks {
+            if !entry.dependencies.contains(&network) {
+                entry.dependencies.push(network);
+            }
+        }
     }
 }
 
@@ -1004,6 +1038,109 @@ mod tests {
             );
             assert!(result.resources["management"].dependencies.is_empty());
         }
+    }
+
+    /// The AWS management policy is rendered from the network setup creates, so management
+    /// waits for it. A network management creates itself later is never waited for.
+    #[tokio::test]
+    async fn aws_management_waits_for_the_network_setup_creates() {
+        for (platform, lifecycle, waits) in [
+            (Platform::Aws, ResourceLifecycle::Frozen, true),
+            (Platform::Aws, ResourceLifecycle::Live, false),
+            (Platform::Gcp, ResourceLifecycle::Frozen, false),
+            (Platform::Azure, ResourceLifecycle::Frozen, false),
+        ] {
+            let stack = Stack::new("test-stack".to_string())
+                .add(
+                    RemoteStackManagement::new("management".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    Network::new("default-network".to_string())
+                        .settings(NetworkSettings::Create {
+                            cidr: None,
+                            availability_zones: 2,
+                        })
+                        .build(),
+                    lifecycle,
+                )
+                .build();
+            let config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(empty_env_snapshot())
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            let result = InfrastructureDependenciesMutation
+                .mutate(stack, &StackState::new(platform), &config)
+                .await
+                .unwrap();
+            let network = ResourceRef::new(Network::RESOURCE_TYPE, "default-network");
+            assert_eq!(
+                result.resources["management"]
+                    .dependencies
+                    .contains(&network),
+                waits,
+                "{platform:?} {lifecycle:?}"
+            );
+            assert!(
+                !result.resources["default-network"]
+                    .dependencies
+                    .iter()
+                    .any(|dependency| dependency.id() == "management"),
+                "{platform:?} {lifecycle:?}: the network must not wait for management"
+            );
+        }
+    }
+
+    /// A network that waits for a resource which waits for management is left unordered, never
+    /// turned into a cycle.
+    #[tokio::test]
+    async fn aws_management_never_waits_for_a_network_that_waits_for_it() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("logs".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_dependencies(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+                vec![ResourceRef::new(Storage::RESOURCE_TYPE, "logs")],
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .unwrap();
+        assert!(result.resources["logs"]
+            .dependencies
+            .contains(&ResourceRef::new(
+                RemoteStackManagement::RESOURCE_TYPE,
+                "management"
+            )));
+        assert!(
+            !result.resources["management"]
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.id() == "default-network"),
+            "{:?}",
+            result.resources["management"].dependencies
+        );
     }
 
     #[tokio::test]

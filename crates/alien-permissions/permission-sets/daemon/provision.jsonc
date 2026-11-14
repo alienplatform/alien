@@ -95,14 +95,55 @@
           }
         }
       },
+      // Load balancers only in the stack's own subnets. Without subnets setup knows (the default
+      // VPC, or a network management creates itself), ${awsSubnetIds} renders as "*".
       {
         "label": "create-public-load-balancer",
         "description": "Create ALB resources for public daemon endpoints.",
         "grant": {
-          "actions": [
-            "elasticloadbalancing:CreateLoadBalancer",
-            "elasticloadbalancing:CreateTargetGroup"
-          ]
+          "actions": ["elasticloadbalancing:CreateLoadBalancer"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "ForAllValues:StringLike": {
+                "elasticloadbalancing:Subnet": "${awsSubnetIds}"
+              },
+              "Null": {
+                "elasticloadbalancing:Subnet": "false"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceId}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              },
+              "ForAllValues:StringLike": {
+                "elasticloadbalancing:Subnet": "${awsSubnetIds}"
+              },
+              "Null": {
+                "elasticloadbalancing:Subnet": "false"
+              }
+            }
+          }
+        }
+      },
+      // Target groups take no network condition in IAM. A group reaches nothing on its own:
+      // registering targets and attaching it to a listener both need this stack's tags.
+      {
+        "label": "create-public-target-group",
+        "description": "Create target groups for public daemon endpoints.",
+        "grant": {
+          "actions": ["elasticloadbalancing:CreateTargetGroup"]
         },
         "binding": {
           "stack": {
@@ -371,8 +412,13 @@
           }
         }
       },
+      // The VPC and the new group must be the stack's own: its known VPC, or for a network
+      // management creates itself, the VPC carrying the stack's tags. AWS supplies ec2:VpcID
+      // only for the VPC and ec2:Vpc only for the new group, and always does, so IfExists checks
+      // each against the stack's VPC. Without a VPC setup knows (the account's default VPC),
+      // ${awsVpcId} renders as "*".
       {
-        "label": "create-public-load-balancer-security-group",
+        "label": "vpc-pinned-create-public-load-balancer-security-group",
         "description": "Create the runtime-owned ALB security group for public daemon endpoints.",
         "grant": {
           "actions": ["ec2:CreateSecurityGroup"]
@@ -382,13 +428,67 @@
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ]
+            ],
+            "condition": {
+              "StringLikeIfExists": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}",
+                "ec2:VpcID": "${awsVpcId}"
+              }
+            }
           },
           "resource": {
             "resources": [
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
               "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
-            ]
+            ],
+            "condition": {
+              "StringLikeIfExists": {
+                "ec2:Vpc": "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/${awsVpcId}",
+                "ec2:VpcID": "${awsVpcId}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "vpc-tagged-create-public-load-balancer-security-group-vpc",
+        "description": "Create the runtime-owned ALB security group for public daemon endpoints.",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "vpc-tagged-create-public-load-balancer-security-group",
+        "description": "Create the runtime-owned ALB security group for public daemon endpoints.",
+        "grant": {
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"]
           }
         }
       },
