@@ -669,7 +669,12 @@ impl DailyIdentity {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|_| failed("Component identity response failed"))?
+            .map_err(|_| {
+                // A connection dropped mid-body is an outage, like a failed send.
+                AlienError::new(ErrorData::SyncFailed {
+                    message: "Component identity response failed".into(),
+                })
+            })?
         {
             if bytes.len() + chunk.len() > 16 * 1024 {
                 return Err(failed("Component identity response exceeds limit"));
@@ -2375,5 +2380,51 @@ mod lost_enrollment_tests {
             format!("{error:?}").contains("HTTP 403"),
             "the refusal keeps its reason: {error:?}"
         );
+    }
+    /// A manager that sends a success status and then drops the connection before the body is
+    /// complete is an outage that can end, not a refusal: the upkeep must retry.
+    #[tokio::test]
+    async fn a_response_cut_off_mid_body_is_retryable() {
+        use tokio::io::AsyncWriteExt as _;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 4096];
+            let _ = tokio::io::AsyncReadExt::read(&mut socket, &mut request).await;
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 200\r\n\r\n{\"token\":",
+                )
+                .await
+                .unwrap();
+            // Closing here leaves the body short of its Content-Length.
+            drop(socket);
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        let identity = DailyIdentity::new(db).unwrap();
+        let state = DailyIdentityState {
+            manager_url: url,
+            audience: "manager-one".into(),
+            deployment_id: "deployment-one".into(),
+            current: format!("ax_day_v1_{}", "1".repeat(64)),
+            pending: None,
+            pending_started_at: None,
+            expires_at: Utc::now() + chrono::Duration::hours(20),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+            previous: None,
+        };
+        let error = identity
+            .post_outcome(&state, "exchange", json!({}))
+            .await
+            .err()
+            .expect("the body never completes");
+        assert!(error.retryable, "a dropped connection can succeed later: {error:?}");
     }
 }
