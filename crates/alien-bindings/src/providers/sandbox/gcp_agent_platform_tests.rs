@@ -1845,18 +1845,46 @@ async fn terminate_of_a_sandbox_this_deployment_cannot_reach_is_still_refused() 
 // ---- preview ----------------------------------------------------------------------------------
 
 #[derive(Debug)]
-struct FixedSigner;
+struct FixedSigner {
+    edge_lifetime: i64,
+}
+
+impl Default for FixedSigner {
+    fn default() -> Self {
+        Self { edge_lifetime: 300 }
+    }
+}
 
 #[async_trait]
 impl EdgeTokenSigner for FixedSigner {
-    async fn sign(&self) -> Result<String> {
-        Ok("edge.jwt".to_string())
+    async fn sign(&self) -> Result<SignedEdgeToken> {
+        Ok(SignedEdgeToken {
+            jwt: "edge.jwt".to_string(),
+            expires_at: chrono::Utc::now().timestamp() + self.edge_lifetime,
+        })
     }
+
+    async fn control_key(&self, sandbox: &str) -> Result<String> {
+        Ok(format!("control-key-for-{sandbox}"))
+    }
+}
+
+/// The agent accepts the control key the binding installs before it grants anything.
+fn expect_install(client: &mut MockAgentPlatformApi) {
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| {
+            let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+            body["op"] == "controlKeyInstall"
+                && body["key"] == format!("control-key-for-{sandbox}")
+                && body["controlKey"] == body["key"]
+        })
+        .returning(|_, _, _| Ok(b"{}".to_vec()));
 }
 
 fn preview_provider(client: MockAgentPlatformApi) -> GcpAgentPlatformSandbox {
     provider(client)
-        .with_preview_signer(Arc::new(FixedSigner))
+        .with_preview_signer(Arc::new(FixedSigner::default()))
         .with_preview_ports(vec![8080, 8081, 9, 8090])
 }
 
@@ -1911,6 +1939,7 @@ async fn preview_grants_over_execute_and_returns_the_header_contract() {
         .unwrap()
         .timestamp();
     let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
     let sandbox_expire = expire.clone();
     client
         .expect_get_sandbox()
@@ -1972,6 +2001,7 @@ async fn preview_caches_the_grant_per_port() {
     let expire = far_future();
     let grants = Arc::new(AtomicUsize::new(0));
     let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
     client
         .expect_get_sandbox()
         .returning(move |_, id| Ok(running_with_route(id, &expire)));
@@ -1998,6 +2028,7 @@ async fn preview_refreshes_a_grant_close_to_expiry() {
     let expire = far_future();
     let grants = Arc::new(AtomicUsize::new(0));
     let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
     client
         .expect_get_sandbox()
         .returning(move |_, id| Ok(running_with_route(id, &expire)));
@@ -2019,6 +2050,7 @@ async fn preview_refreshes_a_grant_close_to_expiry() {
 #[tokio::test]
 async fn preview_of_a_sandbox_without_an_edge_host_is_refused() {
     let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
     client.expect_get_sandbox().returning(|_, id| {
         let mut sandbox = running_with_route(id, &far_future());
         sandbox
@@ -2038,6 +2070,7 @@ async fn preview_of_a_sandbox_without_an_edge_host_is_refused() {
 #[tokio::test]
 async fn preview_of_a_sandbox_without_a_route_is_refused() {
     let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
     client
         .expect_get_sandbox()
         .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
@@ -2052,6 +2085,7 @@ async fn preview_of_a_sandbox_without_a_route_is_refused() {
 async fn an_agent_refusal_of_the_grant_is_surfaced_and_nothing_is_cached() {
     let expire = far_future();
     let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
     client
         .expect_get_sandbox()
         .returning(move |_, id| Ok(running_with_route(id, &expire)));
@@ -2084,7 +2118,7 @@ async fn iam_edge_signer_signs_claims_for_the_edge_audience_with_the_service_acc
             })
         });
     let signer = IamEdgeTokenSigner::new(Arc::new(iam), "sa@p.iam.gserviceaccount.com");
-    assert_eq!(signer.sign().await.unwrap(), "signed.jwt");
+    assert_eq!(signer.sign().await.unwrap().jwt, "signed.jwt");
 }
 
 /// A port the declaration did not name is refused before any call to the cloud or the agent.
@@ -2104,6 +2138,7 @@ async fn preview_of_an_undeclared_port_is_refused_without_a_call() {
 async fn preview_never_reports_more_than_the_longest_grant() {
     let expire = far_future();
     let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
     client
         .expect_get_sandbox()
         .returning(move |_, id| Ok(running_with_route(id, &expire)));
@@ -2114,7 +2149,11 @@ async fn preview_never_reports_more_than_the_longest_grant() {
         }))
         .unwrap())
     });
-    let preview = preview_provider(client).preview("s1", 8080).await.unwrap();
+    let preview = provider(client)
+        .with_preview_signer(Arc::new(FixedSigner {
+            edge_lifetime: 3600,
+        }))
+        .with_preview_ports(vec![8080]).preview("s1", 8080).await.unwrap();
     assert_eq!(
         preview.expires_in_seconds,
         alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS as u64
@@ -2132,6 +2171,7 @@ async fn mint_from_binding_json(binding: serde_json::Value) -> crate::traits::Pr
     };
     let expire = far_future();
     let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
     client
         .expect_get_sandbox()
         .returning(move |_, id| Ok(running_with_route(id, &expire)));
@@ -2201,4 +2241,278 @@ async fn a_controller_binding_mints_a_grant() {
     let preview = mint_from_binding_json(serde_json::to_value(binding).unwrap()).await;
     assert_eq!(preview.headers["Authorization"], "Bearer signed.jwt");
     assert_eq!(preview.allowed_ports, vec![8081]);
+}
+
+/// The headers carry the edge credential as well as the capability, and either ending makes the
+/// response stop working, so the caller is told the sooner of the two.
+#[tokio::test]
+async fn preview_reports_whichever_of_the_grant_and_the_edge_credential_ends_first() {
+    for (grant_seconds, edge_seconds) in [(900, 120), (60, 300)] {
+        let expire = far_future();
+        let mut client = MockAgentPlatformApi::new();
+        expect_install(&mut client);
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(running_with_route(id, &expire)));
+        client.expect_execute().returning(move |_, _, _| {
+            Ok(serde_json::to_vec(&json!({
+                "capability": "cap",
+                "expiresAt": chrono::Utc::now().timestamp() + grant_seconds,
+            }))
+            .unwrap())
+        });
+        let preview = provider(client)
+            .with_preview_signer(Arc::new(FixedSigner {
+                edge_lifetime: edge_seconds,
+            }))
+            .with_preview_ports(vec![8080])
+            .preview("s1", 8080)
+            .await
+            .unwrap();
+        let sooner = grant_seconds.min(edge_seconds) as u64;
+        assert!(
+            preview.expires_in_seconds <= sooner && preview.expires_in_seconds >= sooner - 5,
+            "grant {grant_seconds}s, edge {edge_seconds}s, reported {}",
+            preview.expires_in_seconds
+        );
+    }
+}
+
+fn cached(expires_in: i64) -> CachedGrant {
+    CachedGrant {
+        capability: "cap".to_string(),
+        expires_at: chrono::Utc::now().timestamp() + expires_in,
+    }
+}
+
+/// An expired entry is never read again, so touching the cache drops it.
+#[tokio::test]
+async fn the_grant_cache_drops_expired_entries_when_it_is_used() {
+    let expire = far_future();
+    let mut client = MockAgentPlatformApi::new();
+    expect_install(&mut client);
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    client.expect_execute().returning(|_, _, _| {
+        Ok(serde_json::to_vec(&json!({
+            "capability": "cap",
+            "expiresAt": chrono::Utc::now().timestamp() + 900,
+        }))
+        .unwrap())
+    });
+    let provider = preview_provider(client);
+    {
+        let mut grants = provider.grants.lock().unwrap();
+        grants.insert(("old".to_string(), 8080), cached(-10));
+        grants.insert(("older".to_string(), 8081), cached(0));
+        grants.insert(("live".to_string(), 8080), cached(600));
+    }
+    provider.preview("s1", 8080).await.unwrap();
+    let mut keys: Vec<_> = provider.grants.lock().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec![("live".to_string(), 8080), ("s1".to_string(), 8080)]
+    );
+}
+
+/// A binding that creates sandboxes for as long as it lives must not keep every grant it made.
+#[tokio::test]
+async fn terminating_a_sandbox_drops_its_grants_and_only_its_own() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_delete_sandbox().returning(|_, _| Ok(()));
+    client.expect_get_sandbox().returning(|_, _| Err(not_found()));
+    let provider = preview_provider(client);
+    {
+        let mut grants = provider.grants.lock().unwrap();
+        grants.insert(("s1".to_string(), 8080), cached(600));
+        grants.insert(("s1".to_string(), 8081), cached(600));
+        grants.insert(("s2".to_string(), 8080), cached(600));
+    }
+    provider.terminate("s1").await.unwrap();
+    let keys: Vec<_> = provider.grants.lock().unwrap().keys().cloned().collect();
+    assert_eq!(keys, vec![("s2".to_string(), 8080)]);
+}
+
+/// A terminate that did not confirm the sandbox gone leaves it running, so its grants stay.
+#[tokio::test]
+async fn an_unconfirmed_terminate_keeps_the_grants() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_delete_sandbox()
+        .returning(|_, _| Err(execute_refused()));
+    let provider = preview_provider(client);
+    provider
+        .grants
+        .lock()
+        .unwrap()
+        .insert(("s1".to_string(), 8080), cached(600));
+    provider.terminate("s1").await.expect_err("refused");
+    assert_eq!(provider.grants.lock().unwrap().len(), 1);
+}
+
+/// The edge credential in the preview headers reaches the agent's control routes, so the binding
+/// installs a key before it grants anything, and presents it with every request it sends.
+#[tokio::test]
+async fn preview_installs_the_control_key_before_the_grant_and_every_request_carries_it() {
+    let expire = far_future();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    let recorded = seen.clone();
+    client.expect_execute().returning(move |_, _, input| {
+        let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+        assert_eq!(body["controlKey"], "control-key-for-s1");
+        let op = body["op"].as_str().unwrap().to_string();
+        recorded.lock().unwrap().push(op.clone());
+        Ok(if op == "previewGrant" {
+            serde_json::to_vec(&json!({
+                "capability": "cap",
+                "expiresAt": chrono::Utc::now().timestamp() + 900,
+            }))
+            .unwrap()
+        } else {
+            b"{}".to_vec()
+        })
+    });
+    let provider = preview_provider(client);
+    let preview = provider.preview("s1", 8080).await.unwrap();
+    // The key is never in what the caller receives.
+    let handed_out = format!("{:?}{:?}", preview.headers, preview.subprotocols);
+    assert!(!handed_out.contains("control-key"), "{handed_out}");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec!["controlKeyInstall".to_string(), "previewGrant".to_string()]
+    );
+}
+
+/// Operations other than preview carry the key too: a keyed agent refuses them otherwise.
+#[tokio::test]
+async fn a_binding_with_a_signer_sends_the_control_key_on_every_operation() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client
+        .expect_execute()
+        .withf(|_, _, input| {
+            let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+            body["controlKey"] == "control-key-for-s1"
+        })
+        .times(1..)
+        .returning(|_, _, _| {
+            Ok(serde_json::to_vec(&json!({
+                "protocolVersion": 1,
+                "bootId": "boot-1",
+                "status": "ready",
+                "imageCommand": {"status": "notConfigured"},
+            }))
+            .unwrap())
+        });
+    let provider = preview_provider(client);
+    provider.get("s1").await.expect("probe answered");
+}
+
+/// A signer that cannot derive the key fails the request instead of sending it without one.
+#[tokio::test]
+async fn an_underivable_control_key_fails_the_request_rather_than_sending_it_bare() {
+    #[derive(Debug)]
+    struct NoKey;
+    #[async_trait]
+    impl EdgeTokenSigner for NoKey {
+        async fn sign(&self) -> Result<SignedEdgeToken> {
+            unreachable!("not signing")
+        }
+        async fn control_key(&self, _: &str) -> Result<String> {
+            Err(AlienError::new(ErrorData::Other {
+                message: "denied".to_string(),
+            }))
+        }
+    }
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_execute().never();
+    let provider = provider(client).with_preview_signer(Arc::new(NoKey));
+    provider
+        .get("s1")
+        .await
+        .expect_err("no key, no request to the agent");
+}
+
+/// The key is derived from a signature over claims naming the sandbox, so two sandboxes never
+/// share one, and the same sandbox always derives the same key in any process.
+#[tokio::test]
+async fn the_control_key_is_stable_per_sandbox_and_differs_between_sandboxes() {
+    let mut iam = alien_gcp_clients::gcp::iam::MockIamApi::new();
+    iam.expect_sign_jwt().returning(|_, request| {
+        // A stand-in for a deterministic signature: it depends on the claims only.
+        Ok(alien_gcp_clients::gcp::iam::SignJwtResponse {
+            signed_jwt: format!("h.{}.sig", request.payload.len()),
+        })
+    });
+    let signer = IamEdgeTokenSigner::new(Arc::new(iam), "sa@p.iam.gserviceaccount.com");
+    let a1 = signer.control_key("sandbox-a").await.unwrap();
+    let a2 = signer.control_key("sandbox-a").await.unwrap();
+    let b = signer.control_key("sandbox-bb").await.unwrap();
+    assert_eq!(a1, a2);
+    assert_ne!(a1, b);
+    assert!(a1.len() >= alien_core::sandbox_image::CONTROL_KEY_MIN_LEN, "{a1}");
+}
+
+/// The claims signed for the key name the sandbox and are not an edge credential.
+#[tokio::test]
+async fn the_control_key_claims_name_the_sandbox_and_not_the_edge_audience() {
+    let mut iam = alien_gcp_clients::gcp::iam::MockIamApi::new();
+    iam.expect_sign_jwt()
+        .withf(|_, request| {
+            let claims: serde_json::Value = serde_json::from_str(&request.payload).unwrap();
+            claims["sandbox"] == "sandbox-a" && claims["aud"] != "https://aiplatform.googleapis.com/"
+        })
+        .times(1)
+        .returning(|_, _| {
+            Ok(alien_gcp_clients::gcp::iam::SignJwtResponse {
+                signed_jwt: "a.b.c".to_string(),
+            })
+        });
+    IamEdgeTokenSigner::new(Arc::new(iam), "sa@p.iam.gserviceaccount.com")
+        .control_key("sandbox-a")
+        .await
+        .unwrap();
+}
+
+/// A sandbox of a binding that can sign has its key installed before create returns it, so the
+/// window in which an agent is open is closed before anyone can hold an edge credential.
+#[tokio::test]
+async fn create_installs_the_control_key_and_discards_the_sandbox_when_it_cannot() {
+    for install_works in [true, false] {
+        let mut client = MockAgentPlatformApi::new();
+        client
+            .expect_create_sandbox()
+            .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") }))));
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+        client.expect_execute().returning(move |_, _, input| {
+            let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+            match body["op"].as_str() {
+                Some("controlKeyInstall") if install_works => Ok(b"{}".to_vec()),
+                Some("controlKeyInstall") => Err(execute_refused()),
+                _ => Ok(health_reply()),
+            }
+        });
+        client
+            .expect_delete_sandbox()
+            .times(if install_works { 0 } else { 1 })
+            .returning(|_, _| Ok(()));
+        let result = provider(client)
+            .with_preview_signer(Arc::new(FixedSigner::default()))
+            .create(CreateSandboxRequest::default())
+            .await;
+        assert_eq!(result.is_ok(), install_works, "{result:?}");
+    }
 }

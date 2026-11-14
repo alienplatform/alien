@@ -26,8 +26,9 @@ use crate::traits::{
 use alien_core::{SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::gcp::agent_platform::{
-    AgentPlatformApi, AgentPlatformErrorData, EgressControlConfig, SandboxCreateRequest,
-    SandboxEnvironment, SandboxSnapshot,
+    AgentPlatformApi, AgentPlatformErrorData, EgressControlConfig, ReasoningEngine,
+    Result as AgentResult, SandboxCreateRequest, SandboxEnvironment, SandboxEnvironmentTemplate,
+    SandboxSnapshot,
 };
 use alien_gcp_clients::gcp::longrunning::{Operation, OperationResult};
 
@@ -158,7 +159,28 @@ pub struct GcpAgentPlatformSandbox {
 /// never the preview boundary.
 #[async_trait]
 pub trait EdgeTokenSigner: Send + Sync + std::fmt::Debug {
-    async fn sign(&self) -> Result<String>;
+    async fn sign(&self) -> Result<SignedEdgeToken>;
+
+    /// The key this binding presents to the agent of `sandbox`, derived from something only a
+    /// holder of the signing identity can produce, so that any process holding it arrives at the
+    /// same key and a preview holder (who has only edge JWTs) cannot.
+    async fn control_key(&self, sandbox: &str) -> Result<String>;
+}
+
+/// An edge credential and when it stops working. Never log it.
+pub struct SignedEdgeToken {
+    pub jwt: String,
+    /// Unix seconds.
+    pub expires_at: i64,
+}
+
+impl std::fmt::Debug for SignedEdgeToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignedEdgeToken")
+            .field("jwt", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -212,13 +234,26 @@ impl IamEdgeTokenSigner {
         })
         .to_string()
     }
+
+    /// The claims signed to derive a sandbox's control key. They never leave this process and are
+    /// not an edge credential: the audience is not the edge's.
+    fn control_claims(&self, sandbox: &str) -> String {
+        json!({
+            "iss": self.service_account,
+            "sub": self.service_account,
+            "aud": "alien-sandbox-agent-control",
+            "sandbox": sandbox,
+        })
+        .to_string()
+    }
 }
 
 #[async_trait]
 impl EdgeTokenSigner for IamEdgeTokenSigner {
-    async fn sign(&self) -> Result<String> {
+    async fn sign(&self) -> Result<SignedEdgeToken> {
+        let now = chrono::Utc::now().timestamp();
         let request = alien_gcp_clients::gcp::iam::SignJwtRequest {
-            payload: self.claims(chrono::Utc::now().timestamp()),
+            payload: self.claims(now),
         };
         let response = self
             .iam
@@ -227,15 +262,250 @@ impl EdgeTokenSigner for IamEdgeTokenSigner {
             .context(ErrorData::Other {
                 message: "Failed to sign the sandbox edge credential".to_string(),
             })?;
-        Ok(response.signed_jwt)
+        Ok(SignedEdgeToken {
+            jwt: response.signed_jwt,
+            expires_at: now + EDGE_JWT_LIFETIME_SECONDS,
+        })
+    }
+
+    async fn control_key(&self, sandbox: &str) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        let response = self
+            .iam
+            .sign_jwt(
+                self.service_account.clone(),
+                alien_gcp_clients::gcp::iam::SignJwtRequest {
+                    payload: self.control_claims(sandbox),
+                },
+            )
+            .await
+            .context(ErrorData::Other {
+                message: "Failed to derive the sandbox agent control key".to_string(),
+            })?;
+        // The signature is deterministic for one payload and key, so every process that can sign
+        // as this account derives the same value; hashing it keeps the signature itself private.
+        let mut hash = Sha256::new();
+        hash.update(b"alien-sandbox-agent-control-v1\0");
+        hash.update(response.signed_jwt.as_bytes());
+        Ok(hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+    }
+}
+
+/// Adds the control key to every request this binding sends through `:execute`, so the agent can
+/// tell the binding from a preview holder, who reaches the same agent with the same edge
+/// credential. Everything else is the wrapped client unchanged.
+#[derive(Debug)]
+struct KeyedClient {
+    inner: Arc<dyn AgentPlatformApi>,
+    signer: Arc<dyn EdgeTokenSigner>,
+    keys: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+
+impl KeyedClient {
+    fn new(inner: Arc<dyn AgentPlatformApi>, signer: Arc<dyn EdgeTokenSigner>) -> Self {
+        Self {
+            inner,
+            signer,
+            keys: Default::default(),
+        }
+    }
+
+    async fn key(&self, sandbox: &str) -> Option<String> {
+        if let Some(key) = self.keys.lock().expect("key cache lock").get(sandbox) {
+            return Some(key.clone());
+        }
+        let key = self.signer.control_key(sandbox).await.ok()?;
+        self.keys
+            .lock()
+            .expect("key cache lock")
+            .insert(sandbox.to_string(), key.clone());
+        Some(key)
+    }
+}
+
+#[async_trait]
+impl AgentPlatformApi for KeyedClient {
+    async fn create_engine(&self, display_name: &str) -> AgentResult<Operation> {
+        self.inner.create_engine(display_name).await
+    }
+    async fn delete_engine(&self, engine: &str) -> AgentResult<()> {
+        self.inner.delete_engine(engine).await
+    }
+    async fn list_engines(
+        &self,
+    ) -> AgentResult<Vec<ReasoningEngine>>
+    {
+        self.inner.list_engines().await
+    }
+    async fn create_template(
+        &self,
+        engine: &str,
+        template: SandboxEnvironmentTemplate,
+    ) -> AgentResult<Operation> {
+        self.inner.create_template(engine, template).await
+    }
+    async fn get_template(
+        &self,
+        engine: &str,
+        template: &str,
+    ) -> AgentResult<SandboxEnvironmentTemplate> {
+        self.inner.get_template(engine, template).await
+    }
+    async fn list_templates(
+        &self,
+        engine: &str,
+    ) -> AgentResult<Vec<SandboxEnvironmentTemplate>> {
+        self.inner.list_templates(engine).await
+    }
+    async fn delete_template(&self, engine: &str, template: &str) -> AgentResult<()> {
+        self.inner.delete_template(engine, template).await
+    }
+    async fn create_sandbox(
+        &self,
+        engine: &str,
+        request: SandboxCreateRequest,
+    ) -> AgentResult<Operation> {
+        self.inner.create_sandbox(engine, request).await
+    }
+    async fn get_sandbox(
+        &self,
+        engine: &str,
+        sandbox: &str,
+    ) -> AgentResult<SandboxEnvironment> {
+        self.inner.get_sandbox(engine, sandbox).await
+    }
+    async fn list_sandboxes(
+        &self,
+        engine: &str,
+    ) -> AgentResult<Vec<SandboxEnvironment>> {
+        self.inner.list_sandboxes(engine).await
+    }
+    async fn delete_sandbox(&self, engine: &str, sandbox: &str) -> AgentResult<()> {
+        self.keys.lock().expect("key cache lock").remove(sandbox);
+        self.inner.delete_sandbox(engine, sandbox).await
+    }
+    async fn execute(
+        &self,
+        engine: &str,
+        sandbox: &str,
+        input: &[u8],
+    ) -> AgentResult<Vec<u8>> {
+        let Some(key) = self.key(sandbox).await else {
+            // Sending the request without the key would be refused by a keyed agent and honoured
+            // by an open one; either way the caller would not know the key was missing.
+            return Err(AlienError::new(
+                AgentPlatformErrorData::ExecuteFailed {
+                    sandbox: sandbox.to_string(),
+                    message: "the agent control key could not be derived".to_string(),
+                },
+            ));
+        };
+        let body = match serde_json::from_slice::<serde_json::Value>(input) {
+            Ok(serde_json::Value::Object(mut object)) => {
+                object.insert(
+                    alien_core::sandbox_image::CONTROL_KEY_FIELD.to_string(),
+                    serde_json::Value::String(key),
+                );
+                serde_json::to_vec(&object).unwrap_or_else(|_| input.to_vec())
+            }
+            _ => input.to_vec(),
+        };
+        self.inner.execute(engine, sandbox, &body).await
+    }
+    async fn snapshot(
+        &self,
+        engine: &str,
+        sandbox: &str,
+        display_name: &str,
+    ) -> AgentResult<Operation> {
+        self.inner.snapshot(engine, sandbox, display_name).await
+    }
+    async fn get_operation(&self, name: &str) -> AgentResult<Operation> {
+        self.inner.get_operation(name).await
     }
 }
 
 impl GcpAgentPlatformSandbox {
+    async fn delete_until_gone(&self, sandbox_id: &str) -> Result<()> {
+        Self::checked_sandbox_id(TERMINATE, sandbox_id)?;
+        // Accepted, not completed: the client returns before the sandbox is gone. Returning here
+        // would report containment while the code may still run, which is the whole point of
+        // terminate — so the delete is confirmed by polling to not-found.
+        // A sandbox that is already gone is the state terminate exists to reach, so not-found is
+        // success. Narrowed to exactly that: mapping any failure to `Ok` would report containment
+        // for a sandbox another deployment owns and this one was refused.
+        if let Err(error) = self.client.delete_sandbox(&self.engine, sandbox_id).await {
+            if !is_not_found(&error) {
+                return Err(error.context(ErrorData::SandboxUnreachable {
+                    operation: TERMINATE.to_string(),
+                    reason: format!("the delete of sandbox '{sandbox_id}' was not accepted"),
+                }));
+            }
+            return Ok(());
+        }
+
+        for _ in 0..TERMINATE_POLL_ATTEMPTS {
+            match self.client.get_sandbox(&self.engine, sandbox_id).await {
+                Err(error) if is_not_found(&error) => return Ok(()),
+                // A read that fails is not a sandbox that is gone, and one throttled response must
+                // not end the poll: the attempt budget decides.
+                Err(error) => {
+                    warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone")
+                }
+                Ok(_) => {}
+            }
+            tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
+        }
+
+        Err(AlienError::new(ErrorData::SandboxUnreachable {
+            operation: TERMINATE.to_string(),
+            reason: format!(
+                "deletion of '{sandbox_id}' was accepted but the sandbox was still present after \
+                 {}s; it may still be running",
+                TERMINATE_POLL_ATTEMPTS as u64 * TERMINATE_POLL_INTERVAL.as_secs()
+            ),
+        }))
+    }
+
+    /// Drops every cached grant of one sandbox.
+    fn forget_grants(&self, sandbox_id: &str) {
+        self.grants
+            .lock()
+            .expect("grant cache lock")
+            .retain(|(sandbox, _), _| sandbox != sandbox_id);
+    }
+
+    /// Installs the control key on the sandbox's agent. Idempotent: an agent that holds this key
+    /// answers success, so it runs before every grant and after every create.
+    async fn install_control_key(&self, operation: &str, sandbox_id: &str) -> Result<()> {
+        let Some(signer) = &self.preview_signer else {
+            return Ok(());
+        };
+        let key = signer.control_key(sandbox_id).await?;
+        self.execute_op(
+            sandbox_id,
+            operation,
+            json!({
+                "v": AGENT_PROTOCOL_VERSION,
+                "op": "controlKeyInstall",
+                "key": key,
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Enables preview: every request to the sandbox's edge carries a JWT this signer mints.
     pub fn with_preview_signer(mut self, signer: Arc<dyn EdgeTokenSigner>) -> Self {
-        self.preview_signer = Some(signer);
+        self.set_preview_signer(signer);
         self
+    }
+
+    /// Records the signer and routes every `:execute` through the client that adds the agent's
+    /// control key, so a preview holder's edge credential is not enough to command the sandbox.
+    fn set_preview_signer(&mut self, signer: Arc<dyn EdgeTokenSigner>) {
+        self.client = Arc::new(KeyedClient::new(self.client.clone(), signer.clone()));
+        self.preview_signer = Some(signer);
     }
 
     /// Configures preview from a binding: its declared ports and, when setup created one, the
@@ -256,7 +526,7 @@ impl GcpAgentPlatformSandbox {
                 binding_name,
                 "Failed to resolve previewServiceAccount from the Agent Platform sandbox binding",
             ))?;
-            self.preview_signer = Some(Arc::new(IamEdgeTokenSigner::new(iam, account)));
+            self.set_preview_signer(Arc::new(IamEdgeTokenSigner::new(iam, account)));
         }
         Ok(self)
     }
@@ -789,7 +1059,14 @@ impl Sandbox for GcpAgentPlatformSandbox {
         let sandbox_id = sandbox_id.to_string();
 
         // Past here a sandbox exists the caller has no id for, so every failure deletes it.
-        match self.settle(&sandbox_id).await {
+        let installed = match self.settle(&sandbox_id).await {
+            Ok(generation) => self
+                .install_control_key(CREATE, &sandbox_id)
+                .await
+                .map(|()| generation),
+            Err(error) => Err(error),
+        };
+        match installed {
             Ok(generation) => Ok(SandboxInstance {
                 sandbox_id,
                 state: SandboxState::Running,
@@ -1095,16 +1372,21 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
         let now = chrono::Utc::now().timestamp();
         let key = (sandbox_id.to_string(), port);
-        let cached = self
-            .grants
-            .lock()
-            .expect("grant cache lock")
-            .get(&key)
-            .filter(|grant| grant.expires_at - now > GRANT_REFRESH_MARGIN_SECONDS)
-            .cloned();
+        let cached = {
+            let mut grants = self.grants.lock().expect("grant cache lock");
+            // An expired entry is never read again, so it goes whenever the cache is touched.
+            grants.retain(|_, grant| grant.expires_at > now);
+            grants
+                .get(&key)
+                .filter(|grant| grant.expires_at - now > GRANT_REFRESH_MARGIN_SECONDS)
+                .cloned()
+        };
         let grant = match cached {
             Some(grant) => grant,
             None => {
+                // The edge credential this call returns reaches the agent's control routes too,
+                // so the key goes in before any caller can hold one.
+                self.install_control_key(PREVIEW, sandbox_id).await?;
                 let body = self
                     .execute_op(
                         sandbox_id,
@@ -1138,7 +1420,8 @@ impl Sandbox for GcpAgentPlatformSandbox {
             }
         };
 
-        let edge_jwt = signer.sign().await?;
+        let edge = signer.sign().await?;
+        let edge_jwt = edge.jwt;
         let agent_port = alien_core::sandbox_image::AGENT_PORT.to_string();
         let mut headers = BTreeMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {edge_jwt}"));
@@ -1159,7 +1442,11 @@ impl Sandbox for GcpAgentPlatformSandbox {
             allowed_ports: vec![port],
             // The agent's clock decides when a grant ends; this host's may read a few seconds
             // behind it, so the remaining time is capped at the longest a grant can live.
+            //
+            // The headers carry the edge credential as well, and it stops working on its own
+            // schedule, so the caller is told whichever ends first.
             expires_in_seconds: (grant.expires_at - now)
+                .min(edge.expires_at - now)
                 .clamp(0, alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS)
                 as u64,
             // The edge consumes `Authorization` for its own credential, so the caller's bearer
@@ -1221,44 +1508,13 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
-        Self::checked_sandbox_id(TERMINATE, sandbox_id)?;
-        // Accepted, not completed: the client returns before the sandbox is gone. Returning here
-        // would report containment while the code may still run, which is the whole point of
-        // terminate — so the delete is confirmed by polling to not-found.
-        // A sandbox that is already gone is the state terminate exists to reach, so not-found is
-        // success. Narrowed to exactly that: mapping any failure to `Ok` would report containment
-        // for a sandbox another deployment owns and this one was refused.
-        if let Err(error) = self.client.delete_sandbox(&self.engine, sandbox_id).await {
-            if !is_not_found(&error) {
-                return Err(error.context(ErrorData::SandboxUnreachable {
-                    operation: TERMINATE.to_string(),
-                    reason: format!("the delete of sandbox '{sandbox_id}' was not accepted"),
-                }));
-            }
-            return Ok(());
+        let outcome = self.delete_until_gone(sandbox_id).await;
+        if outcome.is_ok() {
+            // Nothing can use a grant for a sandbox that is gone, and a long-lived binding that
+            // creates sandboxes continually would otherwise hold every one it ever granted.
+            self.forget_grants(sandbox_id);
         }
-
-        for _ in 0..TERMINATE_POLL_ATTEMPTS {
-            match self.client.get_sandbox(&self.engine, sandbox_id).await {
-                Err(error) if is_not_found(&error) => return Ok(()),
-                // A read that fails is not a sandbox that is gone, and one throttled response must
-                // not end the poll: the attempt budget decides.
-                Err(error) => {
-                    warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone")
-                }
-                Ok(_) => {}
-            }
-            tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
-        }
-
-        Err(AlienError::new(ErrorData::SandboxUnreachable {
-            operation: TERMINATE.to_string(),
-            reason: format!(
-                "deletion of '{sandbox_id}' was accepted but the sandbox was still present after \
-                 {}s; it may still be running",
-                TERMINATE_POLL_ATTEMPTS as u64 * TERMINATE_POLL_INTERVAL.as_secs()
-            ),
-        }))
+        outcome
     }
 }
 
