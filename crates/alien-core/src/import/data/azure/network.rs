@@ -64,6 +64,10 @@ pub struct AzureSandboxNetwork {
     /// Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before
     /// the admin port was removed from that rule also allow TCP 3129; both are accepted.
     pub gateway_cidrs: Vec<String>,
+    /// Static private IPs of the setup-created gateway VMs (one per replica). Setup releases
+    /// that predate the VMs leave this empty, and Internet sandboxes then refuse to start.
+    #[serde(default)]
+    pub gateway_ips: Vec<String>,
     /// Workload source ranges allowed on the authenticated admin listener.
     pub workload_cidrs: Vec<String>,
     /// Every VNet range excluded from gateway destinations.
