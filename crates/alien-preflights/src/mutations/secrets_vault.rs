@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, info};
 
-const MACHINE_WORKLOAD_SECRETS_READ_ID: &str = "vault/machine-workload-secrets-read";
+use alien_core::{machine_secrets_installed, MACHINE_WORKLOAD_SECRETS_READ_ID};
 
 /// Adds the shared vault for Worker environment secrets and Azure infrastructure secrets.
 /// Management keeps read/write access to the values it supplies here.
@@ -783,15 +783,18 @@ fn deployer_secrets_read_permission_set(keys: &BTreeSet<String>) -> Result<Permi
     })
 }
 
-/// New AWS installs, installs that already have the secrets vault, and runs
-/// with setup authority take the machine workload vault grants. An installed
-/// stack without the vault keeps its current secret path on ordinary releases,
-/// so they never need setup; re-running setup opts it in.
+/// New AWS installs, runs with setup authority, and installs whose profiles
+/// already carry the machine workload grant take the machine workload vault
+/// grants. An installed stack without the grant keeps its current secret path
+/// on ordinary releases, so they never need setup; re-running setup opts it in.
+/// Having the secrets vault is not a signal: a worker gives an install the
+/// vault without the grant, and adding the grant to its frozen profile would
+/// block the release.
 fn machine_secrets_opted_in(stack_state: &StackState, config: &DeploymentConfig) -> bool {
     stack_state.platform == Platform::Aws
         && (stack_state.resources.is_empty()
-            || stack_state.resources.contains_key(SECRETS_VAULT_ID)
-            || config.setup_run)
+            || config.setup_run
+            || machine_secrets_installed(stack_state))
 }
 
 /// Permission profiles of the containers and daemons that run on machines.
@@ -1962,6 +1965,195 @@ mod tests {
         assert!(!SecretsVaultMutation.should_run(&stack, &state, &config));
         config.setup_run = true;
         assert!(SecretsVaultMutation.should_run(&stack, &state, &config));
+    }
+
+    /// An AWS install made before the machine workload grant existed: a worker
+    /// gave it the vault, its profile holds only `vault/data-read`. The
+    /// recorded service accounts are what an ordinary release can see.
+    async fn installed_worker_and_container_install() -> (Stack, StackState, Stack) {
+        let container = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let entry = |config: alien_core::Resource| ResourceEntry {
+            config,
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: None,
+        };
+        let mut stack = compute_cluster_stack();
+        stack.resources.insert(
+            "web".to_string(),
+            entry(alien_core::Resource::new(container)),
+        );
+        stack
+            .resources
+            .insert("api".to_string(), entry(alien_core::Resource::new(worker)));
+        stack
+            .resources
+            .insert("management".to_string(), remote_stack_management_entry());
+        stack
+            .permissions
+            .profiles
+            .insert("execution".to_string(), PermissionProfile::new());
+
+        // The state the install had before the vault: only the cluster.
+        let mut state = StackState::new(Platform::Aws);
+        let cluster = &stack.resources["compute"];
+        state.resources.insert(
+            "compute".to_string(),
+            StackResourceState::new_pending(
+                cluster.config.resource_type().to_string(),
+                cluster.config.clone(),
+                Some(cluster.lifecycle),
+                Vec::new(),
+            ),
+        );
+        let config = machine_config();
+        // The setup the old manager ran: the vault, no machine workload grant.
+        let setup = SecretsVaultMutation
+            .mutate(stack.clone(), &state, &config)
+            .await
+            .unwrap();
+        let setup = ServiceAccountMutation
+            .mutate(setup, &state, &config)
+            .await
+            .unwrap();
+        assert!(!has_machine_grant(&setup, "execution"), "old install");
+        for (id, entry) in &setup.resources {
+            if entry.lifecycle == ResourceLifecycle::Frozen {
+                let mut resource = StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(entry.lifecycle),
+                    entry.dependencies.clone(),
+                );
+                resource.status = alien_core::ResourceStatus::Running;
+                state.resources.insert(id.clone(), resource);
+            }
+        }
+        (stack, state, setup)
+    }
+
+    fn machine_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build()
+    }
+
+    fn has_machine_grant(stack: &Stack, profile: &str) -> bool {
+        stack.permissions.profiles[profile]
+            .0
+            .get("secrets")
+            .into_iter()
+            .flatten()
+            .any(|reference| reference.id() == MACHINE_WORKLOAD_SECRETS_READ_ID)
+    }
+
+    #[tokio::test]
+    async fn an_installed_stack_with_a_worker_vault_is_not_opted_in_on_release() {
+        let (stack, state, setup) = installed_worker_and_container_install().await;
+        assert!(state.resources.contains_key(SECRETS_VAULT_ID));
+        let config = machine_config();
+        let updated = SecretsVaultMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        let updated = ServiceAccountMutation
+            .mutate(updated, &state, &config)
+            .await
+            .unwrap();
+        assert_eq!(updated.permissions.profiles, setup.permissions.profiles);
+        for result in [
+            PermissionProfilesUnchangedCheck
+                .check_with_config(&setup, &updated, &config, Platform::Aws)
+                .await
+                .unwrap(),
+            FrozenResourcesUnchangedCheck {
+                platform: Platform::Aws,
+            }
+            .check_with_config(&setup, &updated, &config, Platform::Aws)
+            .await
+            .unwrap(),
+        ] {
+            assert!(result.errors.is_empty(), "{:?}", result.errors);
+        }
+
+        assert!(!machine_secrets_opted_in(&state, &config));
+        assert!(!machine_secrets_installed(&state));
+
+        // Re-running setup opts it in.
+        let mut setup_config = machine_config();
+        setup_config.setup_run = true;
+        assert!(machine_secrets_opted_in(&state, &setup_config));
+    }
+
+    #[tokio::test]
+    async fn an_installed_stack_that_has_the_machine_grant_keeps_it() {
+        let (stack, mut state, _) = installed_worker_and_container_install().await;
+        // Setup was re-run after the grant shipped.
+        let mut setup_config = machine_config();
+        setup_config.setup_run = true;
+        let setup = SecretsVaultMutation
+            .mutate(stack.clone(), &state, &setup_config)
+            .await
+            .unwrap();
+        let setup = ServiceAccountMutation
+            .mutate(setup, &state, &setup_config)
+            .await
+            .unwrap();
+        assert!(has_machine_grant(&setup, "execution"));
+        let account = setup.resources["execution-sa"].clone();
+        state.resources.insert(
+            "execution-sa".to_string(),
+            StackResourceState::new_pending(
+                account.config.resource_type().to_string(),
+                account.config.clone(),
+                Some(account.lifecycle),
+                account.dependencies.clone(),
+            ),
+        );
+        let config = machine_config();
+        assert!(machine_secrets_installed(&state));
+        assert!(machine_secrets_opted_in(&state, &config));
+
+        let updated = SecretsVaultMutation
+            .mutate(stack, &state, &config)
+            .await
+            .unwrap();
+        let updated = ServiceAccountMutation
+            .mutate(updated, &state, &config)
+            .await
+            .unwrap();
+        assert!(has_machine_grant(&updated, "execution"));
+        assert_eq!(updated.permissions.profiles, setup.permissions.profiles);
+        let result = PermissionProfilesUnchangedCheck
+            .check_with_config(&setup, &updated, &config, Platform::Aws)
+            .await
+            .unwrap();
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
     }
 
     #[tokio::test]
