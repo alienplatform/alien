@@ -55,8 +55,37 @@ impl AwsVaultController {
         );
 
         let account_id = aws_cfg.account_id.to_string();
-
         let vault_prefix = aws_prefixed_resource_name(ctx.resource_prefix, &config.id);
+
+        // Record the name before any AWS write. The permissions boundary names this vault's
+        // parameters from the recorded prefix, and every step that builds it, including the
+        // retry of a failed permissions step, reads it from the saved state.
+        self.vault_prefix = Some(vault_prefix);
+        self.account_id = Some(account_id);
+        self.region = Some(aws_cfg.region.clone());
+
+        Ok(HandlerAction::Continue {
+            state: ApplyingResourcePermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ApplyingResourcePermissions,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn applying_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Vault>()?;
+        let vault_prefix = self.vault_prefix.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Vault prefix missing while applying permissions".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
 
         ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
             ctx,
@@ -73,19 +102,11 @@ impl AwsVaultController {
             self.permissions_revision = Some(super::permissions_revision(ctx)?);
         }
 
-        // Store the vault prefix using resource_prefix-config.id pattern
-        self.vault_prefix = Some(vault_prefix);
-
         info!(
             vault_id = %config.id,
-            account_id = %account_id,
-            region = %aws_cfg.region,
-            vault_prefix = %self.vault_prefix.as_deref().unwrap_or("unknown"),
+            vault_prefix = %vault_prefix,
             "AWS SSM Parameter Store vault is ready (implicitly exists)"
         );
-
-        self.account_id = Some(account_id);
-        self.region = Some(aws_cfg.region.clone());
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -396,7 +417,7 @@ mod permission_update_tests {
         AwsClientConfigExt as _,
     };
     use alien_client_core::ErrorData as CloudError;
-    use alien_core::permissions::PermissionProfile;
+    use alien_core::permissions::{PermissionProfile, PermissionSetReference};
     use alien_core::{
         AwsClientConfig, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
         ExternalBindings, InitialSetupAuthority, Resource, ResourceLifecycle, ResourceRef,
@@ -588,6 +609,9 @@ mod permission_update_tests {
         /// The name the `"*"` grant uses for the read set; it may be an alias.
         #[builder(default = "vault/data-read")]
         wildcard_set: &str,
+        /// The vault has not been created: setup is about to run its first step.
+        #[builder(default)]
+        fresh_vault: bool,
     ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
         let iam = Arc::new(Mutex::new(Iam::default()));
         for (role, name) in existing {
@@ -668,13 +692,19 @@ mod permission_update_tests {
             Vault::RESOURCE_TYPE.to_string(),
             Resource::new(vault),
             Some(lifecycle),
-            vec![],
+            vec![ResourceRef::new(
+                ServiceAccount::RESOURCE_TYPE,
+                "consumer-sa",
+            )],
         );
-        vault_state.status = ResourceStatus::Running;
-        vault_state.outputs = controller.get_outputs();
-        vault_state
-            .set_internal_controller(Some(Box::new(controller)))
-            .unwrap();
+        if !fresh_vault {
+            vault_state.dependencies = vec![];
+            vault_state.status = ResourceStatus::Running;
+            vault_state.outputs = controller.get_outputs();
+            vault_state
+                .set_internal_controller(Some(Box::new(controller)))
+                .unwrap();
+        }
         state.resources.insert("secrets".to_string(), vault_state);
         // The newly created role is ready, but the existing vault has not yet
         // recorded its new dependency or installed its read policy.
@@ -1157,6 +1187,72 @@ mod permission_update_tests {
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert!(iam.lock().unwrap().calls.is_empty());
+    }
+
+    /// Setup's other resources read the vault's recorded name when they build the
+    /// permissions boundary. A first step that fails while writing IAM must already
+    /// have recorded it, or the next resource to build the boundary fails for good.
+    #[tokio::test]
+    async fn a_first_step_that_fails_in_iam_has_already_recorded_the_vault_name() {
+        let (executor, state, _iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::LoseFirstPut)
+            .existing(&[])
+            .remove_consumer(false)
+            .fresh_vault(true)
+            .call();
+        // Step until the IAM write fails, as it does when the response is lost.
+        let mut state = state;
+        for _ in 0..3 {
+            state = reload(&executor.step(state).await.unwrap().next_state);
+            if state.resources["secrets"].error.is_some() {
+                break;
+            }
+        }
+        let vault = &state.resources["secrets"];
+        assert_ne!(vault.status, ResourceStatus::Running);
+        assert!(vault.error.is_some(), "the IAM write should have failed");
+
+        let stack = Stack::new("test".to_string())
+            .add(
+                Vault::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .permission(
+                "consumer",
+                // The grant setup gives a container profile on the secrets vault: an inline
+                // set whose resource is named from the vault's recorded prefix.
+                PermissionProfile::new().resource(
+                    "secrets",
+                    [PermissionSetReference::from_inline(
+                        serde_json::from_value(serde_json::json!({
+                            "id": "vault/machine-workload-secrets-read",
+                            "description": "Reads the secret values handed to this profile",
+                            "platforms": {"aws": [{
+                                "grant": {"actions": ["ssm:GetParameter"]},
+                                "binding": {"resource": {"resources": [
+                                    "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-hz.consumer.*"
+                                ]}}
+                            }]}
+                        }))
+                        .unwrap(),
+                    )],
+                ),
+            )
+            .build();
+        let context = alien_permissions::PermissionContext::new()
+            .with_stack_prefix("test")
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_managing_account_id("210987654321")
+            .with_managing_role_arn("arn:aws:iam::210987654321:role/manager");
+        let boundary = crate::core::aws_permissions_boundary_for_stack(&stack, &state, &context)
+            .expect("the boundary resolves while the vault's first step is retried");
+        assert!(
+            boundary.to_string().contains(":parameter/test-*"),
+            "{boundary}"
+        );
     }
 
     #[tokio::test]
