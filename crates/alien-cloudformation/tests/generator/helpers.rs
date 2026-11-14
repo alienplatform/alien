@@ -199,6 +199,10 @@ pub fn resolve(
             }
 
             if let Some(CfExpression::List(arguments)) = fields.get("Fn::Join") {
+                // A list parameter joined whole stands in as one placeholder value.
+                if let [CfExpression::String(_), list @ CfExpression::Object(_)] = &arguments[..] {
+                    return placeholder(list).map(CfExpression::String);
+                }
                 let [CfExpression::String(delimiter), CfExpression::List(items)] = &arguments[..]
                 else {
                     panic!("malformed Fn::Join: {arguments:?}");
@@ -257,11 +261,20 @@ pub fn resolve(
 }
 
 /// Text standing in for a deploy-time string inside `Fn::Join`: `Ref: Name` is
-/// `${Name}` and `Fn::GetAtt: [Id, Attr]` is `${Id.Attr}`.
+/// `${Name}`, `Fn::GetAtt: [Id, Attr]` is `${Id.Attr}` `Fn::Select: [N, ..]` is `${SelectN}` and a plain `Fn::Sub` stays its template.
 fn placeholder(expression: &CfExpression) -> Option<String> {
     let CfExpression::Object(fields) = expression else {
         return None;
     };
+    if let Some(CfExpression::String(template)) = fields.get("Fn::Sub") {
+        return Some(template.clone());
+    }
+    if let Some(CfExpression::List(arguments)) = fields.get("Fn::Select") {
+        return match &arguments[..] {
+            [CfExpression::Integer(index), _] => Some(format!("${{Select{index}}}")),
+            _ => None,
+        };
+    }
     match (fields.get("Ref"), fields.get("Fn::GetAtt")) {
         (Some(CfExpression::String(name)), None) => Some(format!("${{{name}}}")),
         (None, Some(CfExpression::List(target))) => match &target[..] {
