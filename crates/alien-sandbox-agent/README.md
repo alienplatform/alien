@@ -485,6 +485,13 @@ root; an image with a non-root USER starts as that user with no capabilities. Ex
 stay non-root. Sandboxes use the project's
 default network placement and are reached through `:execute`.
 
+Deployment requirements for preview: the sandbox is declared Frozen, so setup creates the signing
+identity next to the engine and passes it to the template controller through the import data; the
+controller publishes it, with the declared ports, in the binding a deployed app reads. A Live sandbox
+with preview ports is refused at plan time, and a manager-resolved (remote) binding refuses
+`preview()` with a message saying so, because its lease cannot sign the edge credential. The
+calling identity needs `sandbox/execute` to preview and `sandbox/management` to create sandboxes.
+
 Limits the plan refuses with a message, rather than discovering them at the first session:
 - a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
 - `internet` egress and preview ports (not built or proven on GCP yet; declare `none` and no
