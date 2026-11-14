@@ -288,7 +288,11 @@ impl EdgeTokenSigner for IamEdgeTokenSigner {
         let mut hash = Sha256::new();
         hash.update(b"alien-sandbox-agent-control-v1\0");
         hash.update(response.signed_jwt.as_bytes());
-        Ok(hash.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
+        Ok(hash
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
     }
 }
 
@@ -332,10 +336,7 @@ impl AgentPlatformApi for KeyedClient {
     async fn delete_engine(&self, engine: &str) -> AgentResult<()> {
         self.inner.delete_engine(engine).await
     }
-    async fn list_engines(
-        &self,
-    ) -> AgentResult<Vec<ReasoningEngine>>
-    {
+    async fn list_engines(&self) -> AgentResult<Vec<ReasoningEngine>> {
         self.inner.list_engines().await
     }
     async fn create_template(
@@ -352,10 +353,7 @@ impl AgentPlatformApi for KeyedClient {
     ) -> AgentResult<SandboxEnvironmentTemplate> {
         self.inner.get_template(engine, template).await
     }
-    async fn list_templates(
-        &self,
-        engine: &str,
-    ) -> AgentResult<Vec<SandboxEnvironmentTemplate>> {
+    async fn list_templates(&self, engine: &str) -> AgentResult<Vec<SandboxEnvironmentTemplate>> {
         self.inner.list_templates(engine).await
     }
     async fn delete_template(&self, engine: &str, template: &str) -> AgentResult<()> {
@@ -368,38 +366,24 @@ impl AgentPlatformApi for KeyedClient {
     ) -> AgentResult<Operation> {
         self.inner.create_sandbox(engine, request).await
     }
-    async fn get_sandbox(
-        &self,
-        engine: &str,
-        sandbox: &str,
-    ) -> AgentResult<SandboxEnvironment> {
+    async fn get_sandbox(&self, engine: &str, sandbox: &str) -> AgentResult<SandboxEnvironment> {
         self.inner.get_sandbox(engine, sandbox).await
     }
-    async fn list_sandboxes(
-        &self,
-        engine: &str,
-    ) -> AgentResult<Vec<SandboxEnvironment>> {
+    async fn list_sandboxes(&self, engine: &str) -> AgentResult<Vec<SandboxEnvironment>> {
         self.inner.list_sandboxes(engine).await
     }
     async fn delete_sandbox(&self, engine: &str, sandbox: &str) -> AgentResult<()> {
         self.keys.lock().expect("key cache lock").remove(sandbox);
         self.inner.delete_sandbox(engine, sandbox).await
     }
-    async fn execute(
-        &self,
-        engine: &str,
-        sandbox: &str,
-        input: &[u8],
-    ) -> AgentResult<Vec<u8>> {
+    async fn execute(&self, engine: &str, sandbox: &str, input: &[u8]) -> AgentResult<Vec<u8>> {
         let Some(key) = self.key(sandbox).await else {
             // Sending the request without the key would be refused by a keyed agent and honoured
             // by an open one; either way the caller would not know the key was missing.
-            return Err(AlienError::new(
-                AgentPlatformErrorData::ExecuteFailed {
-                    sandbox: sandbox.to_string(),
-                    message: "the agent control key could not be derived".to_string(),
-                },
-            ));
+            return Err(AlienError::new(AgentPlatformErrorData::ExecuteFailed {
+                sandbox: sandbox.to_string(),
+                message: "the agent control key could not be derived".to_string(),
+            }));
         };
         let body = match serde_json::from_slice::<serde_json::Value>(input) {
             Ok(serde_json::Value::Object(mut object)) => {

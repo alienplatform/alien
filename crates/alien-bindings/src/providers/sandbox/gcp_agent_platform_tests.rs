@@ -2153,7 +2153,10 @@ async fn preview_never_reports_more_than_the_longest_grant() {
         .with_preview_signer(Arc::new(FixedSigner {
             edge_lifetime: 3600,
         }))
-        .with_preview_ports(vec![8080]).preview("s1", 8080).await.unwrap();
+        .with_preview_ports(vec![8080])
+        .preview("s1", 8080)
+        .await
+        .unwrap();
     assert_eq!(
         preview.expires_in_seconds,
         alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS as u64
@@ -2322,7 +2325,9 @@ async fn the_grant_cache_drops_expired_entries_when_it_is_used() {
 async fn terminating_a_sandbox_drops_its_grants_and_only_its_own() {
     let mut client = MockAgentPlatformApi::new();
     client.expect_delete_sandbox().returning(|_, _| Ok(()));
-    client.expect_get_sandbox().returning(|_, _| Err(not_found()));
+    client
+        .expect_get_sandbox()
+        .returning(|_, _| Err(not_found()));
     let provider = preview_provider(client);
     {
         let mut grants = provider.grants.lock().unwrap();
@@ -2461,7 +2466,10 @@ async fn the_control_key_is_stable_per_sandbox_and_differs_between_sandboxes() {
     let b = signer.control_key("sandbox-bb").await.unwrap();
     assert_eq!(a1, a2);
     assert_ne!(a1, b);
-    assert!(a1.len() >= alien_core::sandbox_image::CONTROL_KEY_MIN_LEN, "{a1}");
+    assert!(
+        a1.len() >= alien_core::sandbox_image::CONTROL_KEY_MIN_LEN,
+        "{a1}"
+    );
 }
 
 /// The claims signed for the key name the sandbox and are not an edge credential.
@@ -2471,7 +2479,8 @@ async fn the_control_key_claims_name_the_sandbox_and_not_the_edge_audience() {
     iam.expect_sign_jwt()
         .withf(|_, request| {
             let claims: serde_json::Value = serde_json::from_str(&request.payload).unwrap();
-            claims["sandbox"] == "sandbox-a" && claims["aud"] != "https://aiplatform.googleapis.com/"
+            claims["sandbox"] == "sandbox-a"
+                && claims["aud"] != "https://aiplatform.googleapis.com/"
         })
         .times(1)
         .returning(|_, _| {

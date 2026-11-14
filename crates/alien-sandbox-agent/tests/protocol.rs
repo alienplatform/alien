@@ -2589,7 +2589,10 @@ async fn a_preview_capability_never_authorizes_a_control_route() {
     .json()
     .await
     .unwrap();
-    let capability = granted["capability"].as_str().expect("a capability").to_string();
+    let capability = granted["capability"]
+        .as_str()
+        .expect("a capability")
+        .to_string();
 
     let preview = reqwest::Client::new()
         .get(format!("{base}/v1/preview/{port}/"))
@@ -2598,7 +2601,11 @@ async fn a_preview_capability_never_authorizes_a_control_route() {
         .send()
         .await
         .unwrap();
-    assert_eq!(preview.status(), 200, "the capability is the preview credential");
+    assert_eq!(
+        preview.status(),
+        200,
+        "the capability is the preview credential"
+    );
 
     // The holder presents the capability everywhere it can think of; no control route admits it.
     let client = reqwest::Client::new();
@@ -2633,7 +2640,11 @@ async fn the_control_key_installs_once_and_cannot_be_replaced() {
         "a short key is refused"
     );
     assert_eq!(install_control_key(&base, CONTROL_KEY).await.status(), 200);
-    assert_eq!(install_control_key(&base, CONTROL_KEY).await.status(), 200, "same key again");
+    assert_eq!(
+        install_control_key(&base, CONTROL_KEY).await.status(),
+        200,
+        "same key again"
+    );
     let other = "z-9999999999999999999999999999999999-other";
     let replace = envelope(
         &base,

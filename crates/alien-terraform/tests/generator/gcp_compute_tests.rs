@@ -636,14 +636,17 @@ fn two_gcp_preview_sandboxes_share_one_signing_role() {
     assert_eq!(roles, 1, "one signing role for the stack:\n{rendered}");
     assert_eq!(
         rendered
-            .matches("resource \"google_project_iam_custom_role\" \"gcp_role_sandbox_preview_sign\"")
+            .matches(
+                "resource \"google_project_iam_custom_role\" \"gcp_role_sandbox_preview_sign\""
+            )
             .count(),
         1,
         "{rendered}"
     );
     // Each signer account has its own binding, and both name the one role.
     for signer in ["agents_preview", "jobs_preview"] {
-        let binding = format!("resource \"google_service_account_iam_member\" \"{signer}_sign_worker_sa\"");
+        let binding =
+            format!("resource \"google_service_account_iam_member\" \"{signer}_sign_worker_sa\"");
         let block = rendered
             .split(&binding)
             .nth(1)
