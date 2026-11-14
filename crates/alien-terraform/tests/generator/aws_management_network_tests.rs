@@ -16,6 +16,10 @@ const CREATED_VPC: &str = "vpc-0c0000000000000a1";
 const EXISTING_VPC: &str = "vpc-0e0000000000000b2";
 
 fn stack(settings: NetworkSettings) -> Stack {
+    stack_builder(settings).build()
+}
+
+fn stack_builder(settings: NetworkSettings) -> alien_core::StackBuilder {
     Stack::new("scope".to_string())
         .management(ManagementPermissions::extend(
             PermissionProfile::new().global(["compute-cluster/management", "container/provision"]),
@@ -43,7 +47,6 @@ fn stack(settings: NetworkSettings) -> Stack {
                 .build(),
             ResourceLifecycle::Live,
         )
-        .build()
 }
 
 fn strings(values: &[&str]) -> Value {
@@ -503,5 +506,84 @@ fn aws_management_policy_refuses_more_subnets_than_it_names() {
                 "{settings:?}: {count} subnets, {mode}"
             );
         }
+    }
+}
+
+/// On a Kubernetes target the module creates no sandbox gateway subnets and declares no
+/// variable for them (the sandbox runs in the cluster), so the management policy must not name
+/// them either. With an internet sandbox and its gateway in the stack, the module still
+/// validates and names only the network's own subnets.
+#[test]
+fn aws_management_policy_on_eks_names_no_sandbox_gateway_subnets() {
+    use alien_core::{
+        sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Container, ContainerCode, ResourceSpec, Sandbox,
+        SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+    };
+    for settings in [
+        NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        },
+        NetworkSettings::ByoVpcAws {
+            vpc_id: EXISTING_VPC.to_string(),
+            public_subnet_ids: vec![],
+            private_subnet_ids: vec!["subnet-0e0000000000priv1".to_string()],
+            security_group_ids: vec![String::new()],
+        },
+    ] {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "s3://vpcscope-artifacts/agents/bundle.zip".to_string(),
+                bundled_from: None,
+            })
+            .egress(SandboxEgress::Internet)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let gateway = Container::new(SANDBOX_EGRESS_GATEWAY_ID.to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "ghcr.io/example/gateway:1".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.25".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "256Mi".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let stack = stack_builder(settings.clone())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .add(gateway, ResourceLifecycle::Live)
+            .build();
+        assert!(alien_core::sandbox_egress::has_sandbox_gateway(&stack));
+        let module = render(
+            &stack,
+            TerraformTarget::Eks,
+            StackSettings {
+                network: Some(settings.clone()),
+                ..StackSettings::default()
+            },
+        );
+        assert_terraform_valid(&module, "management network scope on EKS");
+        let text = module
+            .iter()
+            .filter(|(path, _)| path.ends_with(".tf"))
+            .map(|(_, contents)| contents.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("_network_subnet_ids"),
+            "{settings:?}: the policy names the network"
+        );
+        assert!(
+            !text.contains("sandbox_gateway"),
+            "{settings:?}: an EKS module names gateway subnets it does not have"
+        );
     }
 }

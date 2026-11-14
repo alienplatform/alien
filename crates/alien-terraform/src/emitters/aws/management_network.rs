@@ -100,7 +100,10 @@ pub(crate) fn network_expressions(
     let Some((network_label, network)) = default_network(ctx) else {
         return Ok(None);
     };
-    let gateway = alien_core::sandbox_egress::has_sandbox_gateway(ctx.stack);
+    // As the network emitter and the module's variables: a Kubernetes target runs the sandbox
+    // in the cluster and has no gateway subnets.
+    let gateway =
+        !ctx.targets_kubernetes && alien_core::sandbox_egress::has_sandbox_gateway(ctx.stack);
     let gateway_list = || -> Result<Option<String>> {
         Ok(if gateway {
             Some(format!(

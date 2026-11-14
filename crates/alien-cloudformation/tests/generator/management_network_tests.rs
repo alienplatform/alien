@@ -200,3 +200,97 @@ fn a_network_management_creates_scopes_management_by_its_tags() {
         "launches need the stack's subnet tags: {policies}"
     );
 }
+
+/// On a Kubernetes target the sandbox runs in the cluster and the template has no sandbox
+/// gateway subnets, so the management policy names only the network's own subnets, and the
+/// template is valid with an internet sandbox and its gateway in the stack.
+#[test]
+fn an_eks_install_names_no_sandbox_gateway_subnets() {
+    use alien_core::{
+        sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, Container, ContainerCode, ResourceSpec, Sandbox,
+        SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+    };
+    for network in [
+        NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        },
+        NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-0123456789abcdef0".to_string(),
+            public_subnet_ids: vec![],
+            private_subnet_ids: vec!["subnet-0bbbbbbbbbbbbbbbb".to_string()],
+            security_group_ids: vec![String::new()],
+        },
+    ] {
+        let stack = Stack::new("vpcscope".to_string())
+            .management(ManagementPermissions::extend(
+                PermissionProfile::new()
+                    .global(["compute-cluster/management", "container/provision"]),
+            ))
+            .permission("execution", PermissionProfile::new())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(network.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "s3://vpcscope-artifacts/agents/bundle.zip".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(SandboxEgress::Internet)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Container::new(SANDBOX_EGRESS_GATEWAY_ID.to_string())
+                    .code(ContainerCode::Image {
+                        image: "ghcr.io/example/gateway:1".to_string(),
+                    })
+                    .cpu(ResourceSpec {
+                        min: "0.25".to_string(),
+                        desired: "0.25".to_string(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "256Mi".to_string(),
+                        desired: "256Mi".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        assert!(alien_core::sandbox_egress::has_sandbox_gateway(&stack));
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            StackSettings {
+                network: Some(network.clone()),
+                ..StackSettings::default()
+            },
+            custom_resource_registration(),
+            CloudFormationTarget::Eks,
+            "eks",
+            "management network scope on EKS",
+        );
+        let policies = policies_of(&template);
+        assert_no_placeholder(&policies);
+        assert!(
+            policies.contains("elasticloadbalancing:Subnet"),
+            "{network:?}: the policy names the network"
+        );
+        assert!(
+            !policies.contains("SandboxGateway"),
+            "{network:?}: an EKS template names gateway subnets it does not have: {policies}"
+        );
+    }
+}
