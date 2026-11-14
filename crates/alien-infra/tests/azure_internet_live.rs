@@ -23,7 +23,7 @@
 
 use alien_core::{
     import::ImportContext, AzureClientConfig, AzureCredentials, ClientConfig, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, Platform, ResourceStatus, Stack,
+    EnvironmentVariablesSnapshot, ExternalBindings, Platform, ResourceLifecycle, ResourceStatus, Stack,
     StackSettings, StackState,
 };
 use alien_infra::{ImporterRegistry, StackExecutor, StackResourceStateExt};
@@ -110,23 +110,36 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
         .external_bindings(ExternalBindings::default())
         .allow_frozen_changes(false)
         .build();
-    let executor = StackExecutor::builder(&stack, client_config)
+    // The deployment's two phases: setup-owned (Frozen) resources continue from the import, then
+    // the Live phase runs over the same state, which is where the gateway declaration is accepted.
+    let frozen = StackExecutor::builder(&stack, client_config.clone())
         .deployment_config(&config)
+        .lifecycle_filter(vec![ResourceLifecycle::Frozen])
         .build()
         .expect("the executor accepts the prepared stack");
-
-    let mut state = executor
+    state = frozen
         .continue_imported(state)
         .await
         .expect("imported setup state continues")
         .next_state;
-    let finished = executor.run_until_synced(state.clone()).await;
-    state = finished.final_state;
+    let finished = frozen.run_until_synced(state).await;
     assert!(
         finished.success,
-        "the executor did not sync: {:?}",
+        "the Frozen phase did not sync: {:?}",
         finished.error
     );
+    state = finished.final_state;
+    let live = StackExecutor::builder(&stack, client_config)
+        .deployment_config(&config)
+        .build()
+        .expect("the executor accepts the prepared stack in the Live phase");
+    let finished = live.run_until_synced(state).await;
+    assert!(
+        finished.success,
+        "the Live phase did not sync: {:?}",
+        finished.error
+    );
+    state = finished.final_state;
 
     for (id, resource) in &state.resources {
         eprintln!("[state] {id}: {:?}", resource.status);
