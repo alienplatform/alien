@@ -1,5 +1,8 @@
 pub mod storage_notifications;
 
+mod prepared_resources;
+pub use prepared_resources::*;
+
 mod stack;
 pub use stack::*;
 

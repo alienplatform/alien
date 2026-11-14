@@ -132,9 +132,12 @@ pub(crate) fn network_expressions(
     let (vpc, subnets, subnet_limit) = match &network.settings {
         NetworkSettings::Create { .. } => {
             let (default_vpc, default_subnets) = if stack_has_setup_postgres(ctx) {
+                // The data sources and the VPC have no instance when the module does not
+                // create the network (an existing cluster), and before Terraform 1.12 an
+                // index on them fails even where the condition above would not pick it.
                 (
-                    format!("data.aws_vpcs.{network_label}_default[0].ids[0]"),
-                    format!("data.aws_subnets.{network_label}_default[0].ids"),
+                    format!("length(data.aws_vpcs.{network_label}_default[*].ids) > 0 ? data.aws_vpcs.{network_label}_default[0].ids[0] : \"*\""),
+                    format!("length(data.aws_subnets.{network_label}_default[*].ids) > 0 ? data.aws_subnets.{network_label}_default[0].ids : [\"*\"]"),
                 )
             } else {
                 // Without a database in it, setup does not look the default VPC up, so its
@@ -155,10 +158,10 @@ pub(crate) fn network_expressions(
             }
             (
                 format!(
-                    "var.network_mode == \"create-new\" ? aws_vpc.{network_label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : {default_vpc}"
+                    "var.network_mode == \"create-new\" ? (length(aws_vpc.{network_label}[*].id) > 0 ? aws_vpc.{network_label}[0].id : \"*\") : var.network_mode == \"use-existing\" ? var.vpc_id : ({default_vpc})"
                 ),
                 format!(
-                    "var.network_mode == \"create-new\" ? concat({}) : var.network_mode == \"use-existing\" ? {} : {default_subnets}",
+                    "var.network_mode == \"create-new\" ? concat({}) : var.network_mode == \"use-existing\" ? {} : ({default_subnets})",
                     created.join(", "),
                     provided(existing),
                 ),

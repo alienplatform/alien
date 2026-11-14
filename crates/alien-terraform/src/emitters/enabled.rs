@@ -20,12 +20,46 @@ use hcl::{
     Identifier,
 };
 
-/// Terraform variable carrying the gate's value.
+/// Local (EKS modules) that is true when the deployment settings carry a `network` from
+/// `advanced_settings`, i.e. the deployer asked for one explicitly.
+pub const ADVANCED_NETWORK_LOCAL: &str = "deployment_requests_network";
+
+/// Prefix of a gate that is true for a module-created cluster, an explicitly requested network,
+/// or while any of the listed deployer inputs (comma separated, all non-null booleans, possibly
+/// none) is true. Built by [`kubernetes_network_gate`].
+const KUBERNETES_NETWORK_GATE_PREFIX: &str = "@kubernetes-network:";
+
+/// The gate for a network the manager expects for a created cluster, a network the settings
+/// request, or a cloud database whose own gate is on.
+pub fn kubernetes_network_gate(database_gate_inputs: &[&str]) -> String {
+    format!(
+        "{KUBERNETES_NETWORK_GATE_PREFIX}{}",
+        database_gate_inputs.join(",")
+    )
+}
+
+/// Terraform expression carrying the gate's value.
 ///
-/// Mirrors `terraform_stack_input_variable_name`; the compile-time check
-/// guarantees the input is a non-null boolean, so the expressions below never
-/// need a null guard.
+/// An input gate mirrors `terraform_stack_input_variable_name`; the compile-time check
+/// guarantees the input is a non-null boolean, so the expressions below never need a null
+/// guard.
 fn gate_variable(input_id: &str) -> String {
+    if let Some(inputs) = input_id.strip_prefix(KUBERNETES_NETWORK_GATE_PREFIX) {
+        // Plain variables and locals only, so evaluating every operand is safe on any Terraform
+        // version.
+        let operands = ["var.kubernetes_cluster_mode == \"create\"".to_string()]
+            .into_iter()
+            .chain([format!("local.{ADVANCED_NETWORK_LOCAL}")])
+            .chain(
+                inputs
+                    .split(',')
+                    .filter(|input| !input.is_empty())
+                    .map(|input| {
+                        format!("var.{}", crate::generator::stack_input_variable_name(input))
+                    }),
+            );
+        return format!("({})", operands.collect::<Vec<_>>().join(" || "));
+    }
     format!(
         "var.{}",
         crate::generator::stack_input_variable_name(input_id)
