@@ -61,26 +61,22 @@ impl AzureSandbox {
     }
 
     pub(super) fn native_policy(&self) -> Option<EgressPolicy> {
-        let Some(manager) = &self.egress_manager else {
+        if self.egress_manager.is_none() {
             return super::egress_policy(&self.egress);
-        };
+        }
         // Full/default-Deny inspects the inner CONNECT destination and rejects the gateway.
-        // Partial requires default-Allow. The ordered catch-all blocks other HTTP requests;
-        // setup's NSG allows the linked gateway ports and denies platform DNS/IMDS and other
-        // traffic. The gateway admin port has no rule and is not reachable from sandboxes.
+        // Partial requires default-Allow. The one ordered catch-all closes the :80/:443
+        // interposer. There is no gateway rule: Azure refuses a host:port pattern, and a host
+        // rule for an IP does not open a TCP port. Setup's NSG allows the linked gateway ports
+        // and denies platform DNS/IMDS and other traffic; the admin port has no rule and is not
+        // reachable from sandboxes.
         Some(EgressPolicy {
             default_action: "Allow".into(),
             traffic_inspection: Some("Partial".into()),
-            host_rules: vec![
-                EgressHostRule {
-                    pattern: manager.gateway_authority().into(),
-                    action: "Allow".into(),
-                },
-                EgressHostRule {
-                    pattern: "*".into(),
-                    action: "Deny".into(),
-                },
-            ],
+            host_rules: vec![EgressHostRule {
+                pattern: "*".into(),
+                action: "Deny".into(),
+            }],
             rules: Vec::new(),
             unmodelled: Default::default(),
         })

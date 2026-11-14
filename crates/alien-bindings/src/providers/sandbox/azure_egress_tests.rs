@@ -175,11 +175,11 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
     let floor = req.egress.unwrap();
     assert_eq!(floor.default_action, "Allow");
     assert_eq!(floor.traffic_inspection.as_deref(), Some("Partial"));
-    assert_eq!(floor.host_rules[0].pattern, "127.0.0.1:3128");
-    // No rule for the gateway admin port: the sandbox must not reach it at all.
-    assert_eq!(floor.host_rules.len(), 2);
-    assert_eq!(floor.host_rules[1].action, "Deny");
-    assert_eq!(floor.host_rules[1].pattern, "*");
+    // Azure refuses a host:port pattern, and an IP host rule would not open a TCP port anyway:
+    // the single catch-all closes the :80/:443 interposer and the NSG carries the gateway path.
+    assert_eq!(floor.host_rules.len(), 1);
+    assert_eq!(floor.host_rules[0].action, "Deny");
+    assert_eq!(floor.host_rules[0].pattern, "*");
 
     // Reopening the manager loses all in-process state; the provider label remains authoritative.
     let reopened = AzureSandbox {
@@ -324,8 +324,8 @@ async fn a_changed_native_floor_is_refused_before_policy_updates() {
         .egress_policy
         .as_mut()
         .unwrap()
-        .host_rules
-        .reverse();
+        .host_rules[0]
+        .pattern = "example.com".into();
     let error = sandbox
         .update_egress(
             "571fa784-7be7-5d9e-9cff-8e9a11414684",
@@ -403,8 +403,8 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         ("/enforcementMode", serde_json::json!("Audit")),
         ("/http/enforcementMode", serde_json::json!("Audit")),
         ("/http/defaultAction", serde_json::json!("Deny")),
-        ("/http/hostRules/1/action", serde_json::json!("Allow")),
-        ("/hostRules/0/pattern", serde_json::json!("*")),
+        ("/http/hostRules/0/action", serde_json::json!("Allow")),
+        ("/hostRules/0/pattern", serde_json::json!("example.com")),
         ("/http", serde_json::json!(null)),
     ];
     for (path, value) in changes {
