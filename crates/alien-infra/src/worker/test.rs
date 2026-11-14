@@ -527,7 +527,7 @@ impl TestWorkerController {
     // ─────────────── READY STATE ────────────────────────────────
     #[handler(
         state = Ready,
-        on_failure = CreateFailed,
+        on_failure = RefreshFailed,
         status = ResourceStatus::Running,
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
@@ -559,6 +559,20 @@ impl TestWorkerController {
             }
         }
 
+        // A permanent observation failure: the health check can never pass.
+        if let Ok(target_func) = ctx.desired_resource_config::<Worker>() {
+            if target_func
+                .environment
+                .get("SIMULATE_PERMANENT_OBSERVATION_FAILURE")
+                .is_some_and(|v| v == "true")
+            {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: "Simulated permanent observation failure".to_string(),
+                    resource_id: Some(target_func.id.clone()),
+                }));
+            }
+        }
+
         // The system will automatically know if config changed and transition to update
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -578,6 +592,19 @@ impl TestWorkerController {
         &mut self,
         _ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        // A permanent failure stays failed, as a controller whose RefreshFailed is terminal does.
+        if let Ok(target_func) = _ctx.desired_resource_config::<Worker>() {
+            if target_func
+                .environment
+                .get("SIMULATE_PERMANENT_OBSERVATION_FAILURE")
+                .is_some_and(|v| v == "true")
+            {
+                return Ok(HandlerAction::Continue {
+                    state: RefreshFailed,
+                    suggested_delay: None,
+                });
+            }
+        }
         self.ready_observations += 1;
         self.url = Some(format!("https://observed-{}.test", self.ready_observations));
         Ok(HandlerAction::Continue {
