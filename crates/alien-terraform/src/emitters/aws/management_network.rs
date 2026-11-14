@@ -71,8 +71,11 @@ pub(crate) struct NetworkExpressions {
     pub locals: Vec<(String, Expression)>,
     vpc: Expression,
     subnets: Expression,
-    /// The local holding the stack's subnets padded with blank entries.
-    subnets_local: String,
+    /// A condition that holds when the installer's subnet variables name no more subnets than
+    /// the policy can. It reads variables only: a reference to the network's resources would
+    /// take the management role out of the network's destroy order. Subnets setup creates or
+    /// looks up never exceed the limit.
+    subnet_limit: Option<String>,
 }
 
 /// Longest VPC ID: `vpc-` and 17 hexadecimal digits.
@@ -115,7 +118,15 @@ pub(crate) fn network_expressions(
             lists.join(", ")
         )
     };
-    let (vpc, subnets) = match &network.settings {
+    // The installer's subnet variables, gateway subnets included, when setup does not create
+    // the network.
+    let provided_limit = |mut lists: Vec<String>| {
+        if gateway {
+            lists.push("var.sandbox_gateway_subnet_ids".to_string());
+        }
+        format!("length({}) <= {SUBNET_PLACEHOLDERS}", provided(lists))
+    };
+    let (vpc, subnets, subnet_limit) = match &network.settings {
         NetworkSettings::Create { .. } => {
             let (default_vpc, default_subnets) = if stack_has_setup_postgres(ctx) {
                 (
@@ -148,12 +159,20 @@ pub(crate) fn network_expressions(
                     created.join(", "),
                     provided(existing),
                 ),
+                Some(format!(
+                    "var.network_mode != \"use-existing\" || {}",
+                    provided_limit(vec![
+                        "var.public_subnet_ids".to_string(),
+                        "var.private_subnet_ids".to_string(),
+                    ])
+                )),
             )
         }
         // The same default VPC and default subnets the runtime places resources in.
         NetworkSettings::UseDefault => (
             format!("data.aws_vpcs.{network_label}_default.ids[0]"),
             format!("data.aws_subnets.{network_label}_default.ids"),
+            None,
         ),
         NetworkSettings::ByoVpcAws { .. } => {
             let mut lists = vec![
@@ -163,7 +182,14 @@ pub(crate) fn network_expressions(
             if let Some(gateway) = gateway_list()? {
                 lists.push(gateway);
             }
-            (format!("var.{network_label}_vpc_id"), provided(lists))
+            (
+                format!("var.{network_label}_vpc_id"),
+                provided(lists),
+                Some(provided_limit(vec![
+                    format!("var.{network_label}_public_subnet_ids"),
+                    format!("var.{network_label}_private_subnet_ids"),
+                ])),
+            )
         }
         NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. } => {
             return Ok(None)
@@ -190,28 +216,21 @@ pub(crate) fn network_expressions(
                 })
                 .collect(),
         ),
-        subnets_local,
+        subnet_limit,
     }))
 }
 
 impl NetworkExpressions {
-    /// A `lifecycle` block for the management role that fails the plan when the stack's
-    /// network has more subnets than the policy names, rather than leaving the extra ones out.
-    pub(crate) fn subnet_limit_lifecycle(&self) -> hcl::Structure {
-        let subnets_local = &self.subnets_local;
-        nested_block(
+    /// A `lifecycle` block for the management role that fails the plan when the installer names
+    /// more subnets than the policy can, rather than leaving the extra ones out.
+    pub(crate) fn subnet_limit_lifecycle(&self) -> Option<hcl::Structure> {
+        let condition = self.subnet_limit.as_ref()?;
+        Some(nested_block(
             "lifecycle",
             vec![nested_block(
                 "precondition",
                 vec![
-                    attr(
-                        "condition",
-                        // The local is padded with SUBNET_PLACEHOLDERS blank entries.
-                        expr::raw(format!(
-                            "length(local.{subnets_local}) <= {}",
-                            2 * SUBNET_PLACEHOLDERS
-                        )),
-                    ),
+                    attr("condition", expr::raw(condition.clone())),
                     attr(
                         "error_message",
                         Expression::String(format!(
@@ -220,7 +239,7 @@ impl NetworkExpressions {
                     ),
                 ],
             )],
-        )
+        ))
     }
 }
 

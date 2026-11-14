@@ -411,61 +411,97 @@ fn aws_management_waiting_for_the_network_leaves_the_module_unchanged() {
 /// role's precondition instead of leaving the extra subnets out of the policy.
 #[test]
 fn aws_management_policy_refuses_more_subnets_than_it_names() {
-    let settings = NetworkSettings::ByoVpcAws {
-        vpc_id: EXISTING_VPC.to_string(),
-        public_subnet_ids: vec![],
-        private_subnet_ids: vec!["subnet-0e0000000000priv1".to_string()],
-        security_group_ids: vec![String::new()],
-    };
-    let module = render(
-        &stack(settings.clone()),
-        TerraformTarget::Aws,
-        StackSettings {
-            network: Some(settings),
-            ..StackSettings::default()
-        },
-    );
-    assert_terraform_valid(&module, "management subnet limit");
-    let role = module
-        .iter()
-        .filter(|(path, _)| path.ends_with(".tf"))
-        .flat_map(|(_, contents)| hcl::parse(contents).unwrap().into_blocks())
-        .find(|block| {
-            block.identifier() == "resource"
-                && block.labels()[0].as_str() == "aws_iam_role"
-                && block.labels()[1].as_str() == "management"
-        })
-        .expect("the module creates the management role");
-    let condition = role
-        .body()
-        .blocks()
-        .filter(|block| block.identifier() == "lifecycle")
-        .flat_map(|lifecycle| lifecycle.body().blocks())
-        .filter(|block| block.identifier() == "precondition")
-        .flat_map(|precondition| precondition.body().attributes())
-        .find(|attribute| attribute.key() == "condition")
-        .expect("the management role checks the subnet count")
-        .expr()
-        .clone();
     let subnets = |count: usize| -> Vec<String> {
         (1..=count)
             .map(|index| format!("subnet-0e000000000000{index:03}"))
             .collect()
     };
-    for (count, allowed) in [(1, true), (9, true), (10, false)] {
-        let context = evaluation_context(
-            &module,
-            json!({
-                "net_vpc_id": EXISTING_VPC,
-                "net_public_subnet_ids": [""],
-                "net_private_subnet_ids": subnets(count),
-                "net_security_group_ids": [""],
+    let existing = NetworkSettings::ByoVpcAws {
+        vpc_id: EXISTING_VPC.to_string(),
+        public_subnet_ids: vec![],
+        private_subnet_ids: vec!["subnet-0e0000000000priv1".to_string()],
+        security_group_ids: vec![String::new()],
+    };
+    let created = NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    for (settings, vars) in [
+        (
+            existing,
+            Box::new(|count: usize, _mode: &str| {
+                json!({
+                    "net_vpc_id": EXISTING_VPC,
+                    "net_public_subnet_ids": [""],
+                    "net_private_subnet_ids": subnets(count),
+                    "net_security_group_ids": [""],
+                })
+            }) as Box<dyn Fn(usize, &str) -> Json>,
+        ),
+        (
+            created,
+            Box::new(|count: usize, mode: &str| {
+                json!({
+                    "network_mode": mode,
+                    "vpc_id": EXISTING_VPC,
+                    "public_subnet_ids": [],
+                    "private_subnet_ids": subnets(count),
+                })
             }),
+        ),
+    ] {
+        let module = render(
+            &stack(settings.clone()),
+            TerraformTarget::Aws,
+            StackSettings {
+                network: Some(settings.clone()),
+                ..StackSettings::default()
+            },
         );
-        assert_eq!(
-            condition.evaluate(&context).unwrap(),
-            Value::Bool(allowed),
-            "{count} subnets"
+        assert_terraform_valid(&module, "management subnet limit");
+        let role = module
+            .iter()
+            .filter(|(path, _)| path.ends_with(".tf"))
+            .flat_map(|(_, contents)| hcl::parse(contents).unwrap().into_blocks())
+            .find(|block| {
+                block.identifier() == "resource"
+                    && block.labels()[0].as_str() == "aws_iam_role"
+                    && block.labels()[1].as_str() == "management"
+            })
+            .expect("the module creates the management role");
+        let condition = role
+            .body()
+            .blocks()
+            .filter(|block| block.identifier() == "lifecycle")
+            .flat_map(|lifecycle| lifecycle.body().blocks())
+            .filter(|block| block.identifier() == "precondition")
+            .flat_map(|precondition| precondition.body().attributes())
+            .find(|attribute| attribute.key() == "condition")
+            .expect("the management role checks the subnet count")
+            .expr()
+            .clone();
+        // The check reads the installer's variables only, never the network's resources.
+        let text = hcl::format::to_string(&condition).unwrap();
+        assert!(
+            !text.contains("aws_subnet") && !text.contains("local."),
+            "{text}"
         );
+        for (count, mode, allowed) in [
+            (1, "use-existing", true),
+            (9, "use-existing", true),
+            (10, "use-existing", false),
+            // Subnets setup creates never exceed the limit; the variables are not used.
+            (10, "create-new", true),
+        ] {
+            if matches!(settings, NetworkSettings::ByoVpcAws { .. }) && mode != "use-existing" {
+                continue;
+            }
+            let context = evaluation_context(&module, vars(count, mode));
+            assert_eq!(
+                condition.evaluate(&context).unwrap(),
+                Value::Bool(allowed),
+                "{settings:?}: {count} subnets, {mode}"
+            );
+        }
     }
 }

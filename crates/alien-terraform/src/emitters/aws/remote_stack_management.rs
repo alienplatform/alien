@@ -185,7 +185,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                 block.labels.first().map(|label| label.as_str()) == Some("aws_iam_role")
                     && block.labels.get(1).map(|label| label.as_str()) == Some(label)
             }) {
-                role.body.0.push(network.subnet_limit_lifecycle());
+                role.body.0.extend(network.subnet_limit_lifecycle());
             }
         }
 

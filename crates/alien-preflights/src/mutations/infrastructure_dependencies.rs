@@ -97,7 +97,41 @@ impl StackMutation for InfrastructureDependenciesMutation {
             }
         }
 
+        if platform == Platform::Aws {
+            add_management_network_dependency(&mut stack);
+        }
+
         Ok(stack)
+    }
+}
+
+/// The AWS management policy names the stack's VPC and subnets, read from the network once it
+/// is Running, so management waits for a network setup creates. Setup creates the two together
+/// only when the network is Frozen; a Live network is created later by management itself. A
+/// network that already waits for management (through a resource that waits for it) is left
+/// unordered rather than made a cycle; management then names it by its tags (or not at all, for
+/// the default VPC) until the next setup run.
+fn add_management_network_dependency(stack: &mut Stack) {
+    let Some(management_id) = remote_stack_management_id(stack).map(str::to_string) else {
+        return;
+    };
+    let management = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, management_id.clone());
+    let networks: Vec<ResourceRef> = stack
+        .resources
+        .iter()
+        .filter(|(id, entry)| {
+            entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                && entry.config.resource_type() == Network::RESOURCE_TYPE
+                && !depends_on(stack, id, &management)
+        })
+        .map(|(id, _)| ResourceRef::new(Network::RESOURCE_TYPE, id.clone()))
+        .collect();
+    if let Some(entry) = stack.resources.get_mut(&management_id) {
+        for network in networks {
+            if !entry.dependencies.contains(&network) {
+                entry.dependencies.push(network);
+            }
+        }
     }
 }
 
@@ -192,23 +226,6 @@ impl InfrastructureDependenciesMutation {
                 alien_core::Vault::RESOURCE_TYPE,
                 alien_core::SECRETS_VAULT_ID,
             ));
-        }
-
-        // The AWS management policy names the stack's VPC and subnets, read from the network
-        // once it is Running. Setup creates the two together only when the network is Frozen;
-        // a Live network is created later by management itself, so ordering it first would
-        // wait on a resource setup never runs.
-        if platform == Platform::Aws && resource_type == &RemoteStackManagement::RESOURCE_TYPE {
-            dependencies.extend(
-                stack
-                    .resources
-                    .iter()
-                    .filter(|(_, entry)| {
-                        entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                            && entry.config.resource_type() == Network::RESOURCE_TYPE
-                    })
-                    .map(|(id, _)| ResourceRef::new(Network::RESOURCE_TYPE, id.clone())),
-            );
         }
 
         // AWS workload roles need setup's boundary before create, and must be
@@ -1074,6 +1091,56 @@ mod tests {
                 "{platform:?} {lifecycle:?}: the network must not wait for management"
             );
         }
+    }
+
+    /// A network that waits for a resource which waits for management is left unordered, never
+    /// turned into a cycle.
+    #[tokio::test]
+    async fn aws_management_never_waits_for_a_network_that_waits_for_it() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("logs".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_with_dependencies(
+                Network::new("default-network".to_string())
+                    .settings(NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+                vec![ResourceRef::new(Storage::RESOURCE_TYPE, "logs")],
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .unwrap();
+        assert!(result.resources["logs"]
+            .dependencies
+            .contains(&ResourceRef::new(
+                RemoteStackManagement::RESOURCE_TYPE,
+                "management"
+            )));
+        assert!(
+            !result.resources["management"]
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.id() == "default-network"),
+            "{:?}",
+            result.resources["management"].dependencies
+        );
     }
 
     #[tokio::test]
