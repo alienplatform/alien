@@ -1487,18 +1487,24 @@ impl AwsSandboxController {
 
         // A successful version this state does not know came from before versions were
         // retired. It starts the same clock, from now.
-        for version in &succeeded {
-            if !self.retired_versions.iter().any(|e| &e.version == version) {
-                self.retired_versions
-                    .push(RetiredVersion::new(version.clone()));
-            }
-        }
+        // Older than anything this state replaced, so they go first, in listing order.
+        let unknown: Vec<RetiredVersion> = succeeded
+            .iter()
+            .filter(|version| !self.retired_versions.iter().any(|e| &e.version == *version))
+            .map(|version| RetiredVersion::new(version.clone()))
+            .collect();
+        self.retired_versions.splice(0..0, unknown);
 
         // A dependent that has not yet rolled to the current release can still hold the
         // previous binding and so still start sessions on the version it names.
+        //
+        // The version replaced most recently stays ACTIVE as well: a dependent whose own config
+        // did not change is re-rendered with the new binding only by propagation or the
+        // Ready-time refresh, which can land after this pass.
         if self.dependents_on_current_binding(ctx, resource_id) {
             let mut retired = 0;
-            for entry in &mut self.retired_versions {
+            let keep = self.retired_versions.len().saturating_sub(1);
+            for entry in self.retired_versions.iter_mut().take(keep) {
                 if entry.inactive_at.is_some() {
                     continue;
                 }
@@ -6442,18 +6448,17 @@ mod tests {
         client
             .expect_update_microvm_image_version()
             .withf(|_, version, status| {
-                (version == "1.0" || version == "2.0")
+                version == "1.0"
                     && *status
                         == alien_aws_clients::lambda_microvms::MicrovmImageVersionStatus::Inactive
             })
-            .times(2)
+            .times(1)
             .returning(|_, _, _| Ok(()));
         let controller =
             tick_ready_over(client, vec![retired("1.0", None), retired("2.0", None)]).await;
-        assert!(controller
-            .retired_versions
-            .iter()
-            .all(|v| v.inactive_at.is_some()));
+        // 2.0 was replaced most recently and stays active.
+        assert!(controller.retired_versions[0].inactive_at.is_some());
+        assert!(controller.retired_versions[1].inactive_at.is_none());
         assert_eq!(controller.deleting_version, None);
     }
 
@@ -6468,7 +6473,7 @@ mod tests {
         ]);
         client
             .expect_update_microvm_image_version()
-            .times(2)
+            .times(1)
             .returning(|_, _, _| Ok(()));
         let controller = tick_ready_over(client, vec![]).await;
         let mut seen: Vec<_> = controller
@@ -6477,7 +6482,7 @@ mod tests {
             .map(|v| (v.version.as_str(), v.inactive_at.is_some()))
             .collect();
         seen.sort();
-        assert_eq!(seen, [("1.0", true), ("2.0", true)]);
+        assert_eq!(seen, [("1.0", true), ("2.0", false)]);
         assert_eq!(controller.deleting_version, None);
     }
 
@@ -6587,18 +6592,69 @@ mod tests {
     /// An install whose role predates the grant keeps its versions and keeps rolling.
     #[tokio::test]
     async fn a_missing_retire_grant_keeps_the_version_instead_of_failing_the_step() {
-        let mut client = ready_client(&[("2.0", "SUCCESSFUL"), ("3.0", "SUCCESSFUL")]);
+        let mut client = ready_client(&[
+            ("1.0", "SUCCESSFUL"),
+            ("2.0", "SUCCESSFUL"),
+            ("3.0", "SUCCESSFUL"),
+        ]);
         client
             .expect_update_microvm_image_version()
             .times(1)
             .returning(|_, _, _| {
                 Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
                     resource_type: "microvm-image-version".to_string(),
-                    resource_name: "2.0".to_string(),
+                    resource_name: "1.0".to_string(),
                 }))
             });
-        let controller = tick_ready_over(client, vec![retired("2.0", None)]).await;
+        let controller =
+            tick_ready_over(client, vec![retired("1.0", None), retired("2.0", None)]).await;
         assert_eq!(controller.retired_versions[0].inactive_at, None);
+    }
+
+    /// A sandbox-only release leaves dependents' config unchanged, and they pick up the new
+    /// binding only after this pass. The previous version keeps accepting sessions meanwhile;
+    /// only older ones retire.
+    #[tokio::test]
+    async fn the_previous_version_stays_active_while_older_ones_retire() {
+        let mut client = ready_client(&[
+            ("1.0", "SUCCESSFUL"),
+            ("2.0", "SUCCESSFUL"),
+            ("3.0", "SUCCESSFUL"),
+        ]);
+        client
+            .expect_update_microvm_image_version()
+            .withf(|_, version, _| version == "1.0")
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        let consumer = || {
+            alien_core::Build::new("consumer".to_string())
+                .permissions("same".to_string())
+                .link(&sandbox())
+                .build()
+        };
+        let mut controller = ready_controller();
+        controller.active_version = Some("3.0".to_string());
+        controller.retired_versions = vec![retired("1.0", None), retired("2.0", None)];
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(client))
+            .with_stack_resource(consumer(), alien_core::ResourceLifecycle::Live)
+            .build()
+            .await
+            .expect("executor should build");
+        let saved = alien_core::StackResourceState::builder()
+            .resource_type(alien_core::Build::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::Running)
+            .config(alien_core::Resource::new(consumer()))
+            .lifecycle(alien_core::ResourceLifecycle::Live)
+            .build();
+        executor.insert_saved_resource("consumer", saved);
+        executor.step().await.expect("ready tick");
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert!(controller.retired_versions[0].inactive_at.is_some());
+        assert_eq!(controller.retired_versions[1].inactive_at, None);
     }
 
     /// Real AWS: the reclaim deletes every retired version of an image whose fence has passed.
