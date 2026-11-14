@@ -5079,7 +5079,9 @@ resource "terraform_data" "gate_keeper" {}
             "Helm values must annotate the manager service account with its IRSA role"
         );
         assert!(
-            rendered.contains("id   = \"management\""),
+            // The registration list renders column-aligned when nothing in it is gated and
+            // inline inside `concat(...)` when the network is gated.
+            rendered.contains("id   = \"management\"") || rendered.contains("id = \"management\""),
             "rendered Terraform should include the management identity resource"
         );
         assert!(
