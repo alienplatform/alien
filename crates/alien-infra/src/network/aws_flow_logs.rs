@@ -190,12 +190,24 @@ impl AwsNetworkController {
         )
     }
 
-    /// Whether this run may create or delete the flow log objects. Only direct setup holds
-    /// the credentials that create the delivery role: a network the runtime creates for an
-    /// automatic setup runs under the management identity, which may only create roles under
-    /// the setup's permissions boundary, and that boundary does not allow log delivery.
-    pub(super) fn flow_log_owned_here(ctx: &ResourceControllerContext<'_>) -> bool {
+    /// Whether this run may look for and delete flow log objects. Direct setup's authority
+    /// (which the manager also records on every automatic import) is enough: delete uses only
+    /// the deletes the network's provision grant already gives the management identity, so a
+    /// flow log an installer's run created is found and removed even when its record was lost.
+    pub(super) fn flow_log_discoverable(ctx: &ResourceControllerContext<'_>) -> bool {
         ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+    }
+
+    /// Whether this run may create flow log objects. Only a run with the installer's
+    /// credentials holds what creates the delivery role. An automatic setup carries direct
+    /// setup's authority, but unless an installer's setup run is making the call, it runs as the
+    /// management identity. That identity may only create roles under the setup's permissions
+    /// boundary, which does not allow log delivery, and holds no flow log grants.
+    pub(super) fn flow_log_owned_here(ctx: &ResourceControllerContext<'_>) -> bool {
+        Self::flow_log_discoverable(ctx)
+            && (ctx.deployment_config.setup_run
+                || ctx.deployment_config.stack_settings.setup_management
+                    != alien_core::SetupManagement::Automatic)
     }
 
     /// One create call per step until the flow log exists.
