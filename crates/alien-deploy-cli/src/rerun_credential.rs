@@ -297,10 +297,11 @@ where
         // The reused key ran out on the way, or clocks differ: ask once more
         // instead of failing, for anything but that key. A newer key a
         // concurrent run holds stays valid; a new one is minted only when the
-        // expired key is the one the Operator holds.
+        // Operator holds none or an expired one (`--reuse` answers a cached
+        // key that is still live), never over a concurrent run's newer key.
         Err(ExecFailure::Expired(returned)) if *ask != Ask::New => exec(match returned {
             Some(fingerprint) => Ask::ReuseExcept(fingerprint),
-            None => Ask::New,
+            None => Ask::Reuse,
         })
         .await
         .map(|(token, expires_at)| (token, expires_at, true)),
@@ -941,6 +942,25 @@ mod tests {
             *asks.lock().unwrap(),
             vec![Ask::Reuse, Ask::ReuseExcept(key_fingerprint("old"))]
         );
+    }
+
+    #[tokio::test]
+    async fn an_expired_answer_with_no_key_asks_again_with_reuse_not_a_new_key() {
+        let asks = std::sync::Mutex::new(Vec::new());
+        let got = fetch_with(&Ask::Reuse, |ask| {
+            asks.lock().unwrap().push(ask.clone());
+            let first = asks.lock().unwrap().len() == 1;
+            async move {
+                if first {
+                    Err(ExecFailure::Expired(None))
+                } else {
+                    live()
+                }
+            }
+        })
+        .await;
+        assert!(got.is_ok());
+        assert_eq!(*asks.lock().unwrap(), vec![Ask::Reuse, Ask::Reuse]);
     }
 
     #[tokio::test]
