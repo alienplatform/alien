@@ -337,6 +337,15 @@ async fn fill_the_image_to_the_version_cap() {
                 for old in versions {
                     let old = old.image_version.unwrap();
                     if old != version {
+                        // Skip versions already inactive: repeating the call for every old
+                        // version on every roll gets throttled.
+                        let current = lambda
+                            .get_microvm_image_version(&image, &old)
+                            .await
+                            .expect("get version");
+                        if current.status.as_deref() == Some("INACTIVE") {
+                            continue;
+                        }
                         lambda
                             .update_microvm_image_version(
                                 &image,
@@ -422,5 +431,19 @@ async fn roll_the_image_once() {
             assert_eq!(error.code, "VERSION_LIMIT_EXCEEDED");
         }
         (other, expected) => panic!("expected {expected}, got {other:?}"),
+    }
+}
+
+/// Prints every version of the probe image with its state and status.
+#[tokio::test]
+#[ignore]
+async fn show_probe_versions() {
+    let state = load();
+    let image = state.image.clone().expect("an image");
+    let lambda = LambdaMicrovmsClient::new(Client::new(), provider());
+    for v in lambda.list_microvm_image_versions(&image).await.unwrap() {
+        let ver = v.image_version.clone().unwrap();
+        let got = lambda.get_microvm_image_version(&image, &ver).await.unwrap();
+        println!("version {ver} state={:?} status={:?} reason={:?}", got.state, got.status, got.state_reason);
     }
 }
