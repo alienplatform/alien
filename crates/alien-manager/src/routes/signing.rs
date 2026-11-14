@@ -241,7 +241,7 @@ fn signing_already_on(project: &str, first: &SignerListRecord) -> Response {
 pub struct ProjectSigningResponse {
     /// What this manager renders setup templates with, so the digests a
     /// release signs are of the templates installs get.
-    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    #[cfg_attr(feature = "openapi", schema(value_type = std::collections::HashMap<String, serde_json::Value>))]
     pub setup_hosting: SetupHostingOptions,
 }
 

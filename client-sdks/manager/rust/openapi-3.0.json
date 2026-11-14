@@ -15581,7 +15581,8 @@
         "properties": {
           "setupHosting": {
             "type": "object",
-            "description": "What this manager renders setup templates with, so the digests a\nrelease signs are of the templates installs get."
+            "description": "What this manager renders setup templates with, so the digests a\nrelease signs are of the templates installs get.",
+            "additionalProperties": {}
           }
         }
       },
