@@ -1358,11 +1358,14 @@ mod permission_update_tests {
             stack: &Stack,
             context: &alien_permissions::PermissionContext,
             mut state: StackState,
+            latest: &std::sync::Mutex<StackState>,
             until: impl Fn(&StackState) -> bool,
         ) -> StackState {
             for round in 0..80 {
+                *latest.lock().unwrap() = state.clone();
                 let step = executor.step(state).await.unwrap();
                 state = reload(&step.next_state);
+                *latest.lock().unwrap() = state.clone();
                 let summary: Vec<_> = state
                     .resources
                     .iter()
@@ -1425,10 +1428,16 @@ mod permission_update_tests {
             .with_aws_region(aws.region.as_str())
             .with_managing_account_id(aws.account_id.as_str())
             .with_managing_role_arn(format!("arn:aws:iam::{}:root", aws.account_id));
+        let latest = std::sync::Mutex::new(StackState::with_resource_prefix(
+            Platform::Aws,
+            prefix.clone(),
+        ));
+        // Run the checks; whatever happens, delete what was created so far, then re-raise.
+        let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {
         let first = release(false);
         let state = StackState::with_resource_prefix(Platform::Aws, prefix.clone());
         let ids = ["management", "consumer-sa", "data", "jobs", "secrets"];
-        let state = drive(&executor(&first), &first, &context, state, |s| {
+        let state = drive(&executor(&first), &first, &context, state, &latest, |s| {
             ids.iter().all(|id| {
                 s.resources
                     .get(*id)
@@ -1469,7 +1478,7 @@ mod permission_update_tests {
             "secrets",
             "more",
         ];
-        let state = drive(&executor(&second), &second, &context, state, |s| {
+        let state = drive(&executor(&second), &second, &context, state, &latest, |s| {
             ids2.iter().all(|id| {
                 s.resources
                     .get(*id)
@@ -1487,14 +1496,21 @@ mod permission_update_tests {
         }
         assert_eq!(before, after, "the second release changes the boundary");
 
-        // Delete everything this test created.
+        }))
+        .await;
+
+        // Delete everything this test created, on success and on failure.
+        let state = latest.lock().unwrap().clone();
         let empty = Stack::new("live-vault".to_string()).build();
-        let _ = drive(&executor(&empty), &empty, &context, state, |s| {
+        let _ = drive(&executor(&empty), &empty, &context, state, &latest, |s| {
             s.resources
                 .values()
                 .all(|r| r.status == ResourceStatus::Deleted)
         })
         .await;
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     #[tokio::test]
