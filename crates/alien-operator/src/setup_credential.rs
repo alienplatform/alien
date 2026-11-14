@@ -52,10 +52,15 @@ struct Request {
     refused: Option<String>,
 }
 
-/// The part of a key that names it without being usable: the manager stores the
-/// same 12 characters as the key's prefix.
-pub(crate) fn key_id(key: &str) -> String {
-    key.chars().take(12).collect()
+/// Names a key without carrying any of it: the first 16 hex characters of its
+/// SHA-256. The CLI passes this as an exec argument, which the cluster may log.
+pub(crate) fn key_fingerprint(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(key.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Where the running Operator listens. The directory is local to the container
@@ -391,7 +396,7 @@ where
         // if it is a different key (a newer run replaced it).
         if let Some(issued) = last
             .as_ref()
-            .filter(|i| i.expires_at > now && refused != Some(key_id(&i.token).as_str()))
+            .filter(|i| i.expires_at > now && refused != Some(key_fingerprint(&i.token).as_str()))
         {
             return Answer {
                 credential: Some(issued.token.clone()),
@@ -585,16 +590,16 @@ mod tests {
         };
         // B is cached (a newer run minted it after A): A was refused, B is returned, no mint.
         let mut last = Some(issued("key-b", 10));
-        let answer = answer_for(&mut last, true, Some("key-a"), Utc::now(), mint("key-c")).await;
+        let answer = answer_for(&mut last, true, Some(key_fingerprint("key-a").as_str()), Utc::now(), mint("key-c")).await;
         assert_eq!(answer.credential.as_deref(), Some("key-b"));
         assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 0);
         // The refused key is the cached one: a new key is minted.
-        let answer = answer_for(&mut last, true, Some("key-b"), Utc::now(), mint("key-c")).await;
+        let answer = answer_for(&mut last, true, Some(key_fingerprint("key-b").as_str()), Utc::now(), mint("key-c")).await;
         assert_eq!(answer.credential.as_deref(), Some("key-c"));
         assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
         // Nothing cached: mints.
         let mut none = None;
-        let answer = answer_for(&mut none, true, Some("key-x"), Utc::now(), mint("key-d")).await;
+        let answer = answer_for(&mut none, true, Some(key_fingerprint("key-x").as_str()), Utc::now(), mint("key-d")).await;
         assert_eq!(answer.credential.as_deref(), Some("key-d"));
     }
 
@@ -605,7 +610,11 @@ mod tests {
             SetupCredentialArgs::try_parse_from(["x", "--reuse", "--refused", "ax_dep_12345"])
                 .unwrap();
         assert_eq!(args.refused.as_deref(), Some("ax_dep_12345"));
-        assert_eq!(key_id("ax_dep_1234567890"), "ax_dep_12345");
+        let fp = key_fingerprint("ax_setup_abc");
+        assert_eq!(fp.len(), 16);
+        assert!(!fp.contains("ax_setup"));
+        assert_eq!(fp, key_fingerprint("ax_setup_abc"));
+        assert_ne!(fp, key_fingerprint("ax_setup_abd"));
         let gone = Issued {
             token: "k".into(),
             expires_at: Utc::now() - chrono::Duration::seconds(1),

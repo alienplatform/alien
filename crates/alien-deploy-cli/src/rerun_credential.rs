@@ -77,14 +77,20 @@ pub enum Ask {
     New,
     /// The key issued last if it is still valid.
     Reuse,
-    /// Like `Reuse`, but never the key with this id: it was refused.
+    /// Like `Reuse`, but never the key with this fingerprint: it was refused.
     ReuseExcept(String),
 }
 
-/// The part of a key that names it without being usable (the manager stores the
-/// same 12 characters as the key's prefix).
-pub fn key_id(key: &str) -> String {
-    key.chars().take(12).collect()
+/// Names a key without carrying any of it: the first 16 hex characters of its
+/// SHA-256. Exec arguments can be written to cluster audit logs, so the raw key
+/// (or any part of it) never goes there.
+pub fn key_fingerprint(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(key.as_bytes())
+        .iter()
+        .take(8)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// The release and namespace a rerun uses: flags first, then what the tracker
@@ -496,7 +502,7 @@ impl InClusterUse {
         if rerun.in_cluster {
             self.mark(name, rerun.expires_at);
             self.0.lock().unwrap_or_else(|e| e.into_inner()).key =
-                Some((key_id(&rerun.token), rerun.asked_again));
+                Some((key_fingerprint(&rerun.token), rerun.asked_again));
         }
         if let Some(missing) = &rerun.missing_install {
             self.0.lock().unwrap_or_else(|e| e.into_inner()).missing =
@@ -541,7 +547,7 @@ impl InClusterUse {
 
 /// Run `attempt(refused, state)` for a read-only command. If the key it reused
 /// from the Operator is refused (401: a newer run replaced it, an admin deleted
-/// it, or it expired), run it once more with `refused` set to that key's id, so
+/// it, or it expired), run it once more with `refused` set to that key's fingerprint, so
 /// the Operator hands out the key issued last if that is a different one and
 /// only issues a new key if it is not. A key that came from a second ask is not
 /// retried: the budget is one. A second refusal is explained as usual.
@@ -682,6 +688,16 @@ mod tests {
             assert!(resolved.in_cluster);
             assert_eq!(*calls.lock().unwrap(), vec![reuse], "{verb}");
         }
+    }
+
+    #[test]
+    fn exec_args_carry_a_fingerprint_and_no_part_of_the_key() {
+        let key = "ax_setup_0123456789abcdef0123456789abcdef";
+        let args = exec_args("r", "n", &Ask::ReuseExcept(key_fingerprint(key))).join(" ");
+        assert!(!args.contains("ax_setup"));
+        assert!(!args.contains("0123456789abcdef"));
+        assert!(args.contains(&key_fingerprint(key)));
+        assert_eq!(key_fingerprint(key).len(), 16);
     }
 
     #[test]
@@ -845,7 +861,7 @@ mod tests {
         assert_eq!(result.unwrap(), "done");
         assert_eq!(
             *calls.lock().unwrap(),
-            vec![None, Some("ax_dep_AAAAA".to_string())]
+            vec![None, Some(key_fingerprint("ax_dep_AAAAAAAAAAAAAAAA"))]
         );
     }
 
