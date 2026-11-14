@@ -55,8 +55,37 @@ impl AwsVaultController {
         );
 
         let account_id = aws_cfg.account_id.to_string();
-
         let vault_prefix = aws_prefixed_resource_name(ctx.resource_prefix, &config.id);
+
+        // Record the name before any AWS write. The permissions boundary names this vault's
+        // parameters from the recorded prefix, and every step that builds it, including the
+        // retry of a failed permissions step, reads it from the saved state.
+        self.vault_prefix = Some(vault_prefix);
+        self.account_id = Some(account_id);
+        self.region = Some(aws_cfg.region.clone());
+
+        Ok(HandlerAction::Continue {
+            state: ApplyingResourcePermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = ApplyingResourcePermissions,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn applying_resource_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Vault>()?;
+        let vault_prefix = self.vault_prefix.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Vault prefix missing while applying permissions".to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
 
         ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
             ctx,
@@ -73,19 +102,11 @@ impl AwsVaultController {
             self.permissions_revision = Some(super::permissions_revision(ctx)?);
         }
 
-        // Store the vault prefix using resource_prefix-config.id pattern
-        self.vault_prefix = Some(vault_prefix);
-
         info!(
             vault_id = %config.id,
-            account_id = %account_id,
-            region = %aws_cfg.region,
-            vault_prefix = %self.vault_prefix.as_deref().unwrap_or("unknown"),
+            vault_prefix = %vault_prefix,
             "AWS SSM Parameter Store vault is ready (implicitly exists)"
         );
-
-        self.account_id = Some(account_id);
-        self.region = Some(aws_cfg.region.clone());
 
         Ok(HandlerAction::Continue {
             state: Ready,
@@ -396,7 +417,9 @@ mod permission_update_tests {
         AwsClientConfigExt as _,
     };
     use alien_client_core::ErrorData as CloudError;
-    use alien_core::permissions::PermissionProfile;
+    use alien_core::permissions::{
+        ManagementPermissions, PermissionProfile, PermissionSetReference,
+    };
     use alien_core::{
         AwsClientConfig, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
         ExternalBindings, InitialSetupAuthority, Resource, ResourceLifecycle, ResourceRef,
@@ -588,6 +611,9 @@ mod permission_update_tests {
         /// The name the `"*"` grant uses for the read set; it may be an alias.
         #[builder(default = "vault/data-read")]
         wildcard_set: &str,
+        /// The vault has not been created: setup is about to run its first step.
+        #[builder(default)]
+        fresh_vault: bool,
     ) -> (StackExecutor, StackState, Arc<Mutex<Iam>>) {
         let iam = Arc::new(Mutex::new(Iam::default()));
         for (role, name) in existing {
@@ -668,13 +694,19 @@ mod permission_update_tests {
             Vault::RESOURCE_TYPE.to_string(),
             Resource::new(vault),
             Some(lifecycle),
-            vec![],
+            vec![ResourceRef::new(
+                ServiceAccount::RESOURCE_TYPE,
+                "consumer-sa",
+            )],
         );
-        vault_state.status = ResourceStatus::Running;
-        vault_state.outputs = controller.get_outputs();
-        vault_state
-            .set_internal_controller(Some(Box::new(controller)))
-            .unwrap();
+        if !fresh_vault {
+            vault_state.dependencies = vec![];
+            vault_state.status = ResourceStatus::Running;
+            vault_state.outputs = controller.get_outputs();
+            vault_state
+                .set_internal_controller(Some(Box::new(controller)))
+                .unwrap();
+        }
         state.resources.insert("secrets".to_string(), vault_state);
         // The newly created role is ready, but the existing vault has not yet
         // recorded its new dependency or installed its read policy.
@@ -1157,6 +1189,328 @@ mod permission_update_tests {
         let state = executor.step(state).await.unwrap().next_state;
         assert_eq!(state.resources["secrets"].status, ResourceStatus::Running);
         assert!(iam.lock().unwrap().calls.is_empty());
+    }
+
+    /// Setup's other resources read the vault's recorded name when they build the
+    /// permissions boundary. A first step that fails while writing IAM must already
+    /// have recorded it, or the next resource to build the boundary fails for good.
+    #[tokio::test]
+    async fn a_first_step_that_fails_in_iam_has_already_recorded_the_vault_name() {
+        let (executor, state, _iam) = fixture_with_removed_profile()
+            .lifecycle(ResourceLifecycle::Frozen)
+            .authority(InitialSetupAuthority::DirectSetup)
+            .fault(Fault::LoseFirstPut)
+            .existing(&[])
+            .remove_consumer(false)
+            .fresh_vault(true)
+            .call();
+        // Step until the IAM write fails, as it does when the response is lost.
+        let mut state = state;
+        for _ in 0..3 {
+            state = reload(&executor.step(state).await.unwrap().next_state);
+            if state.resources["secrets"].error.is_some() {
+                break;
+            }
+        }
+        let vault = &state.resources["secrets"];
+        assert_ne!(vault.status, ResourceStatus::Running);
+        assert!(vault.error.is_some(), "the IAM write should have failed");
+
+        let stack = Stack::new("test".to_string())
+            .add(
+                Vault::new("secrets".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .permission(
+                "consumer",
+                // The grant setup gives a container profile on the secrets vault: an inline
+                // set whose resource is named from the vault's recorded prefix.
+                PermissionProfile::new().resource(
+                    "secrets",
+                    [PermissionSetReference::from_inline(
+                        serde_json::from_value(serde_json::json!({
+                            "id": "vault/machine-workload-secrets-read",
+                            "description": "Reads the secret values handed to this profile",
+                            "platforms": {"aws": [{
+                                "grant": {"actions": ["ssm:GetParameter"]},
+                                "binding": {"resource": {"resources": [
+                                    "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-hz.consumer.*"
+                                ]}}
+                            }]}
+                        }))
+                        .unwrap(),
+                    )],
+                ),
+            )
+            .build();
+        let context = alien_permissions::PermissionContext::new()
+            .with_stack_prefix("test")
+            .with_aws_account_id("123456789012")
+            .with_aws_region("us-east-1")
+            .with_managing_account_id("210987654321")
+            .with_managing_role_arn("arn:aws:iam::210987654321:role/manager");
+        let boundary = crate::core::aws_permissions_boundary_for_stack(&stack, &state, &context)
+            .expect("the boundary resolves while the vault's first step is retried");
+        assert!(
+            boundary.to_string().contains(":parameter/test-*"),
+            "{boundary}"
+        );
+    }
+
+    /// Direct setup of a stack with a management identity, a storage, a queue and a vault
+    /// whose profile reads the vault through an inline grant, against real AWS. The vault
+    /// and its consumer are created in the same run, so the vault's first permissions write
+    /// can race the new role. Run with a neutral `ALIEN_TEST_SETUP_PREFIX` (starting `e2e-`)
+    /// and AWS credentials in the environment; the test deletes what it creates.
+    #[tokio::test]
+    #[ignore = "requires AWS credentials for a disposable test account"]
+    async fn live_direct_setup_with_a_vault_reaches_running_and_keeps_its_boundary() {
+        use alien_aws_clients::AwsClientConfigExt as _;
+        use alien_core::{
+            AwsManagementConfig, ManagementConfig, Queue, RemoteStackManagement, Storage,
+        };
+
+        let prefix = std::env::var("ALIEN_TEST_SETUP_PREFIX").unwrap();
+        assert!(prefix.starts_with("e2e-"), "use a task-owned test prefix");
+        let aws = AwsClientConfig::from_std_env().await.unwrap();
+        let managing_role = format!("arn:aws:iam::{}:root", aws.account_id);
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(true)
+            .build();
+        config.management_config = Some(ManagementConfig::Aws(AwsManagementConfig {
+            managing_role_arn: managing_role,
+        }));
+
+        let release = |extra_storage: bool| {
+            let consumer = ServiceAccount::new("consumer-sa".to_string()).build();
+            let mut stack = Stack::new("live-vault".to_string())
+                .add(
+                    RemoteStackManagement::new("management".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(consumer, ResourceLifecycle::Frozen)
+                .add(
+                    Storage::new("data".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    Queue::new("jobs".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                // The vault does not wait for the role it grants: its first permissions
+                // write can run before the role exists.
+                .add(
+                    Vault::new("secrets".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                );
+            if extra_storage {
+                stack = stack.add(
+                    Storage::new("more".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                );
+            }
+            stack
+                .management(ManagementPermissions::Extend(
+                    PermissionProfile::new().global([
+                        "storage/management",
+                        "queue/management",
+                        "vault/management",
+                    ]),
+                ))
+                .permission(
+                    "consumer",
+                    PermissionProfile::new().resource(
+                        "secrets",
+                        [PermissionSetReference::from_inline(
+                            serde_json::from_value(serde_json::json!({
+                                "id": "vault/machine-workload-secrets-read",
+                                "description": "Reads the secret values handed to this profile",
+                                "platforms": {"aws": [{
+                                    "grant": {"actions": ["ssm:GetParameter"]},
+                                    "binding": {"resource": {"resources": [
+                                        "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-hz.consumer.*"
+                                    ]}}
+                                }]}
+                            }))
+                            .unwrap(),
+                        )],
+                    ),
+                )
+                .build()
+        };
+        let executor = |stack: &Stack| {
+            StackExecutor::builder(stack, ClientConfig::Aws(Box::new(aws.clone())))
+                .deployment_config(&config)
+                .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+                .step_running_resources(false)
+                .build()
+                .unwrap()
+        };
+        async fn drive(
+            executor: &StackExecutor,
+            stack: &Stack,
+            context: &alien_permissions::PermissionContext,
+            mut state: StackState,
+            latest: &std::sync::Mutex<StackState>,
+            until: impl Fn(&StackState) -> bool,
+        ) -> StackState {
+            for round in 0..80 {
+                *latest.lock().unwrap() = state.clone();
+                let step = executor.step(state).await.unwrap();
+                state = reload(&step.next_state);
+                *latest.lock().unwrap() = state.clone();
+                let summary: Vec<_> = state
+                    .resources
+                    .iter()
+                    .map(|(id, r)| {
+                        format!(
+                            "{id}={:?}{}",
+                            r.status,
+                            r.error
+                                .as_ref()
+                                .map(|e| format!(" ({})", e.message))
+                                .unwrap_or_default()
+                        )
+                    })
+                    .collect();
+                eprintln!("round {round}: {}", summary.join(", "));
+                // The management resource builds this boundary whenever it installs or
+                // updates it, in whichever round that happens to be.
+                if stack.resources.contains_key("management")
+                    && state.resources.contains_key("secrets")
+                    && !state.resources["management"]
+                        .status
+                        .eq(&ResourceStatus::Deleting)
+                    && state.resources["secrets"].status != ResourceStatus::Deleted
+                {
+                    crate::core::aws_permissions_boundary_for_stack(stack, &state, context)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "round {round}: the boundary cannot be built: {e}\nvault: {:?}",
+                                state.resources["secrets"]
+                                    .error
+                                    .as_ref()
+                                    .map(|e| e.message.clone())
+                            )
+                        });
+                }
+                assert!(
+                    !state.resources.values().any(|r| r.error.is_some()
+                        && !matches!(
+                            r.status,
+                            ResourceStatus::Provisioning
+                                | ResourceStatus::Updating
+                                | ResourceStatus::Deleting
+                        )),
+                    "a resource failed"
+                );
+                if until(&state) {
+                    return state;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    step.suggested_delay_ms.unwrap_or(1000).min(5000),
+                ))
+                .await;
+            }
+            panic!("did not converge");
+        }
+
+        let context = alien_permissions::PermissionContext::new()
+            .with_stack_prefix(prefix.as_str())
+            .with_aws_account_id(aws.account_id.as_str())
+            .with_aws_region(aws.region.as_str())
+            .with_managing_account_id(aws.account_id.as_str())
+            .with_managing_role_arn(format!("arn:aws:iam::{}:root", aws.account_id));
+        let latest = std::sync::Mutex::new(StackState::with_resource_prefix(
+            Platform::Aws,
+            prefix.clone(),
+        ));
+        // Run the checks; whatever happens, delete what was created so far, then re-raise.
+        let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {
+        let first = release(false);
+        let state = StackState::with_resource_prefix(Platform::Aws, prefix.clone());
+        let ids = ["management", "consumer-sa", "data", "jobs", "secrets"];
+        let state = drive(&executor(&first), &first, &context, state, &latest, |s| {
+            ids.iter().all(|id| {
+                s.resources
+                    .get(*id)
+                    .is_some_and(|r| r.status == ResourceStatus::Running)
+            })
+        })
+        .await;
+        let boundary = |state: &StackState| {
+            state.resources["management"]
+                .get_internal_controller_typed::<crate::remote_stack_management::AwsRemoteStackManagementController>()
+                .unwrap()
+                .permissions_boundary_document
+                .unwrap()
+        };
+        let before = boundary(&state);
+        if let Ok(dir) = std::env::var("ALIEN_TEST_EVIDENCE_DIR") {
+            std::fs::write(
+                format!("{dir}/boundary-first-release.json"),
+                serde_json::to_string_pretty(&before).unwrap(),
+            )
+            .unwrap();
+        }
+        let vault = state.resources["secrets"]
+            .get_internal_controller_typed::<AwsVaultController>()
+            .unwrap();
+        assert_eq!(
+            vault.vault_prefix.as_deref(),
+            Some(format!("{prefix}-secrets").as_str())
+        );
+
+        // A second release adds a storage; every resource stays and the boundary still holds.
+        let second = release(true);
+        let ids2 = [
+            "management",
+            "consumer-sa",
+            "data",
+            "jobs",
+            "secrets",
+            "more",
+        ];
+        let state = drive(&executor(&second), &second, &context, state, &latest, |s| {
+            ids2.iter().all(|id| {
+                s.resources
+                    .get(*id)
+                    .is_some_and(|r| r.status == ResourceStatus::Running)
+            })
+        })
+        .await;
+        let after = boundary(&state);
+        if let Ok(dir) = std::env::var("ALIEN_TEST_EVIDENCE_DIR") {
+            std::fs::write(
+                format!("{dir}/boundary-second-release.json"),
+                serde_json::to_string_pretty(&after).unwrap(),
+            )
+            .unwrap();
+        }
+        assert_eq!(before, after, "the second release changes the boundary");
+
+        }))
+        .await;
+
+        // Delete everything this test created, on success and on failure.
+        let state = latest.lock().unwrap().clone();
+        let empty = Stack::new("live-vault".to_string()).build();
+        let _ = drive(&executor(&empty), &empty, &context, state, &latest, |s| {
+            s.resources
+                .values()
+                .all(|r| r.status == ResourceStatus::Deleted)
+        })
+        .await;
+        if let Err(panic) = outcome {
+            std::panic::resume_unwind(panic);
+        }
     }
 
     #[tokio::test]
