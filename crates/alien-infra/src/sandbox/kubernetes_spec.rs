@@ -340,7 +340,7 @@ const PROTECTED_METADATA_PATH: &str = "/opt/alien";
 /// (from the sandbox image itself, so it is the pinned build the container runs) and `/opt/alien`
 /// into a volume, and the sandbox container mounts that volume read-only over both paths.
 ///
-/// It runs as uid 0 only because the image's `/opt/alien` files are root-owned and mode 0600; it
+/// It runs as uid 0 only because the image's `/opt/alien` files are root-owned (mode 0444 for the image command, 0600 for the rest); it
 /// holds no capability, cannot gain one, and has a read-only root filesystem.
 fn stage_protected_files(image: &str) -> Container {
     Container {
