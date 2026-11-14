@@ -395,6 +395,7 @@ fn emit_gateway_subnet(
         ],
     ));
     emit_gateway_subnet_nsg(ctx, network, fragment)?;
+    super::sandbox_gateway_vm::emit(ctx, network, fragment)?;
     Ok(())
 }
 
@@ -473,9 +474,14 @@ fn emit_gateway_subnet_nsg(
         [
             attr(
                 "name",
-                expr::template(format!("${{local.resource_prefix}}-{network}-sandbox-gateway")),
+                expr::template(format!(
+                    "${{local.resource_prefix}}-{network}-sandbox-gateway"
+                )),
             ),
-            attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
             attr("location", expr::raw("var.azure_location")),
             attr("tags", tags(ctx, "sandbox-gateway-network")),
         ],
@@ -495,7 +501,9 @@ fn emit_gateway_subnet_nsg(
             })
         })?;
         let sandbox_label = subnet_label(network, name);
-        let source = expr::raw(format!("azurerm_subnet.{sandbox_label}.address_prefixes[0]"));
+        let source = expr::raw(format!(
+            "azurerm_subnet.{sandbox_label}.address_prefixes[0]"
+        ));
         inbound_rule(
             fragment,
             &label,
@@ -507,18 +515,31 @@ fn emit_gateway_subnet_nsg(
         );
         priority += 1;
     }
-    for (index, suffix) in ["public", "private", "container_apps"].into_iter().enumerate() {
+    for (index, suffix) in ["public", "private", "container_apps"]
+        .into_iter()
+        .enumerate()
+    {
         inbound_rule(
             fragment,
             &label,
             &format!("admin_from_{suffix}"),
             200 + index as i64,
             "Allow",
-            expr::raw(format!("azurerm_subnet.{network}_{suffix}.address_prefixes[0]")),
+            expr::raw(format!(
+                "azurerm_subnet.{network}_{suffix}.address_prefixes[0]"
+            )),
             "3129",
         );
     }
-    inbound_rule(fragment, &label, "deny_all", 4000, "Deny", Expression::String("*".into()), "*");
+    inbound_rule(
+        fragment,
+        &label,
+        "deny_all",
+        4000,
+        "Deny",
+        Expression::String("*".into()),
+        "*",
+    );
     for (resource, field, target) in [
         (
             "azurerm_subnet_network_security_group_association",
@@ -535,7 +556,10 @@ fn emit_gateway_subnet_nsg(
             resource,
             &label,
             [
-                attr("subnet_id", expr::traversal(["azurerm_subnet", &label, "id"])),
+                attr(
+                    "subnet_id",
+                    expr::traversal(["azurerm_subnet", &label, "id"]),
+                ),
                 attr(field, target),
             ],
         ));
@@ -558,7 +582,10 @@ fn inbound_rule(
         &format!("{label}_{name}"),
         [
             attr("name", Expression::String(name.to_string())),
-            attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
             attr(
                 "network_security_group_name",
                 expr::traversal(["azurerm_network_security_group", label, "name"]),
@@ -569,8 +596,14 @@ fn inbound_rule(
             attr("protocol", Expression::String(protocol.to_string())),
             attr("source_port_range", Expression::String("*".to_string())),
             attr("source_address_prefix", source),
-            attr("destination_address_prefix", Expression::String("*".to_string())),
-            attr("destination_port_range", Expression::String(port.to_string())),
+            attr(
+                "destination_address_prefix",
+                Expression::String("*".to_string()),
+            ),
+            attr(
+                "destination_port_range",
+                Expression::String(port.to_string()),
+            ),
         ],
     ));
 }
@@ -702,7 +735,12 @@ mod gateway_inbound_tests {
             Expression::String("10.0.0.0/24".into()),
             port,
         );
-        hcl::to_string(&hcl::Body::builder().add_blocks(fragment.resource_blocks).build()).unwrap()
+        hcl::to_string(
+            &hcl::Body::builder()
+                .add_blocks(fragment.resource_blocks)
+                .build(),
+        )
+        .unwrap()
     }
 
     #[test]
