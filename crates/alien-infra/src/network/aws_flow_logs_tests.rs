@@ -810,3 +810,126 @@ async fn without_direct_setup_authority_no_flow_log_objects_are_touched() {
     assert_eq!(executor.status(), ResourceStatus::Deleted);
     assert_eq!(cloud.lock().unwrap().calls, ["DeleteVpc vpc-1"]);
 }
+
+async fn automatic(
+    cloud: &Arc<Mutex<Cloud>>,
+    controller: AwsNetworkController,
+    setup_run: bool,
+) -> SingleControllerExecutor {
+    SingleControllerExecutor::builder()
+        .resource(network())
+        .controller(controller)
+        .platform(Platform::Aws)
+        .service_provider(provider(cloud))
+        .resource_prefix(PREFIX)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .setup_run(setup_run)
+        .stack_settings(alien_core::StackSettings {
+            setup_management: alien_core::SetupManagement::Automatic,
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("executor builds")
+}
+
+/// A portal-created automatic setup runs as the management identity, which holds no flow log
+/// grants, yet carries direct setup's authority. It must create nothing (the create would be
+/// denied and fail the network).
+#[tokio::test]
+async fn an_automatic_setup_run_by_the_management_identity_creates_no_flow_log_objects() {
+    let cloud = Arc::new(Mutex::new(Cloud::default()));
+    let mut executor = automatic(&cloud, creating_flow_logs(), false).await;
+
+    executor
+        .run_until_terminal()
+        .await
+        .expect("create finishes");
+    assert_eq!(executor.status(), ResourceStatus::Running);
+    assert_eq!(flow_logs(&executor), None);
+    assert!(cloud.lock().unwrap().calls.is_empty());
+
+    executor.delete().expect("delete starts");
+    executor
+        .run_until_terminal()
+        .await
+        .expect("delete finishes");
+    assert_eq!(executor.status(), ResourceStatus::Deleted);
+    assert_eq!(cloud.lock().unwrap().calls, ["DeleteVpc vpc-1"]);
+}
+
+/// An automatic setup an installer runs with their own credentials still creates the flow log,
+/// and the management identity later deletes it with the network.
+#[tokio::test]
+async fn an_automatic_setup_run_with_installer_credentials_still_creates_and_later_deletes_them() {
+    let cloud = Arc::new(Mutex::new(Cloud::default()));
+    let mut executor = automatic(&cloud, creating_flow_logs(), true).await;
+
+    executor
+        .run_until_terminal()
+        .await
+        .expect("create finishes");
+    assert_eq!(executor.status(), ResourceStatus::Running);
+    assert_eq!(
+        flow_logs(&executor).and_then(|setup| setup.flow_log_id),
+        Some("fl-1".to_string())
+    );
+    cloud.lock().unwrap().calls.clear();
+
+    // The management identity's runtime, which is not a setup run, deletes the network.
+    let recorded = executor
+        .internal_state::<AwsNetworkController>()
+        .expect("network controller")
+        .clone();
+    let mut runtime = automatic(&cloud, recorded, false).await;
+    runtime.delete().expect("delete starts");
+    runtime
+        .run_until_terminal()
+        .await
+        .expect("delete finishes");
+    assert_eq!(runtime.status(), ResourceStatus::Deleted);
+    assert_eq!(
+        cloud.lock().unwrap().calls,
+        [
+            "DeleteFlowLogs fl-1".to_string(),
+            format!("DeleteRolePolicy {NAME} flow-logs-delivery"),
+            format!("DeleteRole {NAME}"),
+            format!("DeleteLogGroup {NAME}"),
+            "DeleteVpc vpc-1".to_string(),
+        ]
+    );
+}
+
+/// A flow log an installer's run created whose record was lost is still found by its tags and
+/// deleted before the VPC when the management identity deletes an automatic deployment.
+#[tokio::test]
+async fn an_automatic_delete_finds_tagged_flow_log_objects_without_a_record() {
+    let cloud = Arc::new(Mutex::new(Cloud {
+        log_groups: vec![(NAME.to_string(), ours())],
+        roles: vec![(NAME.to_string(), ours())],
+        flow_logs: vec![("fl-7".to_string(), "earlier-token".to_string())],
+        ..Default::default()
+    }));
+    let mut controller = creating_flow_logs();
+    controller.vpc_id = Some("vpc-1".to_string());
+    controller.flow_logs = None;
+    let mut runtime = automatic(&cloud, controller, false).await;
+    runtime.delete().expect("delete starts");
+    runtime
+        .run_until_terminal()
+        .await
+        .expect("delete finishes");
+    assert_eq!(runtime.status(), ResourceStatus::Deleted);
+    let cloud = cloud.lock().unwrap();
+    assert!(cloud.log_groups.is_empty() && cloud.roles.is_empty() && cloud.flow_logs.is_empty());
+    assert_eq!(
+        cloud.calls,
+        [
+            "DeleteFlowLogs fl-7".to_string(),
+            format!("DeleteRolePolicy {NAME} flow-logs-delivery"),
+            format!("DeleteRole {NAME}"),
+            format!("DeleteLogGroup {NAME}"),
+            "DeleteVpc vpc-1".to_string(),
+        ]
+    );
+}

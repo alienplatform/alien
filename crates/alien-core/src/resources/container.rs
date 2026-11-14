@@ -851,7 +851,10 @@ pub struct ContainerOutputs {
     pub current_replicas: u32,
     /// Desired number of replicas
     pub desired_replicas: u32,
-    /// Internal DNS name (e.g., "api.svc")
+    /// Internal DNS name of the container's Service. On Kubernetes this is
+    /// `<name>.<namespace>.svc.<cluster domain>`; other platforms have no such
+    /// name. To reach another container, use the link binding
+    /// (`ALIEN_<ID>_BINDING`, `internalUrls`), not a name built from the id.
     pub internal_dns: String,
     /// Public endpoints resolved for this container.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

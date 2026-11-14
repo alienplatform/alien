@@ -353,20 +353,20 @@ pub async fn handle_update_pending(
         .and_then(|release| release.release_id.as_deref());
 
     // Run deployment-time preflights: compatibility checks + mutations + runtime checks
-    // Store the mutated stack to use for the actual update and for future compatibility checks
-    let recorded_setup_update_authorization = current
+    // Store the mutated stack to use for the actual update and for future compatibility checks.
+    // The setup update authority is bound to the setup it was prepared for (the installed and
+    // target setup digests the preflights compare), not to the release that recorded it: a newer
+    // release needing the same setup may use it after that release's apply failed.
+    let setup_update_authorization = current
         .runtime_metadata
         .as_ref()
         .and_then(|metadata| metadata.setup_update_authorization.as_ref());
-    let setup_update_authorization = recorded_setup_update_authorization
-        .filter(|authorization| Some(authorization.release_id.as_str()) == target_release_id);
     info!(
-        authorization_present = recorded_setup_update_authorization.is_some(),
-        authorization_release_id = recorded_setup_update_authorization
+        authorization_present = setup_update_authorization.is_some(),
+        authorization_release_id = setup_update_authorization
             .map(|authorization| authorization.release_id.as_str()),
         target_release_id,
-        kept_for_target_release = setup_update_authorization.is_some(),
-        "setup update authorization release filter"
+        "setup update authorization recorded for the update"
     );
     let (mutated_stack, _deployment_summary, setup_update_authorized) = runner
         .run_deployment_time_preflights(
@@ -500,11 +500,12 @@ fn refuse_changes_requiring_setup(
 /// Note: Stack settings are updated during UpdatePending phase and should not change mid-update.
 pub async fn handle_updating(
     current: DeploymentState,
-    config: DeploymentConfig,
+    mut config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling Updating status");
+    config.release_statements = crate::helpers::release_statements(current.target_release.as_ref());
 
     // Clone current first before moving any fields
     let mut next = current.clone();
@@ -859,6 +860,8 @@ pub async fn handle_updating(
                         message: "Pending prepared stack not found in runtime metadata".to_string(),
                     })
                 })?,
+                signed: None,
+                signer_lists: Vec::new(),
             });
             next.status = DeploymentStatus::UpdatePending;
             next.runtime_metadata = Some(runtime_metadata);
@@ -1171,6 +1174,8 @@ mod tests {
             version: None,
             description: None,
             stack,
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let current = DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -1335,6 +1340,8 @@ mod tests {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
+                signer_lists: Vec::new(),
             }
         }
 

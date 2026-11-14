@@ -24,6 +24,49 @@ pub const AGENT_PATH: &str = "/usr/local/bin/alien-sandbox-agent";
 /// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
 pub const AGENT_PORT: u16 = 8971;
 
+/// Header carrying a preview capability. Never `Authorization`: the caller's own bearer token
+/// belongs to the code inside the sandbox and reaches it untouched.
+pub const PREVIEW_CAPABILITY_HEADER: &str = "x-alien-preview-capability";
+
+/// Header naming the sandbox port a preview request is for.
+pub const PREVIEW_PORT_HEADER: &str = "x-alien-preview-port";
+
+/// Header a caller puts its own bearer in when the backend's edge consumes `Authorization` for
+/// its own credential (GCP). The agent, after the capability verifies, re-emits it as
+/// `Authorization` towards `127.0.0.1` only.
+pub const CALLER_AUTHORIZATION_HEADER: &str = "x-alien-caller-authorization";
+
+/// Environment variable naming the header a backend's callers use for their own bearer
+/// (`authorization` when unset). Set on backends whose edge replaces `Authorization`.
+pub const ENV_CALLER_AUTHORIZATION_HEADER: &str = "ALIEN_SANDBOX_CALLER_AUTHORIZATION_HEADER";
+
+/// Longest a preview capability lives, in seconds. A grant never outlives the session either.
+pub const PREVIEW_CAPABILITY_MAX_SECONDS: i64 = 15 * 60;
+
+/// Set by the Kubernetes backend only: the pod mounts the agent binary and `/opt/alien`
+/// read-only itself, so the agent verifies that instead of building a private mount namespace
+/// (a pod's default seccomp profile blocks `unshare`). The agent refuses to start if the mounts
+/// are not there, so setting it elsewhere cannot turn protection off.
+pub const ENV_PROTECTED_MOUNTS: &str = "ALIEN_SANDBOX_PROTECTED_MOUNTS";
+
+/// Comma-separated `host:port` addresses of the Kubernetes API server (its Service ClusterIP and
+/// the real endpoint IPs) that the startup gate must see dropped. The Operator sets it on every
+/// Kubernetes sandbox pod, because service links are off and the pod has no
+/// `KUBERNETES_SERVICE_HOST` to learn the address from.
+pub const ENV_MUST_DROP_KUBE_API: &str = "ALIEN_SANDBOX_MUST_DROP_KUBE_API";
+/// A public `host:port` the startup gate must also see dropped. The Operator sets it only where
+/// the declared egress forbids direct public traffic (`none`, and `internet`, which goes through
+/// the gateway). It is unset when the policy allows that address, so an `allow` pod is not
+/// refused for reaching it.
+pub const ENV_MUST_DROP_PUBLIC: &str = "ALIEN_SANDBOX_MUST_DROP_PUBLIC";
+/// The public address the Operator asks the gate to probe.
+pub const MUST_DROP_PUBLIC_PROBE: &str = "1.1.1.1:443";
+/// The agent's first argument that stages the protected files (the Kubernetes init container).
+pub const STAGE_PROTECTED_FILES_ARGUMENT: &str = "--stage-protected-files";
+/// Names inside the staging directory the pod mounts over the agent binary and `/opt/alien`.
+pub const STAGED_AGENT_NAME: &str = "agent";
+pub const STAGED_METADATA_NAME: &str = "opt";
+
 /// Mode of the agent binary, owned by `0:0` so the exec uid cannot rewrite its supervisor.
 pub const AGENT_MODE: u32 = 0o755;
 
@@ -35,6 +78,39 @@ pub const SESSION_ROOT_MODE: u32 = 0o700;
 
 /// `RUST_LOG` for a GCP image, which the agent needs set before it logs anything.
 pub const GCP_AGENT_LOG_FILTER: &str = "info";
+
+/// Linux capabilities a root image process keeps: Docker's default set without `NET_RAW`.
+///
+/// `(name, number)` pairs, one list for both sides of the contract. The agent keeps exactly
+/// this set for the image's command and a Kubernetes pod grants exactly this set to the agent
+/// (`drop: [ALL]`, then these), so the agent can start the command with what it is entitled to
+/// and nothing more. Never `NET_ADMIN`, `SYS_ADMIN` or `NET_RAW`.
+pub const IMAGE_ROOT_CAPABILITY_SET: &[(&str, u8)] = &[
+    ("CHOWN", 0),
+    ("DAC_OVERRIDE", 1),
+    ("FOWNER", 3),
+    ("FSETID", 4),
+    ("KILL", 5),
+    ("SETGID", 6),
+    ("SETUID", 7),
+    ("SETPCAP", 8),
+    ("NET_BIND_SERVICE", 10),
+    ("SYS_CHROOT", 18),
+    ("MKNOD", 27),
+    ("AUDIT_WRITE", 29),
+    ("SETFCAP", 31),
+];
+
+/// [`IMAGE_ROOT_CAPABILITY_SET`] as the 32-bit `CapEff` mask the agent applies.
+pub const IMAGE_ROOT_CAPABILITY_MASK: u32 = {
+    let mut mask = 0u32;
+    let mut index = 0;
+    while index < IMAGE_ROOT_CAPABILITY_SET.len() {
+        mask |= 1 << IMAGE_ROOT_CAPABILITY_SET[index].1;
+        index += 1;
+    }
+    mask
+};
 
 /// How an image ends, and the isolation that ending permits.
 ///
@@ -171,12 +247,14 @@ pub const AWS_MICROVM: SandboxImage = SandboxImage {
 /// GCP keeps a root supervisor separate from the non-root command identity.
 /// Live conformance must verify root execution and capability bounds because the
 /// provider's published custom-image requirements do not promise root support.
-/// Agent Platform serves the declared container port 8080.
+/// Agent Platform serves the port the template declares; the agent keeps the shared port so a
+/// workload that binds 8080 itself does not collide with it (measured live: with the agent on
+/// 8080 a root supervisor that also binds 8080 exits at startup).
 pub const GCP_AGENT_PLATFORM: SandboxImage = SandboxImage {
     exec_uid: 1000,
     exec_gid: 1000,
     session_root: "/sandbox",
-    port: 8080,
+    port: AGENT_PORT,
     authorization: Authorization::Transport,
     isolation: Isolation::UidSplit,
 };
@@ -512,7 +590,7 @@ ENV RUST_LOG={GCP_AGENT_LOG_FILTER} \
 # inherited base CMD values cannot become agent arguments or a second shell process.
 RUN mkdir -p /opt/alien \
  && printf '%s\n' '{empty_image_command}' > {IMAGE_COMMAND_PATH} \
- && chmod 0600 {IMAGE_COMMAND_PATH}
+ && chmod 0444 {IMAGE_COMMAND_PATH}
 
 {entrypoint}
 CMD []
@@ -533,6 +611,25 @@ CMD []
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A root-supervisor workload commonly binds 8080 itself; the agent must not take it.
+    #[test]
+    fn the_gcp_agent_leaves_port_8080_to_the_workload() {
+        assert_ne!(GCP_AGENT_PLATFORM.port, 8080);
+        assert_eq!(GCP_AGENT_PLATFORM.port, AGENT_PORT);
+    }
+
+    /// The published contract value (Docker's default set without `NET_RAW`); the name list the
+    /// pod grants must equal the mask the agent applies.
+    #[test]
+    fn root_capability_set_is_dockers_default_without_net_raw() {
+        assert_eq!(IMAGE_ROOT_CAPABILITY_MASK, 0xa80405fb);
+        for forbidden in ["NET_ADMIN", "SYS_ADMIN", "NET_RAW"] {
+            assert!(IMAGE_ROOT_CAPABILITY_SET
+                .iter()
+                .all(|(name, _)| *name != forbidden));
+        }
+    }
 
     fn committed_path(relative: &str) -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -621,7 +718,7 @@ mod tests {
         assert_eq!(AWS_MICROVM.port, 8971);
         assert_eq!(AWS_MICROVM.exec_uid, 60000);
         assert_eq!(AWS_MICROVM.session_root, "/sandbox");
-        assert_eq!(GCP_AGENT_PLATFORM.port, 8080);
+        assert_eq!(GCP_AGENT_PLATFORM.port, 8971);
         assert_eq!(GCP_AGENT_PLATFORM.exec_uid, 1000);
         assert_eq!(GCP_AGENT_PLATFORM.session_root, "/sandbox");
         for image in [&AWS_MICROVM, &GCP_AGENT_PLATFORM] {

@@ -949,11 +949,7 @@ mod tests {
                 state.resources.get_mut("api").unwrap().status = Running;
                 state.resources.get_mut("execution-sa").unwrap().status = Running;
                 state.resources.get_mut(id).unwrap().status = status;
-                assert_eq!(
-                    aws_member(&state, "role-1"),
-                    accepted,
-                    "{id} in {status:?}"
-                );
+                assert_eq!(aws_member(&state, "role-1"), accepted, "{id} in {status:?}");
                 // The recorded identity must still match exactly.
                 assert!(!aws_member(&state, "role-2"), "{id} in {status:?}");
             }

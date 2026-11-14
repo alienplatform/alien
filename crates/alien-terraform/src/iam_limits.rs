@@ -720,14 +720,14 @@ impl<'a> Module<'a> {
                     ))
                 }
             }
-            ("substr", [value, _offset, Expression::Number(length)]) => {
-                let value = self.string_chars(value, depth)?;
-                match length.as_i64() {
-                    Some(-1) => Ok(value),
-                    Some(length) if length >= 0 => Ok(value.min(length as usize)),
-                    _ => Err(unbounded(expression, "invalid substring length")),
-                }
-            }
+            ("substr", [value, _offset, Expression::Number(length)]) => match length.as_i64() {
+                Some(-1) => self.string_chars(value, depth),
+                // A substring is never longer than its length, whatever it is cut from.
+                Some(length) if length >= 0 => Ok(self
+                    .string_chars(value, depth)
+                    .map_or(length as usize, |value| value.min(length as usize))),
+                _ => Err(unbounded(expression, "invalid substring length")),
+            },
             ("sha1", [_]) => Ok(40),
             ("sha256", [_]) => Ok(64),
             ("md5", [_]) => Ok(32),

@@ -22,9 +22,6 @@ pub use gcp::agent_platform::{
 pub use gcp::artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient};
 pub use gcp::cloud_kms::{CloudKmsApi, CloudKmsClient};
 pub use gcp::cloud_sql::{CloudSqlApi, CloudSqlClient};
-pub use gcp::memorystore::{
-    MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi, ServiceConnectionPolicyClient,
-};
 pub use gcp::cloudasset::{CloudAssetApi, CloudAssetClient};
 pub use gcp::cloudbuild::{CloudBuildApi, CloudBuildClient};
 pub use gcp::cloudrun::{CloudRunApi, CloudRunClient};
@@ -34,6 +31,9 @@ pub use gcp::container::{ContainerApi, ContainerClient};
 pub use gcp::firestore::{FirestoreApi, FirestoreClient};
 pub use gcp::gcs::{GcsApi, GcsClient};
 pub use gcp::iam::{IamApi, IamClient};
+pub use gcp::memorystore::{
+    MemorystoreApi, MemorystoreClient, ServiceConnectionPolicyApi, ServiceConnectionPolicyClient,
+};
 pub use gcp::model_garden::{ModelGardenApi, ModelGardenClient};
 pub use gcp::monitoring::{MonitoringApi, MonitoringClient};
 pub use gcp::pubsub::{PubSubApi, PubSubClient};

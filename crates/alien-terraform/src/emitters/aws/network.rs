@@ -249,7 +249,10 @@ fn stack_has_managed_eks(ctx: &EmitContext<'_>) -> bool {
 fn stack_has_retained_database(ctx: &EmitContext<'_>) -> bool {
     ctx.stack.resources().any(|(_, entry)| {
         entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-            && (entry.config.downcast_ref::<alien_core::Postgres>().is_some()
+            && (entry
+                .config
+                .downcast_ref::<alien_core::Postgres>()
+                .is_some()
                 || entry.config.downcast_ref::<alien_core::Redis>().is_some())
     })
 }

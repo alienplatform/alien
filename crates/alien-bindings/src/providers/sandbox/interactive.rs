@@ -489,6 +489,7 @@ mod tests {
                     gid: metadata.gid(),
                 }
             },
+            preview: Default::default(),
             output_cap: 1 << 24,
             jobs: Default::default(),
             interactive: Default::default(),

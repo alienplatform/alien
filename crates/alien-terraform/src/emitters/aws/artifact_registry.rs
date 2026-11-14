@@ -19,6 +19,16 @@ impl TfEmitter for AwsArtifactRegistryEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let registry = downcast::<ArtifactRegistry>(ctx, ArtifactRegistry::RESOURCE_TYPE)?;
         registry.validate_aws_replication()?;
+        if registry.replication_regions_input.is_some() {
+            return Err(alien_error::AlienError::new(
+                alien_core::ErrorData::GenericError {
+                    message: format!(
+                        "Artifact registry '{}': a replication regions input is only supported in CloudFormation packages",
+                        registry.id()
+                    ),
+                },
+            ));
+        }
         let label = required_label(ctx)?;
         let pull_label = format!("{label}_pull");
         let push_label = format!("{label}_push");

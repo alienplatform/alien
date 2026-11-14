@@ -6,6 +6,9 @@ license-file.workspace = true
 
 [dependencies]
 subtle = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 alien-core = { workspace = true, features = ["sandbox-capability", "sandbox-process"] }
 alien-error = { workspace = true }
 serde = { workspace = true }

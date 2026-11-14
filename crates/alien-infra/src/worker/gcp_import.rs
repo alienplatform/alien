@@ -35,6 +35,7 @@ impl ResourceImporter for GcpWorkerImporter {
             state: GcpWorkerState::Ready,
             service_name: Some(data.service_name),
             url: data.url,
+            cloud_run_url: None,
             operation_name: None,
             image_pull_permission_retries: 0,
             compute_operation_name: None,
@@ -60,6 +61,7 @@ impl ResourceImporter for GcpWorkerImporter {
             region: Some(data.region),
             commands_topic_name: data.commands_topic_name,
             commands_subscription_name: data.commands_subscription_name,
+            applied_config: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

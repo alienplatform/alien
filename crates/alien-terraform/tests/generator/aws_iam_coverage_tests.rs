@@ -18,12 +18,15 @@
 //! preflights add the resource after profiles are checked) are covered only by their
 //! stack-wide sets; their resource-bound grants are rendered by the emitter of that type.
 
-use super::helpers::{assert_terraform_valid, prepare_for_target, render_with_registry};
+use super::helpers::{
+    assert_terraform_valid, assert_terraform_validates, prepare_for_target,
+    prepare_for_target_with, render_with_registry,
+};
 use alien_core::{
     import::EmitContext, ownership_policy_for_resource_type, Ai, ArtifactRegistry, Build,
     ComputeCluster, Key, Kv, NetworkSettings, PermissionProfile, Platform, Queue,
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
-    Stack, StackSettings, Storage, Vault, Worker, WorkerCode, WorkerTrigger,
+    Stack, StackSettings, StackSigning, Storage, Vault, Worker, WorkerCode, WorkerTrigger,
 };
 use alien_permissions::{
     get_permission_set, list_permission_set_ids, permission_set_covers_platform, BindingTarget,
@@ -304,17 +307,36 @@ async fn every_aws_emitter_renders_every_permission_set_it_supports() {
     for families in FIXTURES {
         for target in [TerraformTarget::Aws, TerraformTarget::Eks] {
             for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
-                let case = format!("{families:?} on {target:?} with {lifecycle:?} data resources");
-                let (stack, settings) = fixture(families, target, lifecycle);
-                let stack = prepare_for_target(stack, target).await;
-                rendered_types.extend(
-                    stack
-                        .resources()
-                        .map(|(_, entry)| entry.config.resource_type().to_string()),
-                );
-                let module = render_with_registry(&stack, target, settings, &registry)
-                    .unwrap_or_else(|error| panic!("{case}: the module renders: {error:?}"));
-                modules.push((case, module));
+                // A protected stack with a function also gets the verifier, which only
+                // preflights add. On Kubernetes the chart holds the signing settings instead.
+                let protections: &[bool] =
+                    if *families == ["worker"] && target == TerraformTarget::Aws {
+                        &[false, true]
+                    } else {
+                        &[false]
+                    };
+                for &protected in protections {
+                    let case = format!(
+                        "{families:?} on {target:?} with {lifecycle:?} data resources{}",
+                        if protected { ", protected" } else { "" }
+                    );
+                    let (stack, mut settings) = fixture(families, target, lifecycle);
+                    if protected {
+                        settings.signing = Some(StackSigning {
+                            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+                            channel: "production".to_string(),
+                        });
+                    }
+                    let stack = prepare_for_target_with(stack, target, settings.clone()).await;
+                    rendered_types.extend(
+                        stack
+                            .resources()
+                            .map(|(_, entry)| entry.config.resource_type().to_string()),
+                    );
+                    let module = render_with_registry(&stack, target, settings, &registry)
+                        .unwrap_or_else(|error| panic!("{case}: the module renders: {error:?}"));
+                    modules.push((case, module, protected));
+                }
             }
         }
     }
@@ -332,8 +354,14 @@ async fn every_aws_emitter_renders_every_permission_set_it_supports() {
     std::thread::scope(|scope| {
         for _ in 0..VALIDATE_WORKERS {
             scope.spawn(|| {
-                while let Some((case, module)) = modules.get(next.fetch_add(1, Ordering::Relaxed)) {
-                    assert_terraform_valid(module, case);
+                while let Some((case, module, protected)) =
+                    modules.get(next.fetch_add(1, Ordering::Relaxed))
+                {
+                    if *protected {
+                        assert_terraform_validates(module, case);
+                    } else {
+                        assert_terraform_valid(module, case);
+                    }
                 }
             });
         }

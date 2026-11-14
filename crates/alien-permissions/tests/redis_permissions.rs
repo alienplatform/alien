@@ -98,7 +98,9 @@ fn aws_provision_allows_the_controllers_own_calls() {
             Request::new("secretsmanager:TagResource", secret.clone())
                 .resource_tags(OWN)
                 .request_tags(OWN),
-            Request::new("ec2:CreateSecurityGroup", sg.clone()),
+            // AWS supplies the VPC of the new group.
+            Request::new("ec2:CreateSecurityGroup", sg.clone())
+                .with("ec2:Vpc", "arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0123"),
             Request::new("ec2:CreateTags", sg.clone())
                 .request_tags(OWN)
                 .with("ec2:CreateAction", "CreateSecurityGroup"),

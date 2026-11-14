@@ -20,11 +20,9 @@ use tracing::{debug, info};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::lambda_microvms::{
-    is_refused_for_running_microvms, CreateMicrovmImageRequest, MicrovmCodeArtifact,
-    MicrovmCpuConfiguration, MicrovmImageBuild, MicrovmImageBuildHooks, MicrovmImageHooks,
-    MicrovmImageLogging, MicrovmImageResources, MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
-};
+use alien_aws_clients::lambda_microvms::{is_refused_for_running_microvms, MicrovmImageBuild};
+use alien_aws_clients::sandbox_image_build::image_build_inputs;
+pub(crate) use alien_aws_clients::sandbox_image_build::{aws_partition, sandbox_image_arn};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SANDBOX_BUNDLE_STORAGE_ID,
@@ -38,9 +36,6 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 use sha2::{Digest, Sha256};
-
-/// The only architecture MicroVM images accept.
-const ARCHITECTURE: &str = "ARM_64";
 
 /// A build takes ~110-160s, gated on the in-image `Ready` hook (itself capped at 120s).
 /// 90 polls at this interval is a 15-minute ceiling — an order of magnitude past a healthy
@@ -263,7 +258,12 @@ impl AwsSandboxController {
             ctx.desired_stack,
             config,
         ))
-        .with_receipt()?;
+        .with_receipt()
+        .into_alien_error()
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Cannot encode MicroVM build request".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?;
 
         // A create whose response never reached state leaves an image under this
         // account-unique name, and a second create would collide with it. Read first and adopt
@@ -290,10 +290,9 @@ impl AwsSandboxController {
 
         let (operation, image_arn, image_version) = match existing {
             None => {
-                let created = client
-                    .create_microvm_image(
-                        inputs.create_request(image_name.clone(), image_tags(ctx, &config.id)),
-                    )
+                let request =
+                    inputs.create_request(image_name.clone(), image_tags(ctx, &config.id));
+                let created = create_image(ctx, client.as_ref(), &config.id, request)
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to create MicroVM image '{image_name}'"),
@@ -341,15 +340,18 @@ impl AwsSandboxController {
                             suggested_delay: Some(BUILD_POLL_INTERVAL),
                         });
                     }
-                    let rolled = client
-                        .update_microvm_image(&identifier, inputs.update_request())
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to rebuild adopted MicroVM image '{image_name}'"
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        })?;
+                    let rolled = update_image(
+                        ctx,
+                        client.as_ref(),
+                        &config.id,
+                        &identifier,
+                        inputs.update_request(),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to rebuild adopted MicroVM image '{image_name}'"),
+                        resource_id: Some(config.id.clone()),
+                    })?;
                     if let Some(replaced) = image.image_version {
                         self.retired_versions.push(RetiredVersion {
                             version: replaced,
@@ -867,7 +869,12 @@ impl AwsSandboxController {
         ))
         .for_roll(self.active_version.as_deref())
         .for_retry(self.build_retry_generation)
-        .with_receipt()?
+        .with_receipt()
+        .into_alien_error()
+        .context(ErrorData::ResourceConfigInvalid {
+            message: "Cannot encode MicroVM build request".to_string(),
+            resource_id: Some(config.id.clone()),
+        })?
         .update_request();
         let inventory = client
             .list_microvm_image_versions(&image_identifier)
@@ -895,8 +902,7 @@ impl AwsSandboxController {
                     suggested_delay: Some(BUILD_POLL_INTERVAL),
                 });
             }
-            client
-                .update_microvm_image(&image_identifier, request)
+            update_image(ctx, client.as_ref(), &config.id, &image_identifier, request)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to roll MicroVM image '{image_identifier}'"),
@@ -1436,6 +1442,98 @@ impl AwsSandboxController {
     }
 }
 
+/// The image a rendered bundle builds from: the release's container image, or `bundledFrom` when a
+/// publisher put its own bundle in `code.image`. The release stores the manager's proxy
+/// reference; the build pulls from the registry behind it.
+fn rendered_image(
+    ctx: &ResourceControllerContext<'_>,
+    image: &String,
+    bundled_from: Option<&String>,
+) -> String {
+    let image = bundled_from.unwrap_or(image);
+    match ctx.deployment_config.native_image_host.as_deref() {
+        Some(host) => alien_core::image_rewrite::resolve_native_image_uri(image, host)
+            .unwrap_or_else(|| image.clone()),
+        None => image.clone(),
+    }
+}
+
+/// Starts the image's first build. On a protected install the verifier sends it, after checking
+/// it against the signed sandbox; the request is the same either way.
+async fn create_image(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi,
+    sandbox_id: &str,
+    request: alien_aws_clients::lambda_microvms::CreateMicrovmImageRequest,
+) -> Result<alien_aws_clients::lambda_microvms::CreateMicrovmImageResponse> {
+    let sent = serde_json::to_value(&request).into_alien_error().context(
+        ErrorData::ResourceConfigInvalid {
+            message: "Cannot encode MicroVM build request".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        },
+    )?;
+    match crate::core::verifier::aws_sandbox_write(
+        ctx,
+        sandbox_id,
+        crate::core::verifier::ResourceWrite::CreateMicrovmImage { request: sent },
+    )
+    .await?
+    {
+        Some(answer) => serde_json::from_value(answer).into_alien_error().context(
+            ErrorData::CloudPlatformError {
+                message: "The verifier's answer to the image build is not a build".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            },
+        ),
+        None => client
+            .create_microvm_image(request)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "CreateMicrovmImage failed".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            }),
+    }
+}
+
+/// Rolls a new version onto the image, through the verifier on a protected install.
+async fn update_image(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi,
+    sandbox_id: &str,
+    image: &str,
+    request: alien_aws_clients::lambda_microvms::UpdateMicrovmImageRequest,
+) -> Result<alien_aws_clients::lambda_microvms::UpdateMicrovmImageResponse> {
+    let sent = serde_json::to_value(&request).into_alien_error().context(
+        ErrorData::ResourceConfigInvalid {
+            message: "Cannot encode MicroVM build request".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        },
+    )?;
+    match crate::core::verifier::aws_sandbox_write(
+        ctx,
+        sandbox_id,
+        crate::core::verifier::ResourceWrite::UpdateMicrovmImage {
+            image: image.to_string(),
+            request: sent,
+        },
+    )
+    .await?
+    {
+        Some(answer) => serde_json::from_value(answer).into_alien_error().context(
+            ErrorData::CloudPlatformError {
+                message: "The verifier's answer to the image roll is not a build".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            },
+        ),
+        None => client.update_microvm_image(image, request).await.context(
+            ErrorData::CloudPlatformError {
+                message: "UpdateMicrovmImage failed".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            },
+        ),
+    }
+}
+
 fn resource_lifecycle(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -1458,37 +1556,6 @@ fn image_tags(ctx: &ResourceControllerContext<'_>, resource_id: &str) -> BTreeMa
         standard_resource_tags(ctx.resource_prefix, resource_id)
             .into_iter()
             .collect()
-    }
-}
-
-/// Assembles the build inputs from the declaration, so a create and a roll of the same sandbox
-/// differ only in the bundle.
-fn image_build_inputs(
-    region: &str,
-    resource_id: &str,
-    image_name: &str,
-    build_role_arn: &str,
-    bundle_uri: &str,
-    baseline_memory_mib: i64,
-) -> ImageBuildInputs {
-    ImageBuildInputs {
-        description: format!("Sandbox {resource_id}"),
-        base_image_arn: managed_base_image_arn(region),
-        build_role_arn: build_role_arn.to_string(),
-        code_artifact: MicrovmCodeArtifact {
-            uri: bundle_uri.to_string(),
-        },
-        egress_network_connectors: vec![internet_egress_connector_arn(region)],
-        resources: vec![MicrovmImageResources {
-            minimum_memory_in_mib: baseline_memory_mib,
-        }],
-        // Keyed on the account-unique image name and the bundle: a retry of the same release
-        // replays the prior success, a new release's bundle asks for a real build, and another
-        // deployment in the same account rolling the same bundle onto its own image never reuses
-        // this image's token.
-        client_token: build_client_token(image_name, bundle_uri),
-        environment: agent_environment(),
-        additional_os_capabilities: vec![],
     }
 }
 
@@ -1536,14 +1603,7 @@ impl AwsSandboxController {
                     dependency_id: SANDBOX_BUNDLE_STORAGE_ID.to_string(),
                 })
             })?;
-            let image = bundled_from.as_ref().unwrap_or(image);
-            // The release stores the manager's proxy reference; the build pulls from the
-            // registry behind it.
-            let image = match ctx.deployment_config.native_image_host.as_deref() {
-                Some(host) => alien_core::image_rewrite::resolve_native_image_uri(image, host)
-                    .unwrap_or_else(|| image.clone()),
-                None => image.clone(),
-            };
+            let image = rendered_image(ctx, image, bundled_from.as_ref());
             return Ok(BundleToBuild::Rendered(super::aws_bundle::render(
                 bucket, &image, &config.id,
             )?));
@@ -1590,6 +1650,43 @@ impl AwsSandboxController {
             return Ok(());
         };
         let client = ctx.service_provider.get_aws_s3_client(aws_config).await?;
+        // On a protected install the verifier writes it: it renders the same bundle from the
+        // image the release signed, so a bundle names no image but that one.
+        if let SandboxCode::Image {
+            image,
+            bundled_from,
+        } = &config.code
+        {
+            if let Some(answer) = crate::core::verifier::aws_sandbox_write(
+                ctx,
+                &config.id,
+                crate::core::verifier::ResourceWrite::PutSandboxBundle {
+                    image: rendered_image(ctx, image, bundled_from.as_ref()),
+                },
+            )
+            .await?
+            {
+                if answer["uri"].as_str() != Some(rendered.uri().as_str()) {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "The verifier wrote the sandbox bundle to {}, not {}",
+                            answer["uri"],
+                            rendered.uri()
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                super::aws_bundle::prune(
+                    client.as_ref(),
+                    &rendered,
+                    self.bundle_uri.as_deref(),
+                    &config.id,
+                )
+                .await;
+                self.written_bundle_uri = Some(rendered.uri());
+                return Ok(());
+            }
+        }
         super::aws_bundle::write(
             client.as_ref(),
             &rendered,
@@ -1645,228 +1742,6 @@ fn regional_bundle_uri(uri: &str, region: &str, resource_id: &str) -> Result<Str
         BundleUri::Literal(uri) => Ok(uri.to_string()),
         BundleUri::Regional { before, after } => Ok(format!("{before}{region}{after}")),
     }
-}
-
-/// The build inputs a create and a roll must state identically.
-///
-/// `UpdateMicrovmImage` has PUT semantics — a field left out of the roll is dropped from the
-/// new version — so the two requests are built from one value rather than assembled twice.
-#[derive(Clone)]
-struct ImageBuildInputs {
-    description: String,
-    base_image_arn: String,
-    build_role_arn: String,
-    code_artifact: MicrovmCodeArtifact,
-    egress_network_connectors: Vec<String>,
-    resources: Vec<MicrovmImageResources>,
-    client_token: String,
-    environment: BTreeMap<String, String>,
-    additional_os_capabilities: Vec<String>,
-}
-
-impl ImageBuildInputs {
-    fn with_agent_environment(mut self, environment: BTreeMap<String, String>) -> Self {
-        self.environment.extend(environment);
-        if self.environment.contains_key("ALIEN_SANDBOX_EGRESS")
-            || self.environment.contains_key("ALIEN_SANDBOX_IMAGE_COMMAND")
-        {
-            // AWS rejects named capabilities (including NET_ADMIN): the API enum is only ALL.
-            // The agent reduces its grant before starting threads, bounds root image startup,
-            // and gives exec no capabilities. The grant also permits firewall installation.
-            // https://docs.aws.amazon.com/lambda/latest/dg/microvms-images.html#microvms-images-os-capabilities
-            self.additional_os_capabilities = vec!["ALL".to_string()];
-            // Fold the complete policy into the token without truncating away its digest.
-            let digest =
-                Sha256::digest(format!("{}{:?}", self.client_token, self.environment).as_bytes());
-            self.client_token = format!("agent-{:x}", digest)[..64].to_string();
-        }
-        self
-    }
-
-    fn for_roll(mut self, previous_version: Option<&str>) -> Self {
-        self.client_token = roll_client_token(&self.client_token, previous_version);
-        self
-    }
-
-    fn for_retry(mut self, generation: u64) -> Self {
-        if generation != 0 {
-            let digest = Sha256::digest(format!("{}:retry:{generation}", self.client_token));
-            self.client_token = format!("{digest:x}");
-        }
-        self
-    }
-
-    /// The receipt hashes the whole request, so a release that changes any field of it (hooks,
-    /// environment, base image) does not recognise a build an earlier release started and lost
-    /// the response to: recovery misses it and builds again, leaving that version untracked.
-    /// Accepted for the narrow window it needs, a lost response retried across an upgrade.
-    fn with_receipt(mut self) -> Result<Self> {
-        let encoded = serde_json::to_vec(&self.clone().update_request())
-            .into_alien_error()
-            .context(ErrorData::ResourceConfigInvalid {
-                message: "Cannot encode MicroVM build request".to_string(),
-                resource_id: None,
-            })?;
-        self.client_token = format!("{:x}", Sha256::digest(encoded));
-        self.description = format!("{} [build:{}]", self.description, self.client_token);
-        Ok(self)
-    }
-
-    fn create_request(
-        self,
-        name: String,
-        tags: BTreeMap<String, String>,
-    ) -> CreateMicrovmImageRequest {
-        CreateMicrovmImageRequest::builder()
-            .name(name)
-            .description(self.description)
-            .base_image_arn(self.base_image_arn)
-            .base_image_version("1")
-            .build_role_arn(self.build_role_arn)
-            .code_artifact(self.code_artifact)
-            // The switch behind "control plane never sees sandbox contents".
-            .logging(MicrovmImageLogging::Disabled {})
-            .egress_network_connectors(self.egress_network_connectors)
-            .cpu_configurations(vec![MicrovmCpuConfiguration {
-                architecture: ARCHITECTURE.to_string(),
-            }])
-            .resources(self.resources)
-            .hooks(agent_hooks())
-            .environment_variables(self.environment)
-            .additional_os_capabilities(self.additional_os_capabilities)
-            // The deployed `sandbox/provision` grant conditions `CreateMicrovmImage` on the
-            // stack tag and `managed-by: runtime` arriving as request tags; without them the
-            // call is denied by a policy that is already installed.
-            .tags(tags)
-            .client_token(self.client_token)
-            .build()
-    }
-
-    /// The roll carries no tags: the API rejects them here, and the image keeps the ones its
-    /// create set — which is what every other sandbox statement scopes against.
-    fn update_request(self) -> UpdateMicrovmImageRequest {
-        UpdateMicrovmImageRequest::builder()
-            .description(self.description)
-            .base_image_arn(self.base_image_arn)
-            .base_image_version("1")
-            .build_role_arn(self.build_role_arn)
-            .code_artifact(self.code_artifact)
-            .logging(MicrovmImageLogging::Disabled {})
-            .egress_network_connectors(self.egress_network_connectors)
-            .cpu_configurations(vec![MicrovmCpuConfiguration {
-                architecture: ARCHITECTURE.to_string(),
-            }])
-            .resources(self.resources)
-            .hooks(agent_hooks())
-            .environment_variables(self.environment)
-            .additional_os_capabilities(self.additional_os_capabilities)
-            .client_token(self.client_token)
-            .build()
-    }
-}
-
-/// A build idempotency token that changes with the bundle. Both the create and the roll replay a
-/// prior success for a repeated token, so folding the content-addressed bundle in keeps a retry
-/// idempotent while a genuinely new release asks for a real build.
-fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
-    let digest = Sha256::digest(bundle_uri.as_bytes());
-    // Sixteen hex chars of the bundle digest is plenty to separate one release from the next,
-    // and keeps the token well under the API's length ceiling.
-    format!("{image_name}-{:x}", digest)
-        .chars()
-        .take(image_name.len() + 1 + 16)
-        .collect()
-}
-
-fn roll_client_token(token: &str, previous_version: Option<&str>) -> String {
-    let digest = Sha256::digest(format!("{token}:{previous_version:?}").as_bytes());
-    format!("roll-{:x}", digest)[..64].to_string()
-}
-
-/// The pre-create probe has no ARN to adopt yet, and the API answers a bare name with a 400
-/// that no absent-resource check can read as absence. The name is account-unique, so the ARN
-/// it will carry is derivable before the image exists.
-pub(crate) fn sandbox_image_arn(region: &str, account_id: &str, image_name: &str) -> String {
-    format!(
-        "arn:{}:lambda:{region}:{account_id}:microvm-image:{image_name}",
-        aws_partition(region)
-    )
-}
-
-/// The Lambda-managed base image the build runs on. The vendor's own base is inside the
-/// bundle's Dockerfile, not here.
-fn managed_base_image_arn(region: &str) -> String {
-    format!(
-        "arn:{}:lambda:{region}:aws:microvm-image:al2023-1",
-        aws_partition(region)
-    )
-}
-
-/// AWS's own internet connector, which the image build routes through to reach a registry.
-fn internet_egress_connector_arn(region: &str) -> String {
-    format!(
-        "arn:{}:lambda:{region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS",
-        aws_partition(region)
-    )
-}
-
-/// Partition for ARNs the controller mints itself, where no CloudFormation pseudo-parameter
-/// can resolve it.
-pub(crate) fn aws_partition(region: &str) -> &'static str {
-    if region.starts_with("us-gov-") {
-        "aws-us-gov"
-    } else if region.starts_with("cn-") {
-        "aws-cn"
-    } else {
-        "aws"
-    }
-}
-
-/// Lifecycle hooks, served by the agent on its own port; mirrors what the setup emitters bake
-/// into a Frozen image.
-///
-/// `Ready` is not optional — AWS rejects an image enabling any MicroVM hook without it, and it
-/// is what defers the snapshot until the agent is serving. `Validate` runs on a MicroVM restored
-/// from the snapshot and fails the build when a command or a file write cannot work on it; 30s
-/// is AWS's default and far above the probe's sub-second work, where `Ready`'s 120s covers a
-/// boot. `Run` and `Resume` are acknowledged by the agent and nothing more: entropy separation
-/// between MicroVMs comes from the MicroVM service.
-fn agent_hooks() -> MicrovmImageHooks {
-    MicrovmImageHooks::builder()
-        .port(AWS_MICROVM.port)
-        .microvm_image_hooks(MicrovmImageBuildHooks {
-            ready: "ENABLED".to_string(),
-            ready_timeout_in_seconds: 120,
-            validate: "ENABLED".to_string(),
-            validate_timeout_in_seconds: 30,
-        })
-        .microvm_hooks(MicrovmLifecycleHooks {
-            run: "ENABLED".to_string(),
-            run_timeout_in_seconds: 30,
-            resume: "ENABLED".to_string(),
-            resume_timeout_in_seconds: 30,
-        })
-        .build()
-}
-
-/// The agent's configuration contract, identical to the setup emitters' rendering.
-///
-/// Identity and isolation come from the image: runtime defaults would overwrite its USER.
-fn agent_environment() -> BTreeMap<String, String> {
-    BTreeMap::from([
-        (
-            "ALIEN_SANDBOX_ROOT".to_string(),
-            AWS_MICROVM.session_root.to_string(),
-        ),
-        (
-            "ALIEN_SANDBOX_PORT".to_string(),
-            AWS_MICROVM.port.to_string(),
-        ),
-        (
-            "ALIEN_SANDBOX_AUTHORIZATION".to_string(),
-            AWS_MICROVM.authorization.env_value().to_string(),
-        ),
-    ])
 }
 
 /// How far along a MicroVM image version's build is.
@@ -1946,6 +1821,11 @@ mod tests {
     use alien_aws_clients::lambda_microvms::{
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
         UpdateMicrovmImageResponse,
+    };
+    use alien_aws_clients::lambda_microvms::{MicrovmImageLogging, MicrovmImageResources};
+    use alien_aws_clients::sandbox_image_build::{
+        build_client_token, internet_egress_connector_arn, managed_base_image_arn,
+        roll_client_token,
     };
     use alien_core::permissions::{PermissionProfile, PermissionSetReference};
     use alien_core::{Platform, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};

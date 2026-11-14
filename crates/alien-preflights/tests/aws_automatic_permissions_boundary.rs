@@ -620,16 +620,29 @@ async fn automatic_profile_cannot_select_floating_asg_templates() {
             "autoscaling:UpdateAutoScalingGroup",
         ] {
             for numeric in ["true", "false"] {
-                let request = Request::new(action, arn)
+                let mut request = Request::new(action, arn)
                     .request_tags(&tags)
                     .resource_tags(&tags)
                     .with("autoscaling:LaunchTemplateVersionSpecified", numeric);
+                // A group is created in named subnets, as the controller does.
+                if action == "autoscaling:CreateAutoScalingGroup" {
+                    request = request.with_values(
+                        "autoscaling:VPCZoneIdentifiers",
+                        &["subnet-0aaaaaaaaaaaaaaa1"],
+                    );
+                }
                 assert_eq!(
                     evaluate(&policy, &request) == Decision::Allowed,
-                    !bounded || numeric == "true"
+                    !bounded || numeric == "true",
+                    "{action} with LaunchTemplateVersionSpecified={numeric}, bounded={bounded}"
                 );
             }
         }
+        // A group created without subnets would land in the default VPC.
+        let no_subnets = Request::new("autoscaling:CreateAutoScalingGroup", arn)
+            .request_tags(&tags)
+            .with("autoscaling:LaunchTemplateVersionSpecified", "true");
+        assert_eq!(evaluate(&policy, &no_subnets), Decision::NotAllowed);
         let capacity = Request::new("autoscaling:UpdateAutoScalingGroup", arn).resource_tags(&tags);
         assert_eq!(evaluate(&policy, &capacity), Decision::Allowed);
         let refresh = Request::new("autoscaling:StartInstanceRefresh", arn).resource_tags(&tags);

@@ -1,4 +1,4 @@
-use super::{backend_name, failed, labels, missing, owned};
+use super::{backend_name, failed, has_runtime_scope, labels, missing, object_labels, owned};
 use crate::error::Result;
 use alien_core::sync::TargetDynamicContainer;
 use alien_k8s_clients::KubernetesClient;
@@ -48,6 +48,7 @@ pub(super) async fn put_secret(
             .data
             .as_ref()
             .is_some_and(|data| data.len() == target.secret_env.len())
+            && has_runtime_scope(&secret.metadata)
     }) {
         return Ok(());
     }
@@ -55,7 +56,7 @@ pub(super) async fn put_secret(
         metadata: ObjectMeta {
             name: Some(name.clone()),
             namespace: Some(namespace.to_string()),
-            labels: Some(labels(deployment_id, &target.name)),
+            labels: Some(object_labels(deployment_id, &target.name)),
             resource_version: current
                 .as_ref()
                 .and_then(|value| value.metadata.resource_version.clone()),
@@ -116,6 +117,7 @@ pub(super) async fn put_registry_secret(
             .as_ref()
             .and_then(|data| data.get(".dockerconfigjson"))
             .is_some_and(|stored| stored.0 == docker_config)
+            && has_runtime_scope(&secret.metadata)
     }) {
         return Ok(true);
     }
@@ -123,7 +125,7 @@ pub(super) async fn put_registry_secret(
         metadata: ObjectMeta {
             name: Some(name.clone()),
             namespace: Some(namespace.to_string()),
-            labels: Some(labels(deployment_id, &target.name)),
+            labels: Some(object_labels(deployment_id, &target.name)),
             resource_version: current
                 .as_ref()
                 .and_then(|value| value.metadata.resource_version.clone()),

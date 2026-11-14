@@ -1,7 +1,9 @@
 use crate::{
     error::{ErrorData, Result},
-    generators::labels::{
-        entry_description, entry_snake_label, entry_title_label, has_explicit_label,
+    generators::{
+        families::gcp_family,
+        labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
+        protected_allowlist::is_built_in_unchanged,
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -210,15 +212,20 @@ impl GcpRuntimePermissionsGenerator {
         for (index, platform_permission) in gcp_platform_permissions.iter().enumerate() {
             validate_gcp_grant(permission_set, index, &platform_permission.grant)?;
 
-            let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
+            let residual = gcp_residual_permissions(&platform_permission.grant);
+            let replaced = replaced_role_permissions(&platform_permission.grant, context);
+            if residual.is_none() && replaced.is_empty() {
                 continue;
-            };
+            }
+            let mut permissions: Vec<String> = residual.cloned().unwrap_or_default();
+            permissions.extend(replaced);
+            let permissions = granted_permissions(permission_set, &permissions, context)?;
             if permissions.is_empty() {
                 continue;
             }
             let role = self.custom_role_for_permissions(
                 permission_set,
-                permissions.clone(),
+                permissions,
                 context,
                 role_suffix(
                     &platform_permission.grant,
@@ -363,30 +370,64 @@ impl GcpRuntimePermissionsGenerator {
             };
             let resource_kind = binding_resource_kind(binding_spec);
             let condition = self.binding_condition(binding_spec, context)?;
+            if context.signing_protected
+                && condition.is_some()
+                && !is_built_in_unchanged(permission_set)
+            {
+                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                    platform: "gcp".to_string(),
+                    message: format!(
+                        "Permission set '{}' puts an IAM condition on a management binding; \
+                         a protected install doesn't support conditions the stack supplies",
+                        permission_set.id
+                    ),
+                }));
+            }
 
+            // A protected install's management identity holds predefined roles only from the
+            // built-in list. A role with a family permission becomes a custom role without it.
+            let mut replaced_role_permissions: Vec<String> = Vec::new();
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for predefined_role in predefined_roles {
+                    if context.signing_protected {
+                        if let Some(permissions) =
+                            gcp_role_without_family_permissions(predefined_role)
+                        {
+                            replaced_role_permissions
+                                .extend(permissions.iter().map(|p| p.to_string()));
+                            continue;
+                        }
+                        require_built_in_gcp_role(&permission_set.id, predefined_role)?;
+                    }
                     bindings.push(GcpIamBinding {
                         role: predefined_role.clone(),
                         members: vec![service_account.clone()],
                         target,
                         target_resource_name: target_resource_name.clone(),
                         resource_kind,
-                        condition: condition.clone(),
+                        condition: protected_secret_condition(
+                            condition.clone(),
+                            predefined_role.contains("secretmanager"),
+                            context,
+                        )?,
                     });
                 }
             }
 
-            let Some(permissions) = gcp_residual_permissions(&platform_permission.grant) else {
+            let residual = gcp_residual_permissions(&platform_permission.grant);
+            if residual.is_none() && replaced_role_permissions.is_empty() {
                 continue;
-            };
+            }
+            let mut permissions: Vec<String> = residual.cloned().unwrap_or_default();
+            permissions.extend(replaced_role_permissions);
+            let permissions = granted_permissions(permission_set, &permissions, context)?;
             if permissions.is_empty() {
                 continue;
             }
 
             let custom_role = self.custom_role_for_permissions(
                 permission_set,
-                permissions.clone(),
+                permissions,
                 context,
                 role_suffix(
                     &platform_permission.grant,
@@ -395,6 +436,14 @@ impl GcpRuntimePermissionsGenerator {
                 ),
                 platform_permission.label.as_deref(),
                 platform_permission.description.as_deref(),
+            )?;
+            let condition = protected_secret_condition(
+                condition,
+                custom_role
+                    .included_permissions
+                    .iter()
+                    .any(|permission| permission.starts_with("secretmanager.")),
+                context,
             )?;
             bindings.push(GcpIamBinding {
                 role: custom_role.name.clone(),
@@ -451,6 +500,268 @@ impl GcpRuntimePermissionsGenerator {
             expression: interpolated_expression,
         })
     }
+}
+
+/// The predefined roles the built-in management profile binds on GCP. A predefined role can't be
+/// narrowed, so a protected install refuses every other one (a broad role such as `roles/editor`,
+/// or one GCP adds later). Roles that hold a family permission are not here: see
+/// [`gcp_role_without_family_permissions`].
+pub const GCP_BUILT_IN_ROLES: &[&str] = &[
+    "roles/artifactregistry.reader",
+    "roles/cloudkms.cryptoKeyEncrypterDecrypter",
+    "roles/cloudkms.viewer",
+    "roles/datastore.user",
+    "roles/datastore.viewer",
+    "roles/iam.roleViewer",
+    "roles/iam.serviceAccountViewer",
+    "roles/logging.logWriter",
+    "roles/pubsub.publisher",
+    "roles/pubsub.viewer",
+    "roles/run.invoker",
+    "roles/run.viewer",
+    "roles/secretmanager.secretAccessor",
+    "roles/secretmanager.secretVersionAdder",
+    "roles/secretmanager.viewer",
+    "roles/serviceusage.serviceUsageViewer",
+    "roles/storage.bucketViewer",
+    "roles/storage.objectCreator",
+    "roles/storage.objectViewer",
+];
+
+/// Predefined roles that carry a family permission, with each role's complete permission list.
+/// A protected install's management identity gets a custom role setup creates from this list minus
+/// the family permissions ([`gcp_role_without_family_permissions`]).
+///
+/// Taken from the public IAM dataset and checked against the cloud provider's role reference:
+/// a predefined role can change, so the snapshot is pinned here and a test fails when a
+/// replacement would hold a family permission.
+const GCP_ROLES_WITH_FAMILY_PERMISSIONS: &[(&str, &[&str])] = &[
+    (
+        "roles/storage.objectAdmin",
+        &[
+            "monitoring.timeSeries.create",
+            "orgpolicy.policy.get",
+            "resourcemanager.projects.get",
+            "resourcemanager.projects.list",
+            "storage.folders.create",
+            "storage.folders.delete",
+            "storage.folders.get",
+            "storage.folders.list",
+            "storage.folders.rename",
+            "storage.managedFolders.create",
+            "storage.managedFolders.delete",
+            "storage.managedFolders.get",
+            "storage.managedFolders.list",
+            "storage.managedFolders.update",
+            "storage.multipartUploads.abort",
+            "storage.multipartUploads.create",
+            "storage.multipartUploads.list",
+            "storage.multipartUploads.listParts",
+            "storage.objects.create",
+            "storage.objects.createContext",
+            "storage.objects.delete",
+            "storage.objects.deleteContext",
+            "storage.objects.get",
+            "storage.objects.getIamPolicy",
+            "storage.objects.list",
+            "storage.objects.move",
+            "storage.objects.overrideUnlockedRetention",
+            "storage.objects.restore",
+            "storage.objects.setIamPolicy",
+            "storage.objects.setRetention",
+            "storage.objects.update",
+            "storage.objects.updateContext",
+        ],
+    ),
+    (
+        "roles/pubsub.subscriber",
+        &[
+            "pubsub.snapshots.seek",
+            "pubsub.subscriptions.consume",
+            "pubsub.topics.attachSubscription",
+        ],
+    ),
+    (
+        "roles/serviceusage.serviceUsageAdmin",
+        &[
+            "cloudquotas.quotas.get",
+            "cloudquotas.quotas.update",
+            "monitoring.timeSeries.list",
+            "serviceusage.catalogs.listMembers",
+            "serviceusage.consumerpolicy.analyze",
+            "serviceusage.consumerpolicy.get",
+            "serviceusage.consumerpolicy.update",
+            "serviceusage.contentsecuritypolicy.get",
+            "serviceusage.contentsecuritypolicy.update",
+            "serviceusage.effectivemcppolicy.get",
+            "serviceusage.effectivepolicy.get",
+            "serviceusage.groups.list",
+            "serviceusage.groups.listExpandedMembers",
+            "serviceusage.groups.listMembers",
+            "serviceusage.mcppolicy.get",
+            "serviceusage.mcppolicy.update",
+            "serviceusage.operations.get",
+            "serviceusage.quotas.get",
+            "serviceusage.quotas.update",
+            "serviceusage.services.disable",
+            "serviceusage.services.enable",
+            "serviceusage.services.get",
+            "serviceusage.services.list",
+            "serviceusage.services.listApis",
+            "serviceusage.services.listDependentServices",
+            "serviceusage.services.use",
+            "serviceusage.values.test",
+        ],
+    ),
+];
+
+/// The custom-role permissions that replace `role` on a protected install: the role's permissions
+/// without the family ones. `None` for a role with no family permission to take out.
+pub fn gcp_role_without_family_permissions(role: &str) -> Option<Vec<&'static str>> {
+    GCP_ROLES_WITH_FAMILY_PERMISSIONS
+        .iter()
+        .find(|(name, _)| *name == role)
+        .map(|(_, permissions)| {
+            permissions
+                .iter()
+                .copied()
+                .filter(|permission| gcp_family(permission).is_none())
+                .collect()
+        })
+}
+
+/// What a protected install's management identity gets instead of the predefined roles in `grant`
+/// that carry a family permission.
+fn replaced_role_permissions(grant: &PermissionGrant, context: &PermissionContext) -> Vec<String> {
+    if !context.signing_protected {
+        return Vec::new();
+    }
+    grant
+        .predefined_roles
+        .iter()
+        .flatten()
+        .filter_map(|role| gcp_role_without_family_permissions(role))
+        .flat_map(|permissions| permissions.into_iter().map(|p| p.to_string()))
+        .collect()
+}
+
+fn require_built_in_gcp_role(permission_set_id: &str, role: &str) -> Result<()> {
+    if GCP_BUILT_IN_ROLES.contains(&role) {
+        return Ok(());
+    }
+    Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+        platform: "gcp".to_string(),
+        message: format!(
+            "Permission set '{permission_set_id}' binds the predefined role '{role}' to a protected \
+             install's management identity; a predefined role can't be narrowed, so only the \
+             built-in management roles are accepted"
+        ),
+    }))
+}
+
+/// The permissions of a catalog entry the rendered identity receives: all of them, except that a
+/// protected install's management identity never receives what only the verifier may do. The
+/// entry keeps its role ID either way, so a role loses permissions instead of being replaced.
+///
+/// What a set the stack defines grants must also be on the GCP allow-list, or rendering is
+/// refused. Predefined roles are checked against the same file for every set, since a role can't
+/// be narrowed permission by permission.
+fn granted_permissions(
+    permission_set: &PermissionSet,
+    permissions: &[String],
+    context: &PermissionContext,
+) -> Result<Vec<String>> {
+    if context.signing_protected && !is_built_in_unchanged(permission_set) {
+        for permission in permissions {
+            if let Some(family) = gcp_family(permission) {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ProtectedManagementFamilyAction {
+                        permission_set_id: permission_set.id.clone(),
+                        action: permission.clone(),
+                        family: family.name().to_string(),
+                    },
+                ));
+            }
+        }
+    }
+    let kept: Vec<String> = permissions
+        .iter()
+        .filter(|permission| !(context.signing_protected && gcp_family(permission).is_some()))
+        .cloned()
+        .collect();
+    Ok(kept)
+}
+
+/// Secrets named `signed-…` hold a protected install's inputs; only setup writes them. On a
+/// protected install, every binding that grants Secret Manager permissions excludes them, for
+/// any prefix, so an install whose prefix extends this one's can't reach them either.
+/// IAM conditions don't support `matches`; `extract` returns the empty string for other names.
+const SIGNED_SECRETS_EXCLUDED: &str =
+    r#"!resource.name.extract("/secrets/{name}").startsWith("signed-")"#;
+
+fn protected_secret_condition(
+    condition: Option<GcpIamCondition>,
+    grants_secrets: bool,
+    context: &PermissionContext,
+) -> Result<Option<GcpIamCondition>> {
+    if !(context.signing_protected && grants_secrets) {
+        return Ok(condition);
+    }
+    Ok(Some(match condition {
+        Some(condition) => {
+            if !is_single_cel_operand(&condition.expression) {
+                return Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+                    platform: "gcp".to_string(),
+                    message: format!(
+                        "IAM condition '{}' can't be combined with the signing-secret exclusion: \
+                         its parentheses don't balance or it holds a comment",
+                        condition.title
+                    ),
+                }));
+            }
+            GcpIamCondition {
+                expression: format!("({}) && {SIGNED_SECRETS_EXCLUDED}", condition.expression),
+                ..condition
+            }
+        }
+        None => GcpIamCondition {
+            title: "Not signing inputs".to_string(),
+            description: "Leaves out the secrets only setup writes".to_string(),
+            expression: SIGNED_SECRETS_EXCLUDED.to_string(),
+        },
+    }))
+}
+
+/// Whether wrapping `expression` in one pair of parentheses makes it a single operand: outside
+/// string literals the parentheses balance and never close more than they opened, and there is
+/// no `//` comment that would swallow what follows.
+fn is_single_cel_operand(expression: &str) -> bool {
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut chars = expression.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(open) = quote {
+            if c == '\\' {
+                chars.next();
+            } else if c == open {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '(' => depth += 1,
+            ')' => {
+                let Some(next) = depth.checked_sub(1) else {
+                    return false;
+                };
+                depth = next;
+            }
+            '/' if chars.peek() == Some(&'/') => return false,
+            _ => {}
+        }
+    }
+    depth == 0 && quote.is_none()
 }
 
 fn gcp_residual_permissions(grant: &PermissionGrant) -> Option<&Vec<String>> {
@@ -808,4 +1119,24 @@ fn dedupe_bindings(bindings: Vec<GcpIamBinding>) -> Vec<GcpIamBinding> {
         }
     }
     deduped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_single_cel_operand;
+
+    #[test]
+    fn only_a_balanced_comment_free_expression_is_one_operand() {
+        for ok in [
+            "resource.name.startsWith(\"a\")",
+            "a && (b || c)",
+            "resource.name == \"a)(\"",
+            "x == 'it\\'s ) fine'",
+        ] {
+            assert!(is_single_cel_operand(ok), "{ok}");
+        }
+        for bad in ["true) || (true", "a)", "(a", "a // comment", "x == \"open"] {
+            assert!(!is_single_cel_operand(bad), "{bad}");
+        }
+    }
 }

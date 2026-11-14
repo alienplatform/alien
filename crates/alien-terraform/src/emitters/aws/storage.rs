@@ -217,14 +217,22 @@ fn public_access_block(label: &str, block_public: bool) -> Block {
     )
 }
 
-/// The one principal that may write sandbox bundles: the management role the controller runs as.
+/// The one principal that may write sandbox bundles: the management role the controller runs as,
+/// or the verifier on a protected install.
 /// A bundle is what the next image is built from, so a workload able to write one could choose
 /// what a sandbox runs; its grants reach this bucket like any other of the stack's.
 fn sandbox_bundle_writer(ctx: &EmitContext<'_>, storage: &Storage) -> Option<Expression> {
-    (storage.id() == SANDBOX_BUNDLE_STORAGE_ID)
-        .then(|| remote_stack_management_label(ctx))
-        .flatten()
-        .map(|label| expr::traversal(["aws_iam_role", label, "arn"]))
+    if storage.id() != SANDBOX_BUNDLE_STORAGE_ID {
+        return None;
+    }
+    // A protected install's bundles are written by its verifier, which renders them from the
+    // signed release; management never writes one.
+    if ctx.stack.resources().any(|(_, entry)| {
+        entry.config.resource_type() == alien_core::SigningVerifier::RESOURCE_TYPE
+    }) {
+        return Some(expr::traversal(["aws_iam_role", "signing_verifier", "arn"]));
+    }
+    remote_stack_management_label(ctx).map(|label| expr::traversal(["aws_iam_role", label, "arn"]))
 }
 
 fn bucket_policy(label: &str, storage: &Storage, bundle_writer: Option<Expression>) -> Block {

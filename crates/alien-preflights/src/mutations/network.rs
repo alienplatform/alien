@@ -139,7 +139,7 @@ impl StackMutation for NetworkMutation {
             "Adding Network resource to stack"
         );
 
-        let network_id = "default-network";
+        let network_id = alien_core::PREPARED_NETWORK_ID;
 
         let network = Network::new(network_id.to_string())
             .settings(network_settings)
@@ -150,11 +150,8 @@ impl StackMutation for NetworkMutation {
             config: alien_core::Resource::new(network),
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
-            display_name: Some("Network".to_string()),
-            description: Some(
-                "Provides the network and subnet connections used by application resources."
-                    .to_string(),
-            ),
+            display_name: Some(alien_core::PREPARED_NETWORK_DISPLAY_NAME.to_string()),
+            description: Some(alien_core::PREPARED_NETWORK_DESCRIPTION.to_string()),
             remote_access: false,
         };
 

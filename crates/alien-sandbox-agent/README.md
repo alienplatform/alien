@@ -33,7 +33,7 @@ builder cannot represent that repeated layer correctly.
 New builds inspect prebuilt OCI references as well as Dockerfile outputs. GCP and
 Azure bases then use the normal agent assembler; Local keeps an immutable Docker
 image ID. The resolved original USER drives planning, including explicit root refusal on
-Local/Kubernetes and root refusal on AWS modes without a connector. Images without
+Local, root refusal on Kubernetes with `allow` egress, and root refusal on AWS modes without a connector. Images without
 USER retain the released Local/Kubernetes behavior: non-root uid 65534 and no new
 image boot contract. AWS images without USER also retain their released non-root
 contract when no connector is present (including unrestricted egress). With an AWS
@@ -301,6 +301,67 @@ Remove calls to the former TypeScript `privilegedSupervisor()` method or Rust
 Saved declarations retain their serialized compatibility field and existing
 command-identity/egress behavior; rebuilding adopts the new image contract.
 
+## Kubernetes root boot
+
+A root image (`USER 0`) runs on Kubernetes when egress is `internet` or `none` and the
+RuntimeClass is a verified sandboxed one. `allow` and `allowDomains` are refused at plan time:
+nothing outside the pod enforces them. Non-root images behave exactly as before.
+
+The pod runs the agent as uid 0 with `drop: [ALL]` plus the boot set that AWS uses
+(`IMAGE_ROOT_CAPABILITY_SET` in `alien-core`; never NET_ADMIN, SYS_ADMIN or NET_RAW), seccomp
+`RuntimeDefault` and `allowPrivilegeEscalation: false`. The agent starts the image ENTRYPOINT with
+that set; commands and jobs run as a fixed non-root uid with no capabilities and no_new_privs.
+
+`RuntimeDefault` seccomp blocks `unshare` without SYS_ADMIN, so the private mount namespace used
+elsewhere is unavailable. An init container (same image digest as the sandbox container, uid 0, no
+capabilities, read-only root filesystem) copies the agent and `/opt/alien` into volumes, and the
+sandbox container mounts them read-only with `subPath`. The agent checks `/proc/self/mountinfo` at
+startup and fails closed when a mount is missing or writable. Image code running as root cannot
+write, rename, remount or ptrace them (the agent is non-dumpable).
+
+Pod Security: set `sandbox.namespace` in the chart. That namespace needs the `baseline` level
+(root plus these capabilities is not `restricted`); every other Operator pod stays `restricted`.
+Create and label it first, because Helm fails with `namespaces "<name>" not found` otherwise:
+`kubectl create namespace <name> && kubectl label namespace <name> pod-security.kubernetes.io/enforce=baseline`.
+A pre-install hook creates a probe pod and fails the install with the namespace and fix when the
+namespace rejects root boot.
+
+API server target: the Operator reads the `default/kubernetes` Service and EndpointSlice and gives
+the pod `ALIEN_SANDBOX_MUST_DROP_KUBE_API` (ClusterIP and endpoint addresses with ports). The
+startup gate probes each and fails closed, with no ENTRYPOINT, when the target is missing. The
+chart creates a Role and RoleBinding in the `default` namespace (get on those two named objects).
+An installer that cannot write to `default` makes sandboxes refuse, with an error naming the
+missing target.
+
+NetworkPolicy enforcement: the install is refused until the cluster enforces NetworkPolicy (a
+probe checks it with live traffic). On EKS Auto Mode, enforcement is off until you apply a
+ConfigMap `amazon-vpc-cni` in `kube-system` with `enable-network-policy-controller: "true"`; the
+NodeClass `networkPolicy` field only sets the default. The probe's failure message names this step.
+A policy can still load about one second after a pod's container starts, so the agent, before it
+starts the ENTRYPOINT (root or non-root image), proves the restriction. Each round tries the
+cluster API and `1.1.1.1:443`, which must time out. A timeout also looks like a
+network that is not ready, so a round counts only with a control: in `internet` mode the gateway must
+connect in the same round; in `none` mode nothing may be used as a control, so the pod must have an
+address and a route and every blocked attempt must time out (ENETUNREACH and the like fail closed),
+which still relies on the CNI's own ordering. It starts the workload after three such rounds; if they
+do not come within 30 s it exits with an error naming NetworkPolicy enforcement. For the sandbox's
+lifetime PID 1 repeats the blocked check every 30 s; if a blocked destination connects it reports why
+(stderr, termination log) and exits, which ends the workload. Sandbox pods never mount a service
+account token. On AKS use Azure CNI powered by Cilium, or Calico: Azure NPM programs its rules after
+the pod starts. Optional hardening: a dedicated sandbox NodePool with NodeClass
+`networkPolicy: DefaultDeny`, and security groups or a host firewall that block node IPs; neither is
+required.
+
+Preview serves ports 8080, 8081 and 8090 over HTTP and WebSocket. The capability travels in
+`X-Alien-Preview-Capability` (optionally with `X-Alien-Preview-Port`); the caller's own
+`Authorization` header reaches the workload unchanged.
+
+Limits: on Kubernetes, the metadata address may stay reachable; the agent refuses to start if any credential or instance identity can be obtained from it. The own node's kubelet port (10250) stays reachable from a pod because many CNIs never
+filter pod-to-own-node traffic; it requires authentication. The layered agent is amd64 only, so a node selector for another architecture is refused
+at plan time ("schedule sandboxes on amd64 nodes"); arm64 sandboxes on Kubernetes are not
+supported yet. There is no pause: an idle session keeps its pod's CPU and memory on the node until
+it is terminated or reaches its deadline.
+
 ## Bootstrap file protection
 
 Before any image code starts, the agent creates a private mount namespace and
@@ -325,6 +386,34 @@ qualification, including these mounts. A fresh container must repeat protection
 before image startup. Azure persists the custom session disk, so protecting the
 next boot's executable is required independently of the current process.
 
+## Azure preview, jobs, lifetime and identity
+
+- **Preview.** The agent's HTTPS port is published anonymously, so the agent is the only gate:
+  `preview(id, port)` asks it (`previewGrant`, over the boot-token connection) for a capability
+  bound to the sandbox, this boot, one declared port and an expiry of at most 15 minutes. The
+  binding returns the agent port route plus `x-alien-preview-capability` and
+  `x-alien-preview-port`; the caller's own `Authorization` is forwarded to the workload
+  untouched, and the capability headers are never forwarded. The per-boot key lives only in the
+  agent's memory. The platform's own port authentication (anonymous, or Entra ID for an object id
+  such as a service principal) cannot be the gate: the edge removes `Authorization`.
+  The agent's port is reachable from the internet; a request without a valid capability is
+  refused before any connection to the workload is opened.
+- **Jobs.** `start_job`, `poll_job` and `cancel_job` use the agent's job registry, which outlives
+  the client that started a job, so another process can poll it. Catalog images, which run
+  without the agent, refuse them.
+- **Lifetime.** Azure has no wall-clock ceiling of its own. A sandbox gets a deadline only from
+  `timeoutMs` on its create request, the declaration's `maxLifetimeSeconds`, or a gateway
+  identity's expiry (the earliest applies); the binding stamps it as `alienExpiresAtMs`, every
+  binding verb refuses a sandbox past it, and the controller's reaper deletes it in groups where a
+  declared ceiling or a gateway applies. With none of these a sandbox lives until it is deleted,
+  as before. Preview capabilities end no later than the sandbox's deadline, and a resumed sandbox
+  gets new ones.
+- **Idempotent create.** Azure assigns ids and two identical creates make two sandboxes, so
+  `get_or_create` labels a sandbox with a hash of the requested id and looks for it first; two
+  racing creates converge on the oldest.
+- **Identity.** The platform's managed-identity variables (`IDENTITY_ENDPOINT`,
+  `IDENTITY_HEADER`) are removed from the boot and command environments.
+
 Azure clients cache the HTTPS client and boot credential per session. The first
 operation activates the boot after checking provider policy. A definitive 401
 refreshes the native-file credential; only a changed credential permits one
@@ -335,6 +424,10 @@ replay a command. Server errors also never replay commands. Ordinary commands re
 the route or credential again. Query `session_capabilities(id)` in Rust, or
 `capabilities(id)` in TypeScript/Python, when reusing a session across upgrades;
 no-argument capabilities describe new sessions from the current binding.
+
+## Azure egress `none` limits
+
+Under egress `none`, Azure sandboxes can still resolve DNS names through the platform resolver, but they can't open connections.
 
 ## Process lifecycle
 
@@ -382,3 +475,43 @@ I/O and PTY allocation remain supported.
 GCP's sandbox kernel exposes no block devices and rejects block-node creation in
 live qualification; its provider device boundary remains required. The agent's
 private user namespace does not grant control over provider devices.
+
+# GCP Agent Platform sandboxes
+
+Sandboxes run under gVisor. The image's ENTRYPOINT starts once per boot as the image's OCI `USER`
+(`start_from_with_env` resolves the saved USER against the image's passwd and group files). It is
+root, with Docker's default capabilities minus NET_RAW, only when the image sets no user or sets
+root; an image with a non-root USER starts as that user with no capabilities. Exec and jobs always
+stay non-root. Sandboxes use the project's
+default network placement and are reached through `:execute`.
+
+Limits the plan refuses with a message, rather than discovering them at the first session:
+- a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
+- `internet` egress and preview ports (not built or proven on GCP yet; declare `none` and no
+  preview ports);
+- an idle pause policy (the platform has no idle policy and Alien does not watch for idleness on
+  GCP). `pause_resume` is off: a resume was seen returning a fresh container.
+
+Images must be linux/amd64 and their container must keep running in the foreground: a template
+whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
+Alien stops the create at the FAILED state and names this as the likely cause.
+
+## Preview on GCP
+
+Preview is refused at plan time on GCP Agent Platform (declare no preview ports). For a root-supervisor
+workload the preview boundary has to be a capability that the sandbox agent itself verifies, and the
+platform gives no place to anchor one:
+- Google's edge JWT is scoped to the whole sandbox, not to a port, and the same token is accepted on
+  `:execute`. Holding it is command access, so it cannot stand in for a port-scoped capability.
+- The Agent Platform sandbox template has no env, args, label, volume or secret field, and a sandbox
+  carries no metadata the guest can read. There is no channel to hand a per-deployment trust root
+  (a signing key or a public key) to the agent at boot.
+- Egress `none` blocks DNS, so the agent cannot fetch a trust root (for example a key set) at runtime.
+
+Preview can be offered once the platform adds a per-deployment value that the guest can read and a
+preview holder cannot write.
+
+Egress `none` (`internetAccess: false`) blocks TCP to public addresses, the metadata server and DNS
+resolution, measured on the default network placement. The platform has no client token on create,
+so a retried create can leave an extra sandbox; `get_or_create` reuses a running sandbox with the
+same id.

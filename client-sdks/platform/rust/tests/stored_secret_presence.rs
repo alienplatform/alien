@@ -4,7 +4,7 @@
 use alien_platform_api::types::{
     DeploymentConfig, SyncAcquireResponseDeployment, SyncAcquireResponseDeploymentConfig,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn config() -> Value {
     json!({
@@ -68,13 +68,13 @@ fn absent_and_empty_stored_secret_ids_remain_distinct() {
             alien_platform_api::types::builder::SyncAcquireResponseDeploymentConfig::from(
                 acquired.config.clone(),
             )
-                .stored_secret_input_ids(
-                    original
-                        .get("storedSecretInputIds")
-                        .map(|value| serde_json::from_value::<Vec<String>>(value.clone()).unwrap()),
-                )
-                .try_into()
-                .unwrap();
+            .stored_secret_input_ids(
+                original
+                    .get("storedSecretInputIds")
+                    .map(|value| serde_json::from_value::<Vec<String>>(value.clone()).unwrap()),
+            )
+            .try_into()
+            .unwrap();
         let encoded = serde_json::to_value(&acquired.config).unwrap();
         assert_eq!(serde_json::to_value(rebuilt).unwrap(), encoded);
         assert_eq!(
@@ -124,12 +124,10 @@ fn null_presence_decodes_like_legacy_omission() {
     original["storedSecretInputIds"] = Value::Null;
     let acquired: SyncAcquireResponseDeployment =
         serde_json::from_value(acquired_deployment(original)).unwrap();
-    assert!(
-        serde_json::to_value(acquired.config)
-            .unwrap()
-            .get("storedSecretInputIds")
-            .is_none()
-    );
+    assert!(serde_json::to_value(acquired.config)
+        .unwrap()
+        .get("storedSecretInputIds")
+        .is_none());
 }
 
 #[test]

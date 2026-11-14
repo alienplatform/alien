@@ -111,6 +111,21 @@ async fn provider_ranges_extend_registration_and_frontend_needs_no_nat() {
 }
 
 #[tokio::test]
+async fn the_proxy_only_rule_and_the_older_proxy_and_admin_rule_both_pass() {
+    let (network, vnet, mut nsg, nat, public) = fixture();
+    let rules = nsg["properties"]["securityRules"].as_array_mut().unwrap();
+    rules[0]["properties"]["destinationPortRanges"] = json!(["3128"]);
+    check(&network, vnet, nsg, nat, public)
+        .await
+        .expect("the narrowed rule passes");
+    // The fixture's own rule is the older 3128 and 3129 pair.
+    let (network, vnet, nsg, nat, public) = fixture();
+    check(&network, vnet, nsg, nat, public)
+        .await
+        .expect("an install that has not taken the narrowed rule passes");
+}
+
+#[tokio::test]
 async fn refuse_nsg_bypasses_and_missing_platform_denies() {
     for mutation in 0..6 {
         let (network, vnet, mut nsg, nat, public) = fixture();

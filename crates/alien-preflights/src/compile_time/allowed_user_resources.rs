@@ -3,7 +3,7 @@ use crate::{CheckResult, CompileTimeCheck};
 use alien_core::permissions::ManagementPermissions;
 use alien_core::sandbox_build_role::SANDBOX_BUNDLE_STORAGE_ID;
 use alien_core::sandbox_egress::{has_internet_sandbox, SANDBOX_EGRESS_GATEWAY_ID};
-use alien_core::{Platform, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID};
+use alien_core::{Platform, SigningVerifier, Stack, DEPLOYER_SECRETS_VAULT_ID, SECRETS_VAULT_ID};
 use std::collections::HashSet;
 
 /// Ensures the stack contains only allowed user-defined resource types and IDs.
@@ -102,6 +102,18 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             ) {
                 errors.push(format!(
                     "Resource ID '{resource_id}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
+                ));
+                continue;
+            }
+
+            // A protected install's verifier is `<prefix>-verifier`; a workload of that name would
+            // be the verifier, and its id is the verifier resource's.
+            if resource_id
+                .replace('_', "-")
+                .eq_ignore_ascii_case(SigningVerifier::ID)
+            {
+                errors.push(format!(
+                    "Resource ID '{resource_id}' is reserved for the install's verifier. Choose a different ID for the application resource"
                 ));
                 continue;
             }
@@ -447,6 +459,50 @@ mod tests {
         assert_eq!(result.errors.len(), 1);
         assert!(result.errors[0].contains("reserved for deployment secret delivery"));
         assert!(result.errors[0].contains("different ID"));
+    }
+
+    /// A workload named `verifier` would run as `<prefix>-verifier`, the install's verifier; the
+    /// verifier resource itself is the preflight's, never the stack's.
+    #[tokio::test]
+    async fn the_verifiers_id_is_reserved() {
+        let worker = |id: &str| {
+            alien_core::Resource::new(
+                Worker::new(id.to_string())
+                    .code(WorkerCode::Image {
+                        image: "ghcr.io/shop/api@sha256:1".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+            )
+        };
+        for (id, config) in [
+            ("verifier", worker("verifier")),
+            ("Verifier", worker("Verifier")),
+            (
+                "verifier",
+                alien_core::Resource::new(SigningVerifier::new("verifier".to_string()).build()),
+            ),
+        ] {
+            let stack = Stack::new("test-stack".to_string())
+                .add_entry(ResourceEntry {
+                    config,
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    display_name: None,
+                    description: None,
+                    remote_access: false,
+                    enabled_when: None,
+                })
+                .build();
+            let result = AllowedUserResourcesCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .expect("reserved-id validation should run");
+            assert_eq!(
+                result.errors,
+                [format!("Resource ID '{id}' is reserved for the install's verifier. Choose a different ID for the application resource")]
+            );
+        }
     }
 
     #[tokio::test]

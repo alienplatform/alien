@@ -393,3 +393,16 @@ mod tests {
         assert_eq!(bindings, deserialized);
     }
 }
+
+/// Resource types an installer can bind to existing infrastructure with an
+/// [`ExternalBinding`].
+pub const EXTERNAL_BINDING_TYPES: &[&str] = &[
+    "storage",
+    "queue",
+    "kv",
+    "artifact-registry",
+    "vault",
+    "postgres",
+    "redis",
+    "ai",
+];

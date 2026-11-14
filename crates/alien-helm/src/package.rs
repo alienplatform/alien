@@ -81,10 +81,22 @@ pub fn apply_package_defaults(
             "version: 0.1.0\n",
             &format!("version: {version}\n"),
         )?;
+        // The application is the Operator this chart installs, so its version is
+        // the Operator's release version. Without a release version (`dev`,
+        // `latest`) the chart version stands in.
+        let app_version = defaults
+            .operator_image
+            .as_ref()
+            .map(|image| image.tag.strip_prefix('v').unwrap_or(image.tag))
+            .filter(|tag| {
+                tag.split('.').count() == 3
+                    && tag.split('.').all(|part| part.parse::<u64>().is_ok())
+            })
+            .unwrap_or(version);
         replace_once(
             chart_yaml,
             "appVersion: \"0.1.0\"\n",
-            &format!("appVersion: {}\n", quote(version)?),
+            &format!("appVersion: {}\n", quote(app_version)?),
         )?;
     }
 
@@ -119,15 +131,42 @@ pub fn apply_package_defaults(
         )?;
     }
     if let Some(image) = defaults.operator_image {
-        replace_once(
-            values,
-            "    repository: registry.example.com/deployment/operator\n    tag: latest\n",
-            &format!(
-                "    repository: {}\n    tag: {}\n",
-                quote(image.repository)?,
-                quote(image.tag)?
-            ),
-        )?;
+        match pinned_operator_digest(values) {
+            None => replace_once(
+                values,
+                "    repository: registry.example.com/deployment/operator\n    tag: latest\n",
+                &format!(
+                    "    repository: {}\n    tag: {}\n",
+                    quote(image.repository)?,
+                    quote(image.tag)?
+                ),
+            )?,
+            // A chart with release signing runs the Operator digest it pins; the package
+            // picks where it comes from and its tag label only.
+            Some(digest) => {
+                let tag = match image.tag.split_once('@') {
+                    None => format!("{}@{digest}", image.tag),
+                    Some((_, other)) if other == digest => image.tag.to_string(),
+                    Some((_, other)) => {
+                        return Err(AlienError::new(ErrorData::GenericError {
+                            message: format!(
+                                "The chart pins Operator image {digest}; the package names {other}"
+                            ),
+                        }))
+                    }
+                };
+                replace_once(
+                    values,
+                    "    repository: registry.example.com/deployment/operator\n",
+                    &format!("    repository: {}\n", quote(image.repository)?),
+                )?;
+                replace_once(
+                    values,
+                    &format!("    tag: \"latest@{digest}\"\n"),
+                    &format!("    tag: {}\n", quote(&tag)?),
+                )?;
+            }
+        }
     }
     if defaults.registry_pull_secret {
         replace_once(
@@ -205,6 +244,15 @@ fn file_mut<'a>(chart: &'a mut HelmChart, name: &str) -> Result<&'a mut String> 
         AlienError::new(ErrorData::GenericError {
             message: format!("Generated chart '{chart_name}' has no {name}"),
         })
+    })
+}
+
+/// The Operator digest a chart with release signing pins (`tag: "latest@<digest>"`).
+fn pinned_operator_digest(values: &str) -> Option<String> {
+    values.lines().find_map(|line| {
+        line.strip_prefix("    tag: \"latest@")
+            .and_then(|rest| rest.strip_suffix('"'))
+            .map(str::to_string)
     })
 }
 

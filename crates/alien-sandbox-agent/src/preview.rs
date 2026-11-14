@@ -43,8 +43,8 @@ pub fn declared_ports() -> Vec<u16> {
 }
 
 /// Whether `port` may be previewed on this pod.
-pub fn port_is_declared(port: u16, declared: &[u16]) -> bool {
-    port != AGENT_PORT && declared.contains(&port)
+pub fn port_is_declared(port: u16, declared: &[u16], own_ports: &[u16]) -> bool {
+    port != AGENT_PORT && !own_ports.contains(&port) && declared.contains(&port)
 }
 
 fn fail(status: StatusCode, message: &str) -> Response<Body> {
@@ -65,14 +65,77 @@ const HOP_BY_HOP: [&str; 8] = [
     "upgrade",
 ];
 
+/// Headers that belong to the cloud edge, never to the code inside. Every `x-alien-*` header is
+/// the agent's and is stripped too.
+const STRIPPED: [&str; 2] = ["x-sandbox-routing-token", "x-sandbox-port"];
+
+/// How the caller's own bearer reaches the code inside a previewed port.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallerAuth {
+    /// `Authorization` belongs to the agent (the Kubernetes route); it is dropped.
+    Drop,
+    /// The caller's bearer is `Authorization` on this backend. `X-Alien-Caller-Authorization` is
+    /// also accepted, but both at once is ambiguous and refused.
+    Authorization,
+    /// The cloud edge consumes `Authorization` (GCP), so whatever arrives there is not the
+    /// caller's and is ignored. The caller's bearer is in `X-Alien-Caller-Authorization`.
+    EdgeConsumesAuthorization,
+}
+
+impl CallerAuth {
+    /// The mode for this sandbox, from the header its backend names for the caller's bearer.
+    pub fn from_env() -> Self {
+        match std::env::var(alien_core::sandbox_image::ENV_CALLER_AUTHORIZATION_HEADER) {
+            Ok(name)
+                if name.eq_ignore_ascii_case(
+                    alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER,
+                ) =>
+            {
+                Self::EdgeConsumesAuthorization
+            }
+            _ => Self::Authorization,
+        }
+    }
+}
+
 /// Forwards `request` to `127.0.0.1:{port}` with `path_and_query` as its target. `close_at` is
 /// the unix time an upgraded stream is closed at.
+///
+/// `caller_auth` is the one header contract difference left between backends (see
+/// [`CallerAuth`]). Whatever the mode, the caller's bearer reaches the code inside as
+/// `Authorization` only, and every `x-alien-*` header and the cloud edge's routing headers are
+/// stripped.
 pub async fn forward(
     mut request: Request<Body>,
     port: u16,
     path_and_query: String,
     close_at: i64,
+    caller_auth: CallerAuth,
+    own_ports: &[u16],
 ) -> Response<Body> {
+    // Defense in depth: this connection runs as the agent's uid, so it must never be made to
+    // the agent's own listeners, whatever the caller verified before.
+    if port == AGENT_PORT || own_ports.contains(&port) {
+        return fail(StatusCode::FORBIDDEN, "that port is not previewable");
+    }
+    let caller_bearer = {
+        let headers = request.headers();
+        let own = headers.get(header::AUTHORIZATION);
+        let caller = headers.get(alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER);
+        match caller_auth {
+            CallerAuth::Drop => None,
+            CallerAuth::Authorization => match (own, caller) {
+                (Some(_), Some(_)) => {
+                    return fail(
+                        StatusCode::BAD_REQUEST,
+                        "send the bearer in one header, not both Authorization and X-Alien-Caller-Authorization",
+                    )
+                }
+                (own, caller) => own.or(caller).cloned(),
+            },
+            CallerAuth::EdgeConsumesAuthorization => caller.cloned(),
+        }
+    };
     let upgrading = request
         .headers()
         .get(header::UPGRADE)
@@ -112,7 +175,13 @@ pub async fn forward(
     .into_bytes();
     for (name, value) in &parts.headers {
         let lower = name.as_str();
-        if lower == "host" || lower == header::AUTHORIZATION.as_str() || lower == "content-length" {
+        if lower == "host" || lower == "content-length" {
+            continue;
+        }
+        if lower == header::AUTHORIZATION.as_str() || lower.starts_with("x-alien-") {
+            continue;
+        }
+        if STRIPPED.contains(&lower) {
             continue;
         }
         if HOP_BY_HOP.contains(&lower)
@@ -123,6 +192,11 @@ pub async fn forward(
         head.extend_from_slice(name.as_str().as_bytes());
         head.extend_from_slice(b": ");
         head.extend_from_slice(value.as_bytes());
+        head.extend_from_slice(b"\r\n");
+    }
+    if let Some(bearer) = caller_bearer {
+        head.extend_from_slice(b"Authorization: ");
+        head.extend_from_slice(bearer.as_bytes());
         head.extend_from_slice(b"\r\n");
     }
     if !body.is_empty() || !matches!(parts.method.as_str(), "GET" | "HEAD") {
@@ -373,7 +447,15 @@ mod tests {
         )
         .await;
         let request = Request::builder().uri("/").body(Body::empty()).unwrap();
-        let response = forward(request, port, "/".to_string(), i64::MAX).await;
+        let response = forward(
+            request,
+            port,
+            "/".to_string(),
+            i64::MAX,
+            CallerAuth::Drop,
+            &[],
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), 1024)
             .await
@@ -417,8 +499,9 @@ mod tests {
 
     #[test]
     fn the_agents_own_port_and_undeclared_ports_are_never_previewable() {
-        assert!(port_is_declared(8080, &[8080]));
-        assert!(!port_is_declared(8081, &[8080]));
-        assert!(!port_is_declared(AGENT_PORT, &[AGENT_PORT, 8080]));
+        assert!(port_is_declared(8080, &[8080], &[]));
+        assert!(!port_is_declared(8081, &[8080], &[]));
+        assert!(!port_is_declared(8080, &[8080], &[8080]));
+        assert!(!port_is_declared(AGENT_PORT, &[AGENT_PORT, 8080], &[]));
     }
 }

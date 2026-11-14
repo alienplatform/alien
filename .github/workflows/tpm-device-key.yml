@@ -1,0 +1,93 @@
+name: TPM device key
+
+# The TPM device-key backend shells out to tpm2-tools, so its test needs a TPM.
+# This runs it against the swtpm simulator. It runs only when the backend or this
+# workflow changes.
+on:
+  pull_request:
+    paths:
+      - 'crates/alien-cli/src/signing/**'
+      - 'crates/alien-cli/src/commands/signing.rs'
+      - 'crates/alien-cli/tests/signing_flow.rs'
+      - 'crates/alien-manager/src/routes/signing.rs'
+      - 'crates/alien-signing/**'
+      - '.github/workflows/tpm-device-key.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/alien-cli/src/signing/**'
+      - 'crates/alien-cli/src/commands/signing.rs'
+      - 'crates/alien-cli/tests/signing_flow.rs'
+      - 'crates/alien-manager/src/routes/signing.rs'
+      - 'crates/alien-signing/**'
+      - '.github/workflows/tpm-device-key.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tpm-device-key-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tpm-device-key:
+    name: TPM device key
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      TPM2TOOLS_TCTI: swtpm:port=2321
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: jdx/mise-action@v5
+        env:
+          MISE_DATA_DIR: ${{ runner.temp }}/mise-rust
+        with:
+          version: 2026.10.1
+          add_shims_to_path: false
+          install_args: rust
+          cache: false
+
+      - uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621 # main
+        with:
+          mold-version: 2.42.1
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "35.x"
+          repo-token: ${{ github.token }}
+
+      - name: Configure git credentials for cargo
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Start the TPM simulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y swtpm swtpm-tools tpm2-tools libtss2-tcti-swtpm0
+          mkdir -p "$RUNNER_TEMP/tpm"
+          swtpm socket --tpm2 --daemon \
+            --tpmstate dir="$RUNNER_TEMP/tpm" \
+            --server type=tcp,port=2321 --ctrl type=tcp,port=2322 \
+            --flags not-need-init,startup-clear
+          tpm2_getrandom 4 --hex
+
+      # A filter that matches nothing passes, so the step checks that the test ran.
+      - name: Test the TPM backend
+        run: |
+          cargo test --locked -p alien-cli --lib \
+            signing::device::tests::a_tpm_key_signs_with_its_pin_and_refuses_a_wrong_one \
+            -- --ignored --exact | tee "$RUNNER_TEMP/tpm-test.log"
+          grep -q "test result: ok. 1 passed" "$RUNNER_TEMP/tpm-test.log"
+
+      # First release, a refused second v1, pairing, CI, removal and recovery,
+      # with real CLI and manager processes and keys in the simulator.
+      - name: Test the signing flow
+        run: |
+          cargo test --locked -p alien-cli --features test-device-env --test signing_flow -- --ignored | tee "$RUNNER_TEMP/flow-test.log"
+          grep -q "test result: ok. 1 passed" "$RUNNER_TEMP/flow-test.log"

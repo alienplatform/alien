@@ -3,6 +3,7 @@ import {
   ArtifactRegistrySchema,
   type ResourceType,
 } from "./generated/index.js"
+import type { StackInputRef } from "./input.js"
 import { type Resource, ResourceMetadataBuilder } from "./resource.js"
 
 export type {
@@ -44,6 +45,17 @@ export class ArtifactRegistry extends ResourceMetadataBuilder {
    */
   public replicationRegions(regions: string[]): this {
     this._config.replicationRegions = regions
+    return this
+  }
+
+  /**
+   * AWS only (CloudFormation packages): replicate images to the regions the
+   * deployer lists in a string-list input. Up to 10 regions. An empty answer
+   * writes no replication configuration.
+   * @param input A `stringList` input declared in the same stack.
+   */
+  public replicationRegionsFrom(input: StackInputRef<string[]>): this {
+    this._config.replicationRegionsInput = input.id
     return this
   }
 

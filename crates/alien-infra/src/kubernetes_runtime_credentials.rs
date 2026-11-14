@@ -606,22 +606,27 @@ mod tests {
         let live: Arc<Mutex<Option<Secret>>> = Arc::new(Mutex::new(None));
         let mut secrets = MockSecretsApi::new();
         let created = live.clone();
-        secrets.expect_create_secret().returning(move |namespace, secret| {
-            assert_eq!(namespace, "agents");
-            assert_eq!(secret.metadata.name.as_deref(), Some("agent-deploy-runtime"));
-            let mut live = created.lock().unwrap();
-            if live.is_some() {
-                return Err(AlienError::new(ClientError::RemoteResourceConflict {
-                    resource_type: "Secret".into(),
-                    resource_name: "agent-deploy-runtime".into(),
-                    message: "exists".into(),
-                }));
-            }
-            let mut stored = secret.clone();
-            stored.metadata.resource_version = Some("1".into());
-            *live = Some(stored.clone());
-            Ok(stored)
-        });
+        secrets
+            .expect_create_secret()
+            .returning(move |namespace, secret| {
+                assert_eq!(namespace, "agents");
+                assert_eq!(
+                    secret.metadata.name.as_deref(),
+                    Some("agent-deploy-runtime")
+                );
+                let mut live = created.lock().unwrap();
+                if live.is_some() {
+                    return Err(AlienError::new(ClientError::RemoteResourceConflict {
+                        resource_type: "Secret".into(),
+                        resource_name: "agent-deploy-runtime".into(),
+                        message: "exists".into(),
+                    }));
+                }
+                let mut stored = secret.clone();
+                stored.metadata.resource_version = Some("1".into());
+                *live = Some(stored.clone());
+                Ok(stored)
+            });
         let read = live.clone();
         secrets
             .expect_get_secret()
@@ -663,7 +668,10 @@ mod tests {
             .build();
         let installed = alien_core::Stack::new("app".into())
             .add(worker.clone(), alien_core::ResourceLifecycle::Live)
-            .add(Vault::new("files".into()).build(), alien_core::ResourceLifecycle::Frozen)
+            .add(
+                Vault::new("files".into()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
             .build();
         let mut state = alien_core::StackState::new(alien_core::Platform::Kubernetes);
         state.resources.insert(
@@ -737,5 +745,4 @@ mod tests {
             "ax_cap_v1_renewed"
         );
     }
-
 }

@@ -28,6 +28,7 @@ form_urlencoded = { workspace = true }
 urlencoding = { workspace = true }
 md5 = { workspace = true }
 sha2 = { workspace = true }
+zip = { workspace = true }
 hex = { workspace = true }
 backon = { workspace = true }
 async-trait = { workspace = true }

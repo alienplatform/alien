@@ -966,6 +966,15 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
         1,
         "the management role may not rewrite itself"
     );
+    // Every management role refuses writes under `/signed/`, where signing settings live.
+    let (signed_denies, denies): (Vec<_>, Vec<_>) = denies
+        .into_iter()
+        .partition(|deny| deny["Sid"] == "OnlySetupChangesSigningSettings");
+    assert_eq!(signed_denies.len(), 1, "{signed_denies:#?}");
+    assert_eq!(
+        signed_denies[0]["Resource"],
+        serde_json::json!(["arn:aws:ssm:*:*:parameter/signed/*"])
+    );
     let (boundary_denies, denies): (Vec<_>, Vec<_>) = denies.into_iter().partition(|statement| {
         statement["Action"]
             .as_array()

@@ -87,3 +87,13 @@ pub use kubernetes::*;
 mod test;
 #[cfg(feature = "test")]
 pub use test::*;
+
+/// The deployment's secrets vault, opened with the identity this controller
+/// runs as. Controllers use it to hand secret values to workloads through the
+/// cloud's own secret store.
+#[cfg(any(feature = "aws", feature = "azure", feature = "kubernetes"))]
+pub async fn deployment_secrets_vault(
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<std::sync::Arc<dyn alien_bindings::Vault>> {
+    crate::sandbox::egress::deployment_vault(ctx).await
+}

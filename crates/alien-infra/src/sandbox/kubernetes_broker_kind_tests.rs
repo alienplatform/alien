@@ -639,7 +639,7 @@ spec:
             "--namespace", &namespace, "exec", "preview-client", "--", "python3", "-c",
             &format!(
                 "import urllib.request,urllib.error\n\
-                 r=urllib.request.Request('http://{ip}:8971{path}',headers={{'Authorization':'Bearer {token}'}})\n\
+                 r=urllib.request.Request('http://{ip}:8971{path}',headers={{'X-Alien-Preview-Capability':'{token}','Authorization':'Bearer caller-own-token'}})\n\
                  try:\n  x=urllib.request.urlopen(r,timeout=10); print(x.status, x.read().decode().strip())\n\
                  except urllib.error.HTTPError as e: print(e.code)"
             ),

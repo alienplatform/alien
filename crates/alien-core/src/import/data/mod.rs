@@ -6,6 +6,7 @@ pub mod aws;
 pub mod azure;
 pub mod gcp;
 pub mod kubernetes_cluster;
+pub mod signing_verifier;
 
 pub use aws::{
     AwsAiImportData, AwsArtifactRegistryImportData, AwsBuildImportData,
@@ -38,6 +39,7 @@ pub use gcp::{
 pub use kubernetes_cluster::{
     AzureApplicationGatewayForContainersBootstrap, KubernetesClusterImportData,
 };
+pub use signing_verifier::SigningVerifierImportData;
 
 pub(crate) fn deserialize_bool_from_bool_or_string<'de, D>(
     deserializer: D,
@@ -138,6 +140,7 @@ mod schema_snapshots {
     fn import_data_schema_snapshot() {
         let schemas = IndexMap::from([
             ("aws_ai", schema::<AwsAiImportData>()),
+            ("signing_verifier", schema::<SigningVerifierImportData>()),
             (
                 "aws_artifact_registry",
                 schema::<AwsArtifactRegistryImportData>(),

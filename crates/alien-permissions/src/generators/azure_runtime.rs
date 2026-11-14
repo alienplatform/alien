@@ -1,7 +1,11 @@
 use crate::{
     error::{ErrorData, Result},
-    generators::labels::{
-        entry_description, entry_snake_label, entry_title_label, has_explicit_label,
+    generators::{
+        azure_sandbox_data::azure_sandbox_role_substitute,
+        families::{azure_data_family, azure_family, azure_reach_exclusions, Family},
+        labels::{entry_description, entry_snake_label, entry_title_label, has_explicit_label},
+        protected_allowlist::is_built_in_unchanged,
+        verifier_owned::{azure_changes_what_runs, azure_protected_role_substitute},
     },
     variables::VariableInterpolator,
     BindingTarget, PermissionContext,
@@ -395,10 +399,14 @@ impl AzureRuntimePermissionsGenerator {
             declares_target = true;
 
             if let Some(actions) = &platform_permission.grant.actions {
-                all_actions.extend(actions.clone());
+                all_actions.extend(granted_actions(permission_set, actions, context)?);
             }
             if let Some(data_actions) = &platform_permission.grant.data_actions {
-                all_data_actions.extend(data_actions.clone());
+                all_data_actions.extend(granted_data_actions(
+                    permission_set,
+                    data_actions,
+                    context,
+                )?);
             }
 
             // Interpolate variables in the scope
@@ -505,6 +513,16 @@ impl AzureRuntimePermissionsGenerator {
 
             if let Some(predefined_roles) = &platform_permission.grant.predefined_roles {
                 for role_name in predefined_roles {
+                    if context.signing_protected {
+                        // The two built-in roles a held set binds that reach the verifier's
+                        // identity are replaced by the custom role the entry renders below.
+                        if protected_role_substitute(permission_set, role_name).is_some()
+                            || protected_data_role_substitute(permission_set, role_name).is_some()
+                        {
+                            continue;
+                        }
+                        require_built_in_azure_role(&permission_set.id, role_name)?;
+                    }
                     let role_definition_id =
                         self.predefined_role_definition_id(role_name, context)?;
                     bindings.push(AzureRoleBinding {
@@ -516,7 +534,11 @@ impl AzureRuntimePermissionsGenerator {
                 }
             }
 
-            if has_residual_azure_permissions(&platform_permission.grant) {
+            if grants_residual_azure_permissions(
+                permission_set,
+                &platform_permission.grant,
+                context,
+            ) {
                 let entry_label = entry_snake_label(
                     platform_permission.label.as_deref(),
                     &platform_permission.grant,
@@ -598,16 +620,41 @@ impl AzureRuntimePermissionsGenerator {
             })
         })?;
 
-        let mut actions = platform_permission
+        let mut requested: Vec<String> = platform_permission
             .grant
             .actions
             .clone()
             .unwrap_or_default();
-        let mut data_actions = platform_permission
-            .grant
-            .data_actions
-            .clone()
-            .unwrap_or_default();
+        let mut actions = granted_actions(permission_set, &requested, context)?;
+        // A predefined role a protected install replaces keeps its wildcard with the REACH actions
+        // in `NotActions`; one that reaches RUN or IDENTITY is left out.
+        let mut not_actions = Vec::new();
+        for substitute in substitute_actions(permission_set, &platform_permission.grant, context) {
+            match azure_family(&substitute) {
+                None => actions.push(substitute),
+                Some(Family::Reach) if !azure_reach_exclusions(&substitute).is_empty() => {
+                    not_actions.extend(azure_reach_exclusions(&substitute));
+                    actions.push(substitute);
+                }
+                Some(_) => {}
+            }
+        }
+        not_actions.sort();
+        not_actions.dedup();
+        let mut data_actions = granted_data_actions(
+            permission_set,
+            platform_permission
+                .grant
+                .data_actions
+                .as_deref()
+                .unwrap_or_default(),
+            context,
+        )?;
+        data_actions.extend(
+            substitute_data_actions(permission_set, &platform_permission.grant, context)
+                .into_iter()
+                .map(str::to_string),
+        );
         actions.sort();
         actions.dedup();
         data_actions.sort();
@@ -635,7 +682,7 @@ impl AzureRuntimePermissionsGenerator {
                 ),
             ),
             actions,
-            not_actions: vec![],
+            not_actions,
             data_actions,
             not_data_actions: vec![],
             assignable_scopes: vec![scope.to_string()],
@@ -782,6 +829,192 @@ impl Default for AzureRuntimePermissionsGenerator {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The actions of an entry the rendered identity receives: all of them, except that a
+/// protected install's management identity never receives what only the verifier may do, nor
+/// any write or delete of what runs code. The deployment stack's deny holds the resource group
+/// itself, but Azure doesn't carry it to the resources in the group, so the roles must leave
+/// those writes out.
+///
+/// What a set the stack defines grants must also be on the Azure allow-list, or rendering is
+/// refused: a wildcard such as `Microsoft.Compute/*/action` would carry a run command, which no
+/// deny setting refuses.
+fn granted_actions(
+    permission_set: &PermissionSet,
+    actions: &[String],
+    context: &PermissionContext,
+) -> Result<Vec<String>> {
+    let kept = kept_actions(actions, context);
+    if context.signing_protected && !is_built_in_unchanged(permission_set) {
+        for action in actions {
+            if let Some(family) = azure_family(action) {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ProtectedManagementFamilyAction {
+                        permission_set_id: permission_set.id.clone(),
+                        action: action.clone(),
+                        family: family.name().to_string(),
+                    },
+                ));
+            }
+        }
+    }
+    Ok(kept)
+}
+
+/// The predefined roles the built-in management profile binds on Azure. A predefined role can't
+/// be narrowed, so a protected install refuses every other one. Roles that reach the verifier's
+/// identity or run templates are replaced by custom roles instead (see
+/// `azure_protected_role_substitute`), and roles only sets that management never holds bind
+/// (a registry push, sandbox execution) are not here.
+pub const AZURE_BUILT_IN_ROLES: &[&str] = &[
+    "AcrPull",
+    "Azure Service Bus Data Receiver",
+    "Azure Service Bus Data Sender",
+    "Cognitive Services User",
+    "Key Vault Reader",
+    "Monitoring Reader",
+    "Reader",
+    "Storage Blob Data Contributor",
+    "Storage Blob Data Reader",
+    "Storage Table Data Contributor",
+    "Storage Table Data Reader",
+];
+
+fn require_built_in_azure_role(permission_set_id: &str, role: &str) -> Result<()> {
+    if AZURE_BUILT_IN_ROLES
+        .iter()
+        .any(|built_in| built_in.eq_ignore_ascii_case(role))
+    {
+        return Ok(());
+    }
+    Err(alien_error::AlienError::new(ErrorData::GeneratorError {
+        platform: "azure".to_string(),
+        message: format!(
+            "Permission set '{permission_set_id}' binds the predefined role '{role}' to a protected \
+             install's management identity; a predefined role can't be narrowed, so only the \
+             built-in management roles are accepted"
+        ),
+    }))
+}
+
+/// The data actions of an entry the rendered identity receives. A protected install's
+/// management identity never receives a data action in a family (a sandbox's disk image or
+/// sandbox write decides what a sandbox runs); a set the stack defines that names one is refused.
+/// Key Vault secrets are not in a family: the signing vault sits in a group management cannot
+/// assign roles in.
+fn granted_data_actions(
+    permission_set: &PermissionSet,
+    data_actions: &[String],
+    context: &PermissionContext,
+) -> Result<Vec<String>> {
+    if context.signing_protected && !is_built_in_unchanged(permission_set) {
+        for action in data_actions {
+            if let Some(family) = azure_data_family(action) {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::ProtectedManagementFamilyAction {
+                        permission_set_id: permission_set.id.clone(),
+                        action: action.clone(),
+                        family: family.name().to_string(),
+                    },
+                ));
+            }
+        }
+    }
+    Ok(kept_data_actions(data_actions, context))
+}
+
+fn kept_data_actions(data_actions: &[String], context: &PermissionContext) -> Vec<String> {
+    data_actions
+        .iter()
+        .filter(|action| !(context.signing_protected && azure_data_family(action).is_some()))
+        .cloned()
+        .collect()
+}
+
+fn kept_actions(actions: &[String], context: &PermissionContext) -> Vec<String> {
+    actions
+        .iter()
+        .filter(|action| {
+            !(context.signing_protected
+                && (azure_family(action).is_some() || azure_changes_what_runs(action)))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The actions that stand in for `role` on a protected install's management identity, when the
+/// set is one the install holds by design.
+fn protected_role_substitute(
+    permission_set: &PermissionSet,
+    role: &str,
+) -> Option<&'static [&'static str]> {
+    azure_protected_role_substitute(role).filter(|_| is_built_in_unchanged(permission_set))
+}
+
+/// The data actions that replace the predefined `role` on a protected install: only the set the
+/// install holds by design gets the replacement; any other set naming the role is refused.
+fn protected_data_role_substitute(
+    permission_set: &PermissionSet,
+    role: &str,
+) -> Option<&'static [&'static str]> {
+    azure_sandbox_role_substitute(role).filter(|_| is_built_in_unchanged(permission_set))
+}
+
+/// The data actions the entry's substituted predefined roles stand for. Empty off a protected
+/// install.
+fn substitute_data_actions(
+    permission_set: &PermissionSet,
+    grant: &PermissionGrant,
+    context: &PermissionContext,
+) -> Vec<&'static str> {
+    if !context.signing_protected {
+        return Vec::new();
+    }
+    grant
+        .predefined_roles
+        .iter()
+        .flatten()
+        .filter_map(|role| protected_data_role_substitute(permission_set, role))
+        .flatten()
+        .copied()
+        .collect()
+}
+
+/// The actions the entry's substituted predefined roles stand for. Empty off a protected install.
+fn substitute_actions(
+    permission_set: &PermissionSet,
+    grant: &PermissionGrant,
+    context: &PermissionContext,
+) -> Vec<String> {
+    if !context.signing_protected {
+        return Vec::new();
+    }
+    grant
+        .predefined_roles
+        .iter()
+        .flatten()
+        .filter_map(|role| protected_role_substitute(permission_set, role))
+        .flat_map(|actions| actions.iter().map(|action| action.to_string()))
+        .collect()
+}
+
+/// Whether the entry grants the rendered identity any action or data action.
+fn grants_residual_azure_permissions(
+    permission_set: &PermissionSet,
+    grant: &PermissionGrant,
+    context: &PermissionContext,
+) -> bool {
+    !substitute_actions(permission_set, grant, context).is_empty()
+        || !substitute_data_actions(permission_set, grant, context).is_empty()
+        || grant
+            .actions
+            .as_ref()
+            .is_some_and(|actions| !kept_actions(actions, context).is_empty())
+        || grant
+            .data_actions
+            .as_ref()
+            .is_some_and(|actions| !kept_data_actions(actions, context).is_empty())
 }
 
 fn has_residual_azure_permissions(grant: &PermissionGrant) -> bool {

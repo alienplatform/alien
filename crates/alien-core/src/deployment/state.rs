@@ -396,6 +396,11 @@ pub struct RegistryAccess {
     /// added later needs the policy rewritten.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service_types: Vec<String>,
+
+    /// A protected install's verifier, which deploys its functions from these images and so
+    /// reads them as well. `None` on an unprotected install.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier: Option<String>,
 }
 
 /// Deployment state
@@ -561,6 +566,8 @@ mod tests {
             version: None,
             description: None,
             stack: empty_stack(),
+            signed: None,
+            signer_lists: Vec::new(),
         }
     }
 

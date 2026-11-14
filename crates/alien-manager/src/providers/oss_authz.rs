@@ -550,6 +550,8 @@ mod tests {
             git_commit_ref: None,
             git_commit_message: None,
             created_at: Utc::now(),
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
         }
     }
 

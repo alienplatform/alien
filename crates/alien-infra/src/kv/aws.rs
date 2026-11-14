@@ -1421,6 +1421,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_binding_is_what_the_enforcers_derive() {
+        let table = Arc::new(Mutex::new(Table::default()));
+        let mut executor =
+            executor(AwsKvController::default(), table, ResourceLifecycle::Live).await;
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let engine = crate::core::ResourceController::get_binding_params(
+            executor.internal_state::<AwsKvController>().unwrap(),
+        )
+        .unwrap()
+        .expect("a running table has a binding");
+        crate::core::binding_equivalence::assert_enforcers_derive(
+            Platform::Aws,
+            "kv",
+            "cache",
+            engine,
+        );
+    }
+
+    #[tokio::test]
     async fn create_turns_on_point_in_time_recovery() {
         let table = Arc::new(Mutex::new(Table::default()));
         let mut executor = executor(

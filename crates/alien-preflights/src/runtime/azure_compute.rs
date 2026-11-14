@@ -11,10 +11,15 @@ use alien_azure_clients::{
     azure::models::compute_rp::Usage, ComputeUsagesApi, ResourceSku, ResourceSkusApi,
 };
 use alien_core::{
-    instance_catalog::find_instance_type, AzureClientConfig, CapacityGroup, ComputeCluster,
-    ComputeClusterOutputs, Platform, ResourceStatus, Stack, StackResourceState, StackState,
+    compute_planner::MachineRoom,
+    instance_catalog::{find_instance_type, InstanceTypeSpec},
+    AzureClientConfig, CapacityGroup, ComputeCluster, ComputeClusterOutputs, Platform,
+    ResourceStatus, Stack, StackResourceState, StackState,
 };
-use std::collections::BTreeMap;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 fn identity(subscription: &str, region: &str, metric: &str) -> QuotaIdentity {
     QuotaIdentity {
@@ -183,16 +188,10 @@ fn demands_for(
     Some(demands)
 }
 
-/// Restriction checks must not infer a location ban from a single unavailable zone.
-fn availability(sku: &ResourceSku, region: &str, selected: &[String]) -> QuotaOutcome {
-    let available = sku.available_zones_in(region);
-    let offered = sku
-        .location_info
-        .iter()
-        .filter(|info| info.location.eq_ignore_ascii_case(region))
-        .flat_map(|info| &info.zones)
-        .collect::<Vec<_>>();
-    let location_restricted = sku.restrictions.iter().any(|restriction| {
+/// Whether the subscription cannot use the SKU anywhere in the region. Zone restrictions are
+/// separate: a SKU restricted in every zone can still run without one.
+fn location_restricted(sku: &ResourceSku, region: &str) -> bool {
+    sku.restrictions.iter().any(|restriction| {
         if !restriction
             .restriction_type
             .eq_ignore_ascii_case("Location")
@@ -209,7 +208,19 @@ fn availability(sku: &ResourceSku, region: &str, selected: &[String]) -> QuotaOu
             || locations
                 .iter()
                 .any(|location| location.eq_ignore_ascii_case(region))
-    });
+    })
+}
+
+/// Restriction checks must not infer a location ban from a single unavailable zone.
+fn availability(sku: &ResourceSku, region: &str, selected: &[String]) -> QuotaOutcome {
+    let available = sku.available_zones_in(region);
+    let offered = sku
+        .location_info
+        .iter()
+        .filter(|info| info.location.eq_ignore_ascii_case(region))
+        .flat_map(|info| &info.zones)
+        .collect::<Vec<_>>();
+    let location_restricted = location_restricted(sku, region);
     if location_restricted
         || (!offered.is_empty() && available.is_empty())
         || (!offered.is_empty() && selected.iter().any(|zone| !available.contains(zone)))
@@ -229,6 +240,186 @@ fn availability(sku: &ResourceSku, region: &str, selected: &[String]) -> QuotaOu
             limit: 1.0,
             needed: 1.0,
         }
+    }
+}
+
+/// The compute SKUs and quota rows of one region, read once for automatic machine selection.
+/// Selection and the quota check below read the same rows through [`observation`].
+pub struct ComputeRoom {
+    region: String,
+    skus: Vec<ResourceSku>,
+    usages: Vec<Usage>,
+}
+
+impl ComputeRoom {
+    /// `None` when either read fails: selection then stays on the plain catalog pick and the
+    /// quota check reports what it can read.
+    pub async fn read(
+        skus: &dyn ResourceSkusApi,
+        usages: &dyn ComputeUsagesApi,
+        region: &str,
+    ) -> Option<Self> {
+        Some(Self {
+            region: region.to_string(),
+            skus: skus.list_resource_skus(region).await.ok()?,
+            usages: usages.list_compute_usages(region).await.ok()?,
+        })
+    }
+
+    /// Free vCPUs of the machine's quota family and of the region, or `None` when a row is
+    /// missing or the subscription cannot use the SKU in the region (zone restrictions don't count).
+    pub fn free_quota(&self, machine: &str) -> Option<FreeQuota> {
+        let sku = sku(&self.skus, machine)?;
+        if location_restricted(sku, &self.region) {
+            return None;
+        }
+        let family = sku.family.as_deref().filter(|family| !family.is_empty())?;
+        let free = |metric: &str| observation(&self.usages, metric).map(|row| row.limit - row.used);
+        Some(FreeQuota {
+            family: family.to_string(),
+            family_free: free(family)?,
+            regional_free: free("cores")?,
+        })
+    }
+
+    /// The smaller of the family's and the region's free vCPUs.
+    pub fn free_cores(&self, machine: &str) -> Option<f64> {
+        let free = self.free_quota(machine)?;
+        Some(free.family_free.min(free.regional_free))
+    }
+
+    /// Whether `machines` of the machine fit the family and regional quota.
+    pub fn has_room(&self, spec: &InstanceTypeSpec, machines: u32) -> bool {
+        self.free_cores(spec.machine_type)
+            .is_some_and(|free| free >= f64::from(spec.vcpu) * f64::from(machines))
+    }
+}
+
+#[cfg(test)]
+impl ComputeRoom {
+    /// eastus2 as the first real proof saw it: Dsv5 limit 0, Dsv6 limit 10 with 6 regional
+    /// vCPUs in use.
+    pub(crate) fn eastus2_fixture() -> Self {
+        let mut skus: Vec<ResourceSku> =
+            serde_json::from_str(include_str!("fixtures/azure-compute-skus.json")).unwrap();
+        for row in &mut skus {
+            row.restrictions.clear();
+        }
+        skus.extend(
+            serde_json::from_str::<Vec<ResourceSku>>(include_str!(
+                "fixtures/azure-compute-skus-v6.json"
+            ))
+            .unwrap(),
+        );
+        let mut usages: Vec<Usage> =
+            serde_json::from_str(include_str!("fixtures/azure-compute-usages.json")).unwrap();
+        usages.retain(|row| row.name.value.as_deref() != Some("cores"));
+        usages.extend(
+            serde_json::from_str::<Vec<Usage>>(include_str!(
+                "fixtures/azure-compute-usages-v6.json"
+            ))
+            .unwrap(),
+        );
+        Self {
+            region: "eastus".into(),
+            skus,
+            usages,
+        }
+    }
+}
+
+/// Free vCPUs of one machine's quota family and of the region.
+pub struct FreeQuota {
+    pub family: String,
+    pub family_free: f64,
+    pub regional_free: f64,
+}
+
+/// Quota that automatic selection hands out pool by pool. Each pool's choice is held against
+/// the free quota before the next pool chooses, so two new pools that each fit alone are not
+/// both put on a series that has room for one. A pool that is installed keeps its machine
+/// series and holds nothing: its machines are already in the usage rows.
+pub struct PoolQuotaLedger<'a> {
+    room: &'a ComputeRoom,
+    installed_series: BTreeMap<String, &'static str>,
+    held: RefCell<BTreeMap<String, (String, f64)>>,
+    checked: RefCell<BTreeMap<String, Vec<(&'static str, u32)>>>,
+    placed: RefCell<BTreeSet<String>>,
+}
+
+impl<'a> PoolQuotaLedger<'a> {
+    pub fn new(room: &'a ComputeRoom, state: &StackState) -> Self {
+        let installed_series = state
+            .resources
+            .values()
+            .filter_map(|resource| resource.config.downcast_ref::<ComputeCluster>())
+            .flat_map(|cluster| &cluster.capacity_groups)
+            .filter_map(|group| {
+                let spec = find_instance_type(Platform::Azure, group.instance_type.as_deref()?)?;
+                Some((group.group_id.clone(), spec.series))
+            })
+            .collect();
+        Self {
+            room,
+            installed_series,
+            held: RefCell::default(),
+            checked: RefCell::default(),
+            placed: RefCell::default(),
+        }
+    }
+
+    /// Pools that asked for room and found none in any series, with the series and machine
+    /// counts they asked about, in the order asked.
+    pub fn without_room(&self) -> Vec<(String, Vec<(&'static str, u32)>)> {
+        let placed = self.placed.borrow();
+        self.checked
+            .borrow()
+            .iter()
+            .filter(|(pool, _)| !placed.contains(*pool))
+            .map(|(pool, asked)| (pool.clone(), asked.clone()))
+            .collect()
+    }
+}
+
+impl MachineRoom for PoolQuotaLedger<'_> {
+    fn has_room(&self, pool_id: &str, spec: &InstanceTypeSpec, machines: u32) -> bool {
+        if let Some(series) = self.installed_series.get(pool_id) {
+            return spec.series == *series;
+        }
+        let need = f64::from(spec.vcpu) * f64::from(machines);
+        let fits = self.room.free_quota(spec.machine_type).is_some_and(|free| {
+            let held = self.held.borrow();
+            let others = held.iter().filter(|(pool, _)| pool.as_str() != pool_id);
+            let family_held: f64 = others
+                .clone()
+                .filter(|(_, (family, _))| *family == free.family)
+                .map(|(_, (_, cores))| cores)
+                .sum();
+            let regional_held: f64 = others.map(|(_, (_, cores))| cores).sum();
+            free.family_free - family_held >= need && free.regional_free - regional_held >= need
+        });
+        let mut checked = self.checked.borrow_mut();
+        let asked = checked.entry(pool_id.to_string()).or_default();
+        if !asked.contains(&(spec.series, machines)) {
+            asked.push((spec.series, machines));
+        }
+        if fits {
+            self.placed.borrow_mut().insert(pool_id.to_string());
+        }
+        fits
+    }
+
+    fn commit(&self, pool_id: &str, spec: &InstanceTypeSpec, machines: u32) {
+        if self.installed_series.contains_key(pool_id) {
+            return;
+        }
+        let family = sku(&self.room.skus, spec.machine_type)
+            .and_then(|sku| sku.family.clone())
+            .unwrap_or_default();
+        self.held.borrow_mut().insert(
+            pool_id.to_string(),
+            (family, f64::from(spec.vcpu) * f64::from(machines)),
+        );
     }
 }
 
@@ -649,6 +840,116 @@ mod tests {
         assert!(observation(&duplicate, "cores").is_none());
     }
 
+    fn room() -> ComputeRoom {
+        ComputeRoom::eastus2_fixture()
+    }
+
+    #[test]
+    fn room_follows_the_family_and_regional_quota_rows() {
+        let room = room();
+        let spec = |name| find_instance_type(Platform::Azure, name).unwrap();
+        assert!(
+            !room.has_room(spec("Standard_D2s_v5"), 1),
+            "Dsv5 limit is 0"
+        );
+        assert!(
+            room.has_room(spec("Standard_D2s_v6"), 2),
+            "4 of 4 free cores"
+        );
+        assert!(
+            !room.has_room(spec("Standard_D2s_v6"), 3),
+            "regional cores run out"
+        );
+        assert!(
+            !room.has_room(spec("Standard_D4s_v6"), 2),
+            "8 cores need 4 free"
+        );
+        assert_eq!(room.free_cores("Standard_B1s"), None, "unknown SKU");
+        // A SKU restricted in every zone still runs without a zone, as eastus2 does today.
+        let mut zoned = self::room();
+        for row in &mut zoned.skus {
+            row.restrictions = vec![serde_json::from_value(json!({
+                "type": "Zone", "values": ["eastus"],
+                "restrictionInfo": {"locations": ["eastus"], "zones": ["1", "2", "3"]},
+                "reasonCode": "NotAvailableForSubscription"
+            }))
+            .unwrap()];
+        }
+        assert!(zoned.has_room(
+            find_instance_type(Platform::Azure, "Standard_D2s_v6").unwrap(),
+            2
+        ));
+        for row in &mut zoned.skus {
+            row.restrictions = vec![serde_json::from_value(json!({
+                "type": "Location", "values": ["eastus"],
+                "restrictionInfo": {"locations": ["eastus"]},
+                "reasonCode": "NotAvailableForSubscription"
+            }))
+            .unwrap()];
+        }
+        assert!(!zoned.has_room(
+            find_instance_type(Platform::Azure, "Standard_D2s_v6").unwrap(),
+            2
+        ));
+    }
+
+    /// Reads a real subscription. Run by hand with `AZURE_PROOF_TOKEN`, `AZURE_PROOF_SUBSCRIPTION`
+    /// and `AZURE_PROOF_REGION` set: `cargo test -p alien-preflights --lib real_azure -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "reads a real Azure subscription"]
+    async fn real_azure_selection_follows_the_regions_quota() {
+        use alien_core::{
+            instance_catalog::{select_instance_type_with_room, WorkloadRequirements},
+            AzureCredentials,
+        };
+        let env = |name| std::env::var(name).expect(name);
+        let region = env("AZURE_PROOF_REGION");
+        let config = AzureClientConfig {
+            subscription_id: env("AZURE_PROOF_SUBSCRIPTION"),
+            tenant_id: "proof".into(),
+            region: Some(region.clone()),
+            credentials: AzureCredentials::AccessToken {
+                token: env("AZURE_PROOF_TOKEN"),
+            },
+            service_overrides: None,
+        };
+        let http = reqwest::Client::new();
+        let sku_client =
+            AzureResourceSkusClient::new(http.clone(), AzureTokenCache::new(config.clone()));
+        let usage_client = AzureComputeUsagesClient::new(http, AzureTokenCache::new(config));
+        let room = ComputeRoom::read(&sku_client, &usage_client, &region)
+            .await
+            .expect("the subscription's SKUs and usages are readable");
+        let gib = 1024 * 1024 * 1024;
+        let requirements = WorkloadRequirements {
+            total_cpu_at_desired: 3.0,
+            total_memory_bytes_at_desired: 12 * gib,
+            total_cpu_at_max: 3.0,
+            total_memory_bytes_at_max: 12 * gib,
+            max_cpu_per_container: 1.0,
+            max_memory_per_container: 4 * gib,
+            max_ephemeral_storage_bytes: 10 * gib,
+            gpu: None,
+            architecture: None,
+            nested_virt: true,
+        };
+        for machine in ["Standard_D2s_v5", "Standard_D2s_v6"] {
+            println!("{machine}: free cores {:?}", room.free_cores(machine));
+        }
+        let plain =
+            alien_core::instance_catalog::select_instance_type(Platform::Azure, &requirements)
+                .unwrap();
+        let picked =
+            select_instance_type_with_room(Platform::Azure, &requirements, 2, &|spec, machines| {
+                room.has_room(spec, machines)
+            })
+            .unwrap();
+        println!(
+            "plain pick {} -> pick with room {}",
+            plain.instance_type, picked.instance_type
+        );
+    }
+
     #[test]
     fn current_generation_skus_charge_their_provider_family() {
         let skus: Vec<ResourceSku> =
@@ -783,5 +1084,107 @@ mod tests {
         );
         state.resources.get_mut("cluster").unwrap().status = ResourceStatus::ProvisionFailed;
         assert!(demands(&old, &state, &skus).is_none());
+    }
+
+    /// A region with `dsv5` / `dsv6` family vCPUs and `regional` vCPUs free.
+    fn room_with(dsv5: u32, dsv6: u32, regional: u32) -> ComputeRoom {
+        let mut room = ComputeRoom::eastus2_fixture();
+        room.usages = ["standardDSv5Family", "StandardDsv6Family", "cores"]
+            .into_iter()
+            .zip([dsv5, dsv6, regional])
+            .map(|(name, free)| {
+                serde_json::from_value(json!({
+                    "currentValue": 0, "limit": free,
+                    "name": {"value": name, "localizedValue": name}, "unit": "Count"
+                }))
+                .unwrap()
+            })
+            .collect();
+        room
+    }
+
+    fn spec(name: &str) -> &'static alien_core::instance_catalog::InstanceTypeSpec {
+        find_instance_type(Platform::Azure, name).unwrap()
+    }
+
+    #[test]
+    fn pools_do_not_reuse_the_same_free_quota() {
+        // Four free cores in each series and eight in the region: two pools of four cores
+        // each fit, one per series.
+        let room = room_with(4, 4, 8);
+        let state = StackState::new(Platform::Azure);
+        let ledger = PoolQuotaLedger::new(&room, &state);
+        assert!(ledger.has_room("a", spec("Standard_D2s_v5"), 2));
+        ledger.commit("a", spec("Standard_D2s_v5"), 2);
+        assert!(
+            !ledger.has_room("b", spec("Standard_D2s_v5"), 2),
+            "Dsv5's four cores belong to pool a"
+        );
+        assert!(ledger.has_room("b", spec("Standard_D2s_v6"), 2));
+        ledger.commit("b", spec("Standard_D2s_v6"), 2);
+        // A third pool is out of regional quota in any series.
+        assert!(!ledger.has_room("c", spec("Standard_D2s_v6"), 1));
+    }
+
+    #[test]
+    fn an_explicit_pool_holds_its_quota_before_automatic_ones_choose() {
+        let room = room_with(4, 4, 8);
+        let state = StackState::new(Platform::Azure);
+        let ledger = PoolQuotaLedger::new(&room, &state);
+        ledger.commit("explicit", spec("Standard_D2s_v5"), 2);
+        assert!(!ledger.has_room("auto", spec("Standard_D2s_v5"), 2));
+        assert!(ledger.has_room("auto", spec("Standard_D2s_v6"), 2));
+        // Asking again for the same pool replaces its hold instead of adding to it.
+        ledger.commit("explicit", spec("Standard_D2s_v5"), 1);
+        assert!(ledger.has_room("auto", spec("Standard_D2s_v5"), 1));
+    }
+
+    #[test]
+    fn each_pool_without_room_reports_its_own_checked_series() {
+        let room = room_with(2, 2, 3);
+        let state = StackState::new(Platform::Azure);
+        let ledger = PoolQuotaLedger::new(&room, &state);
+        // Pool a finds room in Dsv6 after Dsv5 had none; pool b finds none anywhere.
+        assert!(!ledger.has_room("a", spec("Standard_D2s_v5"), 2));
+        assert!(ledger.has_room("a", spec("Standard_D2s_v6"), 1));
+        ledger.commit("a", spec("Standard_D2s_v6"), 1);
+        assert!(!ledger.has_room("b", spec("Standard_D2s_v5"), 2));
+        assert!(!ledger.has_room("b", spec("Standard_D2s_v6"), 2));
+        let without = ledger.without_room();
+        assert_eq!(
+            without,
+            vec![("b".to_string(), vec![("Dsv5", 2), ("Dsv6", 2)])]
+        );
+    }
+
+    #[test]
+    fn an_installed_pool_keeps_its_series_and_ignores_quota() {
+        let room = room_with(0, 0, 0);
+        let mut state = StackState::new(Platform::Azure);
+        let cluster = ComputeCluster::new("compute".into())
+            .capacity_group(CapacityGroup {
+                group_id: "general".into(),
+                instance_type: Some("Standard_D4s_v6".into()),
+                min_size: 1,
+                max_size: 2,
+                profile: None,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        state.resources.insert(
+            "compute".into(),
+            StackResourceState::new_pending(
+                "compute-cluster".into(),
+                alien_core::Resource::new(cluster),
+                Some(alien_core::ResourceLifecycle::Live),
+                Vec::new(),
+            ),
+        );
+        let ledger = PoolQuotaLedger::new(&room, &state);
+        assert!(ledger.has_room("general", spec("Standard_D8s_v6"), 3));
+        assert!(!ledger.has_room("general", spec("Standard_D4s_v5"), 1));
+        assert!(ledger.without_room().is_empty());
     }
 }
