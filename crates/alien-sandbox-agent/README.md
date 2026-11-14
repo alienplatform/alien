@@ -406,6 +406,21 @@ A client that can only set headers cannot open a WebSocket on this backend. The 
 client side of an upgraded stream open for a quarter second after the workload closes, because the
 edge loses the last frame (the close reply) of a daemon that drops the connection at once.
 
+The edge JWT is not scoped to a port: Google admits any caller that holds `execute` on the sandbox,
+routes it to any declared port (the agent's own included) and accepts the same JWT as an access
+token for `:execute`. So the agent authorizes every control request itself. The binding derives a
+per-sandbox control key from a signature only the signing identity can make, installs it (the
+`controlKeyInstall` op, once per boot; a different key is refused) when it creates a sandbox and
+before each preview grant, and sends it with every request (`controlKey` in an envelope, or the
+`x-alien-control-key` header on a direct route). Once a key is installed the agent refuses any
+control route without it, a preview capability never opens one, and a preview holder never sees
+the key. An agent with no key installed behaves as before, so a sandbox of a deployment without
+preview is unchanged. Two limits: the key is derived from a signature by the identity's
+Google-managed key, which Google rotates, so a sandbox that outlives a rotation can no longer be
+commanded by a new process and has to be recreated; and a container the platform replaces on its
+own starts without a key until the binding next installs one, which a holder of an unexpired edge
+JWT could use in that window (at most the JWT's five minutes).
+
 Deployment requirements for preview: the sandbox is declared Frozen, so setup creates the signing
 identity next to the engine and passes it to the template controller through the import data; the
 controller publishes it, with the declared ports, in the binding a deployed app reads. A Live sandbox

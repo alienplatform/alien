@@ -155,8 +155,9 @@ pub struct GcpAgentPlatformSandbox {
 }
 
 /// Mints the credential the sandbox edge requires on every ingress request: a JWT signed by a
-/// service account that may execute against the engine. It gates the agent port only; it is
-/// never the preview boundary.
+/// service account that may execute against the engine. It is not scoped to a port: the edge
+/// routes it to any declared port, the agent's included, and Google accepts it for `:execute`.
+/// It is never the preview boundary; the agent's control key and the per-port capability are.
 #[async_trait]
 pub trait EdgeTokenSigner: Send + Sync + std::fmt::Debug {
     async fn sign(&self) -> Result<SignedEdgeToken>;
