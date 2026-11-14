@@ -183,16 +183,10 @@ fn demands_for(
     Some(demands)
 }
 
-/// Restriction checks must not infer a location ban from a single unavailable zone.
-fn availability(sku: &ResourceSku, region: &str, selected: &[String]) -> QuotaOutcome {
-    let available = sku.available_zones_in(region);
-    let offered = sku
-        .location_info
-        .iter()
-        .filter(|info| info.location.eq_ignore_ascii_case(region))
-        .flat_map(|info| &info.zones)
-        .collect::<Vec<_>>();
-    let location_restricted = sku.restrictions.iter().any(|restriction| {
+/// Whether the subscription cannot use the SKU anywhere in the region. Zone restrictions are
+/// separate: a SKU restricted in every zone can still run without one.
+fn location_restricted(sku: &ResourceSku, region: &str) -> bool {
+    sku.restrictions.iter().any(|restriction| {
         if !restriction
             .restriction_type
             .eq_ignore_ascii_case("Location")
@@ -209,7 +203,19 @@ fn availability(sku: &ResourceSku, region: &str, selected: &[String]) -> QuotaOu
             || locations
                 .iter()
                 .any(|location| location.eq_ignore_ascii_case(region))
-    });
+    })
+}
+
+/// Restriction checks must not infer a location ban from a single unavailable zone.
+fn availability(sku: &ResourceSku, region: &str, selected: &[String]) -> QuotaOutcome {
+    let available = sku.available_zones_in(region);
+    let offered = sku
+        .location_info
+        .iter()
+        .filter(|info| info.location.eq_ignore_ascii_case(region))
+        .flat_map(|info| &info.zones)
+        .collect::<Vec<_>>();
+    let location_restricted = location_restricted(sku, region);
     if location_restricted
         || (!offered.is_empty() && available.is_empty())
         || (!offered.is_empty() && selected.iter().any(|zone| !available.contains(zone)))
@@ -256,10 +262,10 @@ impl ComputeRoom {
     }
 
     /// Free vCPUs of the machine's quota family and of the region, or `None` when a row is
-    /// missing or the SKU is unavailable here.
+    /// missing or the subscription cannot use the SKU in the region (zone restrictions don't count).
     pub fn free_cores(&self, machine: &str) -> Option<f64> {
         let sku = sku(&self.skus, machine)?;
-        if availability(sku, &self.region, &[]).blocks() {
+        if location_restricted(sku, &self.region) {
             return None;
         }
         let family = sku.family.as_deref().filter(|family| !family.is_empty())?;
@@ -744,6 +750,89 @@ mod tests {
             "8 cores need 4 free"
         );
         assert_eq!(room.free_cores("Standard_B1s"), None, "unknown SKU");
+        // A SKU restricted in every zone still runs without a zone, as eastus2 does today.
+        let mut zoned = self::room();
+        for row in &mut zoned.skus {
+            row.restrictions = vec![serde_json::from_value(json!({
+                "type": "Zone", "values": ["eastus"],
+                "restrictionInfo": {"locations": ["eastus"], "zones": ["1", "2", "3"]},
+                "reasonCode": "NotAvailableForSubscription"
+            }))
+            .unwrap()];
+        }
+        assert!(zoned.has_room(
+            find_instance_type(Platform::Azure, "Standard_D2s_v6").unwrap(),
+            2
+        ));
+        for row in &mut zoned.skus {
+            row.restrictions = vec![serde_json::from_value(json!({
+                "type": "Location", "values": ["eastus"],
+                "restrictionInfo": {"locations": ["eastus"]},
+                "reasonCode": "NotAvailableForSubscription"
+            }))
+            .unwrap()];
+        }
+        assert!(!zoned.has_room(
+            find_instance_type(Platform::Azure, "Standard_D2s_v6").unwrap(),
+            2
+        ));
+    }
+
+    /// Reads a real subscription. Run by hand with `AZURE_PROOF_TOKEN`, `AZURE_PROOF_SUBSCRIPTION`
+    /// and `AZURE_PROOF_REGION` set: `cargo test -p alien-preflights --lib real_azure -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore = "reads a real Azure subscription"]
+    async fn real_azure_selection_follows_the_regions_quota() {
+        use alien_core::{
+            instance_catalog::{select_instance_type_with_room, WorkloadRequirements},
+            AzureCredentials,
+        };
+        let env = |name| std::env::var(name).expect(name);
+        let region = env("AZURE_PROOF_REGION");
+        let config = AzureClientConfig {
+            subscription_id: env("AZURE_PROOF_SUBSCRIPTION"),
+            tenant_id: "proof".into(),
+            region: Some(region.clone()),
+            credentials: AzureCredentials::AccessToken {
+                token: env("AZURE_PROOF_TOKEN"),
+            },
+            service_overrides: None,
+        };
+        let http = reqwest::Client::new();
+        let sku_client =
+            AzureResourceSkusClient::new(http.clone(), AzureTokenCache::new(config.clone()));
+        let usage_client = AzureComputeUsagesClient::new(http, AzureTokenCache::new(config));
+        let room = ComputeRoom::read(&sku_client, &usage_client, &region)
+            .await
+            .expect("the subscription's SKUs and usages are readable");
+        let gib = 1024 * 1024 * 1024;
+        let requirements = WorkloadRequirements {
+            total_cpu_at_desired: 3.0,
+            total_memory_bytes_at_desired: 12 * gib,
+            total_cpu_at_max: 3.0,
+            total_memory_bytes_at_max: 12 * gib,
+            max_cpu_per_container: 1.0,
+            max_memory_per_container: 4 * gib,
+            max_ephemeral_storage_bytes: 10 * gib,
+            gpu: None,
+            architecture: None,
+            nested_virt: true,
+        };
+        for machine in ["Standard_D2s_v5", "Standard_D2s_v6"] {
+            println!("{machine}: free cores {:?}", room.free_cores(machine));
+        }
+        let plain =
+            alien_core::instance_catalog::select_instance_type(Platform::Azure, &requirements)
+                .unwrap();
+        let picked =
+            select_instance_type_with_room(Platform::Azure, &requirements, 2, &|spec, machines| {
+                room.has_room(spec, machines)
+            })
+            .unwrap();
+        println!(
+            "plain pick {} -> pick with room {}",
+            plain.instance_type, picked.instance_type
+        );
     }
 
     #[test]
