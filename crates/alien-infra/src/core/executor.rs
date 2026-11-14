@@ -1123,10 +1123,52 @@ impl StackExecutor {
             })
     }
 
-    /// Whether a dependent may update now against this dependency: the dependency is
-    /// settled, or it is still changing and both controllers opt in. The dependency allows
-    /// its dependents to update in its current state, and the dependent can update against
-    /// it while it is not Running. Either side alone keeps the dependent waiting.
+    /// Whether a settled dependency already carries this executor's desired release, so a
+    /// dependent's update may build on it.
+    ///
+    /// A dependency that is Running on its old config, or whose own update waits for one of
+    /// its dependencies (or will follow one that is changing), is Running yet not rolled. Letting
+    /// its dependents update meanwhile would split the stack across two releases when the
+    /// rollout then fails. A dependency this executor will not update (not in scope, held,
+    /// or a setup-owned resource only setup changes) counts as rolled, so nothing waits
+    /// for a change that never comes.
+    fn dependency_rolled(&self, dependency_id: &str, state: &StackState) -> bool {
+        if !self.dependency_settled(dependency_id, state) {
+            return false;
+        }
+        let (Some(desired), Some(current)) = (
+            self.resources.get(dependency_id),
+            state.resources.get(dependency_id),
+        ) else {
+            return true;
+        };
+        if current.status != ResourceStatus::Running
+            || self.held_resources.contains(dependency_id)
+            || self.setup_owns_writes(desired)
+        {
+            return true;
+        }
+        if desired.resource != current.config
+            || desired.dependencies != current.dependencies
+            // A drift that cannot be read is reported by `plan`; here it keeps the wait.
+            || self
+                .external_binding_drifted(dependency_id, current)
+                .unwrap_or(true)
+        {
+            return false;
+        }
+        // Its update is also planned when one of its own dependencies changes.
+        desired
+            .dependencies
+            .iter()
+            .all(|dependency| self.dependency_rolled(dependency.id(), state))
+    }
+
+    /// Whether a dependent may update now against this dependency: the dependency has rolled
+    /// to this release, or it is still changing and both controllers opt in. The dependency
+    /// allows its dependents to update in its current state, and the dependent can update
+    /// against it while it is not Running. Either side alone keeps the dependent waiting. A
+    /// Running dependency that has not rolled yet is waited for, with no opt-in.
     fn dependency_allows_update(
         &self,
         dependent: &StackResourceState,
@@ -1134,7 +1176,7 @@ impl StackExecutor {
         state: &StackState,
     ) -> Result<bool> {
         if self.dependency_settled(dependency.id(), state) {
-            return Ok(true);
+            return Ok(self.dependency_rolled(dependency.id(), state));
         }
         let Some(dependency_state) = state.resources.get(dependency.id()) else {
             return Ok(false);
@@ -1521,7 +1563,7 @@ impl StackExecutor {
                                     });
                                 let dependencies_ready =
                                     desired_config.dependencies.iter().all(|dependency| {
-                                        self.dependency_settled(dependency.id(), state)
+                                        self.dependency_rolled(dependency.id(), state)
                                     });
 
                                 if can_reconcile_in_place && dependencies_ready {

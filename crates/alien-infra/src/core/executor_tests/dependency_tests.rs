@@ -457,11 +457,13 @@ fn dependency_updates_respect_setup_authority() -> Result<()> {
         assert!(plan.creates.is_empty());
         assert!(plan.deletes.is_empty());
         assert!(plan.replaces.is_empty());
-        for (resource, _, runtime_management) in &dependents {
-            assert_eq!(
-                plan.updates.contains_key(resource.id()),
-                authority == InitialSetupAuthority::DirectSetup || *runtime_management,
-                "dependency update for {} with {authority:?}",
+        // The dependency has not rolled to this release yet, so none of its dependents is
+        // planned: a dependent whose config did not change is not rewritten at all, and one
+        // that changed waits for the dependency, whatever its lifecycle.
+        for (resource, _, _) in &dependents {
+            assert!(
+                !plan.updates.contains_key(resource.id()),
+                "{} must wait for the dependency's update with {authority:?}",
                 resource.id(),
             );
         }
@@ -620,10 +622,10 @@ mod update_during_dependency_change {
     }
 
     /// `daemon` also depends on `config`. A desired stack that changes only `config` to v2
-    /// while `cluster` is still updating: `daemon`'s own config is the same, so its update
-    /// comes from `config` changing, and only both opt-ins on `cluster` let it through.
+    /// while `cluster` is still updating: `daemon`'s own config is the same, and it waits for
+    /// `config` to roll first, with or without the opt-ins on `cluster`.
     #[tokio::test]
-    async fn dependency_change_updates_the_dependent_during_another_dependency_update_only_when_both_opt_in(
+    async fn dependent_following_a_changing_dependency_waits_for_it_whatever_the_opt_ins(
     ) -> Result<()> {
         fn stack(config_version: &str) -> Stack {
             Stack::new("update-during-dependency-change".to_owned())
@@ -665,14 +667,15 @@ mod update_during_dependency_change {
             controller.updates_during_dependency_change = updates_during_dependency_change;
             daemon.set_internal_controller(Some(Box::new(controller)))?;
 
+            // `daemon` follows `config`, which has not rolled to v2 yet: it waits for it, and
+            // `cluster`'s opt-in does not change that.
             let plan = new_executor(&stack("v2"))?.plan(&state)?;
             assert!(plan.updates.contains_key("config"));
             assert!(!plan.updates.contains_key("cluster"));
-            assert_eq!(
-                plan.updates.contains_key("daemon"),
-                both,
+            assert!(
+                !plan.updates.contains_key("daemon"),
                 "dependency opts in: {dependents_may_update}, dependent opts in: \
-                 {updates_during_dependency_change}"
+                 {updates_during_dependency_change}, both: {both}"
             );
         }
         Ok(())
@@ -749,4 +752,196 @@ async fn setup_management_waits_for_the_network_and_never_hangs_on_its_failure()
         "the run ends on the failed network instead of waiting"
     );
     Ok(())
+}
+
+/// A release rolls through a chain of dependents in order: a dependent updates only after the
+/// resource it links has rolled to the same release, so a failed step leaves everything
+/// downstream on the previous one.
+mod rollout_order {
+    use super::*;
+    use alien_core::StackState;
+
+    fn worker(id: &str, release: &str, fail_update: bool) -> Worker {
+        let environment = if fail_update {
+            [("SIMULATE_UPDATE_FAILURE".to_string(), "true".to_string())]
+                .into_iter()
+                .collect()
+        } else {
+            Default::default()
+        };
+        Worker::new(id.to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: format!("{id}-{release}"),
+            })
+            .environment(environment)
+            .permissions("execution".to_string())
+            .build()
+    }
+
+    /// `sandbox` <- `api` (links sandbox) <- `runner` (links api), all Live.
+    fn stack(release: &str, fail_sandbox_update: bool) -> Stack {
+        Stack::new("rollout-order".to_owned())
+            .add(
+                worker("sandbox", release, fail_sandbox_update),
+                ResourceLifecycle::Live,
+            )
+            .add_with_dependencies(
+                worker("api", release, false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "sandbox")],
+            )
+            .add_with_dependencies(
+                worker("runner", release, false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "api")],
+            )
+            .build()
+    }
+
+    fn image(state: &StackState, id: &str) -> String {
+        match &state.resources[id]
+            .config
+            .downcast_ref::<Worker>()
+            .expect("a worker")
+            .code
+        {
+            alien_core::WorkerCode::Image { image } => image.clone(),
+            other => panic!("expected an image worker, got {other:?}"),
+        }
+    }
+
+    async fn running_on_release_one() -> Result<StackState> {
+        let state = run_to_synced(&new_executor(&stack("r1", false))?, new_test_state()).await?;
+        assert_all_running(&state, &["sandbox", "api", "runner"]);
+        Ok(state)
+    }
+
+    /// The customer's shape: the first step of the release fails. The resources linked to it
+    /// stay on the previous release, though their own config changed.
+    #[tokio::test]
+    async fn failed_dependency_update_keeps_dependents_on_the_previous_release() -> Result<()> {
+        let mut state = running_on_release_one().await?;
+        let executor = new_executor(&stack("r2", true))?;
+
+        for _ in 0..60 {
+            state = executor.step(state).await?.next_state;
+        }
+
+        assert_eq!(
+            get_status(&state, "sandbox"),
+            Some(ResourceStatus::UpdateFailed)
+        );
+        for id in ["api", "runner"] {
+            assert_eq!(
+                get_status(&state, id),
+                Some(ResourceStatus::Running),
+                "{id}"
+            );
+            assert_eq!(image(&state, id), format!("{id}-r1"), "{id} must not roll");
+        }
+        Ok(())
+    }
+
+    /// Without a failure the release rolls in dependency order: a resource starts its update
+    /// only once everything it links is Running on the new release.
+    #[tokio::test]
+    async fn release_rolls_dependency_first() -> Result<()> {
+        let mut state = running_on_release_one().await?;
+        let executor = new_update_executor(&stack("r2", false))?;
+
+        let mut started: Vec<String> = Vec::new();
+        for _ in 0..80 {
+            let before = state.clone();
+            state = executor.step(state).await?.next_state;
+            for (id, upstream) in [
+                ("sandbox", None),
+                ("api", Some("sandbox")),
+                ("runner", Some("api")),
+            ] {
+                if image(&before, id) != image(&state, id) {
+                    started.push(id.to_string());
+                    if let Some(upstream) = upstream {
+                        assert_eq!(
+                            get_status(&before, upstream),
+                            Some(ResourceStatus::Running),
+                            "{id} started while {upstream} was not Running"
+                        );
+                        assert_eq!(
+                            image(&before, upstream),
+                            format!("{upstream}-r2"),
+                            "{id} started before {upstream} rolled"
+                        );
+                    }
+                }
+            }
+        }
+
+        assert_eq!(started, ["sandbox", "api", "runner"]);
+        assert_all_running(&state, &["sandbox", "api", "runner"]);
+        Ok(())
+    }
+
+    /// `api`'s own config does not change in the release; it only follows `sandbox`. The
+    /// `runner` linking it still waits for `sandbox`, not just for `api`'s recorded config.
+    #[tokio::test]
+    async fn dependent_waits_for_a_dependency_that_only_follows_another() -> Result<()> {
+        let mut state = running_on_release_one().await?;
+        let desired = Stack::new("rollout-order".to_owned())
+            .add(worker("sandbox", "r2", true), ResourceLifecycle::Live)
+            .add_with_dependencies(
+                worker("api", "r1", false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "sandbox")],
+            )
+            .add_with_dependencies(
+                worker("runner", "r2", false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "api")],
+            )
+            .build();
+        let executor = new_executor(&desired)?;
+
+        for _ in 0..60 {
+            state = executor.step(state).await?.next_state;
+        }
+
+        assert_eq!(
+            get_status(&state, "sandbox"),
+            Some(ResourceStatus::UpdateFailed)
+        );
+        assert_eq!(image(&state, "runner"), "runner-r1");
+        assert_eq!(get_status(&state, "runner"), Some(ResourceStatus::Running));
+        Ok(())
+    }
+
+    /// A dependency this executor does not update (a Frozen resource under a Live-only run)
+    /// never holds its dependents back, though its recorded config differs from the desired.
+    #[tokio::test]
+    async fn frozen_dependency_with_drift_does_not_block_a_live_dependent() -> Result<()> {
+        let stack = |public: bool, image: &str| {
+            Stack::new("rollout-frozen".to_owned())
+                .add(
+                    test_storage_with_public_read("store", public),
+                    ResourceLifecycle::Frozen,
+                )
+                .add_with_dependencies(
+                    test_function_with_image("func", image),
+                    ResourceLifecycle::Live,
+                    vec![ResourceRef::new(Storage::RESOURCE_TYPE, "store")],
+                )
+                .build()
+        };
+        let mut state =
+            run_to_synced(&new_executor(&stack(false, "v1"))?, new_test_state()).await?;
+        assert_all_running(&state, &["store", "func"]);
+
+        let live = new_executor_with_filter(&stack(true, "v2"), vec![ResourceLifecycle::Live])?;
+        assert!(live.plan(&state)?.updates.contains_key("func"));
+        for _ in 0..20 {
+            state = live.step(state).await?.next_state;
+        }
+        assert_eq!(image(&state, "func"), "v2");
+        assert_eq!(get_status(&state, "func"), Some(ResourceStatus::Running));
+        Ok(())
+    }
 }
