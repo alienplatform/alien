@@ -397,9 +397,33 @@ impl FrozenResourcesUnchangedCheck {
 
         // Check for added frozen resources
         let old_frozen_ids: HashSet<_> = old_frozen.keys().copied().collect();
+        // A resource that is new in this release and gated by an input declared with default
+        // false stays out of an installed stack until setup answers the gate, as the setup
+        // templates leave it out, so it is not an addition while the gate resolves false. An
+        // answer that turns true, a gate that cannot be resolved, or a gate declared with
+        // another default makes it one. A resource the installed stack already has is never
+        // excused here: it is compared below exactly as before.
         let added_frozen: Vec<_> = new_frozen
-            .keys()
-            .filter(|id| !old_frozen_ids.contains(*id))
+            .iter()
+            .filter(|(id, _)| !old_frozen_ids.contains(*id))
+            .filter(|(id, entry)| {
+                !(config.is_some_and(|config| {
+                    entry.enabled_when.as_deref().is_some_and(|gate| {
+                        new_stack.inputs.iter().any(|input| {
+                            input.id == gate
+                                && input.default
+                                    == Some(alien_core::StackInputDefaultValue::Boolean(false))
+                        }) && alien_core::gate_resolves_true(
+                            &new_stack.inputs,
+                            gate,
+                            &config.input_values,
+                            id,
+                            self.platform,
+                        ) == Ok(false)
+                    })
+                }))
+            })
+            .map(|(id, _)| id)
             .collect();
 
         if !added_frozen.is_empty() {
@@ -1876,5 +1900,165 @@ mod azure_storage_settings_tests {
             .unwrap()
             .success
         );
+    }
+
+    mod gated_additions {
+        use super::*;
+        use alien_core::{
+            AwsManagementConfig, EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig,
+            StackInputDefaultValue, StackInputDefinition, StackSettings,
+        };
+
+        fn base() -> Stack {
+            Stack::new("gated".to_string())
+                .add(
+                    Storage::new("kept".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        }
+
+        fn with_gated(gate: Option<&str>, inputs: Vec<StackInputDefinition>) -> Stack {
+            let mut builder = Stack::new("gated".to_string()).inputs(inputs).add(
+                Storage::new("kept".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+            let added = Storage::new("added".to_string()).build();
+            builder = match gate {
+                Some(gate) => builder.add_enabled_when(added, ResourceLifecycle::Frozen, gate),
+                None => builder.add(added, ResourceLifecycle::Frozen),
+            };
+            builder.build()
+        }
+
+        fn gate(default: Option<bool>) -> StackInputDefinition {
+            let mut input =
+                StackInputDefinition::deployer_boolean("feature", "Feature", "A feature.", default);
+            input.required = false;
+            input.default = default.map(StackInputDefaultValue::Boolean);
+            input
+        }
+
+        fn config(answer: Option<bool>) -> DeploymentConfig {
+            let mut config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .management_config(ManagementConfig::Aws(AwsManagementConfig {
+                    managing_role_arn: "arn:aws:iam::111122223333:role/management".to_string(),
+                }))
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            if let Some(answer) = answer {
+                config
+                    .input_values
+                    .insert("feature".to_string(), serde_json::json!(answer));
+            }
+            config
+        }
+
+        async fn errors(new: Stack, config: &DeploymentConfig) -> Vec<String> {
+            FrozenResourcesUnchangedCheck {
+                platform: Platform::Aws,
+            }
+            .check_with_config(&base(), &new, config, Platform::Aws)
+            .await
+            .unwrap()
+            .errors
+        }
+
+        fn added(errors: &[String]) -> bool {
+            errors
+                .iter()
+                .any(|e| e.starts_with("Cannot add frozen resources during update: 'added'"))
+        }
+
+        #[tokio::test]
+        async fn a_new_frozen_resource_whose_gate_resolves_false_is_not_an_addition() {
+            let new = with_gated(Some("feature"), vec![gate(Some(false))]);
+            assert!(errors(new.clone(), &config(None)).await.is_empty());
+            // An explicit no behaves the same.
+            assert!(errors(new, &config(Some(false))).await.is_empty());
+        }
+
+        #[tokio::test]
+        async fn an_answer_that_turns_true_without_setup_is_an_addition_again() {
+            let new = with_gated(Some("feature"), vec![gate(Some(false))]);
+            assert!(added(&errors(new, &config(Some(true))).await));
+            // A later release whose declared default is true does the same.
+            let later = with_gated(Some("feature"), vec![gate(Some(true))]);
+            assert!(added(&errors(later, &config(None)).await));
+        }
+
+        #[tokio::test]
+        async fn an_ungated_new_frozen_resource_is_still_an_addition() {
+            let new = with_gated(None, vec![gate(Some(false))]);
+            assert!(added(&errors(new, &config(None)).await));
+        }
+
+        #[tokio::test]
+        async fn a_gate_that_cannot_be_resolved_is_still_an_addition() {
+            // Undeclared input.
+            let undeclared = with_gated(Some("feature"), vec![]);
+            assert!(added(&errors(undeclared, &config(None)).await));
+            // Declared with no default and no answer.
+            let unanswered = with_gated(Some("feature"), vec![gate(None)]);
+            assert!(added(&errors(unanswered, &config(None)).await));
+        }
+
+        #[tokio::test]
+        async fn a_gate_declared_with_another_default_is_not_excused() {
+            // Required (no default), and an explicit no: only a declared default of false
+            // marks an input a later release added for installed stacks to leave off.
+            let new = with_gated(Some("feature"), vec![gate(None)]);
+            assert!(added(&errors(new, &config(Some(false))).await));
+            let default_true = with_gated(Some("feature"), vec![gate(Some(true))]);
+            assert!(added(&errors(default_true, &config(Some(false))).await));
+        }
+
+        #[tokio::test]
+        async fn an_installed_frozen_resource_whose_gate_turns_off_keeps_its_behavior() {
+            // The installed stack has `added`; the new release gates it off. Excusing it would
+            // hide a removal, so the outcome must equal the ungated release's.
+            let installed = with_gated(None, vec![]);
+            let ungated = with_gated(None, vec![gate(Some(false))]);
+            let gated_off = with_gated(Some("feature"), vec![gate(Some(false))]);
+            let check = FrozenResourcesUnchangedCheck {
+                platform: Platform::Aws,
+            };
+            let config = config(Some(false));
+            let ungated_result = check
+                .check_with_config(&installed, &ungated, &config, Platform::Aws)
+                .await
+                .unwrap();
+            let gated_result = check
+                .check_with_config(&installed, &gated_off, &config, Platform::Aws)
+                .await
+                .unwrap();
+            assert_eq!(ungated_result.success, gated_result.success);
+            assert_eq!(ungated_result.errors, gated_result.errors);
+            // And the stack that lost the resource entirely is still a removal.
+            let removed = check
+                .check_with_config(&installed, &base(), &config, Platform::Aws)
+                .await
+                .unwrap();
+            assert!(!removed.success, "{:?}", removed.errors);
+        }
+
+        #[tokio::test]
+        async fn without_the_deployment_config_a_gated_addition_is_an_addition() {
+            let new = with_gated(Some("feature"), vec![gate(Some(false))]);
+            let result = FrozenResourcesUnchangedCheck {
+                platform: Platform::Aws,
+            }
+            .check(&base(), &new)
+            .await
+            .unwrap();
+            assert!(added(&result.errors));
+        }
     }
 }
