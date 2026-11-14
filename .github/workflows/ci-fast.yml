@@ -264,6 +264,21 @@ jobs:
           scripts/terraform-provider-mirror.sh "$RUNNER_TEMP/terraform-mirror" "$RUNNER_TEMP/terraform.rc"
           echo "TF_CLI_CONFIG_FILE=$RUNNER_TEMP/terraform.rc" >> "$GITHUB_ENV"
 
+      # Generated modules declare `required_version >= 1.9.0`. Terraform before 1.12 evaluates
+      # both sides of `&&` and `||`, which the newer Terraform above hides, so the
+      # `terraform_1_9` generator tests plan the registered module on the oldest supported one.
+      - name: Terraform 1.9 for the generator compatibility tests
+        run: |
+          case "$(uname -m)" in
+            x86_64) TF_ARCH=amd64 ;;
+            aarch64|arm64) TF_ARCH=arm64 ;;
+            *) echo "Unsupported Terraform architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/terraform-1.9"
+          curl -fsSL "https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_${TF_ARCH}.zip" -o "$RUNNER_TEMP/terraform-1.9.zip"
+          unzip -q "$RUNNER_TEMP/terraform-1.9.zip" -d "$RUNNER_TEMP/terraform-1.9"
+          echo "ALIEN_TERRAFORM_1_9_DIR=$RUNNER_TEMP/terraform-1.9" >> "$GITHUB_ENV"
+
       - uses: azure/setup-helm@v5
 
       - name: Install kubeconform

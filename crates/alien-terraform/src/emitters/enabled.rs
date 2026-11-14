@@ -20,12 +20,19 @@ use hcl::{
     Identifier,
 };
 
-/// Terraform variable carrying the gate's value.
+/// A gate that is not a deployer input: the module's own `kubernetes_cluster_mode` decides it.
+/// Not a valid stack input id (those are plain identifiers), so it can never collide with one.
+pub const KUBERNETES_CLUSTER_CREATE_GATE: &str = "@kubernetes-cluster-create";
+
+/// Terraform expression carrying the gate's value.
 ///
-/// Mirrors `terraform_stack_input_variable_name`; the compile-time check
-/// guarantees the input is a non-null boolean, so the expressions below never
-/// need a null guard.
+/// An input gate mirrors `terraform_stack_input_variable_name`; the compile-time check
+/// guarantees the input is a non-null boolean, so the expressions below never need a null
+/// guard. [`KUBERNETES_CLUSTER_CREATE_GATE`] is true only for a module-created cluster.
 fn gate_variable(input_id: &str) -> String {
+    if input_id == KUBERNETES_CLUSTER_CREATE_GATE {
+        return "var.kubernetes_cluster_mode == \"create\"".to_string();
+    }
     format!(
         "var.{}",
         crate::generator::stack_input_variable_name(input_id)

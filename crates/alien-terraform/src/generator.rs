@@ -499,7 +499,10 @@ pub(crate) fn render_terraform_module(
         }
 
         let mut fragment = emitter.emit_with_registry(&ctx, options.registry)?;
-        if let Some(input_id) = resource.enabled_when.as_deref() {
+        // What decides whether the resource exists: the deployer's input, or, for the network of
+        // a Kubernetes module, whether the module creates the cluster.
+        let gate = effective_gate(stack, resource, resource_type.as_ref(), target);
+        if let Some(input_id) = gate.as_deref() {
             crate::gating::gate_fragment(&mut fragment, resource_id, input_id, &mut gated)?;
         }
         // Grants this fragment renders on behalf of OTHER resources' gates.
@@ -528,7 +531,7 @@ pub(crate) fn render_terraform_module(
                     Expression::String(resource.config.resource_type().as_ref().replace('-', "_")),
                 );
                 chart_infrastructure.push((
-                    resource.enabled_when.clone(),
+                    gate.clone(),
                     resource_id.clone(),
                     Expression::Object(binding),
                 ));
@@ -537,7 +540,7 @@ pub(crate) fn render_terraform_module(
 
         let registration_data = emitter.emit_import_ref(&ctx)?;
         registration_resources.push((
-            resource.enabled_when.clone(),
+            gate,
             expr::object([
                 ("id", Expression::String(resource_id.to_string())),
                 ("type", Expression::String(resource_type.to_string())),
@@ -2695,6 +2698,34 @@ fn stack_input_description(label: &str, description: &str) -> String {
 
 fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
     stack_input_variable_name(&input.id)
+}
+
+/// The gate a resource's blocks and registration entry follow: its own `enabled_when`, or, for
+/// the `Network` of an EKS module, whether the module creates the cluster.
+///
+/// An existing cluster is already attached to a network, and the manager prepares a stack with
+/// no network for it, so setup must create no VPC and must not register one. The exception is a
+/// stack with a cloud database, which the manager still gives a network of its own (see
+/// `kubernetes_requires_cloud_network` in `alien-preflights`); that network stays in every mode.
+///
+/// GKE and AKS modules are left as they were: their cluster emitters read the network's outputs
+/// in every mode, so gating it needs its own change.
+fn effective_gate(
+    stack: &Stack,
+    resource: &alien_core::ResourceEntry,
+    resource_type: &str,
+    target: TerraformTarget,
+) -> Option<String> {
+    if let Some(input_id) = &resource.enabled_when {
+        return Some(input_id.clone());
+    }
+    let attached_cluster_needs_network = stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type() == alien_core::Postgres::RESOURCE_TYPE);
+    (target == TerraformTarget::Eks
+        && resource_type == Network::RESOURCE_TYPE.as_ref()
+        && !attached_cluster_needs_network)
+        .then(|| crate::emitters::enabled::KUBERNETES_CLUSTER_CREATE_GATE.to_string())
 }
 
 /// Variable name for a stack input id. Shared with the gating helpers, which
@@ -5121,7 +5152,7 @@ fn helm_install_body(
                 attr(
                     "remote_operator_namespace_exists",
                     expr::raw(
-                        "local.remote_operator_inspect_lifecycle && length(data.kubernetes_resources.remote_operator_namespace[0].objects) != 0",
+                        "local.remote_operator_inspect_lifecycle ? length(data.kubernetes_resources.remote_operator_namespace[0].objects) != 0 : false",
                     ),
                 ),
             ],
@@ -5189,7 +5220,7 @@ fn helm_install_body(
                 attr(
                     "remote_operator_persisted_sync_token_revision",
                     expr::raw(
-                        "local.remote_operator_namespace_exists && length(data.kubernetes_resources.remote_operator_credentials[0].objects) != 0 ? try(tonumber(data.kubernetes_resources.remote_operator_credentials[0].objects[0].metadata.annotations[\"alien.dev/sync-token-revision\"]), 0) : 0",
+                        "local.remote_operator_namespace_exists ? (length(data.kubernetes_resources.remote_operator_credentials[0].objects) != 0 ? try(tonumber(data.kubernetes_resources.remote_operator_credentials[0].objects[0].metadata.annotations[\"alien.dev/sync-token-revision\"]), 0) : 0) : 0",
                     ),
                 ),
             ],

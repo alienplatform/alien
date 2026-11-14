@@ -18,7 +18,7 @@ use alien_core::{
     KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
     KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
     KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    PermissionsConfig, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
+    PermissionsConfig, Postgres, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
     ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
@@ -1561,5 +1561,96 @@ fn kubernetes_modules_register_a_network_only_when_they_create_the_cluster() {
     assert!(
         !settings.contains("endpointAccess = var.endpoint_access, network ="),
         "network must not be registered unconditionally: {settings}"
+    );
+}
+
+fn eks_stack_with_network(extra: Option<Postgres>) -> Stack {
+    let mut builder = Stack::new("eks-network-gate".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        );
+    if let Some(database) = extra {
+        builder = builder.add(database, ResourceLifecycle::Frozen);
+    }
+    builder.build()
+}
+
+/// An existing cluster is already attached to a network, and the manager prepares a stack with
+/// none for it, so the module must neither create a VPC nor register `default-network` unless it
+/// creates the cluster. It must also register the cluster as `existing`, not `managed`.
+#[test]
+fn eks_creates_and_registers_a_default_network_only_with_a_created_cluster() {
+    let module = render(
+        &eks_stack_with_network(None),
+        TerraformTarget::Eks,
+        StackSettings::default(),
+    );
+    let network = module
+        .get("default_network.tf")
+        .expect("default_network.tf");
+    let compact = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let network = compact(network);
+    assert!(
+        network.contains(
+            "count = var.kubernetes_cluster_mode == \"create\" ? var.network_mode == \"create-new\" ? 1 : 0 : 0"
+        ),
+        "{network}"
+    );
+    let locals = compact(module.get("locals.tf").expect("locals.tf"));
+    assert!(
+        locals.contains(
+            "deployment_resources = concat(var.kubernetes_cluster_mode == \"create\" ? [{ id = \"default-network\""
+        ),
+        "{locals}"
+    );
+    assert!(
+        locals.contains(
+            "ownership = var.kubernetes_cluster_mode == \"create\" ? \"managed\" : \"existing\""
+        ),
+        "{locals}"
+    );
+    assert_terraform_valid(&module, "eks_network_gated_on_cluster_mode");
+}
+
+/// The manager still gives a stack with a cloud database a network of its own for an existing
+/// cluster (`kubernetes_requires_cloud_network`), so that network stays in every mode.
+#[test]
+fn eks_keeps_the_default_network_for_a_stack_with_a_database() {
+    let module = render(
+        &eks_stack_with_network(Some(Postgres::new("db".to_string()).build())),
+        TerraformTarget::Eks,
+        StackSettings::default(),
+    );
+    let locals = module
+        .get("locals.tf")
+        .expect("locals.tf")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        locals.contains("deployment_resources = [ { id = \"default-network\""),
+        "{locals}"
+    );
+    let network = module
+        .get("default_network.tf")
+        .expect("default_network.tf");
+    assert!(
+        !network.contains("var.kubernetes_cluster_mode"),
+        "{network}"
     );
 }

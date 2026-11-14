@@ -297,7 +297,7 @@ locals {
       type = "kubernetes-cluster"
       importData = {
         provider           = "eks"
-        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "managed"
+        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "existing"
         namespace          = var.kubernetes_namespace
         clusterName        = local.kubernetes_cluster_name
         clusterId          = local.kubernetes_cluster_name
