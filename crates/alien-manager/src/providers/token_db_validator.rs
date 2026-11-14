@@ -133,6 +133,14 @@ fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: S
             },
             Role::DeploymentManager,
         ),
+        (TokenType::Setup | TokenType::SetupImport, _, Some(deployment_id)) => (
+            Scope::Deployment {
+                project_id: "default".to_string(),
+                deployment_id: deployment_id.to_string(),
+            },
+            Role::DeploymentManager,
+        ),
+        (TokenType::Setup | TokenType::SetupImport, _, None) => (Scope::Workspace, Role::DeploymentViewer),
         (TokenType::Deployment, _, None) => {
             // Unscoped deployment token shouldn't exist; fail closed.
             (Scope::Workspace, Role::DeploymentViewer)

@@ -11,9 +11,12 @@ mod setup_update;
 pub(crate) const DEPLOY_CLI_USER_AGENT: &str =
     concat!("alien-deploy-cli/", env!("CARGO_PKG_VERSION"));
 
-use crate::deployment_tracking::{DeploymentTracker, TrackedDeployment, TrackedLocalDeployment};
+use crate::deployment_tracking::{
+    DeploymentTracker, TrackedDeployment, TrackedHelmRelease, TrackedLocalDeployment,
+};
 use crate::error::{ErrorData, Result};
 use crate::output;
+use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_cli_common::{
     network::{self, NetworkArgs, NetworkMode},
     SetupItem,
@@ -872,7 +875,7 @@ mod tests {
                 "--base-url",
                 &server.base_url(),
             ]);
-            async move { resolve_deployment_info(&args, None, None).await }
+            async move { resolve_deployment_info(&args, None, None, &InClusterUse::default()).await }
         };
 
         let by_group = resolve("ax_dg_setup", &name).await.expect("group token");
@@ -906,9 +909,10 @@ mod tests {
             "--manager-url",
             "http://127.0.0.1:1",
         ]);
-        let direct = resolve_deployment_info(&direct, Some(&branded), None)
-            .await
-            .expect("direct manager run");
+        let direct =
+            resolve_deployment_info(&direct, Some(&branded), None, &InClusterUse::default())
+                .await
+                .expect("direct manager run");
         assert_eq!(direct.platform, "local");
         lookups.assert_hits_async(0).await;
 
@@ -1129,7 +1133,8 @@ mod tests {
         let tracked = TrackedDeployment {
             name: "smoke 1".to_string(),
             deployment_id: "dep_demo".to_string(),
-            token: "saved-deployment-key".to_string(),
+            token: Some("saved-deployment-key".to_string()),
+            helm: None,
             manager_url: server.base_url(),
             platform: "machines".to_string(),
             local: None,
@@ -4338,6 +4343,17 @@ type = "create"
 }
 
 pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
+    let in_cluster = InClusterUse::default();
+    up_command_with(args, embedded_config, &in_cluster)
+        .await
+        .map_err(|error| in_cluster.explain(error))
+}
+
+async fn up_command_with(
+    mut args: UpArgs,
+    embedded_config: Option<&DeployCliConfig>,
+    in_cluster: &InClusterUse,
+) -> Result<()> {
     let deploy_config = load_deploy_config(&args)?;
     if args.validate_only {
         validate_deploy_config(&args, embedded_config, deploy_config.as_ref())?;
@@ -4348,7 +4364,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         return setup_update::run(&args, embedded_config, deploy_config.as_ref()).await;
     }
     // Resolve token and platform from args, embedded config, or tracked deployment
-    let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref()).await?;
+    let resolved =
+        resolve_deployment_info(&args, embedded_config, deploy_config.as_ref(), in_cluster).await?;
     let token = resolved.token;
     let platform_str = resolved.platform;
     let base_platform_str = resolved.base_platform;
@@ -4360,6 +4377,16 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             message: e,
         })
     })?;
+    if platform == Platform::Kubernetes {
+        // A rerun without --namespace/--release keeps the install's own location.
+        if let Some(saved) = DeploymentTracker::new()?
+            .get(&name)
+            .and_then(|tracked| tracked.helm.clone())
+        {
+            args.helm_release.get_or_insert(saved.release);
+            args.namespace.get_or_insert(saved.namespace);
+        }
+    }
     let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     if args.setup_update {
@@ -4563,12 +4590,23 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 
     // Track the deployment locally
     let mut tracker = DeploymentTracker::new()?;
+    // A Kubernetes install saves no key: its Operator enrolls and the key is
+    // retired, so a rerun asks the Operator for a short-lived one. It saves the
+    // release instead, to find that Operator.
+    let tracked_helm = (platform == Platform::Kubernetes).then(|| {
+        let release = kubernetes_helm_release(&args, &name);
+        TrackedHelmRelease {
+            release: release.name,
+            namespace: release.namespace,
+        }
+    });
     tracker.track(
         name.clone(),
         deployment_id.clone(),
-        effective_token.clone(),
+        (platform != Platform::Kubernetes).then(|| effective_token.clone()),
         manager_url.clone(),
         platform_str.clone(),
+        tracked_helm,
         local_tracking,
     )?;
 
@@ -5553,7 +5591,15 @@ async fn run_tracked_setup_update(
 ) -> Result<SetupRunOutcome> {
     let explicit_token = resolve_token(args, embedded_config).ok();
     let uses_saved_key = explicit_token.is_none();
-    let token = explicit_token.unwrap_or_else(|| tracked.token.clone());
+    let token = rerun_credential::resolve(
+        explicit_token,
+        tracked,
+        &kube_access(args),
+        cli_name(embedded_config),
+        "deploy",
+    )
+    .await?
+    .token;
     let setup_client = create_manager_client(&token, manager_url)?;
     run_push_model(
         &setup_client,
@@ -5561,7 +5607,7 @@ async fn run_tracked_setup_update(
         platform,
         base_platform,
         manager_url,
-        &tracked.token,
+        &token,
         None,
         &args.network,
         None,
@@ -5611,6 +5657,7 @@ async fn resolve_deployment_info(
     args: &UpArgs,
     embedded_config: Option<&DeployCliConfig>,
     deploy_config: Option<&DeployConfigFile>,
+    in_cluster: &InClusterUse,
 ) -> Result<ResolvedInfo> {
     // If name is provided, try to load from tracker
     let requested_name = args
@@ -5620,8 +5667,21 @@ async fn resolve_deployment_info(
     if let Some(name) = requested_name {
         let tracker = DeploymentTracker::new()?;
         if let Some(tracked) = tracker.get(name) {
-            let token =
-                resolve_token(args, embedded_config).unwrap_or_else(|_| tracked.token.clone());
+            let explicit = resolve_optional_token(
+                args.token.clone(),
+                args.token_file.as_ref(),
+                embedded_config,
+            )?;
+            let rerun = rerun_credential::resolve(
+                explicit,
+                tracked,
+                &kube_access(args),
+                cli_name(embedded_config),
+                "deploy",
+            )
+            .await?;
+            in_cluster.note(name, &rerun);
+            let token = rerun.token;
             let manager_url = args
                 .manager_url
                 .clone()
@@ -7545,6 +7605,15 @@ async fn run_kubernetes_pull_model(
 
 /// The Helm release `up` installs the Operator as. Registration reports it, so
 /// it must be the same value the install uses.
+fn kube_access(args: &UpArgs) -> KubeAccess {
+    KubeAccess {
+        release: args.helm_release.clone(),
+        namespace: args.namespace.clone(),
+        kubeconfig: args.kubeconfig.clone(),
+        kube_context: args.kube_context.clone(),
+    }
+}
+
 fn kubernetes_helm_release(args: &UpArgs, deployment_name: &str) -> HelmRelease {
     HelmRelease {
         name: args
@@ -7811,7 +7880,7 @@ fn split_image_tag(image: &str) -> Result<(String, String)> {
     ))
 }
 
-fn sanitize_kubernetes_dns_label(value: &str) -> String {
+pub(crate) fn sanitize_kubernetes_dns_label(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
     for ch in value.chars() {

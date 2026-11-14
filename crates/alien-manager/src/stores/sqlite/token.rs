@@ -28,6 +28,8 @@ impl SqliteTokenStore {
             "deployment-group" => TokenType::DeploymentGroup,
             "deployment" => TokenType::Deployment,
             "commands-receiver" => TokenType::CommandsReceiver,
+            "setup" => TokenType::Setup,
+            "setup-import" => TokenType::SetupImport,
             other => return Err(db_error(&format!("Unknown token type: {}", other))),
         };
         Ok(TokenRecord {
@@ -38,6 +40,14 @@ impl SqliteTokenStore {
             deployment_group_id: p.optional_string(4, "deployment_group_id")?,
             deployment_id: p.optional_string(5, "deployment_id")?,
             created_at: p.datetime(6, "created_at")?,
+            expires_at: match p.optional_string(7, "expires_at")? {
+                Some(value) => Some(
+                    chrono::DateTime::parse_from_rfc3339(&value)
+                        .map_err(|_| db_error("Token has an unreadable expiry"))?
+                        .with_timezone(&Utc),
+                ),
+                None => None,
+            },
         })
     }
 }
@@ -85,6 +95,7 @@ impl TokenStore for SqliteTokenStore {
             deployment_group_id: params.deployment_group_id,
             deployment_id: params.deployment_id,
             created_at: now,
+            expires_at: None,
         })
     }
 
@@ -98,6 +109,7 @@ impl TokenStore for SqliteTokenStore {
                 Tokens::DeploymentGroupId,
                 Tokens::DeploymentId,
                 Tokens::CreatedAt,
+                Tokens::ExpiresAt,
             ])
             .from(Tokens::Table)
             .and_where(Expr::col(Tokens::KeyHash).eq(key_hash))
@@ -115,7 +127,14 @@ impl TokenStore for SqliteTokenStore {
         match rows.next().await.into_alien_error().context(GenericError {
             message: format!("Failed to fetch token row (sql: {sql})"),
         })? {
-            Some(row) => Ok(Some(Self::parse_token(&row)?)),
+            Some(row) => {
+                let token = Self::parse_token(&row)?;
+                // A token past its expiry is as good as deleted.
+                Ok(token
+                    .expires_at
+                    .is_none_or(|expires_at| expires_at > Utc::now())
+                    .then_some(token))
+            }
             None => Ok(None),
         }
     }
@@ -177,6 +196,7 @@ impl TokenStore for SqliteTokenStore {
                 Tokens::DeploymentGroupId,
                 Tokens::DeploymentId,
                 Tokens::CreatedAt,
+                Tokens::ExpiresAt,
             ])
             .from(Tokens::Table)
             .order_by(Tokens::CreatedAt, sea_query::Order::Desc)
@@ -266,6 +286,7 @@ impl TokenStore for SqliteTokenStore {
             deployment_group_id: None,
             deployment_id: Some(deployment_id.to_owned()),
             created_at: now,
+            expires_at: None,
         }))
     }
 
@@ -297,5 +318,94 @@ impl TokenStore for SqliteTokenStore {
         .context(failed())?;
         tx.commit().await.into_alien_error().context(failed())?;
         Ok(())
+    }
+
+    async fn create_setup_token(
+        &self,
+        token_type: TokenType,
+        deployment_id: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        expires_at: chrono::DateTime<Utc>,
+    ) -> Result<TokenRecord, AlienError> {
+        let failed = || GenericError {
+            message: "Setup token creation failed".to_string(),
+        };
+        if !matches!(token_type, TokenType::Setup | TokenType::SetupImport) {
+            return Err(AlienError::new(failed()));
+        }
+        let type_name = token_type.to_string();
+        let id = alien_core::new_id(alien_core::IdType::Token);
+        let now = Utc::now();
+        let mut conn = self.db.conn().lock().await;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        // The earlier setup tokens go in the same transaction as the new one is
+        // stored, so two reruns never both hold a live token.
+        let mut revoked = Vec::new();
+        let mut rows = tx
+            .query(
+                "SELECT id FROM tokens WHERE type = ?1 AND deployment_id = ?2",
+                (type_name.clone(), deployment_id.to_owned()),
+            )
+            .await
+            .into_alien_error()
+            .context(failed())?;
+        while let Some(row) = rows.next().await.into_alien_error().context(failed())? {
+            revoked.push(RowParser::new(&row).string(0, "id")?);
+        }
+        drop(rows);
+        tx.execute(
+            "DELETE FROM tokens WHERE type = ?1 AND deployment_id = ?2",
+            (type_name.clone(), deployment_id.to_owned()),
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        tx.execute(
+            "INSERT INTO tokens (id, type, key_prefix, key_hash, deployment_group_id, deployment_id, created_at, expires_at) \
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+            (
+                id.clone(),
+                type_name,
+                key_prefix.to_owned(),
+                key_hash.to_owned(),
+                deployment_id.to_owned(),
+                now.to_rfc3339(),
+                expires_at.to_rfc3339(),
+            ),
+        )
+        .await
+        .into_alien_error()
+        .context(failed())?;
+        tx.commit().await.into_alien_error().context(failed())?;
+        // The manager has no audit store, so every mint is recorded as a
+        // structured event at info level. It names the key by id and its
+        // non-secret prefix, never the key itself.
+        tracing::info!(
+            target: "audit",
+            event = "setup_key_minted",
+            deployment_id = %deployment_id,
+            issuer = %token_type,
+            token_id = %id,
+            key_prefix = %key_prefix,
+            created_at = %now.to_rfc3339(),
+            expires_at = %expires_at.to_rfc3339(),
+            revoked_token_ids = ?revoked,
+            "Setup key minted"
+        );
+        Ok(TokenRecord {
+            id,
+            token_type,
+            key_prefix: key_prefix.to_owned(),
+            key_hash: key_hash.to_owned(),
+            deployment_group_id: None,
+            deployment_id: Some(deployment_id.to_owned()),
+            created_at: now,
+            expires_at: Some(expires_at),
+        })
     }
 }

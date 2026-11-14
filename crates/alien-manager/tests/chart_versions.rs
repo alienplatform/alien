@@ -132,6 +132,7 @@ async fn manager(stores: &Stores, operator_image: &str) -> AppState {
             Some(operator_image.to_string()),
             false,
         ))),
+        runtime_identity: None,
         release_channels: None,
         bundle_signing_key: None,
         bundle_sources: None,

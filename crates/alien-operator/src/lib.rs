@@ -32,6 +32,7 @@ pub mod pod_logs;
 pub mod protected;
 pub mod readiness_server;
 pub mod self_update;
+pub mod setup_credential;
 mod workload_observation;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
@@ -431,6 +432,11 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         pod_log_collection: runtime_options.pod_log_collection.is_some(),
         cancel: cancel.clone(),
     });
+
+    // The command a cluster admin runs inside this container to get a
+    // short-lived key for rerunning the installation.
+    #[cfg(unix)]
+    tokio::spawn(setup_credential::serve(db.clone(), cancel.clone()));
 
     // Start OTLP server (for local functions to send telemetry).
     // Telemetry alone is best-effort; a queue owner must fail if its listener fails.

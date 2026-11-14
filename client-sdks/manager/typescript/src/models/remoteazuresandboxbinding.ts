@@ -34,6 +34,14 @@ export type RemoteAzureSandboxBinding = {
    */
   cpu?: string | null | undefined;
   /**
+   * Set when this install creates its remote callers' sandboxes itself: the caller's own role
+   *
+   * @remarks
+   * cannot, so `POST /v1/bindings/sandboxes/create` does, from the signed release. Absent
+   * everywhere else, and for a client that predates it the data plane is the path.
+   */
+  createViaManager?: boolean | null | undefined;
+  /**
    * Per-region data-plane host, which is separate from the ARM control plane.
    */
   dataPlaneEndpoint: string;
@@ -72,6 +80,7 @@ export const RemoteAzureSandboxBinding$inboundSchema: z.ZodType<
   agent: z.nullable(z.boolean()).optional(),
   allowEgress: z.boolean(),
   cpu: z.nullable(z.string()).optional(),
+  createViaManager: z.nullable(z.boolean()).optional(),
   dataPlaneEndpoint: z.string(),
   disk: z.nullable(z.string()).optional(),
   diskImage: z.string(),

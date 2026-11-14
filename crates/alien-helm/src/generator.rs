@@ -62,6 +62,8 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
     pub deployment_name: &'a str,
     pub manager_url: &'a str,
     pub credential: ManagementCredential<'a>,
+    /// 64 hex characters, or empty to keep the key the installed Secret holds
+    /// (the chart reads it on upgrade and refuses to invent a new one).
     pub runtime_encryption_key: &'a str,
     pub stack: &'a Stack,
     pub stack_state: &'a alien_core::StackState,
@@ -2295,7 +2297,9 @@ fn generate_operator_manifest_inner(
 
 /// Render one complete values file from registered deployment state.
 pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
-    validate_runtime_encryption_key(options.runtime_encryption_key)?;
+    if !options.runtime_encryption_key.is_empty() {
+        validate_runtime_encryption_key(options.runtime_encryption_key)?;
+    }
 
     let registry = HelmRegistry::built_in();
     let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
@@ -14015,6 +14019,33 @@ logCollector:
             )
             .and_then(YamlValue::as_str),
             Some("e2e123")
+        );
+    }
+
+    #[test]
+    fn registered_setup_values_with_no_key_leave_the_installed_one_alone() {
+        let stack_state =
+            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
+
+        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+            deployment_id: "dep_123",
+            deployment_name: "deployment",
+            manager_url: "https://management.example.com",
+            credential: ManagementCredential::Token("token"),
+            runtime_encryption_key: "",
+            stack: &sample_stack(),
+            stack_state: &stack_state,
+            stack_settings: &StackSettings::default(),
+            base_platform: Some(Platform::Aws),
+            region: Some("us-east-1"),
+            gcp_project_id: None,
+            azure_location: None,
+        })
+        .expect("an empty key keeps the installed one");
+        let values_yaml: YamlValue = serde_yaml::from_str(&values).unwrap();
+        assert_eq!(
+            yaml_path(&values_yaml, &["runtime", "encryption", "key"]).and_then(YamlValue::as_str),
+            Some("")
         );
     }
 

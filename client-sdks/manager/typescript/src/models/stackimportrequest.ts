@@ -28,6 +28,14 @@ import {
  * Request body for manager-side stack import.
  */
 export type StackImportRequest = {
+  /**
+   * Set by a client that can use a short-lived deployment token for this run
+   *
+   * @remarks
+   * only and will not store it. Without it, the response carries no new
+   * token for an installation whose Operator already holds its own key.
+   */
+  acceptsShortLivedDeploymentToken?: boolean | undefined;
   basePlatform?: PlatformEnum | null | undefined;
   /**
    * Deployment-group token authorizing the import.
@@ -122,6 +130,7 @@ export type StackImportRequest = {
 
 /** @internal */
 export type StackImportRequest$Outbound = {
+  acceptsShortLivedDeploymentToken?: boolean | undefined;
   basePlatform?: string | null | undefined;
   deploymentGroupToken: string;
   deploymentName: string;
@@ -146,6 +155,7 @@ export const StackImportRequest$outboundSchema: z.ZodType<
   StackImportRequest$Outbound,
   StackImportRequest
 > = z.object({
+  acceptsShortLivedDeploymentToken: z.boolean().optional(),
   basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
   deploymentGroupToken: z.string(),
   deploymentName: z.string(),

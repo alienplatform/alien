@@ -11,6 +11,14 @@ import {
   GitMetadataResponse$inboundSchema,
 } from "./gitmetadataresponse.js";
 import {
+  ReleaseSigning,
+  ReleaseSigning$inboundSchema,
+} from "./releasesigning.js";
+import {
+  SignedStatement,
+  SignedStatement$inboundSchema,
+} from "./signedstatement.js";
+import {
   StackByPlatform,
   StackByPlatform$inboundSchema,
 } from "./stackbyplatform.js";
@@ -31,6 +39,18 @@ export type ReleaseResponse = {
    */
   setupFingerprints?: { [k: string]: any } | undefined;
   /**
+   * Setup template bytes (base64) keyed by platform and template name,
+   *
+   * @remarks
+   * exactly as the release uploaded them; each hashes to its signed digest.
+   */
+  setupTemplates?: { [k: string]: { [k: string]: string } } | undefined;
+  /**
+   * Signed statements keyed by platform, exactly as they were created.
+   */
+  signedStacks?: { [k: string]: SignedStatement } | undefined;
+  signing?: ReleaseSigning | null | undefined;
+  /**
    * The release API accepts stacks keyed by platform.
    *
    * @remarks
@@ -50,6 +70,10 @@ export const ReleaseResponse$inboundSchema: z.ZodType<
   id: z.string(),
   projectId: z.string(),
   setupFingerprints: z.record(z.string(), z.any()).optional(),
+  setupTemplates: z.record(z.string(), z.record(z.string(), z.string()))
+    .optional(),
+  signedStacks: z.record(z.string(), SignedStatement$inboundSchema).optional(),
+  signing: z.nullable(ReleaseSigning$inboundSchema).optional(),
   stack: StackByPlatform$inboundSchema,
   workspaceId: z.string(),
 });

@@ -15,6 +15,14 @@ pub enum TokenType {
     /// command receivers built before capability files; see
     /// `Role::CommandsReceiver`.
     CommandsReceiver,
+    /// Updates one installation for a few minutes. Made from the installation's
+    /// own Operator identity, so a rerun needs no saved token; see
+    /// [`TokenStore::create_setup_token`].
+    Setup,
+    /// Same access as [`TokenType::Setup`], minted by a stack import for the
+    /// group's install credential. Kept apart so an import and an Operator
+    /// mint never revoke each other's key.
+    SetupImport,
 }
 
 impl std::fmt::Display for TokenType {
@@ -24,6 +32,8 @@ impl std::fmt::Display for TokenType {
             TokenType::DeploymentGroup => write!(f, "deployment-group"),
             TokenType::Deployment => write!(f, "deployment"),
             TokenType::CommandsReceiver => write!(f, "commands-receiver"),
+            TokenType::Setup => write!(f, "setup"),
+            TokenType::SetupImport => write!(f, "setup-import"),
         }
     }
 }
@@ -36,6 +46,7 @@ impl TokenType {
             TokenType::DeploymentGroup => "ax_dg_",
             TokenType::Deployment => "ax_deploy_",
             TokenType::CommandsReceiver => "ax_cmds_",
+            TokenType::Setup | TokenType::SetupImport => "ax_setup_",
         }
     }
 }
@@ -50,6 +61,8 @@ pub struct TokenRecord {
     pub deployment_group_id: Option<String>,
     pub deployment_id: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// After this moment the token is no longer valid. `None` never expires.
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 /// Parameters for creating a new token.
@@ -69,7 +82,7 @@ pub trait TokenStore: Send + Sync {
     /// [`TokenStore::create_commands_key`], which checks the key generation.
     async fn create_token(&self, params: CreateTokenParams) -> Result<TokenRecord, AlienError>;
 
-    /// Look up a token by its SHA-256 hash.
+    /// Look up a token by its SHA-256 hash. An expired token is not found.
     async fn validate_token(&self, key_hash: &str) -> Result<Option<TokenRecord>, AlienError>;
 
     /// Delete a token by ID. Returns error if token not found.
@@ -102,4 +115,22 @@ pub trait TokenStore: Send + Sync {
     /// forward, in one step. The commands key is derived from the generation,
     /// so a revoked key is never issued again.
     async fn revoke_commands_keys(&self, deployment_id: &str) -> Result<(), AlienError>;
+
+    /// Store a setup token for `deployment_id` that expires at `expires_at`, and
+    /// delete the deployment's earlier setup tokens, in one step, so at most one
+    /// is live. Only earlier tokens of the same `token_type` (`Setup` or
+    /// `SetupImport`) are deleted: each issuer has its own slot. Stores are expected to refuse a missing implementation: the
+    /// default refuses.
+    async fn create_setup_token(
+        &self,
+        _token_type: TokenType,
+        _deployment_id: &str,
+        _key_prefix: &str,
+        _key_hash: &str,
+        _expires_at: DateTime<Utc>,
+    ) -> Result<TokenRecord, AlienError> {
+        Err(AlienError::new(alien_error::GenericError {
+            message: "This token store cannot create setup tokens".to_string(),
+        }))
+    }
 }

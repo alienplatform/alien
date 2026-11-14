@@ -3,6 +3,7 @@
  */
 
 import { valuesDeleteValue } from "../funcs/valuesDeleteValue.js";
+import { valuesExportValues } from "../funcs/valuesExportValues.js";
 import { valuesListValues } from "../funcs/valuesListValues.js";
 import { valuesPutValues } from "../funcs/valuesPutValues.js";
 import { valuesVerifyValues } from "../funcs/valuesVerifyValues.js";
@@ -33,6 +34,22 @@ export class Values extends ClientSDK {
     return unwrapAsync(valuesPutValues(
       this,
       request,
+      options,
+    ));
+  }
+
+  /**
+   * Sends the stored values of the named slots to another manager, which writes them with the token given. The values go from this manager to the target; the response carries only the target's metadata. The caller's token must be an export token naming the target URL, and the request may name no other.
+   */
+  async exportValues(
+    scope: string,
+    exportValuesRequest: models.ExportValuesRequest,
+    options?: RequestOptions,
+  ): Promise<models.ValueSlotsResponse> {
+    return unwrapAsync(valuesExportValues(
+      this,
+      scope,
+      exportValuesRequest,
       options,
     ));
   }

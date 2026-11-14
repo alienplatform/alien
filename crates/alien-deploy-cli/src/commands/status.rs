@@ -3,8 +3,10 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
+use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use clap::Parser;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -50,6 +52,22 @@ pub struct StatusArgs {
     /// Output status as JSON.
     #[arg(long)]
     pub json: bool,
+
+    /// Kubernetes namespace of a Kubernetes install (default: the one it was installed in).
+    #[arg(long, env = "ALIEN_KUBERNETES_NAMESPACE")]
+    pub namespace: Option<String>,
+
+    /// Helm release of a Kubernetes install (default: the one it was installed as).
+    #[arg(long, env = "ALIEN_HELM_RELEASE")]
+    pub helm_release: Option<String>,
+
+    /// Kubeconfig path for Kubernetes installs. Defaults to KUBECONFIG or kubectl defaults.
+    #[arg(long, env = "KUBECONFIG")]
+    pub kubeconfig: Option<String>,
+
+    /// Kubernetes context for Kubernetes installs.
+    #[arg(long, env = "ALIEN_KUBE_CONTEXT")]
+    pub kube_context: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,11 +118,55 @@ pub async fn status_command(
     args: StatusArgs,
     embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
+    rerun_credential::with_one_new_key_retry(|refused, in_cluster| {
+        let args = args.clone();
+        async move { status_command_with(args, embedded_config, &in_cluster, refused).await }
+    })
+    .await
+}
+
+async fn status_command_with(
+    args: StatusArgs,
+    embedded_config: Option<&DeployCliConfig>,
+    in_cluster: &InClusterUse,
+    refused: Option<String>,
+) -> Result<()> {
     let tracker = DeploymentTracker::new()?;
 
     let tracked = tracker.get(&args.name);
-    let token = resolve_optional_token(args.token.clone(), args.token_file.as_ref(), embedded_config)?
-        .or_else(|| tracked.map(|deployment| deployment.token.clone()))
+    let explicit = resolve_optional_token(
+        args.token.clone(),
+        args.token_file.as_ref(),
+        embedded_config,
+    )?;
+    let token = match tracked {
+        Some(tracked) => {
+            let cli_name = embedded_config
+                .and_then(|config| config.name.as_deref())
+                .unwrap_or("alien-deploy");
+            let access = KubeAccess {
+                release: args.helm_release.clone(),
+                namespace: args.namespace.clone(),
+                kubeconfig: args.kubeconfig.clone(),
+                kube_context: args.kube_context.clone(),
+            };
+            let rerun = match &refused {
+                Some(refused) => {
+                    rerun_credential::resolve_after_refusal(
+                        explicit, tracked, &access, cli_name, "status", refused,
+                    )
+                    .await?
+                }
+                None => {
+                    rerun_credential::resolve(explicit, tracked, &access, cli_name, "status")
+                        .await?
+                }
+            };
+            in_cluster.note(&args.name, &rerun);
+            Some(rerun.token)
+        }
+        None => explicit,
+    }
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "token".to_string(),
@@ -139,7 +201,8 @@ pub async fn status_command(
         .id(&deployment_id)
         .send()
         .await
-        .into_alien_error()
+        .into_sdk_error()
+        .await
         .context(ErrorData::ManagementUnavailable)?
         .into_inner();
 
@@ -337,9 +400,12 @@ async fn fetch_remote_deployment_info(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::ConfigurationError {
+        let mut error = AlienError::new(ErrorData::ConfigurationError {
             message: format!("Failed to fetch deployment info (HTTP {status}): {body}"),
-        }));
+        });
+        // Keep the status so a refused key can be explained.
+        error.http_status_code = Some(status.as_u16());
+        return Err(error);
     }
 
     response
@@ -372,9 +438,12 @@ async fn resolve_remote_deployment_id(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::ConfigurationError {
+        let mut error = AlienError::new(ErrorData::ConfigurationError {
             message: format!("Failed to look up deployment by name (HTTP {status}): {body}"),
-        }));
+        });
+        // Keep the status so a refused key can be explained.
+        error.http_status_code = Some(status.as_u16());
+        return Err(error);
     }
 
     let deployments: RemoteDeploymentList =
