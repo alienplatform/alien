@@ -558,6 +558,52 @@ pub(super) async fn reconcile_gateway_service_policy(
     Ok(())
 }
 
+/// Keeps the gateway Service policy in step with the sandbox's egress mode: written for an
+/// internet sandbox, and removed (when this deployment owns it) once the sandbox no longer uses
+/// the gateway, because the policy's selector would still match its pods. `gateway` is the
+/// address the pool pods were given, if any.
+pub(super) async fn sync_gateway_service_policy(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+    gateway: Option<std::net::Ipv4Addr>,
+) -> Result<()> {
+    match gateway {
+        Some(gateway) if sandbox.egress == SandboxEgress::Internet => {
+            reconcile_gateway_service_policy(ctx, sandbox, namespace, gateway).await
+        }
+        _ if sandbox.egress != SandboxEgress::Internet => {
+            release_gateway_service_policy(ctx, sandbox, namespace).await
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Removes the gateway Service policy when the sandbox goes away or stops using the gateway.
+///
+/// For an internet sandbox the policy is part of the install, so a failure is an error. A sandbox
+/// that never used the gateway usually has none; an install whose Role predates the
+/// NetworkPolicy verbs in a separate sandbox namespace answers Forbidden, and that must not stop
+/// such a sandbox's pool or its deletion, so the failure is only logged.
+pub(super) async fn release_gateway_service_policy(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+) -> Result<()> {
+    let result = delete_gateway_service_policy(ctx, &sandbox.id, namespace).await;
+    if sandbox.egress == SandboxEgress::Internet {
+        return result;
+    }
+    if let Err(error) = result {
+        tracing::warn!(
+            sandbox_id = %sandbox.id,
+            error = %error,
+            "Could not remove a gateway Service policy for a sandbox that does not use the gateway"
+        );
+    }
+    Ok(())
+}
+
 /// Removes the policy with its sandbox. Already gone is the desired end state; a policy this
 /// deployment does not own is left alone.
 pub(super) async fn delete_gateway_service_policy(
@@ -1148,6 +1194,91 @@ mod tests {
             .unwrap();
         delete.assert_hits_async(0).await;
         let _ = labels;
+    }
+
+    /// A sandbox that stops using the gateway (internet -> none) must not keep the policy that
+    /// admits the gateway Service: its selector still matches the sandbox's pods. The Operator
+    /// removes the policy it owns, leaves one it does not own, and an absent policy is fine.
+    #[tokio::test]
+    async fn a_sandbox_that_leaves_the_gateway_loses_the_policy_it_had() {
+        let sandbox = internet_sandbox("subject");
+        let mut none = sandbox.clone();
+        none.egress = SandboxEgress::None;
+        let stack = Stack::new("test".into())
+            .add(none.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let state = deployment_state(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(none.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        let named = "/apis/networking.k8s.io/v1/namespaces/test-ns/networkpolicies/alien-sbx-subject-gateway-service";
+        let gateway: std::net::Ipv4Addr = "10.96.0.7".parse().unwrap();
+
+        // Not allowed to look (a Role that predates the NetworkPolicy verbs): the sandbox's
+        // upkeep goes on, because it does not use the gateway.
+        let mut forbidden = server
+            .mock_async(|when, then| {
+                when.method(GET).path(named);
+                then.status(403).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403,"message":"networkpolicies is forbidden"}));
+            })
+            .await;
+        sync_gateway_service_policy(&ctx, &none, "test-ns", None)
+            .await
+            .unwrap();
+        release_gateway_service_policy(&ctx, &none, "test-ns")
+            .await
+            .unwrap();
+        // For an internet sandbox the same refusal is an error.
+        assert!(release_gateway_service_policy(&ctx, &sandbox, "test-ns")
+            .await
+            .is_err());
+        forbidden.delete_async().await;
+
+        // Absent: nothing to do, no error.
+        let mut absent = server
+            .mock_async(|when, then| {
+                when.method(GET).path(named);
+                then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
+            })
+            .await;
+        sync_gateway_service_policy(&ctx, &none, "test-ns", None)
+            .await
+            .unwrap();
+        absent.delete_async().await;
+
+        // Owned and still there: removed.
+        let owned = gateway_service_policy(&ctx, "subject", "test-ns", gateway);
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(named);
+                then.status(200)
+                    .json_body(serde_json::to_value(&owned).unwrap());
+            })
+            .await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(DELETE).path(named);
+                then.status(200)
+                    .json_body(json!({"kind":"Status","apiVersion":"v1","status":"Success"}));
+            })
+            .await;
+        sync_gateway_service_policy(&ctx, &none, "test-ns", None)
+            .await
+            .unwrap();
+        delete.assert_hits_async(1).await;
+
+        // An internet sandbox keeps (and rewrites) its policy: no delete.
+        let internet_stack = Stack::new("test".into())
+            .add(sandbox.clone(), ResourceLifecycle::Frozen)
+            .build();
+        ctx.desired_stack = &internet_stack;
+        sync_gateway_service_policy(&ctx, &sandbox, "test-ns", Some(gateway))
+            .await
+            .unwrap();
+        delete.assert_hits_async(1).await;
     }
 
     /// The owner writes the signing key once, create-only, and publishes a configuration that

@@ -1730,10 +1730,31 @@ fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
         for resource in rule["resources"].as_sequence().unwrap() {
             assert!(matches!(
                 resource.as_str(),
-                Some("pods" | "secrets" | "events")
+                Some("pods" | "secrets" | "events" | "networkpolicies")
             ));
         }
     }
+    // The Operator writes the gateway Service policy of an internet sandbox next to its pods, so
+    // it needs those four verbs on NetworkPolicies there, and no list, watch or patch.
+    let policy_rules: Vec<_> = role["rules"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .filter(|rule| {
+            rule["resources"]
+                .as_sequence()
+                .is_some_and(|resources| resources.iter().any(|x| x == "networkpolicies"))
+        })
+        .collect();
+    assert_eq!(policy_rules.len(), 1, "{role:?}");
+    assert_eq!(
+        policy_rules[0]["apiGroups"],
+        serde_yaml::from_str::<serde_yaml::Value>("[networking.k8s.io]").unwrap()
+    );
+    assert_eq!(
+        policy_rules[0]["verbs"],
+        serde_yaml::from_str::<serde_yaml::Value>("[get, create, update, delete]").unwrap()
+    );
     let binding = documents
         .iter()
         .find(|document| {
