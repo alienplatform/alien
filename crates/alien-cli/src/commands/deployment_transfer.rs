@@ -4,7 +4,7 @@
 //! `start` begins it, `status` reports where it is, `continue` takes the next step, and `cancel`
 //! stops it. Every call goes to `/v1/deployments/{id}/instance-move`.
 
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Subcommand;
 use reqwest::Method;
 use serde_json::{json, Value};
@@ -123,6 +123,16 @@ fn request_for(cmd: &TransferCmd, deployment_id: &str) -> (Method, String, Optio
     }
 }
 
+/// A server that predates transfers answers 404 for the route itself, with no error body of its
+/// own. A 404 that names a deployment or transfer carries an error `code`.
+fn is_route_missing(status: u16, body: &str) -> bool {
+    status == 404
+        && serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|parsed| parsed.get("code").and_then(Value::as_str).map(str::to_string))
+            .is_none()
+}
+
 async fn call(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -132,6 +142,13 @@ async fn call(
 ) -> Result<Value> {
     let (status, text) =
         value_access::platform_request(client, method, path, workspace, body).await?;
+    if is_route_missing(status, &text) {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "This server does not support transferring deployments yet. \
+                      Update the server, or use a newer one."
+                .to_string(),
+        }));
+    }
     if !(200..300).contains(&status) {
         return Err(value_access::platform_error(status, &text)).context(
             ErrorData::ApiRequestFailed {
@@ -391,6 +408,19 @@ mod tests {
             dry_run,
             json: false,
         }
+    }
+
+    #[test]
+    fn a_missing_route_is_told_apart_from_a_missing_deployment() {
+        assert!(is_route_missing(404, "404 Not Found"));
+        assert!(is_route_missing(404, ""));
+        assert!(is_route_missing(404, r#"{"message":"nope"}"#));
+        assert!(!is_route_missing(
+            404,
+            r#"{"code":"DEPLOYMENT_NOT_FOUND","message":"Deployment not found"}"#
+        ));
+        assert!(!is_route_missing(409, "Conflict"));
+        assert!(!is_route_missing(200, "{}"));
     }
 
     #[test]
