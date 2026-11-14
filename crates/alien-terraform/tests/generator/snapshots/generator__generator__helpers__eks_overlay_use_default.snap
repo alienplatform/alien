@@ -291,13 +291,62 @@ locals {
   kubernetes_exposure            = jsondecode(var.custom_domain_name == "" ? jsonencode(local.generated_kubernetes_exposure) : jsonencode(merge(local.generated_kubernetes_exposure, { mode = "custom", domain = var.custom_domain_name, certificate = { mode = "awsAcmArn", certificateArn = var.custom_domain_certificate_arn } })))
   deployment_kubernetes_settings = merge(try(local.advanced_settings.kubernetes, {}), { cluster = merge(try(local.advanced_settings.kubernetes.cluster, {}), { ownership = var.kubernetes_cluster_mode == "create" ? "managed" : "existing" }), exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure)) })
   deployment_settings            = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, kubernetes = local.deployment_kubernetes_settings }, jsondecode(var.kubernetes_cluster_mode == "create" ? jsonencode({ network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = compact([for id in var.public_subnet_ids : trimspace(id)]), privateSubnetIds = compact([for id in var.private_subnet_ids : trimspace(id)]), securityGroupIds = compact([for id in var.security_group_ids : trimspace(id)]) }) : jsonencode({ type = "use-default" })) }) : "{}"))
-  deployment_resources           = concat(var.kubernetes_cluster_mode == "create" ? [{ id = "default-network", type = "network", importData = { vpcId = null, cidrBlock = null, internetGatewayId = null, natGatewayId = null, eipAllocationId = null, publicSubnetIds = [], privateSubnetIds = [], publicRouteTableId = null, privateRouteTableId = null, securityGroupId = null, availabilityZones = [], isByoVpc = true, sandboxNetwork = null } }] : [], [{ id = "kubernetes", type = "kubernetes-cluster", importData = { provider = "eks", ownership = var.kubernetes_cluster_mode == "create" ? "managed" : "existing", namespace = var.kubernetes_namespace, clusterName = local.kubernetes_cluster_name, clusterId = local.kubernetes_cluster_name, cloudMetadataReady = true } }], [{ id = "data", type = "storage", importData = { bucketName = aws_s3_bucket.data.bucket, bucketArn = aws_s3_bucket.data.arn } }], [{ id = "execution-sa", type = "service-account", importData = { roleName = aws_iam_role.execution_sa.name, roleArn = aws_iam_role.execution_sa.arn, stackPermissionsApplied = true } }])
-  kubernetes_cluster_name        = var.kubernetes_cluster_mode == "create" ? aws_eks_cluster.kubernetes[0].name : var.eks_cluster_name
-  kubernetes_kube_context        = local.kubernetes_cluster_name
-  kubernetes_kubeconfig          = var.kubernetes_cluster_mode == "create" ? yamlencode({ apiVersion = "v1", kind = "Config", clusters = [{ name = aws_eks_cluster.kubernetes[0].name, cluster = { server = aws_eks_cluster.kubernetes[0].endpoint, "certificate-authority-data" = aws_eks_cluster.kubernetes[0].certificate_authority[0].data } }], contexts = [{ name = aws_eks_cluster.kubernetes[0].name, context = { cluster = aws_eks_cluster.kubernetes[0].name, user = aws_eks_cluster.kubernetes[0].name } }], "current-context" = aws_eks_cluster.kubernetes[0].name, users = [{ name = aws_eks_cluster.kubernetes[0].name, user = { exec = { apiVersion = "client.authentication.k8s.io/v1beta1", command = "aws", args = ["eks", "get-token", "--cluster-name", aws_eks_cluster.kubernetes[0].name, "--region", var.aws_region] } } }] }) : ""
-  eks_oidc_issuer_host_path      = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
-  eks_oidc_provider_arn          = var.kubernetes_cluster_mode == "create" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn
-  kubernetes_namespace           = var.kubernetes_namespace
+  deployment_resources = [
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        vpcId               = null
+        cidrBlock           = null
+        internetGatewayId   = null
+        natGatewayId        = null
+        eipAllocationId     = null
+        publicSubnetIds     = []
+        privateSubnetIds    = []
+        publicRouteTableId  = null
+        privateRouteTableId = null
+        securityGroupId     = null
+        availabilityZones   = []
+        isByoVpc            = true
+        sandboxNetwork      = null
+      }
+    },
+    {
+      id   = "kubernetes"
+      type = "kubernetes-cluster"
+      importData = {
+        provider           = "eks"
+        ownership          = var.kubernetes_cluster_mode == "create" ? "managed" : "existing"
+        namespace          = var.kubernetes_namespace
+        clusterName        = local.kubernetes_cluster_name
+        clusterId          = local.kubernetes_cluster_name
+        cloudMetadataReady = true
+      }
+    },
+    {
+      id   = "data"
+      type = "storage"
+      importData = {
+        bucketName = aws_s3_bucket.data.bucket
+        bucketArn  = aws_s3_bucket.data.arn
+      }
+    },
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        roleName                = aws_iam_role.execution_sa.name
+        roleArn                 = aws_iam_role.execution_sa.arn
+        stackPermissionsApplied = true
+      }
+    }
+  ]
+  kubernetes_cluster_name   = var.kubernetes_cluster_mode == "create" ? aws_eks_cluster.kubernetes[0].name : var.eks_cluster_name
+  kubernetes_kube_context   = local.kubernetes_cluster_name
+  kubernetes_kubeconfig     = var.kubernetes_cluster_mode == "create" ? yamlencode({ apiVersion = "v1", kind = "Config", clusters = [{ name = aws_eks_cluster.kubernetes[0].name, cluster = { server = aws_eks_cluster.kubernetes[0].endpoint, "certificate-authority-data" = aws_eks_cluster.kubernetes[0].certificate_authority[0].data } }], contexts = [{ name = aws_eks_cluster.kubernetes[0].name, context = { cluster = aws_eks_cluster.kubernetes[0].name, user = aws_eks_cluster.kubernetes[0].name } }], "current-context" = aws_eks_cluster.kubernetes[0].name, users = [{ name = aws_eks_cluster.kubernetes[0].name, user = { exec = { apiVersion = "client.authentication.k8s.io/v1beta1", command = "aws", args = ["eks", "get-token", "--cluster-name", aws_eks_cluster.kubernetes[0].name, "--region", var.aws_region] } } }] }) : ""
+  eks_oidc_issuer_host_path = trimprefix(data.aws_eks_cluster.target.identity[0].oidc[0].issuer, "https://")
+  eks_oidc_provider_arn     = var.kubernetes_cluster_mode == "create" ? aws_iam_openid_connect_provider.eks[0].arn : data.aws_iam_openid_connect_provider.eks_existing[0].arn
+  kubernetes_namespace      = var.kubernetes_namespace
   helm_service_accounts = {
     execution = {
       annotations = {

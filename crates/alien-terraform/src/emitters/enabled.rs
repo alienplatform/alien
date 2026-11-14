@@ -24,6 +24,24 @@ use hcl::{
 /// Not a valid stack input id (those are plain identifiers), so it can never collide with one.
 pub const KUBERNETES_CLUSTER_CREATE_GATE: &str = "@kubernetes-cluster-create";
 
+/// Prefix of a gate that is true for a module-created cluster or while any of the listed
+/// deployer inputs (comma separated, all non-null booleans) is true. Built by
+/// [`kubernetes_network_gate`].
+const KUBERNETES_NETWORK_GATE_PREFIX: &str = "@kubernetes-network:";
+
+/// The gate for a network the manager expects only for a created cluster or a cloud database
+/// whose own gate is on. With no database gates it is [`KUBERNETES_CLUSTER_CREATE_GATE`].
+pub fn kubernetes_network_gate(database_gate_inputs: &[&str]) -> String {
+    if database_gate_inputs.is_empty() {
+        KUBERNETES_CLUSTER_CREATE_GATE.to_string()
+    } else {
+        format!(
+            "{KUBERNETES_NETWORK_GATE_PREFIX}{}",
+            database_gate_inputs.join(",")
+        )
+    }
+}
+
 /// Terraform expression carrying the gate's value.
 ///
 /// An input gate mirrors `terraform_stack_input_variable_name`; the compile-time check
@@ -32,6 +50,16 @@ pub const KUBERNETES_CLUSTER_CREATE_GATE: &str = "@kubernetes-cluster-create";
 fn gate_variable(input_id: &str) -> String {
     if input_id == KUBERNETES_CLUSTER_CREATE_GATE {
         return "var.kubernetes_cluster_mode == \"create\"".to_string();
+    }
+    if let Some(inputs) = input_id.strip_prefix(KUBERNETES_NETWORK_GATE_PREFIX) {
+        // Plain variables only, so evaluating every operand is safe on any Terraform version.
+        let inputs = inputs
+            .split(',')
+            .map(|input| format!("var.{}", crate::generator::stack_input_variable_name(input)));
+        return format!(
+            "(var.kubernetes_cluster_mode == \"create\" || {})",
+            inputs.collect::<Vec<_>>().join(" || ")
+        );
     }
     format!(
         "var.{}",
