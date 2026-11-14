@@ -117,6 +117,24 @@ pub struct MicrovmImageVersion {
     pub state_reason: Option<String>,
 }
 
+/// Whether a version can launch new MicroVMs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicrovmImageVersionStatus {
+    /// Can be run.
+    Active,
+    /// Blocked from launching new MicroVMs.
+    Inactive,
+}
+
+impl MicrovmImageVersionStatus {
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::Active => "ACTIVE",
+            Self::Inactive => "INACTIVE",
+        }
+    }
+}
+
 /// One build attempt of an image version.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -409,6 +427,15 @@ pub trait LambdaMicrovmsApi: Send + Sync + std::fmt::Debug {
         image_version: &str,
     ) -> Result<()>;
 
+    /// Marks a version `INACTIVE`, which blocks it from launching new MicroVMs. Running and
+    /// suspended MicroVMs are not stopped by it. Reversible by `ACTIVE`.
+    async fn update_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+        status: MicrovmImageVersionStatus,
+    ) -> Result<()>;
+
     /// Deletes an image. Fails while the image is still `CREATING`.
     async fn delete_microvm_image(&self, image_identifier: &str) -> Result<()>;
 
@@ -630,6 +657,33 @@ pub fn is_refused_for_running_microvms(error: &AlienError<ErrorData>) -> bool {
     )
 }
 
+/// Whether a `ServiceQuotaExceededException` is the cap on versions per image, rather than the
+/// memory or concurrency quota. AWS names the quota in `quotaCode` and `resourceType` and says
+/// "maximum number of versions allowed" in the message; any one of them is enough.
+fn is_version_limit(error: &AlienError<ErrorData>) -> bool {
+    let Some(ErrorData::HttpResponseError {
+        http_response_text: Some(text),
+        ..
+    }) = &error.error
+    else {
+        return format!("{error:?}")
+            .to_ascii_lowercase()
+            .contains("number of versions");
+    };
+    let lowered = text.to_ascii_lowercase();
+    if lowered.contains("number of versions") {
+        return true;
+    }
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    ["quotaCode", "resourceType"].iter().any(|field| {
+        body.get(field)
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.to_ascii_lowercase().contains("version"))
+    })
+}
+
 /// Turns a MicroVMs API failure into the error a caller can act on.
 ///
 /// Quota exhaustion has to arrive as `QuotaExceeded` — it is retryable and names the limit — and
@@ -686,7 +740,26 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
     }
 
     let rendered = format!("{error:?}");
-    if rendered.contains("ServiceQuotaExceededException") {
+    // The exception name travels in a response header, not in the body, so a quota refusal is
+    // recognised by its 402 as well as by the name.
+    let quota_refused = rendered.contains("ServiceQuotaExceededException")
+        || matches!(
+            &error.error,
+            Some(ErrorData::HttpResponseError {
+                http_status: 402,
+                ..
+            })
+        );
+    if quota_refused && is_version_limit(error) {
+        // Not the memory quota: a session ending does not clear it, only a version delete does,
+        // so it must not be retried like one.
+        ErrorData::VersionLimitExceeded {
+            message: format!(
+                "Lambda MicroVMs {operation}: the image already holds the maximum number of \
+                 versions AWS allows"
+            ),
+        }
+    } else if quota_refused {
         ErrorData::QuotaExceeded {
             message: format!(
                 "Lambda MicroVMs {operation}: account quota exhausted. MicroVM memory is limited \
@@ -822,6 +895,26 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
                 return Ok(builds);
             }
         }
+    }
+
+    async fn update_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+        status: MicrovmImageVersionStatus,
+    ) -> Result<()> {
+        let _: serde_json::Value = self
+            .send(
+                Method::PATCH,
+                &format!(
+                    "/{API_VERSION}/microvm-images/{image_identifier}/versions/{image_version}"
+                ),
+                &[],
+                Some(serde_json::json!({ "status": status.as_wire() })),
+                "UpdateMicrovmImageVersion",
+            )
+            .await?;
+        Ok(())
     }
 
     async fn delete_microvm_image_version(
@@ -1572,6 +1665,43 @@ mod tests {
             error.to_string().contains("quota exhausted"),
             "the message must name the condition: {error}"
         );
+    }
+
+    fn quota_refusal(body: &str) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::HttpResponseError {
+            message: "HTTP 402 Payment Required".to_string(),
+            url: "https://lambda.test/".to_string(),
+            http_status: 402,
+            http_request_text: None,
+            http_response_text: Some(body.to_string()),
+        })
+    }
+
+    /// The cap on versions per image is not the memory quota: ending sessions does not clear it,
+    /// so it must not be retried, and it must say so in its own words.
+    #[test]
+    fn the_version_cap_is_its_own_non_retryable_error() {
+        for body in [
+            r#"{"message":"You have reached the maximum number of versions allowed for this image.","quotaCode":"L-ABC","resourceType":"MicrovmImage","resourceId":"img"}"#,
+            r#"{"message":"limit","quotaCode":"L-1","resourceType":"MicrovmImageVersion"}"#,
+            r#"{"message":"limit","quotaCode":"L-MAX-VERSIONS-PER-IMAGE","resourceType":"x"}"#,
+        ] {
+            let error = AlienError::new(classify(&quota_refusal(body), "UpdateMicrovmImage"));
+            assert_eq!(error.code, "VERSION_LIMIT_EXCEEDED", "{body}");
+            assert!(!error.retryable, "{body}");
+        }
+    }
+
+    #[test]
+    fn the_memory_quota_with_structured_fields_stays_retryable() {
+        let error = AlienError::new(classify(
+            &quota_refusal(
+                r#"{"message":"Memory limit exceeded","quotaCode":"L-MEM","resourceType":"Microvm"}"#,
+            ),
+            "RunMicrovm",
+        ));
+        assert_eq!(error.code, "QUOTA_EXCEEDED");
+        assert!(error.retryable);
     }
 
     #[test]
