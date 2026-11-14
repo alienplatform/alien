@@ -43,13 +43,21 @@ pub(crate) fn fixture() -> (AzureNetworkController, Value, Value, Value, Value) 
         {"id":subnet_id("gateway"),"properties":{"addressPrefix":"10.0.6.0/24"}},
         {"id":subnet_id("private"),"properties":{"addressPrefix":"10.0.1.0/24", "natGateway":{"id":arm("natGateways","nat")}}}
     ]}});
-    let mut rules = vec![json!({"name":"gateway","properties":{
-        "access":"Allow","direction":"Outbound","priority":100,"protocol":"Tcp",
-        "sourceAddressPrefix":"*","sourcePortRange":"*","destinationAddressPrefix":"10.0.6.0/24",
-        "destinationPortRanges":["3128","3129"]}})];
+    let mut rules = vec![];
+    for (index, ip) in ["10.0.6.4", "10.0.6.5"].into_iter().enumerate() {
+        rules.push(json!({"name":format!("gateway_{index}"),"properties":{
+            "access":"Allow","direction":"Outbound","priority":100 + index,"protocol":"Tcp",
+            "sourceAddressPrefix":"*","sourcePortRange":"*","destinationAddressPrefix":ip,
+            "destinationPortRanges":["3128"]}}));
+    }
+    rules.push(json!({"name":"dns","properties":{
+        "access":"Allow","direction":"Outbound","priority":102,"protocol":"*",
+        "sourceAddressPrefix":"*","sourcePortRange":"*","destinationAddressPrefix":"168.63.129.16",
+        "destinationPortRange":"53"}}));
     for (destination, priority) in [
-        ("AzurePlatformIMDS", 101),
-        ("AzurePlatformDNS", 140),
+        ("AzurePlatformIMDS", 103),
+        ("VirtualNetwork", 110),
+        ("Internet", 128),
         ("*", 300),
     ] {
         rules.push(json!({"name":format!("deny-{priority}"),"properties":{
@@ -112,38 +120,52 @@ async fn provider_ranges_extend_registration_and_frontend_needs_no_nat() {
 }
 
 #[tokio::test]
-async fn the_proxy_only_rule_and_the_older_proxy_and_admin_rule_both_pass() {
-    let (network, vnet, mut nsg, nat, public) = fixture();
-    let rules = nsg["properties"]["securityRules"].as_array_mut().unwrap();
-    rules[0]["properties"]["destinationPortRanges"] = json!(["3128"]);
-    check(&network, vnet, nsg, nat, public)
-        .await
-        .expect("the narrowed rule passes");
-    // The fixture's own rule is the older 3128 and 3129 pair.
+async fn the_emitted_rule_set_passes_and_a_normalised_single_port_does_too() {
     let (network, vnet, nsg, nat, public) = fixture();
     check(&network, vnet, nsg, nat, public)
         .await
-        .expect("an install that has not taken the narrowed rule passes");
+        .expect("the exact emitted rule set passes");
+    // Azure may return a one-port list as a single range and a host as a /32.
+    let (network, vnet, mut nsg, nat, public) = fixture();
+    let rules = nsg["properties"]["securityRules"].as_array_mut().unwrap();
+    rules[0]["properties"]["destinationPortRanges"] = json!([]);
+    rules[0]["properties"]["destinationPortRange"] = json!("3128");
+    rules[0]["properties"]["destinationAddressPrefix"] = json!("10.0.6.4/32");
+    check(&network, vnet, nsg, nat, public).await.unwrap();
 }
 
 #[tokio::test]
 async fn refuse_nsg_bypasses_and_missing_platform_denies() {
-    for mutation in 0..6 {
+    // 0-5 loosen an allow; 6-10 remove a required rule; 11 adds an Internet allow.
+    for mutation in 0..12 {
         let (network, vnet, mut nsg, nat, public) = fixture();
         let rules = nsg["properties"]["securityRules"].as_array_mut().unwrap();
         match mutation {
             0 => rules[0]["properties"]["destinationAddressPrefix"] = json!("*"),
-            1 => rules[0]["properties"]["destinationPortRanges"] = json!(["3128", "3129", "443"]),
+            1 => rules[0]["properties"]["destinationPortRanges"] = json!(["3128", "3129"]),
             2 => rules[0]["properties"]["protocol"] = json!("*"),
-            3 => {
+            3 => rules[0]["properties"]["destinationAddressPrefix"] = json!("10.0.6.0/24"),
+            4 => rules[2]["properties"]["destinationPortRange"] = json!("*"),
+            5 => rules[2]["properties"]["destinationAddressPrefix"] = json!("10.0.0.0/8"),
+            6 => {
                 rules.remove(1);
             }
-            4 => {
+            7 => {
                 rules.remove(2);
             }
-            _ => {
+            8 => {
                 rules.remove(3);
             }
+            9 => {
+                rules.remove(5);
+            }
+            10 => {
+                rules.remove(6);
+            }
+            _ => rules.push(json!({"name":"open","properties":{
+                "access":"Allow","direction":"Outbound","priority":105,"protocol":"*",
+                "sourceAddressPrefix":"*","sourcePortRange":"*","destinationAddressPrefix":"Internet",
+                "destinationPortRange":"*"}})),
         }
         let error = check(&network, vnet, nsg, nat, public).await.unwrap_err();
         assert!(
