@@ -1,7 +1,8 @@
 //! Explicit Kubernetes requirements for an operation. Installers apply these
 //! rules only for enabled plugins and within the selected installation scope.
 //!
-//! Version 1 supports reads, pod deletion, and workload scale patches. It does
+//! Version 1 supports reads, pod deletion, workload scale patches, and patches
+//! of Deployments, StatefulSets and DaemonSets (mutating tier only). It does
 //! not support Secrets, impersonation, RBAC changes, remote execution, or
 //! workload creation (which could mount Secrets or assume a service account).
 //!
