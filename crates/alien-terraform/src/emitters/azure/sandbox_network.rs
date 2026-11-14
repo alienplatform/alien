@@ -97,20 +97,34 @@ pub(super) fn subnet_label(network: &str, sandbox: &str) -> String {
     format!("{network}_sandbox_{sandbox}")
 }
 
-/// The sandbox NSG's allow rule for the egress gateway: the proxy port only.
-fn gateway_rule(fragment: &mut TfFragment, label: &str, network: &str) {
-    rule(
-        fragment,
-        label,
-        Rule {
-            name: "gateway",
-            priority: 100,
-            destination: expr::raw(format!(
-                "azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0]"
-            )),
-            allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
-        },
-    );
+/// Host numbers of the two gateway VMs inside the gateway subnet. Azure reserves .0 to .3, so
+/// the first two usable addresses are .4 and .5; setup pins them as static private IPs.
+pub(super) const GATEWAY_HOSTS: [u8; 2] = [4, 5];
+
+/// Terraform expression for the static private IP of gateway replica `index`.
+pub(super) fn gateway_ip(network: &str, index: usize) -> Expression {
+    expr::raw(format!(
+        "cidrhost(azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0], {})",
+        GATEWAY_HOSTS[index]
+    ))
+}
+
+/// The sandbox NSG's allow rules for the egress gateway: the proxy port on each gateway IP
+/// only, never the subnet or the admin port.
+fn gateway_rules(fragment: &mut TfFragment, label: &str, network: &str) {
+    for index in 0..GATEWAY_HOSTS.len() {
+        rule(
+            fragment,
+            label,
+            Rule {
+                name: &format!("gateway_{index}"),
+                priority: 100 + index as i64,
+                destination: gateway_ip(network, index),
+                allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
+                protocol: "Tcp",
+            },
+        );
+    }
 }
 
 fn emit_group(
@@ -190,43 +204,7 @@ fn emit_group(
             attr("tags", tags(ctx, "sandbox-network")),
         ],
     ));
-    gateway_rule(fragment, &label, network);
-    // Azure's platform metadata/DNS addresses need their service tags: ordinary range denies
-    // do not apply to these platform services. The gateway uses a numeric internal address.
-    for (name, priority, destination) in [
-        ("metadata", 101, "AzurePlatformIMDS"),
-        ("vnet", 110, "VirtualNetwork"),
-        ("unspecified", 120, "0.0.0.0/8"),
-        ("private_10", 121, "10.0.0.0/8"),
-        ("shared", 122, "100.64.0.0/10"),
-        ("loopback", 123, "127.0.0.0/8"),
-        ("link_local", 124, "169.254.0.0/16"),
-        ("private_172", 125, "172.16.0.0/12"),
-        ("private_192", 126, "192.168.0.0/16"),
-        ("multicast", 127, "224.0.0.0/4"),
-        ("other", 300, "*"),
-    ] {
-        rule(
-            fragment,
-            &label,
-            Rule {
-                name,
-                priority,
-                destination: Expression::String(destination.to_string()),
-                allowed_ports: None,
-            },
-        );
-    }
-    rule(
-        fragment,
-        &label,
-        Rule {
-            name: "dns",
-            priority: 140,
-            destination: Expression::String("AzurePlatformDNS".to_string()),
-            allowed_ports: None,
-        },
-    );
+    nsg_rules(fragment, &label, network);
     for (resource, field, target) in [
         (
             "azurerm_subnet_nat_gateway_association",
@@ -254,12 +232,71 @@ fn emit_group(
     Ok(())
 }
 
+fn nsg_rules(fragment: &mut TfFragment, label: &str, network: &str) {
+    gateway_rules(fragment, label, network);
+    // Azure's platform metadata/DNS addresses need their service tags: ordinary range denies
+    // do not apply to these platform services. The gateway uses a numeric internal address.
+    for (name, priority, destination) in [
+        ("metadata", 101, "AzurePlatformIMDS"),
+        ("vnet", 110, "VirtualNetwork"),
+        ("unspecified", 120, "0.0.0.0/8"),
+        ("private_10", 121, "10.0.0.0/8"),
+        ("shared", 122, "100.64.0.0/10"),
+        ("loopback", 123, "127.0.0.0/8"),
+        ("link_local", 124, "169.254.0.0/16"),
+        ("private_172", 125, "172.16.0.0/12"),
+        ("private_192", 126, "192.168.0.0/16"),
+        ("multicast", 127, "224.0.0.0/4"),
+        ("other", 300, "*"),
+    ] {
+        rule(
+            fragment,
+            label,
+            Rule {
+                name,
+                priority,
+                destination: Expression::String(destination.to_string()),
+                allowed_ports: None,
+                protocol: "*",
+            },
+        );
+    }
+    // The platform resolver is the only non-gateway destination: DNS lookups resolve, which
+    // the public docs list as a limit. It sits at 102, ahead of the VirtualNetwork deny.
+    rule(
+        fragment,
+        label,
+        Rule {
+            name: "dns",
+            priority: 102,
+            destination: Expression::String("168.63.129.16".to_string()),
+            allowed_ports: Some(BTreeSet::from(["53".to_string()])),
+            protocol: "*",
+        },
+    );
+    // Deny the Internet tag explicitly in addition to the catch-all, so an edit that removes
+    // the catch-all does not open the Internet.
+    rule(
+        fragment,
+        label,
+        Rule {
+            name: "internet",
+            priority: 128,
+            destination: Expression::String("Internet".to_string()),
+            allowed_ports: None,
+            protocol: "*",
+        },
+    );
+}
+
 struct Rule<'a> {
     name: &'a str,
     priority: i64,
     destination: Expression,
-    /// A public TCP allow rule when present; otherwise deny every port and protocol.
+    /// An allow rule for these ports when present; otherwise deny every port and protocol.
     allowed_ports: Option<BTreeSet<String>>,
+    /// The protocol of an allow rule.
+    protocol: &'a str,
 }
 
 fn rule(fragment: &mut TfFragment, label: &str, rule: Rule<'_>) {
@@ -268,9 +305,10 @@ fn rule(fragment: &mut TfFragment, label: &str, rule: Rule<'_>) {
         priority,
         destination,
         allowed_ports,
+        protocol,
     } = rule;
     let (access, protocol) = if allowed_ports.is_some() {
-        ("Allow", "Tcp")
+        ("Allow", protocol)
     } else {
         ("Deny", "*")
     };
@@ -454,25 +492,73 @@ mod allocation_tests {
 mod proxy_rule_tests {
     use super::*;
 
-    /// The gateway rule of a sandbox NSG allows the proxy port only, under the same resource
-    /// address and name as before, so an install that took the earlier pair of ports updates
-    /// the rule in place.
-    #[test]
-    fn the_gateway_rule_allows_the_proxy_port_only() {
+    fn rendered_rules() -> String {
         let mut fragment = TfFragment::default();
-        gateway_rule(&mut fragment, "agents", "net");
-        let rendered = hcl::to_string(
+        nsg_rules(&mut fragment, "agents", "net");
+        hcl::to_string(
             &hcl::Body::builder()
                 .add_blocks(fragment.resource_blocks.clone())
                 .build(),
         )
-        .unwrap();
-        if let Ok(path) = std::env::var("ALIEN_DUMP_GATEWAY_RULE") {
-            std::fs::write(path, &rendered).unwrap();
+        .unwrap()
+    }
+
+    /// Blocks of one rule, so assertions cannot match across rules.
+    fn rule_block<'a>(rendered: &'a str, name: &str) -> &'a str {
+        let header = format!("resource \"azurerm_network_security_rule\" \"agents_{name}\"");
+        let start = rendered
+            .find(&header)
+            .unwrap_or_else(|| panic!("no rule {name}:\n{rendered}"));
+        let rest = &rendered[start..];
+        &rest[..rest.find("\n}\n").map_or(rest.len(), |end| end + 3)]
+    }
+
+    #[test]
+    fn each_gateway_ip_gets_a_proxy_port_allow_and_nothing_names_the_admin_port() {
+        let rendered = rendered_rules();
+        for index in 0..2 {
+            let block = rule_block(&rendered, &format!("gateway_{index}"));
+            assert!(block.contains("\"Allow\""), "{block}");
+            assert!(block.contains("\"3128\""), "{block}");
+            assert!(
+                block.contains(&format!(
+                    "cidrhost(azurerm_subnet.net_sandbox_gateway.address_prefixes[0], {})",
+                    GATEWAY_HOSTS[index]
+                )),
+                "{block}"
+            );
         }
-        assert!(rendered.contains("resource \"azurerm_network_security_rule\" \"agents_gateway\""));
-        assert!(rendered.contains("destination_port_ranges"), "{rendered}");
-        assert!(rendered.contains("\"3128\""), "{rendered}");
         assert!(!rendered.contains("3129"));
+        // The subnet as a whole is never a destination.
+        assert!(!rendered.contains("address_prefixes[0]\""), "{rendered}");
+    }
+
+    #[test]
+    fn the_only_other_allow_is_dns_to_the_platform_resolver() {
+        let rendered = rendered_rules();
+        let allows = rendered.matches("access             = \"Allow\"").count()
+            + rendered.matches("access = \"Allow\"").count();
+        assert_eq!(allows, 3, "two gateways and the resolver:\n{rendered}");
+        let dns = rule_block(&rendered, "dns");
+        assert!(
+            dns.contains("\"168.63.129.16\"") && dns.contains("\"53\""),
+            "{dns}"
+        );
+    }
+
+    #[test]
+    fn virtual_network_and_internet_are_denied_by_name_and_by_catch_all() {
+        let rendered = rendered_rules();
+        for (name, destination) in [
+            ("vnet", "VirtualNetwork"),
+            ("internet", "Internet"),
+            ("other", "*"),
+        ] {
+            let block = rule_block(&rendered, name);
+            assert!(
+                block.contains("\"Deny\"") && block.contains(&format!("\"{destination}\"")),
+                "{block}"
+            );
+        }
     }
 }
