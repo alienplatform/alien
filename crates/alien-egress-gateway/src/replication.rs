@@ -174,7 +174,7 @@ impl Replication {
             addresses.dedup();
             let mut peers = Vec::new();
             for address in addresses {
-                if !Self::is_self(address.ip(), address.port()).await? {
+                if !(address.port() == self.port && Self::is_self(address.ip(), address.port()).await?) {
                     peers.push(address);
                 }
             }
