@@ -7,7 +7,9 @@
 //! resource names), `GCP_PREVIEW_SA` (the identity the caller may sign as), `GCP_PREVIEW_PORTS`
 //! (comma separated), `GCP_UNDECLARED_PORT` (a port the daemon serves but the template does not
 //! declare), `GCP_PREVIEW_WS_CHECK` (a program that drives the WebSocket checks from the preview
-//! JSON file it is given).
+//! JSON file it is given). With `GCP_BINDING_JSON` set to a binding file a deployment published,
+//! the sandbox is loaded from it through the bindings provider (as a deployed app loads it),
+//! `GCP_ACCESS_TOKEN` is the workload identity's token, and `GCP_PREVIEW_SA` is not needed.
 //!
 //! ```text
 //! cargo test -p alien-bindings --features gcp --test gcp_sandbox_preview_live -- --ignored --nocapture
@@ -40,20 +42,44 @@ fn config() -> GcpClientConfig {
     }
 }
 
-fn provider(ports: &[u16]) -> GcpAgentPlatformSandbox {
+/// The sandbox binding under test. With `GCP_BINDING_JSON` (the file a deployment's template
+/// controller published, built from real setup outputs) it is loaded the way a deployed app loads
+/// it, from `ALIEN_<NAME>_BINDING` through the bindings provider, using `GCP_ACCESS_TOKEN` as the
+/// workload identity. Without it the provider is assembled by hand from the `GCP_*` variables.
+async fn provider(ports: &[u16]) -> Arc<dyn Sandbox> {
+    if let Ok(path) = std::env::var("GCP_BINDING_JSON") {
+        use alien_bindings::traits::BindingsProviderApi;
+        let binding = std::fs::read_to_string(path).expect("the binding file reads");
+        let env = std::collections::HashMap::from([
+            ("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string()),
+            ("GCP_ACCESS_TOKEN".to_string(), env("GCP_ACCESS_TOKEN")),
+            ("GCP_PROJECT_ID".to_string(), env("GCP_PROJECT")),
+            ("GCP_REGION".to_string(), env("GCP_REGION")),
+            ("ALIEN_AGENTS_BINDING".to_string(), binding),
+        ]);
+        let provider = alien_bindings::BindingsProvider::from_env(env)
+            .await
+            .expect("the bindings provider builds from the environment");
+        return provider
+            .load_sandbox("agents")
+            .await
+            .expect("the sandbox binding loads");
+    }
     let iam = alien_gcp_clients::iam::IamClient::new(reqwest::Client::new(), config());
     let client = AgentPlatformClient::new(reqwest::Client::new(), config());
-    GcpAgentPlatformSandbox::new(
-        Arc::new(client),
-        env("GCP_ENGINE"),
-        env("GCP_TEMPLATE"),
-        Some(3600),
+    Arc::new(
+        GcpAgentPlatformSandbox::new(
+            Arc::new(client),
+            env("GCP_ENGINE"),
+            env("GCP_TEMPLATE"),
+            Some(3600),
+        )
+        .with_preview_signer(Arc::new(IamEdgeTokenSigner::new(
+            Arc::new(iam),
+            env("GCP_PREVIEW_SA"),
+        )))
+        .with_preview_ports(ports.to_vec()),
     )
-    .with_preview_signer(Arc::new(IamEdgeTokenSigner::new(
-        Arc::new(iam),
-        env("GCP_PREVIEW_SA"),
-    )))
-    .with_preview_ports(ports.to_vec())
 }
 
 async fn get(
@@ -97,7 +123,7 @@ async fn live_preview_http_websocket_and_refusals() {
         .map(|port| port.trim().parse().expect("a port"))
         .collect();
     let undeclared: u16 = env("GCP_UNDECLARED_PORT").parse().expect("a port");
-    let provider = provider(&ports);
+    let provider = provider(&ports).await;
 
     let first = provider
         .create(CreateSandboxRequest::default())

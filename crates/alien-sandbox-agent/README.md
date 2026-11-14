@@ -406,6 +406,13 @@ A client that can only set headers cannot open a WebSocket on this backend. The 
 client side of an upgraded stream open for a quarter second after the workload closes, because the
 edge loses the last frame (the close reply) of a daemon that drops the connection at once.
 
+Deployment requirements for preview: the sandbox is declared Frozen, so setup creates the signing
+identity next to the engine and passes it to the template controller through the import data; the
+controller publishes it, with the declared ports, in the binding a deployed app reads. A Live sandbox
+with preview ports is refused at plan time, and a manager-resolved (remote) binding refuses
+`preview()` with a message saying so, because its lease cannot sign the edge credential. The
+calling identity needs `sandbox/execute` to preview and `sandbox/management` to create sandboxes.
+
 Limits the plan refuses with a message, rather than discovering them at the first session:
 - a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
 - `internet` egress: there is no enforcement point outside the guest without PSC-I or VPC Service
