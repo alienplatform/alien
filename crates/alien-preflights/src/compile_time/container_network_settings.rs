@@ -102,6 +102,14 @@ impl CompileTimeCheck for ContainerNetworkSettingsCheck {
                     {
                         errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: Daemon '{}' links to '{id}' in a different compute cluster", linker.id()));
                     }
+                } else if platform == Platform::Azure
+                    && id == alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID
+                    && source.downcast_ref::<Sandbox>().is_some_and(|sandbox| {
+                        matches!(sandbox.egress, alien_core::SandboxEgress::Internet)
+                    })
+                {
+                    // Setup runs the gateway as VMs whose subnet NSG admits the sandbox
+                    // subnet and whose sandbox NSG admits only the gateway addresses.
                 } else if platform != Platform::Aws {
                     errors.push(format!("CONTAINER_NETWORK_SETTINGS_UNSUPPORTED: {platform} has no exact private network source enforcement for {} '{}' linking to Container '{id}'", linker.resource_type, linker.id()));
                 } else if let Some(sandbox) = source.downcast_ref::<Sandbox>() {

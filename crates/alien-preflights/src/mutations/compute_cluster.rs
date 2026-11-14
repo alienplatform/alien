@@ -220,10 +220,13 @@ impl StackMutation for ComputeClusterMutation {
             return true;
         }
 
-        let has_containers = stack
-            .resources
-            .values()
-            .any(|entry| entry.config.resource_type().as_ref() == "container");
+        // On Azure the managed egress gateway is two VMs that setup creates; its Container is
+        // only the declaration of the gateway image and needs no cluster.
+        let has_containers = stack.resources.iter().any(|(id, entry)| {
+            entry.config.resource_type().as_ref() == "container"
+                && !(stack_state.platform == Platform::Azure
+                    && alien_core::sandbox_egress::is_managed_gateway(stack, id))
+        });
         // Also fire for daemons that reference a managed compute cluster on cloud
         // platforms. Local daemons ignore `.cluster(...)`, so a daemon-only
         // local stack must not grow a Docker-backed ComputeCluster during
