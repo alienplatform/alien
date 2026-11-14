@@ -19,7 +19,8 @@ use alien_core::{
     instance_catalog::{self, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, ComputeSettings,
     Container, Daemon, DeploymentConfig, MachineProfile, Network, PermissionSetReference, Platform,
-    ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState,
+    ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus, Stack, StackResourceState,
+    StackState,
 };
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
@@ -137,14 +138,7 @@ impl ComputeClusterMutation {
     ) -> Result<DeploymentConfig> {
         let stack = place_unplaced_cloud_containers(stack, stack_state.platform)?;
         let resolved = self.resolve_compute_settings(&stack, stack_state, config, Some(room))?;
-        let installed: Vec<&str> = stack_state
-            .resources
-            .values()
-            .filter_map(|state| state.config.downcast_ref::<ComputeCluster>())
-            .flat_map(|cluster| &cluster.capacity_groups)
-            .filter(|group| group.instance_type.is_some())
-            .map(|group| group.group_id.as_str())
-            .collect();
+        let installed: Vec<&str> = created_groups(stack_state);
         let mut chosen = config.clone();
         let Some(resolved) = resolved.stack_settings.compute else {
             return Ok(chosen);
@@ -1076,6 +1070,44 @@ fn persisted_without_pool(stack_state: &StackState, container: &Container) -> bo
         .is_some_and(|persisted| persisted.pool.is_none())
 }
 
+/// Whether the group counts as installed: its resource has left first setup (anything but
+/// Pending or Provisioning). A machine type in the stack state's config is not that signal: a
+/// setup that registers the stack before the manager creates anything (Terraform,
+/// CloudFormation) carries the machine the release was prepared with, and a pool that was
+/// never created has no installed machines to keep. Deployment-time preflights run once
+/// before anything is created (`handle_pending`) and again only for updates and setup
+/// retries, when the resource is Running or failed, so a group with machines is never
+/// re-picked. Every existing install is past first setup and keeps its machine.
+pub(crate) fn group_was_created(state: &StackResourceState, group_id: &str) -> bool {
+    let Some(cluster) = state.config.downcast_ref::<ComputeCluster>() else {
+        return false;
+    };
+    cluster
+        .capacity_groups
+        .iter()
+        .any(|group| group.group_id == group_id && group.instance_type.is_some())
+        && !matches!(
+            state.status,
+            ResourceStatus::Pending | ResourceStatus::Provisioning
+        )
+}
+
+/// The ids of the capacity groups the cloud already has machines for.
+fn created_groups(stack_state: &StackState) -> Vec<&str> {
+    stack_state
+        .resources
+        .values()
+        .filter_map(|state| Some((state, state.config.downcast_ref::<ComputeCluster>()?)))
+        .flat_map(|(state, cluster)| {
+            cluster
+                .capacity_groups
+                .iter()
+                .filter(move |group| group_was_created(state, &group.group_id))
+                .map(|group| group.group_id.as_str())
+        })
+        .collect()
+}
+
 /// Selections that keep installed cloud pools as they are, for pools the deployment stores no
 /// compute choice for and the release names no machine for.
 ///
@@ -1098,8 +1130,13 @@ fn installed_pool_selections(
     stack_state
         .resources
         .values()
-        .filter_map(|state| state.config.downcast_ref::<ComputeCluster>())
-        .flat_map(|cluster| &cluster.capacity_groups)
+        .filter_map(|state| Some((state, state.config.downcast_ref::<ComputeCluster>()?)))
+        .flat_map(|(state, cluster)| {
+            cluster
+                .capacity_groups
+                .iter()
+                .filter(move |group| group_was_created(state, &group.group_id))
+        })
         .filter(|group| {
             settings.is_none_or(|settings| !settings.pools.contains_key(&group.group_id))
                 && !release_groups.iter().any(|release_group| {
@@ -1580,6 +1617,7 @@ mod tests {
         StackSettings, VolumeBackups,
     };
     use indexmap::IndexMap;
+    use serde_json::json;
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
         EnvironmentVariablesSnapshot {
@@ -3271,7 +3309,30 @@ mod tests {
         }
     }
 
+    /// A created pool, as every installed deployment has: Running.
     fn installed_state(machine: &str) -> StackState {
+        state_with_pool(
+            machine,
+            ResourceStatus::Running,
+            Some(json!({"opaque": true})),
+        )
+    }
+
+    /// What a Terraform setup registers before the manager creates anything: the machine the
+    /// release was prepared with, the resource still Provisioning.
+    fn registered_state(machine: &str) -> StackState {
+        state_with_pool(
+            machine,
+            ResourceStatus::Provisioning,
+            Some(json!({"opaque": true})),
+        )
+    }
+
+    fn state_with_pool(
+        machine: &str,
+        status: ResourceStatus,
+        internal: Option<serde_json::Value>,
+    ) -> StackState {
         let cluster = ComputeCluster::new("compute".into())
             .capacity_group(CapacityGroup {
                 group_id: "general".into(),
@@ -3284,15 +3345,15 @@ mod tests {
                 data_disk_gib_range: None,
             })
             .build();
-        azure_state(vec![(
-            "compute",
-            alien_core::StackResourceState::new_pending(
-                "compute-cluster".into(),
-                alien_core::Resource::new(cluster),
-                Some(ResourceLifecycle::Live),
-                Vec::new(),
-            ),
-        )])
+        let mut resource = alien_core::StackResourceState::new_pending(
+            "compute-cluster".into(),
+            alien_core::Resource::new(cluster),
+            Some(ResourceLifecycle::Live),
+            Vec::new(),
+        );
+        resource.status = status;
+        resource.internal_state = internal;
+        azure_state(vec![("compute", resource)])
     }
 
     fn automatic_pool(machines: u32) -> DeploymentConfig {
@@ -3346,6 +3407,74 @@ mod tests {
             None,
             "no new choice for an installed pool"
         );
+    }
+
+    /// A Terraform setup registers the catalog default before the manager creates anything.
+    /// With nothing created, first setup still picks by quota.
+    #[test]
+    fn a_registered_pool_with_nothing_created_gets_the_quota_aware_choice() {
+        let chosen = ComputeClusterMutation
+            .choose_pool_machines(
+                generated_pool_stack(),
+                &registered_state("Standard_D4s_v5"),
+                &empty_config(),
+                &StubRoom::new(|spec, _| spec.series == "Dsv6"),
+            )
+            .unwrap();
+        let machine = pool_machine(&chosen).expect("a pool nothing was created for is chosen");
+        assert!(machine.ends_with("s_v6"), "{machine}");
+    }
+
+    /// An explicit customer machine (stack settings or the setup overlay) wins over automatic
+    /// selection for a pool nothing was created for.
+    #[test]
+    fn an_explicit_machine_is_kept_for_a_pool_nothing_was_created_for() {
+        let explicit = general_selection(ComputePoolSelection::Fixed {
+            machines: 1,
+            machine: Some("Standard_D4s_v5".into()),
+            failure_domains: None,
+            data_disk_gib: None,
+        });
+        let chosen = ComputeClusterMutation
+            .choose_pool_machines(
+                generated_pool_stack(),
+                &registered_state("Standard_D4s_v5"),
+                &explicit,
+                &StubRoom::new(|spec, _| spec.series == "Dsv6"),
+            )
+            .unwrap();
+        assert_eq!(pool_machine(&chosen), Some("Standard_D4s_v5".to_string()));
+    }
+
+    /// Upgrade safety: every install that exists today is past first setup, whatever its
+    /// internal state holds, so no group with a machine is ever treated as new.
+    #[test]
+    fn existing_installs_keep_every_machine_group() {
+        for status in [
+            ResourceStatus::Running,
+            ResourceStatus::Updating,
+            ResourceStatus::UpdateFailed,
+            ResourceStatus::ProvisionFailed,
+            ResourceStatus::RefreshFailed,
+        ] {
+            for internal in [None, Some(json!({})), Some(json!({"opaque": true}))] {
+                let state = state_with_pool("m", status, internal);
+                assert!(
+                    group_was_created(&state.resources["compute"], "general"),
+                    "{status:?}"
+                );
+            }
+        }
+        // First setup with nothing created is not installed; an unknown group never is.
+        let registered = registered_state("m");
+        assert!(!group_was_created(
+            &registered.resources["compute"],
+            "general"
+        ));
+        assert!(!group_was_created(
+            &installed_state("m").resources["compute"],
+            "other"
+        ));
     }
 
     /// First setup lands on Dsv6 because Dsv5 has no quota. The next release has the same
@@ -3729,15 +3858,16 @@ mod tests {
         );
         let mut stack_state = fresh_state.clone();
         for (id, entry) in &installed.resources {
-            stack_state.resources.insert(
-                id.clone(),
-                alien_core::StackResourceState::new_pending(
-                    entry.config.resource_type().to_string(),
-                    entry.config.clone(),
-                    Some(entry.lifecycle),
-                    entry.dependencies.clone(),
-                ),
+            let mut resource = alien_core::StackResourceState::new_pending(
+                entry.config.resource_type().to_string(),
+                entry.config.clone(),
+                Some(entry.lifecycle),
+                entry.dependencies.clone(),
             );
+            // An installed deployment: running.
+            resource.status = ResourceStatus::Running;
+            resource.internal_state = Some(json!({"opaque": true}));
+            stack_state.resources.insert(id.clone(), resource);
         }
 
         // Unchanged release, no stored choice: the prepared stack is the installed one.

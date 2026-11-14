@@ -252,17 +252,23 @@ pub struct ComputeRoom {
 }
 
 impl ComputeRoom {
-    /// `None` when either read fails: selection then stays on the plain catalog pick and the
-    /// quota check reports what it can read.
+    /// The reason as text when either read fails: selection then stays on the plain catalog
+    /// pick, and the caller says why it could not use quota.
     pub async fn read(
         skus: &dyn ResourceSkusApi,
         usages: &dyn ComputeUsagesApi,
         region: &str,
-    ) -> Option<Self> {
-        Some(Self {
+    ) -> Result<Self, String> {
+        Ok(Self {
             region: region.to_string(),
-            skus: skus.list_resource_skus(region).await.ok()?,
-            usages: usages.list_compute_usages(region).await.ok()?,
+            skus: skus
+                .list_resource_skus(region)
+                .await
+                .map_err(|err| format!("reading the VM SKUs failed: {err}"))?,
+            usages: usages
+                .list_compute_usages(region)
+                .await
+                .map_err(|err| format!("reading the compute usages failed: {err}"))?,
         })
     }
 
@@ -352,8 +358,14 @@ impl<'a> PoolQuotaLedger<'a> {
         let installed_series = state
             .resources
             .values()
-            .filter_map(|resource| resource.config.downcast_ref::<ComputeCluster>())
-            .flat_map(|cluster| &cluster.capacity_groups)
+            .filter_map(|resource| {
+                Some((resource, resource.config.downcast_ref::<ComputeCluster>()?))
+            })
+            .flat_map(|(resource, cluster)| {
+                cluster.capacity_groups.iter().filter(move |group| {
+                    crate::mutations::compute_cluster::group_was_created(resource, &group.group_id)
+                })
+            })
             .filter_map(|group| {
                 let spec = find_instance_type(Platform::Azure, group.instance_type.as_deref()?)?;
                 Some((group.group_id.clone(), spec.series))
@@ -585,6 +597,45 @@ mod tests {
     use httpmock::{Method::GET, MockServer};
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn a_failed_usage_read_is_reported_with_its_reason() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path_contains("/providers/Microsoft.Compute/skus");
+                then.status(200).json_body(json!({"value": []}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path_contains("/locations/eastus2/usages");
+                then.status(200).body("not json");
+            })
+            .await;
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".into(), server.base_url())]),
+        });
+        let skus = AzureResourceSkusClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        );
+        let usages =
+            AzureComputeUsagesClient::new(reqwest::Client::new(), AzureTokenCache::new(config));
+        let reason = match ComputeRoom::read(&skus, &usages, "eastus2").await {
+            Ok(_) => panic!("the usage read fails"),
+            Err(reason) => reason,
+        };
+        assert!(
+            reason.starts_with("reading the compute usages failed"),
+            "{reason}"
+        );
+        assert!(
+            reason.contains("Azure ListComputeUsages: JSON parse error for eastus2"),
+            "the reason keeps the underlying failure: {reason}"
+        );
+    }
 
     fn skus() -> Vec<ResourceSku> {
         serde_json::from_str(include_str!("fixtures/azure-compute-skus.json")).unwrap()
@@ -1173,15 +1224,16 @@ mod tests {
                 data_disk_gib_range: None,
             })
             .build();
-        state.resources.insert(
-            "compute".into(),
-            StackResourceState::new_pending(
-                "compute-cluster".into(),
-                alien_core::Resource::new(cluster),
-                Some(alien_core::ResourceLifecycle::Live),
-                Vec::new(),
-            ),
+        let mut resource = StackResourceState::new_pending(
+            "compute-cluster".into(),
+            alien_core::Resource::new(cluster),
+            Some(alien_core::ResourceLifecycle::Live),
+            Vec::new(),
         );
+        // An installed deployment: running.
+        resource.status = alien_core::ResourceStatus::Running;
+        resource.internal_state = Some(json!({"opaque": true}));
+        state.resources.insert("compute".into(), resource);
         let ledger = PoolQuotaLedger::new(&room, &state);
         assert!(ledger.has_room("general", spec("Standard_D8s_v6"), 3));
         assert!(!ledger.has_room("general", spec("Standard_D4s_v5"), 1));
