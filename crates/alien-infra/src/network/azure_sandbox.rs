@@ -513,7 +513,12 @@ fn validate_gateway_ips(resource: &str, ips: &[String], cidr: &str) -> Result<()
     }
     let (base, bits) = cidr
         .split_once('/')
-        .and_then(|(b, n)| Some((b.parse::<std::net::Ipv4Addr>().ok()?, n.parse::<u32>().ok()?)))
+        .and_then(|(b, n)| {
+            Some((
+                b.parse::<std::net::Ipv4Addr>().ok()?,
+                n.parse::<u32>().ok()?,
+            ))
+        })
         .filter(|(_, n)| *n <= 32)
         .ok_or_else(|| bad("The gateway subnet prefix is not an IPv4 range"))?;
     let mask = u32::MAX.checked_shl(32 - bits).unwrap_or(0);
