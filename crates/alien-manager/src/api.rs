@@ -48,6 +48,8 @@ impl Modify for BearerSecurity {
         crate::routes::values::delete_value,
         crate::routes::values::verify_values,
         crate::routes::values::export_values,
+        crate::routes::values::delete_scope,
+        crate::routes::values::move_values,
         crate::routes::airgap::target,
         crate::routes::airgap::bundle_sources,
         crate::routes::channels::list_channels,

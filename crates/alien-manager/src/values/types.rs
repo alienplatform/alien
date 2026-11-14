@@ -18,7 +18,19 @@ pub const MAX_VALUE_BYTES: usize = 24_000;
 const MAX_ID_LEN: usize = 128;
 const MAX_CONTAINER_NAME_LEN: usize = 63;
 
-/// Who a group of values belongs to: `dep:<deploymentId>`.
+/// What a scope belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeKind {
+    /// A deployment: `dep:<deploymentId>`.
+    Deployment,
+    /// A setup link, before any deployment exists: `link:<setupLinkId>`.
+    SetupLink,
+    /// A setup registration, before any deployment exists: `reg:<registrationId>`.
+    Registration,
+}
+
+/// Who a group of values belongs to: `dep:<deploymentId>`, `link:<setupLinkId>`
+/// or `reg:<registrationId>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ValueScope(String);
 
@@ -28,13 +40,39 @@ impl ValueScope {
         format!("dep:{deployment_id}").parse()
     }
 
+    /// The scope of the values given to a setup link.
+    pub fn setup_link(setup_link_id: &str) -> Result<Self> {
+        format!("link:{setup_link_id}").parse()
+    }
+
+    /// The scope of the answers given to a setup registration.
+    pub fn registration(registration_id: &str) -> Result<Self> {
+        format!("reg:{registration_id}").parse()
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// The deployment this scope belongs to.
-    pub fn deployment_id(&self) -> &str {
-        &self.0["dep:".len()..]
+    pub fn kind(&self) -> ScopeKind {
+        if self.0.starts_with("link:") {
+            ScopeKind::SetupLink
+        } else if self.0.starts_with("reg:") {
+            ScopeKind::Registration
+        } else {
+            ScopeKind::Deployment
+        }
+    }
+
+    /// The id after the scope's prefix.
+    pub fn id(&self) -> &str {
+        let (_, id) = self.0.split_once(':').expect("a scope always has a prefix");
+        id
+    }
+
+    /// The deployment this scope belongs to, for a deployment scope.
+    pub fn deployment_id(&self) -> Option<&str> {
+        (self.kind() == ScopeKind::Deployment).then(|| self.id())
     }
 }
 
@@ -42,9 +80,12 @@ impl FromStr for ValueScope {
     type Err = AlienError<ErrorData>;
 
     fn from_str(s: &str) -> Result<Self> {
-        if !s.strip_prefix("dep:").is_some_and(valid_id) {
+        let valid = ["dep:", "link:", "reg:"]
+            .iter()
+            .any(|prefix| s.strip_prefix(prefix).is_some_and(valid_id));
+        if !valid {
             return Err(ErrorData::bad_request(format!(
-                "'{s}' is not a value scope; use dep:<deploymentId>"
+                "'{s}' is not a value scope; use dep:<deploymentId>, link:<setupLinkId> or reg:<registrationId>"
             )));
         }
         Ok(Self(s.to_string()))
@@ -83,6 +124,17 @@ impl ValueSlot {
         Self(format!("{SERVED_PREFIX}{digest}"))
     }
 
+    /// The slot that records a finished move or copy, by a hash of its source,
+    /// destination and claim id. It is never listed or addressable through the API.
+    pub(crate) fn moved(key: &str) -> Self {
+        Self(format!("{MOVED_PREFIX}{key}"))
+    }
+
+    /// Whether this slot is a bookkeeping record, not a value.
+    pub(crate) fn is_record(&self) -> bool {
+        self.0.starts_with(SERVED_PREFIX) || self.0.starts_with(MOVED_PREFIX)
+    }
+
     /// The digest, for the slot of a served value.
     pub(crate) fn served_digest(&self) -> Option<&str> {
         self.0.strip_prefix(SERVED_PREFIX)
@@ -90,7 +142,10 @@ impl ValueSlot {
 
     /// Reads a slot name from a backend, which also holds served-value slots.
     pub(crate) fn from_stored(s: &str) -> Result<Self> {
-        match s.strip_prefix(SERVED_PREFIX) {
+        match s
+            .strip_prefix(SERVED_PREFIX)
+            .or_else(|| s.strip_prefix(MOVED_PREFIX))
+        {
             Some(digest) if !digest.is_empty() && digest.chars().all(|c| c.is_ascii_hexdigit()) => {
                 Ok(Self(s.to_string()))
             }
@@ -141,6 +196,7 @@ fn valid_container_name(name: &str) -> bool {
 }
 
 const SERVED_PREFIX: &str = "served:";
+const MOVED_PREFIX: &str = "moved:";
 
 impl FromStr for ValueSlot {
     type Err = AlienError<ErrorData>;
@@ -319,7 +375,7 @@ mod tests {
 
     #[test]
     fn scopes_and_slots_accept_the_documented_forms_only() {
-        for ok in ["dep:dep_abc123", "dep:a-b.c"] {
+        for ok in ["dep:dep_abc123", "dep:a-b.c", "link:key1", "reg:op.1"] {
             assert!(ok.parse::<ValueScope>().is_ok(), "{ok}");
         }
         for bad in [
@@ -328,8 +384,8 @@ mod tests {
             "dep:a:b",
             "dep:a/b",
             "other:x",
-            "link:key1",
-            "reg:op.1",
+            "link:",
+            "reg:a:b",
             "dep_x",
             "dep:a b",
         ] {

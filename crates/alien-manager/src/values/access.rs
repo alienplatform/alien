@@ -96,6 +96,16 @@ impl ValueGrant {
     }
 }
 
+/// What a signed claim allows: emptying `from` into `to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueMove {
+    pub from: ValueScope,
+    pub to: ValueScope,
+    /// The claim's unique id. The store records a finished move under it, so
+    /// presenting the same claim again changes nothing.
+    pub claim_id: String,
+}
+
 /// Decides whether a request may use a scope's values.
 ///
 /// The standalone manager checks its own tokens and deployment rights. An
@@ -112,6 +122,18 @@ pub trait ValueAccessAuthorizer: Send + Sync {
         scope: &ValueScope,
         needed: ValueAccess,
     ) -> std::result::Result<ValueGrant, AlienError<ErrorData>>;
+
+    /// Checks a signed claim that moves the values of `source` into the
+    /// deployment scope the claim names, and returns that scope. The
+    /// destination comes only from the verified claim. An authorizer that
+    /// takes no such claims keeps this default, which refuses.
+    async fn authorize_move(
+        &self,
+        _headers: &HeaderMap,
+        _source: &ValueScope,
+    ) -> std::result::Result<ValueMove, AlienError<ErrorData>> {
+        Err(ErrorData::forbidden("This manager does not move values"))
+    }
 }
 
 #[cfg(test)]

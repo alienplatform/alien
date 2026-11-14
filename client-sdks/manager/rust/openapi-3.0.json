@@ -2472,6 +2472,34 @@
             "bearer": []
           }
         ]
+      },
+      "delete": {
+        "tags": [
+          "values"
+        ],
+        "description": "Removes every value of a setup link or registration scope, for when the link is revoked or the registration expires. A deployment scope is refused: its values go with the deployment.",
+        "operationId": "delete_scope",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "link:<setupLinkId> or reg:<registrationId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, or there was nothing to delete"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/v1/values/{scope}/export": {
@@ -2505,6 +2533,43 @@
         "responses": {
           "200": {
             "description": "The target's metadata of the stored values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValueSlotsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/values/{scope}/move": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "description": "Copies a setup link's values, or moves a registration's values, into the deployment created from it. Needs a signed claim that names the source and the deployment; nothing in the request body or path chooses the destination. Repeating a finished move changes nothing.",
+        "operationId": "move_values",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "link:<setupLinkId> or reg:<registrationId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata of the values now held by the deployment",
             "content": {
               "application/json": {
                 "schema": {
