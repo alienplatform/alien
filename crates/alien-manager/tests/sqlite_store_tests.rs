@@ -644,7 +644,13 @@ async fn update_status() {
     assert_eq!(fetched.status, "update-pending");
 
     // A retained or removing installation is not restarted by a redeploy.
-    for (name, status) in [("ret", "retained"), ("del", "deleting")] {
+    for (name, status) in [
+        ("req", "retention-required"),
+        ("ret", "retained"),
+        ("pend", "delete-pending"),
+        ("del", "deleting"),
+        ("gone", "deleted"),
+    ] {
         let dep = create_test_deployment(&store, &group_id, name, Platform::Aws).await;
         db.conn()
             .lock()
