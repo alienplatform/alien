@@ -149,7 +149,7 @@ async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
 
 #[tokio::test]
 async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() {
-    for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+    for platform in [Platform::Gcp, Platform::Local] {
         let mut declared = sandbox(None);
         declared.egress = SandboxEgress::Internet;
         let result = PreflightRunner::new()
@@ -178,4 +178,32 @@ async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() 
             "released Allow stays available on {platform}: {result:?}"
         );
     }
+}
+
+/// Azure hosts the egress gateway in the deployment's VNet, so `internet` plans there with an
+/// image that carries the agent, and a catalog image (no agent) is refused with the same code.
+#[tokio::test]
+async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
+    let mut catalog = sandbox(None);
+    catalog.egress = SandboxEgress::Internet;
+    let refused = PreflightRunner::new()
+        .run_compile_time_checks(&stack_with(catalog), Platform::Azure)
+        .await
+        .expect("preflight runs");
+    assert!(!refused.success, "{refused:?}");
+    let rendered = format!("{refused:?}");
+    assert!(rendered.contains("SANDBOX_EGRESS_GATEWAY_UNAVAILABLE"), "{rendered}");
+    assert!(rendered.contains("Alien sandbox agent"), "{rendered}");
+
+    let mut registry = sandbox(None);
+    registry.code = SandboxCode::Image {
+        image: "example.azurecr.io/box:1".to_string(),
+        bundled_from: None,
+    };
+    registry.egress = SandboxEgress::Internet;
+    let planned = PreflightRunner::new()
+        .run_compile_time_checks(&stack_with(registry), Platform::Azure)
+        .await
+        .expect("preflight runs");
+    assert!(planned.success, "{planned:?}");
 }

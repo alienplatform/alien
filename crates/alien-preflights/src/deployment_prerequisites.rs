@@ -200,7 +200,11 @@ impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
     }
 
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        // Azure's gateway is two VMs in the deployment's VNet that setup creates, not a managed
+        // Container, so there is no backend to require; the binding refuses a deployment whose
+        // setup predates them ("re-run setup").
         is_cloud_platform(state.platform)
+            && state.platform != Platform::Azure
             && stack.resources().any(|(_, entry)| {
                 entry
                     .config
@@ -1637,7 +1641,7 @@ mod tests {
             .build();
         let mut config = deployment_config();
         let check = SandboxEgressGatewayCheck;
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        for platform in [Platform::Aws, Platform::Gcp] {
             let state = stack_state(platform);
             assert!(check.should_run(&stack, &state, &config));
             let result = check.check(&stack, &state, &config).await.unwrap();
@@ -1648,6 +1652,8 @@ mod tests {
         }
         assert!(!check.should_run(&stack, &stack_state(Platform::Kubernetes), &config));
         assert!(!check.should_run(&stack, &stack_state(Platform::Local), &config));
+        // Azure's gateway VMs come from setup, so no managed backend is required.
+        assert!(!check.should_run(&stack, &stack_state(Platform::Azure), &config));
         config.compute_backend = Some(horizon_backend());
         let result = check
             .check(&stack, &stack_state(Platform::Aws), &config)
