@@ -122,13 +122,12 @@ impl StandaloneRuntimeIdentity {
     /// the installation is not issued while it is being removed, as on the
     /// hosted manager; the Operator's own sync keeps working then.
     ///
-    /// A retained installation gets none either. Its manager routes do not
-    /// confine a deployment key to the erase: redeploy and retry accept it, and
-    /// either would restart an installation whose access was revoked. Erasing
-    /// retained data is the setup workflow's job, which uses the setup token.
+    /// A retained installation still gets one, so it can be erased: redeploy
+    /// refuses a retained installation whatever key asks, so the key cannot
+    /// restart it.
     async fn setup_deployment(&self, id: &str) -> Result<DeploymentRecord, AlienError> {
         let record = self.load(id).await?;
-        if matches!(record.status.as_str(), "deleting" | "deleted" | "retained") {
+        if matches!(record.status.as_str(), "deleting" | "deleted") {
             return Err(AlienError::new(ErrorData::DeploymentRemoving {
                 deployment_id: record.id.clone(),
             })
@@ -1122,7 +1121,7 @@ mod tests {
             .is_err());
     }
 
-    /// A deployment being removed gets no rerun key, and the Operator is told why, while its
+    /// A deployment being removed gets no rerun key (a retained one does, to be erased), and the Operator is told why, while its
     /// own sync keeps working (see the next test).
     #[tokio::test]
     async fn no_rerun_key_is_issued_while_a_deployment_is_being_removed() {
@@ -1131,7 +1130,7 @@ mod tests {
             ("delete-pending", true),
             ("delete-failed", true),
             ("deleting", false),
-            ("retained", false),
+            ("retained", true),
         ] {
             let mut deployment = record("dep-1", Platform::Kubernetes, None);
             deployment.status = status.into();
