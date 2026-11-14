@@ -54,6 +54,7 @@ fn module(target: TerraformTarget) -> ModuleFiles {
                 setup_target: target.name().to_string(),
                 setup_fingerprint: "fp-test".to_string(),
                 setup_fingerprint_version: 1,
+                destroy_guard: false,
             }),
             helm_install: None,
             setup_identity: None,
