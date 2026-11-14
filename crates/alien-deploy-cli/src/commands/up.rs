@@ -5680,9 +5680,7 @@ async fn resolve_deployment_info(
                 "deploy",
             )
             .await?;
-            if rerun.in_cluster {
-                in_cluster.mark(name, rerun.expires_at);
-            }
+            in_cluster.note(name, &rerun);
             let token = rerun.token;
             let manager_url = args
                 .manager_url

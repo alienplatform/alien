@@ -140,9 +140,7 @@ async fn down_command_with(
                 "destroy",
             )
             .await?;
-            if rerun.in_cluster {
-                in_cluster.mark(&tracked.name, rerun.expires_at);
-            }
+            in_cluster.note(&tracked.name, &rerun);
             let token = rerun.token;
             let url = args
                 .manager_url

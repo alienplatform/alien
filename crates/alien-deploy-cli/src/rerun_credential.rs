@@ -35,6 +35,16 @@ pub struct RerunToken {
     pub in_cluster: bool,
     /// When an in-cluster key stops working.
     pub expires_at: Option<DateTime<Utc>>,
+    /// The Helm release and namespace looked for, when the Operator was not there.
+    pub missing_install: Option<MissingInstall>,
+}
+
+/// Where the Operator was looked for and not found.
+#[derive(Debug, Clone)]
+pub struct MissingInstall {
+    pub release: String,
+    pub namespace: String,
+    pub cli_name: String,
 }
 
 impl fmt::Debug for RerunToken {
@@ -85,9 +95,11 @@ pub async fn resolve(
             token,
             in_cluster: false,
             expires_at: None,
+            missing_install: None,
         });
     }
     let mut refusal = None;
+    let mut missing_install = None;
     if tracked.platform == "kubernetes" {
         let (release, namespace) = helm_target(tracked, access);
         match fetch(&release, &namespace, access).await {
@@ -96,9 +108,19 @@ pub async fn resolve(
                     token,
                     in_cluster: true,
                     expires_at: Some(expires_at),
+                    missing_install: None,
                 })
             }
-            Err(reason) => refusal = Some(reason),
+            Err(reason) => {
+                if reason.starts_with(NO_OPERATOR) {
+                    missing_install = Some(MissingInstall {
+                        release,
+                        namespace,
+                        cli_name: cli_name.to_string(),
+                    });
+                }
+                refusal = Some(reason)
+            }
         }
     }
     if let Some(token) = tracked.token.clone() {
@@ -106,6 +128,7 @@ pub async fn resolve(
             token,
             in_cluster: false,
             expires_at: None,
+            missing_install,
         });
     }
     if refusal.as_deref() == Some(REMOVING) {
@@ -173,6 +196,7 @@ async fn fetch(
 }
 
 const REMOVING: &str = "the deployment is being removed";
+const NO_OPERATOR: &str = "no Operator named";
 
 /// One line saying why no key came back, from `kubectl exec`'s stderr.
 fn failure_reason(stderr: &str, release: &str, namespace: &str) -> String {
@@ -197,7 +221,7 @@ fn failure_reason(stderr: &str, release: &str, namespace: &str) -> String {
     } else if has("forbidden") {
         "your Kubernetes access does not allow running a command in the Operator pod".into()
     } else if has("notfound") || has("not found") {
-        format!("no Operator named '{release}' is running in namespace '{namespace}'")
+        format!("{NO_OPERATOR} '{release}' is running in namespace '{namespace}'")
     } else if has("unauthorized")
         || has("must be logged in")
         || has("unable to connect")
@@ -248,36 +272,86 @@ pub fn key_expired(name: &str) -> AlienError<ErrorData> {
 
 /// Whether `error` or a cause is an HTTP 401.
 pub fn is_unauthorized(error: &AlienError<ErrorData>) -> bool {
-    let mut refused = error.http_status_code == Some(401);
-    let mut source = error.source.as_deref();
-    while let Some(cause) = source {
-        refused |= cause.http_status_code == Some(401);
-        source = cause.source.as_deref();
-    }
-    refused
+    has_status(error, 401)
 }
 
-/// Records that a run uses an in-cluster key, and for which deployment, so a
-/// 401 later in the run can be explained.
+/// What a run learned about its credential, so an error later in the run can
+/// be explained: an in-cluster key (a 401 means a newer run took over or the
+/// key expired), or no installation at the place it looked (a refused saved
+/// key means the wrong release or namespace).
 #[derive(Default)]
-pub struct InClusterUse(Mutex<Option<(String, Option<DateTime<Utc>>)>>);
+pub struct InClusterUse(Mutex<UseState>);
+
+#[derive(Default)]
+struct UseState {
+    in_cluster: Option<(String, Option<DateTime<Utc>>)>,
+    missing: Option<(String, MissingInstall)>,
+}
 
 impl InClusterUse {
     pub fn mark(&self, name: &str, expires_at: Option<DateTime<Utc>>) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((name.to_string(), expires_at));
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).in_cluster =
+            Some((name.to_string(), expires_at));
     }
 
-    /// Replace a 401 from a run that used an in-cluster key with the takeover message.
+    /// Record what `resolve` found for `name`.
+    pub fn note(&self, name: &str, rerun: &RerunToken) {
+        if rerun.in_cluster {
+            self.mark(name, rerun.expires_at);
+        }
+        if let Some(missing) = &rerun.missing_install {
+            self.0.lock().unwrap_or_else(|e| e.into_inner()).missing =
+                Some((name.to_string(), missing.clone()));
+        }
+    }
+
+    /// Replace a refusal with what it means for this run.
     pub fn explain(&self, error: AlienError<ErrorData>) -> AlienError<ErrorData> {
-        let name = self.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        match name {
-            Some((name, Some(expires_at))) if is_unauthorized(&error) && Utc::now() >= expires_at => {
-                key_expired(&name)
+        let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((name, missing)) = &state.missing {
+            if has_status(&error, 401) || has_status(&error, 409) {
+                return no_installation(name, missing);
             }
-            Some((name, _)) if is_unauthorized(&error) => took_over(&name),
+        }
+        match &state.in_cluster {
+            Some((name, Some(expires_at)))
+                if is_unauthorized(&error) && Utc::now() >= *expires_at =>
+            {
+                key_expired(name)
+            }
+            Some((name, _)) if is_unauthorized(&error) => took_over(name),
             _ => error,
         }
     }
+}
+
+/// The Operator was not where the CLI looked, and the saved key was refused.
+fn no_installation(name: &str, missing: &MissingInstall) -> AlienError<ErrorData> {
+    let MissingInstall {
+        release,
+        namespace,
+        cli_name,
+    } = missing;
+    AlienError::new(ErrorData::SetupTokenRequired {
+        message: format!(
+            "Cannot update \"{name}\": no installation found as Helm release \"{release}\" in namespace \"{namespace}\". \
+             If it was installed under another release or namespace, run this again with --helm-release <release> --namespace <namespace>. \
+             Or use the setup token you were given: {cli_name} deploy --name {} --token-file <path>. \
+             Your deployment keeps running.",
+            shell_single_quote(name)
+        ),
+    })
+}
+
+/// Whether `error` or a cause has this HTTP status.
+fn has_status(error: &AlienError<ErrorData>, status: u16) -> bool {
+    let mut found = error.http_status_code == Some(status);
+    let mut source = error.source.as_deref();
+    while let Some(cause) = source {
+        found |= cause.http_status_code == Some(status);
+        source = cause.source.as_deref();
+    }
+    found
 }
 
 fn shell_single_quote(value: &str) -> String {
@@ -425,6 +499,61 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_saved_key_after_no_installation_names_what_was_looked_for() {
+        let missing = RerunToken {
+            token: "saved".into(),
+            in_cluster: false,
+            expires_at: None,
+            missing_install: Some(MissingInstall {
+                release: "alien-operator".into(),
+                namespace: "alien-prod".into(),
+                cli_name: "acme-deploy".into(),
+            }),
+        };
+        for status in [401, 409] {
+            let usage = InClusterUse::default();
+            usage.note("prod", &missing);
+            let mut refused = AlienError::new(ErrorData::GenericError {
+                message: "Invalid token".into(),
+            });
+            refused.http_status_code = Some(status);
+            let shown = usage.explain(refused).to_string();
+            assert!(
+                shown.contains("Cannot update \"prod\": no installation found as Helm release \"alien-operator\" in namespace \"alien-prod\"."),
+                "{shown}"
+            );
+            assert!(
+                shown.contains("--helm-release <release> --namespace <namespace>"),
+                "{shown}"
+            );
+            assert!(
+                shown.contains("acme-deploy deploy --name 'prod' --token-file <path>"),
+                "{shown}"
+            );
+            assert!(shown.contains("Your deployment keeps running."), "{shown}");
+            assert!(!shown.to_lowercase().contains("alien\""), "{shown}");
+        }
+        // Other failures, and a run that found the installation, are not rewritten.
+        let usage = InClusterUse::default();
+        usage.note("prod", &missing);
+        let mut other = AlienError::new(ErrorData::GenericError {
+            message: "boom".into(),
+        });
+        other.http_status_code = Some(500);
+        assert!(usage.explain(other).to_string().contains("boom"));
+    }
+
+    #[test]
+    fn no_operator_in_the_namespace_is_remembered_as_a_missing_installation() {
+        let reason = failure_reason(
+            "Error from server (NotFound): deployments.apps \"alien-operator\" not found",
+            "alien-operator",
+            "alien-prod",
+        );
+        assert!(reason.starts_with(NO_OPERATOR), "{reason}");
+    }
+
+    #[test]
     fn a_removing_deployment_gets_its_own_reason() {
         assert_eq!(
             failure_reason("setup-credential: removing", "r", "n"),
@@ -438,6 +567,7 @@ mod tests {
             token: "ax_setup_secret_value".into(),
             in_cluster: true,
             expires_at: None,
+            missing_install: None,
         };
         assert!(!format!("{token:?}").contains("ax_setup_secret_value"));
     }
