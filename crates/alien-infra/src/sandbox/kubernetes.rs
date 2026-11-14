@@ -619,7 +619,7 @@ async fn report_pods_without_network_ready_endpoint(
 const DEFAULT_WARM_POOL_SIZE: usize = 2;
 
 /// What one replenish pass found and did.
-struct WarmPool {
+pub(crate) struct WarmPool {
     /// Idle pods already waiting when the pass ran.
     idle: usize,
     /// Pods the pass added.
@@ -669,10 +669,12 @@ async fn confirm_runtime_class(
 /// translated to a pod, and one that filters after. Without the chart's Service name the literal
 /// address from an older chart is used. A Service that cannot be read is an error, not a pod
 /// without the proof.
+///
+/// The Service is the Operator's own, so it is read from the release namespace, which is not the
+/// sandbox namespace when `sandbox.namespace` places the pods elsewhere.
 pub(crate) async fn resolve_operator_address(
     ctx: &ResourceControllerContext<'_>,
     sandbox: &Sandbox,
-    namespace: &str,
 ) -> Result<()> {
     let Ok(value) = std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) else {
         return Ok(());
@@ -692,13 +694,14 @@ pub(crate) async fn resolve_operator_address(
                 alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE
             ))
         })?;
+    let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
     let client = ctx
         .service_provider
         .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
         .await?;
     let service =
         client
-            .get_service(namespace, name)
+            .get_service(&namespace, name)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!("Failed to read the Operator's own Service '{name}'"),
@@ -726,7 +729,7 @@ pub(crate) async fn resolve_operator_address(
     Ok(())
 }
 
-async fn replenish_warm_pool(
+pub(crate) async fn replenish_warm_pool(
     ctx: &ResourceControllerContext<'_>,
     sandbox: &Sandbox,
     namespace: &str,
@@ -803,7 +806,7 @@ async fn replenish_warm_pool(
         kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
     );
     placement.apply(&mut pod);
-    resolve_operator_address(ctx, sandbox, namespace).await?;
+    resolve_operator_address(ctx, sandbox).await?;
     super::kubernetes_spec::require_enforced_policy(
         &mut pod,
         super::kubernetes_spec::operator_address().as_deref(),

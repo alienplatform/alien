@@ -888,9 +888,7 @@ mod tests {
                 then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
             })
             .await;
-        assert!(resolve_operator_address(&ctx, &sandbox, "test-ns")
-            .await
-            .is_err());
+        assert!(resolve_operator_address(&ctx, &sandbox).await.is_err());
         missing.delete_async().await;
         let mut headless = server
             .mock_async(|when, then| {
@@ -898,9 +896,7 @@ mod tests {
                 then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"acme"},"spec":{"clusterIP":"None"}}));
             })
             .await;
-        assert!(resolve_operator_address(&ctx, &sandbox, "test-ns")
-            .await
-            .is_err());
+        assert!(resolve_operator_address(&ctx, &sandbox).await.is_err());
         headless.delete_async().await;
 
         // A publicly numbered Service address cannot be blocked by the direct-egress policy.
@@ -912,15 +908,15 @@ mod tests {
             .await;
         let mut direct = sandbox.clone();
         direct.egress = alien_core::SandboxEgress::Allow;
-        let refused = resolve_operator_address(&ctx, &direct, "test-ns")
-            .await
-            .unwrap_err();
-        assert!(refused.message.contains("publicly numbered"), "{}", refused.message);
+        let refused = resolve_operator_address(&ctx, &direct).await.unwrap_err();
+        assert!(
+            refused.message.contains("publicly numbered"),
+            "{}",
+            refused.message
+        );
         assert!(kubernetes_spec::operator_address().is_none());
         // The gateway policy admits only the gateway, so the same address is a valid canary.
-        resolve_operator_address(&ctx, &sandbox, "test-ns")
-            .await
-            .unwrap();
+        resolve_operator_address(&ctx, &sandbox).await.unwrap();
         kubernetes_spec::forget_operator_address();
         public.delete_async().await;
 
@@ -930,9 +926,7 @@ mod tests {
                 then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"acme"},"spec":{"clusterIP":"10.96.0.9"}}));
             })
             .await;
-        resolve_operator_address(&ctx, &sandbox, "test-ns")
-            .await
-            .unwrap();
+        resolve_operator_address(&ctx, &sandbox).await.unwrap();
         assert_eq!(
             kubernetes_spec::operator_address().as_deref(),
             Some("10.96.0.9:8080")
@@ -950,6 +944,53 @@ mod tests {
             .find(|var| var.name == "ALIEN_SANDBOX_POLICY_CANARY")
             .and_then(|var| var.value);
         assert_eq!(canary.as_deref(), Some("10.96.0.9:8080"));
+
+        // Refilling the pool of a sandbox whose pods go to another namespace still reads the
+        // Operator's Service where the Operator runs (the release namespace, "test-ns").
+        kubernetes_spec::forget_operator_address();
+        let elsewhere = MockServer::start_async().await;
+        point_at(&mut ctx, &elsewhere);
+        let service = elsewhere
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/namespaces/test-ns/services/acme");
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"acme"},"spec":{"clusterIP":"10.96.0.9"}}));
+            })
+            .await;
+        elsewhere
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/namespaces/sandboxes/pods");
+                then.status(200).json_body(
+                    json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[]}),
+                );
+            })
+            .await;
+        cluster_ranges(&elsewhere, "10.42.0.0/16").await;
+        elsewhere
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/namespaces/default/services/kubernetes");
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"kubernetes"},"spec":{"clusterIP":"10.96.0.1","ports":[{"port":443}]}}));
+            })
+            .await;
+        elsewhere
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/apis/discovery.k8s.io/v1/namespaces/default/endpointslices/kubernetes");
+                then.status(200).json_body(json!({"apiVersion":"discovery.k8s.io/v1","kind":"EndpointSlice","metadata":{"name":"kubernetes"},"addressType":"IPv4","endpoints":[{"addresses":["172.16.0.2"]}],"ports":[{"port":6443}]}));
+            })
+            .await;
+        let mut plain = sandbox.clone();
+        plain.egress = SandboxEgress::None;
+        // Later requests are unmocked and fail; only where the Service is read matters here.
+        let _ = crate::sandbox::kubernetes::replenish_warm_pool(
+            &ctx,
+            &plain,
+            "sandboxes",
+            "gvisor",
+            1,
+            None,
+        )
+        .await;
+        service.assert_hits_async(1).await;
         unsafe { std::env::remove_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) };
         kubernetes_spec::forget_operator_address();
     }
