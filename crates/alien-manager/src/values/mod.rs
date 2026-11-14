@@ -221,14 +221,32 @@ impl ValueStore {
         // recorded before anything is copied. A retry after a crash reuses
         // that set instead of reading the source afresh: an answer written to
         // the source in between is newer than what the claim covered.
-        let mut marked = self.recorded_slots(to, &key).await?;
-        if marked.is_empty() {
+        // The set is trusted only once a "markers complete" record exists. A
+        // failure part-way through writing markers leaves the set incomplete:
+        // the retry reads the source again and adds the slots that have no
+        // marker yet (keeping the versions already recorded).
+        let complete = ValueSlot::moved(&set_complete_key(&key));
+        if self.backend.get(to, &complete).await?.is_none() {
+            let existing = self.recorded_slots(to, &key).await?;
             for stored in self.list(from).await? {
-                self.write_marker(to, &key, &stored.slot, stored.updated_at)
-                    .await?;
+                if existing.iter().all(|(name, _)| name != stored.slot.as_str()) {
+                    self.write_marker(to, &key, &stored.slot, stored.updated_at)
+                        .await?;
+                }
             }
-            marked = self.recorded_slots(to, &key).await?;
+            self.backend
+                .put(
+                    to,
+                    &StoredValue {
+                        slot: complete,
+                        kind: ValueKind::Plain,
+                        value: String::new(),
+                        updated_at: now_in_stored_precision(),
+                    },
+                )
+                .await?;
         }
+        let marked = self.recorded_slots(to, &key).await?;
         let mut copied = Vec::new();
         let mut removable = Vec::new();
         for (name, version) in marked {
@@ -431,6 +449,13 @@ fn transfer_key(from: &ValueScope, to: &ValueScope, claim_id: &str) -> String {
         hasher.update(part.as_bytes());
     }
     hex::encode(hasher.finalize())
+}
+
+/// Names the record that says every slot marker of a transfer is written.
+/// It is a separate hash, so it is not under the transfer's marker prefix.
+fn set_complete_key(transfer: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(format!("{transfer}|markers-complete").as_bytes()))
 }
 
 /// Names the marker of one slot of a finished transfer.
@@ -677,11 +702,21 @@ mod tests {
         allowed: std::sync::atomic::AtomicUsize,
         /// How many copies (`put_if_absent`) are still allowed.
         copies: std::sync::atomic::AtomicUsize,
+        /// How many writes (`put`) are still allowed.
+        puts: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait::async_trait]
     impl super::backend::ValueBackend for CrashingDeletes {
         async fn put(&self, s: &ValueScope, v: &StoredValue) -> Result<()> {
+            use std::sync::atomic::Ordering;
+            if self
+                .puts
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_err()
+            {
+                return Err(ErrorData::internal("crash".to_string()));
+            }
             self.inner.put(s, v).await
         }
         async fn put_if_absent(&self, s: &ValueScope, v: &StoredValue) -> Result<bool> {
@@ -725,6 +760,7 @@ mod tests {
             inner: sealed_backend(Arc::new(kv)).1,
             allowed: std::sync::atomic::AtomicUsize::new(allowed),
             copies: std::sync::atomic::AtomicUsize::new(usize::MAX),
+            puts: std::sync::atomic::AtomicUsize::new(usize::MAX),
         });
         let store = ValueStore::new(backend.clone());
         (dir, backend, store)
@@ -787,6 +823,31 @@ mod tests {
             store.get(&dep, &slot("env:B")).await.unwrap().unwrap().value,
             "old"
         );
+    }
+
+    #[tokio::test]
+    async fn a_retry_after_a_failure_between_marker_writes_covers_every_slot() {
+        use std::sync::atomic::Ordering;
+        let (_dir, backend, store) = crashing_store(100).await;
+        let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
+        for name in ["env:A", "env:B"] {
+            store
+                .put(&reg, &slot(name), ValueKind::Plain, name.into())
+                .await
+                .unwrap();
+        }
+        // The first marker is written, the second write fails.
+        backend.puts.store(1, Ordering::SeqCst);
+        assert!(store.move_scope(&reg, &dep, "claim").await.is_err());
+
+        backend.puts.store(usize::MAX, Ordering::SeqCst);
+        let held = store.move_scope(&reg, &dep, "claim").await.unwrap();
+        let mut names: Vec<_> = held.iter().map(|m| m.slot.as_str().to_string()).collect();
+        names.sort();
+        assert_eq!(names, ["env:A", "env:B"]);
+        assert!(store.list(&reg).await.unwrap().is_empty());
+        // A further retry still reports both.
+        assert_eq!(store.move_scope(&reg, &dep, "claim").await.unwrap().len(), 2);
     }
 
     #[tokio::test]
