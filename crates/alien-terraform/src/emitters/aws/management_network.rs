@@ -7,8 +7,9 @@
 //! exist, so the policy fails closed.
 
 use crate::{
+    block::attr,
     emitters::aws::{
-        helpers::{default_network, stack_has_setup_postgres},
+        helpers::{default_network, nested_block, stack_has_setup_postgres},
         network::gateway_subnet_ids,
     },
     expr,
@@ -70,6 +71,8 @@ pub(crate) struct NetworkExpressions {
     pub locals: Vec<(String, Expression)>,
     vpc: Expression,
     subnets: Expression,
+    /// The local holding the stack's subnets padded with blank entries.
+    subnets_local: String,
 }
 
 /// Longest VPC ID: `vpc-` and 17 hexadecimal digits.
@@ -82,8 +85,8 @@ const SUBNET_ID_CHARS: i64 = 24;
 /// The policy names exactly [`SUBNET_PLACEHOLDERS`] subnet entries, each cut to the length of a
 /// subnet ID, and the VPC cut to the length of a VPC ID: a real ID is never cut, and the policy
 /// keeps the size it was packed at. Entries past the stack's subnets are blank and match no
-/// subnet; a network with more subnets than that has the extra ones left out, so management
-/// cannot use them.
+/// subnet; a network with more subnets than that fails the plan
+/// ([`NetworkExpressions::subnet_limit_lifecycle`]).
 pub(crate) fn network_expressions(
     ctx: &EmitContext<'_>,
     label: &str,
@@ -187,7 +190,38 @@ pub(crate) fn network_expressions(
                 })
                 .collect(),
         ),
+        subnets_local,
     }))
+}
+
+impl NetworkExpressions {
+    /// A `lifecycle` block for the management role that fails the plan when the stack's
+    /// network has more subnets than the policy names, rather than leaving the extra ones out.
+    pub(crate) fn subnet_limit_lifecycle(&self) -> hcl::Structure {
+        let subnets_local = &self.subnets_local;
+        nested_block(
+            "lifecycle",
+            vec![nested_block(
+                "precondition",
+                vec![
+                    attr(
+                        "condition",
+                        // The local is padded with SUBNET_PLACEHOLDERS blank entries.
+                        expr::raw(format!(
+                            "length(local.{subnets_local}) <= {}",
+                            2 * SUBNET_PLACEHOLDERS
+                        )),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(format!(
+                            "The management role can name at most {SUBNET_PLACEHOLDERS} subnets (public, private and sandbox gateway subnets together). Use at most {SUBNET_PLACEHOLDERS} subnets."
+                        )),
+                    ),
+                ],
+            )],
+        )
+    }
 }
 
 /// Replace the placeholders [`network_scope`] rendered with the stack's VPC and subnets.

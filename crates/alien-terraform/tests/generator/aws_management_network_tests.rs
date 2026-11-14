@@ -98,6 +98,12 @@ fn functions(context: &mut EvalContext<'_>) {
             .build(|args| Ok(Value::from(string_arg(&args, 0).trim()))),
     );
     context.declare_func(
+        "length",
+        FuncDef::builder()
+            .param(ParamType::Any)
+            .build(|args| Ok(Value::from(list_arg(&args[0]).len() as u64))),
+    );
+    context.declare_func(
         "substr",
         FuncDef::builder()
             .params([ParamType::String, ParamType::Number, ParamType::Number])
@@ -145,6 +151,28 @@ fn management_documents(stack: &Stack, settings: NetworkSettings, vars: Json) ->
         .filter(|(address, _)| address.contains("management_managed_policy"))
         .collect();
     assert!(!documents.is_empty());
+    let context = evaluation_context(&module, vars);
+    documents
+        .into_iter()
+        .map(|(address, document)| {
+            let document = serde_json::to_value(
+                document
+                    .evaluate(&context)
+                    .unwrap_or_else(|error| panic!("{address} evaluates: {error}")),
+            )
+            .unwrap();
+            assert!(
+                !document.to_string().contains("0a1e0000"),
+                "{address} keeps a network placeholder: {document:#}"
+            );
+            document
+        })
+        .collect()
+}
+
+/// The module's network locals and the values Terraform knows on apply, for the given
+/// variable values.
+fn evaluation_context(module: &alien_terraform::ModuleFiles, vars: Json) -> EvalContext<'static> {
     let mut context = EvalContext::new();
     functions(&mut context);
     for (name, value) in [
@@ -189,22 +217,7 @@ fn management_documents(stack: &Stack, settings: NetworkSettings, vars: Json) ->
         }
     }
     context.declare_var("local", hcl::to_value(Json::Object(locals)).unwrap());
-    documents
-        .into_iter()
-        .map(|(address, document)| {
-            let document = serde_json::to_value(
-                document
-                    .evaluate(&context)
-                    .unwrap_or_else(|error| panic!("{address} evaluates: {error}")),
-            )
-            .unwrap();
-            assert!(
-                !document.to_string().contains("0a1e0000"),
-                "{address} keeps a network placeholder: {document:#}"
-            );
-            document
-        })
-        .collect()
+    context
 }
 
 /// Every value of `key` in any condition of a statement that allows `action`.
@@ -391,5 +404,68 @@ fn aws_management_waiting_for_the_network_leaves_the_module_unchanged() {
             }
             assert_eq!(without, with, "{setup_management:?} {settings:?}");
         }
+    }
+}
+
+/// The policy names at most nine subnets. A network with more fails the plan on the management
+/// role's precondition instead of leaving the extra subnets out of the policy.
+#[test]
+fn aws_management_policy_refuses_more_subnets_than_it_names() {
+    let settings = NetworkSettings::ByoVpcAws {
+        vpc_id: EXISTING_VPC.to_string(),
+        public_subnet_ids: vec![],
+        private_subnet_ids: vec!["subnet-0e0000000000priv1".to_string()],
+        security_group_ids: vec![String::new()],
+    };
+    let module = render(
+        &stack(settings.clone()),
+        TerraformTarget::Aws,
+        StackSettings {
+            network: Some(settings),
+            ..StackSettings::default()
+        },
+    );
+    assert_terraform_valid(&module, "management subnet limit");
+    let role = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .flat_map(|(_, contents)| hcl::parse(contents).unwrap().into_blocks())
+        .find(|block| {
+            block.identifier() == "resource"
+                && block.labels()[0].as_str() == "aws_iam_role"
+                && block.labels()[1].as_str() == "management"
+        })
+        .expect("the module creates the management role");
+    let condition = role
+        .body()
+        .blocks()
+        .filter(|block| block.identifier() == "lifecycle")
+        .flat_map(|lifecycle| lifecycle.body().blocks())
+        .filter(|block| block.identifier() == "precondition")
+        .flat_map(|precondition| precondition.body().attributes())
+        .find(|attribute| attribute.key() == "condition")
+        .expect("the management role checks the subnet count")
+        .expr()
+        .clone();
+    let subnets = |count: usize| -> Vec<String> {
+        (1..=count)
+            .map(|index| format!("subnet-0e000000000000{index:03}"))
+            .collect()
+    };
+    for (count, allowed) in [(1, true), (9, true), (10, false)] {
+        let context = evaluation_context(
+            &module,
+            json!({
+                "net_vpc_id": EXISTING_VPC,
+                "net_public_subnet_ids": [""],
+                "net_private_subnet_ids": subnets(count),
+                "net_security_group_ids": [""],
+            }),
+        );
+        assert_eq!(
+            condition.evaluate(&context).unwrap(),
+            Value::Bool(allowed),
+            "{count} subnets"
+        );
     }
 }

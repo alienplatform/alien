@@ -181,6 +181,12 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
         }
         if let Some(network) = network.as_ref().filter(|_| names_network.get()) {
             fragment.locals.extend(network.locals.iter().cloned());
+            if let Some(role) = fragment.resource_blocks.iter_mut().find(|block| {
+                block.labels.first().map(|label| label.as_str()) == Some("aws_iam_role")
+                    && block.labels.get(1).map(|label| label.as_str()) == Some(label)
+            }) {
+                role.body.0.push(network.subnet_limit_lifecycle());
+            }
         }
 
         // The management role always needs to read its own role —
