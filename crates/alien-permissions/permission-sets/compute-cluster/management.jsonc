@@ -503,6 +503,10 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
+              // A group created without subnets would land in the default VPC.
+              "Null": {
+                "autoscaling:VPCZoneIdentifiers": "false"
+              },
               "ForAllValues:StringLike": {
                 "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
               },
@@ -517,6 +521,10 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
+              // A group created without subnets would land in the default VPC.
+              "Null": {
+                "autoscaling:VPCZoneIdentifiers": "false"
+              },
               "ForAllValues:StringLike": {
                 "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
               },
@@ -543,7 +551,8 @@
                 "autoscaling:LaunchTemplateVersionSpecified": "true"
               },
               "Null": {
-                "autoscaling:LaunchConfigurationName": "true"
+                "autoscaling:LaunchConfigurationName": "true",
+                "autoscaling:VPCZoneIdentifiers": "false"
               },
               "ForAllValues:StringLike": {
                 "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
@@ -563,7 +572,8 @@
                 "autoscaling:LaunchTemplateVersionSpecified": "true"
               },
               "Null": {
-                "autoscaling:LaunchConfigurationName": "true"
+                "autoscaling:LaunchConfigurationName": "true",
+                "autoscaling:VPCZoneIdentifiers": "false"
               },
               "ForAllValues:StringLike": {
                 "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
@@ -576,18 +586,48 @@
           }
         }
       },
-      // Updates may not name subnets; see bounded-role-asg-update.
       {
         "label": "legacy-role-asg-management",
         "grant": {
           "actions": [
             "autoscaling:DeleteAutoScalingGroup",
-            "autoscaling:UpdateAutoScalingGroup",
             "autoscaling:SetDesiredCapacity",
             "autoscaling:StartInstanceRefresh",
             "autoscaling:TerminateInstanceInAutoScalingGroup",
             "autoscaling:SuspendProcesses"
           ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
+            ],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${stackTag}": "${stackPrefix}",
+                "aws:ResourceTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      // Updates may not name subnets: AWS does not check an update's new subnets against the
+      // caller's RunInstances grant, so only creates may name them.
+      {
+        "label": "legacy-role-asg-update",
+        "grant": {
+          "actions": ["autoscaling:UpdateAutoScalingGroup"]
         },
         "binding": {
           "stack": {

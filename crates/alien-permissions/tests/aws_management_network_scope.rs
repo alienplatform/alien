@@ -256,6 +256,8 @@ fn auto_scaling_groups_are_created_only_in_the_stacks_subnets(
         &create(&[OWN_SUBNETS[0], OTHER_SUBNET])
     ));
     assert!(!allowed(&statements, &create(&[OTHER_SUBNET])));
+    // A group created with only availability zones lands in the account's default VPC.
+    assert!(!allowed(&statements, &create(&[])));
 }
 
 /// AWS checks a group's subnets against the caller's launch grant when the group is created,
