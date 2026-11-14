@@ -1281,6 +1281,101 @@ fn count_session_pods(pods: Vec<k8s_openapi::api::core::v1::Pod>) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    /// An enrolled Operator has no deployment token: its registry authority is the pull
+    /// credential the manager issues for the deployment. The sandbox's pull Secret must be
+    /// built from that, the way containers and daemons build theirs.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn the_pull_secret_of_an_enrolled_operator_comes_from_the_manager_issued_credential() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_client_core::runtime_credentials::RuntimeCapability;
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource};
+        use std::sync::{Arc, Mutex};
+
+        let image = "manager.example/sbx/root:1";
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: image.to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "1Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+
+        let mut provider = crate::MockPlatformServiceProvider::new();
+        provider
+            .expect_runtime_registry_pull_credential()
+            .withf(|deployment| deployment == "dep-1")
+            .returning(|_| {
+                Ok(Some(RuntimeCapability {
+                    token: "pull-token".into(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+                }))
+            });
+        let written: Arc<Mutex<Option<k8s_openapi::api::core::v1::Secret>>> = Default::default();
+        let mut secrets = alien_k8s_clients::secrets::MockSecretsApi::new();
+        let sink = written.clone();
+        secrets.expect_create_secret().returning(move |_, secret| {
+            *sink.lock().unwrap() = Some(secret.clone());
+            Ok(secret.clone())
+        });
+        let secrets: Arc<dyn alien_k8s_clients::SecretsApi> = Arc::new(secrets);
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(secrets.clone()));
+
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(sandbox.clone()),
+            vec![EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        {
+            let config = harness.deployment_config_mut();
+            config.manager_url = Some("https://manager.example".into());
+            config.runtime_identity_audience = Some("https://manager.example".into());
+            config.deployment_token = None;
+        }
+        let ctx = harness.ctx();
+
+        let name = ensure_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect("an enrolled Operator pulls with the manager-issued credential")
+            .expect("an image from the manager's registry needs a pull Secret");
+        assert_eq!(name, "alien-sbx-sbx-registry");
+
+        let secret = written
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the Secret is written");
+        let docker_config = secret
+            .string_data
+            .as_ref()
+            .and_then(|data| data.get(".dockerconfigjson").cloned())
+            .or_else(|| {
+                secret.data.as_ref().and_then(|data| {
+                    data.get(".dockerconfigjson")
+                        .map(|bytes| String::from_utf8_lossy(&bytes.0).into_owned())
+                })
+            })
+            .expect("a docker config");
+        assert!(docker_config.contains("pull-token"), "{docker_config}");
+    }
     #[test]
     fn a_pod_security_refusal_names_the_namespace_and_the_fix() {
         let refusal = AlienError::new(ErrorData::CloudPlatformError {
