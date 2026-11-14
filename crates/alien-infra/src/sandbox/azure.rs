@@ -542,9 +542,10 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
     ) -> Option<String> {
-        // The reaper runs only where a ceiling applies: a gateway's 24-hour identities or a
-        // declared `max_lifetime_seconds`. Other groups are never listed on a tick (they lived
-        // until deleted before, and the binding refuses a sandbox past its own deadline label).
+        // Every group is listed on a runtime ready tick: a sandbox past its own deadline label
+        // is deleted whatever the group declares, a gateway adds 24-hour identities, and a
+        // declared `max_lifetime_seconds` bounds sandboxes that carry no label. A sandbox with
+        // neither label nor ceiling is never touched.
         let ceiling = [
             uses_gateway(ctx, config).then_some(AZURE_GATEWAY_MAX_LIFETIME_SECONDS),
             config.lifecycle.max_lifetime_seconds,
@@ -552,15 +553,12 @@ impl AzureSandboxController {
         .into_iter()
         .flatten()
         .min();
-        let Some(ceiling) = ceiling else {
-            return None;
-        };
         let result = async {
             let (group, client) = self.data_plane(ctx, &config.id)?;
             super::azure_lifetime::reap_expired_azure_sandboxes(
                 client.as_ref(),
                 &group,
-                Some(ceiling),
+                ceiling,
             )
             .await
         }
@@ -637,7 +635,6 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        let _ = self.reap_gateway_sessions(ctx, config).await;
         // Nothing to build: `Ready` abandons any build left in flight.
         let Some(reference) = self.pending_image(config) else {
             return Ok(AzureSandboxHandlerAction::Continue {
@@ -1666,9 +1663,10 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn only_gateway_groups_reap_unlabelled_sessions_on_ready_ticks() {
-            // Without a gateway or a declared ceiling nothing bounds a session, so such a group
-            // is not even listed; a gateway group reaps sessions past 24 hours.
+        async fn ready_ticks_delete_past_deadline_labels_and_only_gateways_reap_unlabelled() {
+            // Every group is listed: a session whose deadline label has passed is deleted, a
+            // future label or no label is kept, and only a gateway group's 24-hour ceiling
+            // reaps the unlabelled session.
             for (egress, with_gateway) in [
                 (SandboxEgress::Internet, true),
                 (SandboxEgress::Internet, false),
@@ -1679,19 +1677,40 @@ mod tests {
                 let mut client = MockSandboxDataPlaneApi::new();
                 client
                     .expect_list_sandboxes()
-                    .times(usize::from(gateway))
+                    .times(1)
                     .returning(|_| {
-                        Ok(vec![ListedSandbox {
-                            id: "expired".into(),
-                            created_at: chrono::Utc::now() - chrono::Duration::hours(25),
-                            labels: Default::default(),
+                        let past = chrono::Utc::now().timestamp_millis() - 1000;
+                        let future = chrono::Utc::now().timestamp_millis() + 3_600_000;
+                        let listed = |id: &str, label: Option<i64>| ListedSandbox {
+                            id: id.into(),
+                            created_at: chrono::Utc::now()
+                                - chrono::Duration::hours(if label.is_some() { 1 } else { 25 }),
+                            labels: label
+                                .map(|at| {
+                                    [(
+                                        alien_core::SANDBOX_EXPIRY_LABEL.to_string(),
+                                        at.to_string(),
+                                    )]
+                                    .into()
+                                })
+                                .unwrap_or_default(),
                             state: "Suspended".into(),
-                        }])
+                        };
+                        Ok(vec![
+                            listed("expired", None),
+                            listed("timed-out", Some(past)),
+                            listed("timed-future", Some(future)),
+                        ])
                     });
                 client
                     .expect_delete_sandbox()
-                    .times(usize::from(gateway))
+                    .withf(|group, id| group == "sbg" && id == "timed-out")
+                    .times(1)
+                    .returning(|_, _| Ok(()));
+                client
+                    .expect_delete_sandbox()
                     .withf(|group, id| group == "sbg" && id == "expired")
+                    .times(usize::from(gateway))
                     .returning(|_, _| Ok(()));
                 let mut config = sandbox("ubuntu");
                 config.egress = egress.clone();
