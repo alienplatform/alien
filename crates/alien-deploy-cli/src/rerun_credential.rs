@@ -45,6 +45,8 @@ pub struct MissingInstall {
     pub release: String,
     pub namespace: String,
     pub cli_name: String,
+    /// The command that was run (`deploy`, `status` or `down`), so the advice names it.
+    pub verb: String,
 }
 
 impl fmt::Debug for RerunToken {
@@ -117,6 +119,7 @@ pub async fn resolve(
                         release,
                         namespace,
                         cli_name: cli_name.to_string(),
+                        verb: verb.to_string(),
                     });
                 }
                 refusal = Some(reason)
@@ -331,12 +334,13 @@ fn no_installation(name: &str, missing: &MissingInstall) -> AlienError<ErrorData
         release,
         namespace,
         cli_name,
+        verb,
     } = missing;
     AlienError::new(ErrorData::SetupTokenRequired {
         message: format!(
             "Cannot update \"{name}\": no installation found as Helm release \"{release}\" in namespace \"{namespace}\". \
              If it was installed under another release or namespace, run this again with --helm-release <release> --namespace <namespace>. \
-             Or use the setup token you were given: {cli_name} deploy --name {} --token-file <path>. \
+             Or use the setup token you were given: {cli_name} {verb} --name {} --token-file <path>. \
              Your deployment keeps running.",
             shell_single_quote(name)
         ),
@@ -500,7 +504,7 @@ mod tests {
 
     #[test]
     fn a_refused_saved_key_after_no_installation_names_what_was_looked_for() {
-        let missing = RerunToken {
+        let missing_for = |verb: &str| RerunToken {
             token: "saved".into(),
             in_cluster: false,
             expires_at: None,
@@ -508,8 +512,24 @@ mod tests {
                 release: "alien-operator".into(),
                 namespace: "alien-prod".into(),
                 cli_name: "acme-deploy".into(),
+                verb: verb.into(),
             }),
         };
+        let missing = missing_for("deploy");
+        // The advice names the command that was run, not always `deploy`.
+        for verb in ["deploy", "status", "down"] {
+            let usage = InClusterUse::default();
+            usage.note("prod", &missing_for(verb));
+            let mut refused = AlienError::new(ErrorData::GenericError {
+                message: "Invalid token".into(),
+            });
+            refused.http_status_code = Some(401);
+            let shown = usage.explain(refused).to_string();
+            assert!(
+                shown.contains(&format!("acme-deploy {verb} --name 'prod' --token-file <path>")),
+                "{shown}"
+            );
+        }
         for status in [401, 409] {
             let usage = InClusterUse::default();
             usage.note("prod", &missing);
@@ -526,10 +546,6 @@ mod tests {
                 shown.contains("--helm-release <release> --namespace <namespace>"),
                 "{shown}"
             );
-            assert!(
-                shown.contains("acme-deploy deploy --name 'prod' --token-file <path>"),
-                "{shown}"
-            );
             assert!(shown.contains("Your deployment keeps running."), "{shown}");
             assert!(!shown.to_lowercase().contains("alien\""), "{shown}");
         }
@@ -541,6 +557,72 @@ mod tests {
         });
         other.http_status_code = Some(500);
         assert!(usage.explain(other).to_string().contains("boom"));
+    }
+
+    /// `status` and `down` call the manager through the generated client. A 401 from it must
+    /// reach `explain` with its status, or a takeover or an expired key shows a generic error.
+    #[tokio::test]
+    async fn a_manager_401_keeps_its_status_through_the_calls_status_and_down_make() {
+        use alien_error::Context as _;
+        use alien_manager_api::SdkResultExt as _;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buffer = vec![0; 8192];
+                let _ = stream.read(&mut buffer).await;
+                let body = r#"{"code":"UNAUTHORIZED","message":"Invalid token","retryable":false,"internal":false}"#;
+                let response = format!(
+                    "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = crate::commands::up::create_manager_client(
+            "ax_key",
+            &format!("http://{address}"),
+        )
+        .unwrap();
+        let usage = InClusterUse::default();
+        usage.mark("prod", None);
+
+        // status: fetch the deployment.
+        let status_error = client
+            .get_deployment()
+            .id("dep_1")
+            .send()
+            .await
+            .into_sdk_error()
+            .await
+            .context(ErrorData::ManagementUnavailable)
+            .unwrap_err();
+        assert!(usage
+            .explain(status_error)
+            .message
+            .contains("took over"));
+
+        // down: request the deletion.
+        let down_error = client
+            .delete_deployment()
+            .id("dep_1")
+            .body(alien_manager_api::types::DeleteDeploymentRequest {
+                action: alien_manager_api::types::DeleteDeploymentAction::Forget,
+            })
+            .send()
+            .await
+            .into_sdk_error()
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "request deletion".to_string(),
+            })
+            .unwrap_err();
+        assert!(usage.explain(down_error).message.contains("took over"));
     }
 
     #[test]
