@@ -339,6 +339,78 @@ fn unchanged_legacy_service_account_grants(
     Ok(*on_platform(platform, &Resource::new(normalized)) == *on_platform(platform, new))
 }
 
+/// Whether a Frozen resource that is new in this release is not an addition because its gate is
+/// off: a gate declared with default false that resolves false. The identity of a profile
+/// (`<profile>-sa`) is excused when it has users and every one of them carries the same off
+/// gate. An answer that turns true, a gate that cannot be resolved, another declared default, a
+/// profile with an ungated user, and a resource the installed stack already has are not excused.
+fn frozen_addition_excused_while_gated_off(
+    new_stack: &Stack,
+    config: Option<&DeploymentConfig>,
+    platform: Platform,
+    id: &str,
+    entry: &ResourceEntry,
+) -> bool {
+    let gate_is_off = |gate: &str, resource_id: &str| {
+        config.is_some_and(|config| {
+            new_stack.inputs.iter().any(|input| {
+                input.id == gate
+                    && input.default == Some(alien_core::StackInputDefaultValue::Boolean(false))
+            }) && alien_core::gate_resolves_true(
+                &new_stack.inputs,
+                gate,
+                &config.input_values,
+                resource_id,
+                platform,
+            ) == Ok(false)
+        })
+    };
+    if let Some(gate) = entry.enabled_when.as_deref() {
+        return gate_is_off(gate, id);
+    }
+    let Some(profile) = id.strip_suffix("-sa") else {
+        return false;
+    };
+    if entry.config.downcast_ref::<ServiceAccount>().is_none() {
+        return false;
+    }
+    let mut users = new_stack
+        .resources()
+        .filter(|(_, user)| user.config.get_permissions() == Some(profile))
+        .map(|(_, user)| user.enabled_when.as_deref());
+    let Some(Some(gate)) = users.next() else {
+        return false;
+    };
+    users.all(|other| other == Some(gate)) && gate_is_off(gate, id)
+}
+
+/// Frozen resources of `new_stack` that the installed stack lacks and that the update leaves
+/// out because their gate is off (see [`FrozenResourcesUnchangedCheck`]). Setup never created
+/// them and nothing uses them, so the update must not plan them: it would try to create them
+/// with runtime credentials, which fails. Identities setup already installed are not listed.
+pub fn unused_frozen_additions(
+    old_stack: &Stack,
+    new_stack: &Stack,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Vec<String> {
+    new_stack
+        .resources()
+        .filter(|(id, entry)| {
+            entry.lifecycle == ResourceLifecycle::Frozen
+                && !old_stack.resources.contains_key(id.as_str())
+                && frozen_addition_excused_while_gated_off(
+                    new_stack,
+                    Some(config),
+                    platform,
+                    id,
+                    entry,
+                )
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 #[async_trait::async_trait]
 impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
     fn description(&self) -> &'static str {
@@ -404,45 +476,18 @@ impl FrozenResourcesUnchangedCheck {
         // nothing of its own and nothing would use it. An answer that turns true, a gate that
         // cannot be resolved, another declared default, a profile with an ungated user, and a
         // resource the installed stack already has are compared as before.
-        let gate_is_off = |gate: &str, resource_id: &str| {
-            config.is_some_and(|config| {
-                new_stack.inputs.iter().any(|input| {
-                    input.id == gate
-                        && input.default == Some(alien_core::StackInputDefaultValue::Boolean(false))
-                }) && alien_core::gate_resolves_true(
-                    &new_stack.inputs,
-                    gate,
-                    &config.input_values,
-                    resource_id,
-                    self.platform,
-                ) == Ok(false)
-            })
-        };
-        let excused_while_gated_off = |id: &str, entry: &ResourceEntry| {
-            if let Some(gate) = entry.enabled_when.as_deref() {
-                return gate_is_off(gate, id);
-            }
-            // The derived identity of a profile (`<profile>-sa`): excused when it has users and
-            // every one of them carries the same gate.
-            let Some(profile) = id.strip_suffix("-sa") else {
-                return false;
-            };
-            if entry.config.downcast_ref::<ServiceAccount>().is_none() {
-                return false;
-            }
-            let mut users = new_stack
-                .resources()
-                .filter(|(_, user)| user.config.get_permissions() == Some(profile))
-                .map(|(_, user)| user.enabled_when.as_deref());
-            let Some(Some(gate)) = users.next() else {
-                return false;
-            };
-            users.all(|other| other == Some(gate)) && gate_is_off(gate, id)
-        };
         let added_frozen: Vec<_> = new_frozen
             .iter()
             .filter(|(id, _)| !old_frozen_ids.contains(*id))
-            .filter(|(id, entry)| !excused_while_gated_off(id, entry))
+            .filter(|(id, entry)| {
+                !frozen_addition_excused_while_gated_off(
+                    new_stack,
+                    config,
+                    self.platform,
+                    id,
+                    entry,
+                )
+            })
             .map(|(id, _)| id)
             .collect();
 
@@ -2141,6 +2186,47 @@ mod azure_storage_settings_tests {
             .await
             .unwrap();
             assert!(added(&result.errors));
+        }
+
+        #[test]
+        fn an_excused_identity_setup_never_installed_is_left_out_of_the_target() {
+            let installed = base();
+            let new = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            let unused = unused_frozen_additions(&installed, &new, &config(None), Platform::Aws);
+            assert_eq!(unused, vec!["app-sa".to_string()]);
+            // A gated resource that is itself frozen is left out the same way.
+            let gated = with_gated(Some("feature"), vec![gate(Some(false))]);
+            assert_eq!(
+                unused_frozen_additions(&installed, &gated, &config(None), Platform::Aws),
+                vec!["added".to_string()]
+            );
+        }
+
+        #[test]
+        fn an_identity_setup_installed_stays_in_the_target() {
+            // Setup already installed `app-sa`, so the update keeps it.
+            let new = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            let installed = with_profile_users(&[], vec![gate(Some(false))]);
+            assert!(
+                unused_frozen_additions(&installed, &new, &config(None), Platform::Aws).is_empty()
+            );
+        }
+
+        #[test]
+        fn an_identity_that_is_an_addition_is_not_left_out() {
+            // Not excused (the answer turned true, or a user is ungated): the check refuses it
+            // and nothing is dropped from the target.
+            let installed = base();
+            let on = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            assert!(
+                unused_frozen_additions(&installed, &on, &config(Some(true)), Platform::Aws)
+                    .is_empty()
+            );
+            let mixed = with_profile_users(&[Some("feature"), None], vec![gate(Some(false))]);
+            assert!(
+                unused_frozen_additions(&installed, &mixed, &config(None), Platform::Aws)
+                    .is_empty()
+            );
         }
     }
 }

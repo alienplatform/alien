@@ -420,6 +420,28 @@ pub async fn handle_update_pending(
         current.platform,
     )?;
 
+    // A frozen identity that is new in this release and unused while its gate is off passed the
+    // frozen-compatibility check as not an addition. It is not installed, and setup owns it, so
+    // the executor must not plan to create it with runtime credentials. One setup already
+    // installed stays in the target.
+    let mutated_stack = {
+        let mut stack = mutated_stack;
+        let nothing_installed = Stack::new(stack.id.clone()).build();
+        let unused = alien_preflights::compatibility::unused_frozen_additions(
+            old_stack_for_comparison
+                .as_deref()
+                .unwrap_or(&nothing_installed),
+            &stack,
+            &config,
+            current.platform,
+        )
+        .into_iter()
+        .filter(|id| !existing_resource_ids.contains(id))
+        .collect::<Vec<_>>();
+        alien_core::remove_declined_live_resources(&mut stack, &unused);
+        stack
+    };
+
     if current.runtime_metadata.as_ref().is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
     }) {

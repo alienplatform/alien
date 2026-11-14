@@ -11,9 +11,7 @@
       "id": "valuesKey",
       "kind": "boolean",
       "label": "Keep deployment values in your account",
-      "providedBy": [
-        "deployer"
-      ],
+      "providedBy": ["deployer"],
       "required": false
     }
   ],
@@ -25,21 +23,10 @@
           "artifact-registry/push",
           "artifact-registry/provision"
         ],
-        "command-storage": [
-          "storage/data-read",
-          "storage/data-write"
-        ],
-        "kv": [
-          "kv/data-read",
-          "kv/data-write"
-        ],
-        "telemetry-storage": [
-          "storage/data-read",
-          "storage/data-write"
-        ],
-        "values-key": [
-          "key/remote-cryptography"
-        ]
+        "command-storage": ["storage/data-read", "storage/data-write"],
+        "kv": ["kv/data-read", "kv/data-write"],
+        "telemetry-storage": ["storage/data-read", "storage/data-write"],
+        "values-key": ["key/remote-cryptography"]
       }
     }
   },
@@ -94,9 +81,5 @@
       "lifecycle": "frozen"
     }
   },
-  "supportedPlatforms": [
-    "aws",
-    "gcp",
-    "azure"
-  ]
+  "supportedPlatforms": ["aws", "gcp", "azure"]
 }

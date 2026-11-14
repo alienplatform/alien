@@ -8,6 +8,6 @@ pub mod narrowing;
 pub mod permission_profiles_unchanged;
 pub mod sandbox_setup_inputs_unchanged;
 
-pub use frozen_resources_unchanged::FrozenResourcesUnchangedCheck;
+pub use frozen_resources_unchanged::{unused_frozen_additions, FrozenResourcesUnchangedCheck};
 pub use permission_profiles_unchanged::PermissionProfilesUnchangedCheck;
 pub use sandbox_setup_inputs_unchanged::SandboxSetupInputsUnchangedCheck;
