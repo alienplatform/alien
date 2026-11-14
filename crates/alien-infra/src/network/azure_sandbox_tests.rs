@@ -134,6 +134,26 @@ async fn the_emitted_rule_set_passes_and_a_normalised_single_port_does_too() {
     check(&network, vnet, nsg, nat, public).await.unwrap();
 }
 
+/// Azure reports an unused `destinationPortRange` as an empty string beside the list it stores
+/// the ports in. Read live from the setup's NSG; the empty string is not a port.
+#[tokio::test]
+async fn the_empty_single_port_azure_returns_beside_a_port_list_is_not_a_port() {
+    let (network, vnet, mut nsg, nat, public) = fixture();
+    let rules = nsg["properties"]["securityRules"].as_array_mut().unwrap();
+    for rule in rules.iter_mut() {
+        let properties = &mut rule["properties"];
+        if properties["access"] == "Allow" {
+            if let Some(port) = properties.get("destinationPortRange").cloned() {
+                properties["destinationPortRanges"] = json!([port]);
+            }
+            properties["destinationPortRange"] = json!("");
+        }
+    }
+    check(&network, vnet, nsg, nat, public)
+        .await
+        .expect("an empty single-port field beside a list is not an extra port");
+}
+
 #[tokio::test]
 async fn refuse_nsg_bypasses_and_missing_platform_denies() {
     // 0-5 loosen an allow; 6-10 remove a required rule; 11 adds an Internet allow.

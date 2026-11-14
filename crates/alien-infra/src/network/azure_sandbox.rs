@@ -381,6 +381,8 @@ async fn validate_sandbox_nsg(
             .iter()
             .map(String::as_str)
             .chain(rule.destination_port_range.as_deref())
+            // Azure returns an unused single-port field as an empty string.
+            .filter(|port| !port.is_empty())
             .collect();
         let destination = rule.destination_address_prefix.as_deref().unwrap_or("");
         let single_destination = rule.destination_address_prefixes.is_empty();
