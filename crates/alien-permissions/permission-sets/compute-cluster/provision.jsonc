@@ -563,12 +563,16 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
-              // A group created without subnets would land in the default VPC.
+              // A group created without subnets would land in the default VPC. It joins only
+              // the stack's own target groups, and never classic load balancers or traffic sources.
               "Null": {
-                "autoscaling:VPCZoneIdentifiers": "false"
+                "autoscaling:VPCZoneIdentifiers": "false",
+                "autoscaling:LoadBalancerNames": "true",
+                "autoscaling:TrafficSourceIdentifiers": "true"
               },
               "ForAllValues:StringLike": {
-                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}",
+                "autoscaling:TargetGroupARNs": "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
               },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -581,12 +585,16 @@
               "arn:aws:autoscaling:${awsRegion}:${awsAccountId}:autoScalingGroup:*:autoScalingGroupName/${stackPrefix}-*"
             ],
             "condition": {
-              // A group created without subnets would land in the default VPC.
+              // A group created without subnets would land in the default VPC. It joins only
+              // the stack's own target groups, and never classic load balancers or traffic sources.
               "Null": {
-                "autoscaling:VPCZoneIdentifiers": "false"
+                "autoscaling:VPCZoneIdentifiers": "false",
+                "autoscaling:LoadBalancerNames": "true",
+                "autoscaling:TrafficSourceIdentifiers": "true"
               },
               "ForAllValues:StringLike": {
-                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}",
+                "autoscaling:TargetGroupARNs": "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
               },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -612,10 +620,13 @@
               },
               "Null": {
                 "autoscaling:LaunchConfigurationName": "true",
-                "autoscaling:VPCZoneIdentifiers": "false"
+                "autoscaling:VPCZoneIdentifiers": "false",
+                "autoscaling:LoadBalancerNames": "true",
+                "autoscaling:TrafficSourceIdentifiers": "true"
               },
               "ForAllValues:StringLike": {
-                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}",
+                "autoscaling:TargetGroupARNs": "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
               },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -633,10 +644,13 @@
               },
               "Null": {
                 "autoscaling:LaunchConfigurationName": "true",
-                "autoscaling:VPCZoneIdentifiers": "false"
+                "autoscaling:VPCZoneIdentifiers": "false",
+                "autoscaling:LoadBalancerNames": "true",
+                "autoscaling:TrafficSourceIdentifiers": "true"
               },
               "ForAllValues:StringLike": {
-                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}"
+                "autoscaling:VPCZoneIdentifiers": "${awsSubnetIds}",
+                "autoscaling:TargetGroupARNs": "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/${stackPrefix}-*/*"
               },
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",

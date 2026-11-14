@@ -342,3 +342,39 @@ fn the_runtime_policy_names_the_stacks_vpc_and_subnets() {
         OWN_SUBNETS[0], OWN_SUBNETS[1]
     )));
 }
+
+fn target_group(stack: &str) -> String {
+    format!("arn:aws:elasticloadbalancing:{REGION}:{ACCOUNT}:targetgroup/{stack}-hc-tg/0123456789abcdef")
+}
+
+/// A group joins only the stack's own target groups, and never a classic load balancer or a
+/// traffic source: either would send the stack's machines another resource's traffic.
+#[rstest]
+fn auto_scaling_groups_join_only_the_stacks_target_groups(
+    #[values(false, true)] cloudformation: bool,
+    #[values(false, true)] boundary: bool,
+    #[values(Network::Pinned, Network::Tagged, Network::Unknown)] network: Network,
+) {
+    let statements = statements(cloudformation, BindingTarget::Stack, network, boundary);
+    let create = || auto_scaling_group("autoscaling:CreateAutoScalingGroup", &OWN_SUBNETS);
+    assert!(allowed(&statements, &create()));
+    assert!(allowed(
+        &statements,
+        &create().with_values("autoscaling:TargetGroupARNs", &[&target_group("stack-a")])
+    ));
+    assert!(!allowed(
+        &statements,
+        &create().with_values("autoscaling:TargetGroupARNs", &[&target_group("other")])
+    ));
+    assert!(!allowed(
+        &statements,
+        &create().with_values("autoscaling:LoadBalancerNames", &["other-classic"])
+    ));
+    assert!(!allowed(
+        &statements,
+        &create().with_values(
+            "autoscaling:TrafficSourceIdentifiers",
+            &[&target_group("other")]
+        )
+    ));
+}

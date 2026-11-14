@@ -784,6 +784,8 @@ fn tag_absent_grants_are_reads_of_gone_objects() {
                             !matches!(
                                 key.as_str(),
                                 "autoscaling:LaunchConfigurationName"
+                                    | "autoscaling:LoadBalancerNames"
+                                    | "autoscaling:TrafficSourceIdentifiers"
                                     | "autoscaling:VPCZoneIdentifiers"
                                     | "cloudwatch:AlarmActions"
                                     | "elasticloadbalancing:Subnet"
