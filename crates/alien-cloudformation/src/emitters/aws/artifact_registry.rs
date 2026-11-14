@@ -366,10 +366,6 @@ fn replication_resources(
     let function_id = format!("{logical_id}ReplicationFunction");
     let mut logs = CfResource::new(log_id.clone(), "AWS::Logs::LogGroup".to_string());
     logs.properties.insert(
-        "LogGroupName".to_string(),
-        CfExpression::sub(format!("/aws/lambda/${{AWS::StackName}}-{}-replication", registry.id())),
-    );
-    logs.properties.insert(
         "RetentionInDays".to_string(),
         CfExpression::Integer(alien_core::AWS_LOG_RETENTION_DAYS.into()),
     );
@@ -442,8 +438,8 @@ fn replication_resources(
     );
     let mut function = CfResource::new(function_id.clone(), "AWS::Lambda::Function".to_string());
     function.properties.insert(
-        "FunctionName".to_string(),
-        CfExpression::sub(format!("${{AWS::StackName}}-{}-replication", registry.id())),
+        "LoggingConfig".to_string(),
+        CfExpression::object([("LogGroup", CfExpression::ref_(&log_id))]),
     );
     function
         .properties

@@ -104,6 +104,42 @@ fn render_template_json(stack: &Stack) -> serde_json::Value {
 }
 
 #[test]
+fn aws_registry_replication_names_stay_within_aws_limits_for_long_ids() {
+    let id = "i".repeat(40);
+    let mut registry = ArtifactRegistry::new(id.clone()).build();
+    registry.replication_regions = vec!["us-east-2".to_string()];
+    let stack = Stack::new("s".repeat(40))
+        .add(registry, ResourceLifecycle::Frozen)
+        .build();
+    let template = render_template_json(&stack);
+    let resources = template["Resources"].as_object().unwrap();
+    let helper_types = ["AWS::Lambda::Function", "AWS::Logs::LogGroup", "AWS::IAM::Role"];
+    let mut checked_function = false;
+    for (logical_id, resource) in resources {
+        let kind = resource["Type"].as_str().unwrap();
+        if !logical_id.contains("Replication") || !helper_types.contains(&kind) {
+            continue;
+        }
+        checked_function |= kind == "AWS::Lambda::Function";
+        for (property, limit) in [("FunctionName", 64), ("LogGroupName", 512), ("RoleName", 64)] {
+            let Some(value) = resource["Properties"].get(property) else {
+                continue;
+            };
+            // CloudFormation stack names go up to 128 characters; substitute the worst case.
+            let name = value
+                .to_string()
+                .replace("${AWS::StackName}", &"x".repeat(128));
+            let length = name.trim_matches('"').chars().count();
+            assert!(
+                length <= limit,
+                "{logical_id}.{property} is {length} characters, over {limit}: {value}"
+            );
+        }
+    }
+    assert!(checked_function, "replication helper function not emitted");
+}
+
+#[test]
 fn aws_registry_regions_input_is_read_at_deploy_time_and_empty_writes_nothing() {
     let template = render_template_json(&input_registry_stack());
     let resources = &template["Resources"];
