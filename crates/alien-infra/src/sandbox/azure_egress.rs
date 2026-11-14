@@ -10,6 +10,24 @@ use crate::{
     ErrorData, Result,
 };
 
+const GATEWAY_ADMIN_PORT: u16 = 3129;
+
+/// The setup-created gateway VMs every policy write must reach. Empty means setup predates them.
+fn gateway_addresses(ctx: &ResourceControllerContext<'_>) -> Result<Vec<String>> {
+    let (_, network) = network_controller(ctx)?;
+    let ips = network
+        .sandbox_network
+        .map(|declared| declared.gateway_ips)
+        .unwrap_or_default();
+    if ips.len() != 2 {
+        return Err(invalid(
+            ctx,
+            "The deployment has no egress gateway VMs; re-run setup to create them",
+        ));
+    }
+    Ok(ips)
+}
+
 /// Records the signing key's public half in `public_key` and returns the sandbox's binding. The
 /// owner writes the key once, create-only, and never reads it; every other sandbox takes the
 /// owner's recorded copy.
@@ -18,7 +36,8 @@ pub(super) async fn initialize_key(
     public_key: &mut Option<egress::GatewayPublicKey>,
 ) -> Result<alien_core::bindings::SandboxEgressBinding> {
     use alien_core::bindings::{
-        SandboxEgressBinding, SandboxEgressGateway, SandboxEgressSigningKey,
+        SandboxEgressBinding, SandboxEgressGateway, SandboxEgressReplicas,
+        SandboxEgressSigningKey,
     };
     let config = ctx.desired_resource_config::<alien_core::Sandbox>()?;
     if !sandbox_egress::has_sandbox_gateway(ctx.desired_stack) {
@@ -55,7 +74,12 @@ pub(super) async fn initialize_key(
         },
         kid: key.kid.clone(),
         admin_ca_pem: None,
-        replicas: None,
+        replicas: Some(SandboxEgressReplicas {
+            dns: String::new(),
+            addresses: gateway_addresses(ctx)?,
+            port: GATEWAY_ADMIN_PORT,
+            count: 2,
+        }),
     }))
 }
 
@@ -83,9 +107,10 @@ pub(super) async fn publish_config(
     egress::publish_azure_config(ctx, key, &facts.vpc_cidrs, published, replica_secret_ready).await
 }
 
-pub(super) async fn validate_network(
+/// Setup's Network resource id and its controller state.
+fn network_controller(
     ctx: &ResourceControllerContext<'_>,
-) -> Result<AzureSandboxNetwork> {
+) -> Result<(String, AzureNetworkController)> {
     // Azure has no default VNet: UseDefault and Create both build the managed VNet, subnets
     // and NAT this verifies. Setup refuses BYO VNets for Internet sandboxes.
     let network_id = ctx
@@ -100,19 +125,27 @@ pub(super) async fn validate_network(
         .ok_or_else(|| invalid(ctx, "Internet sandboxes require the deployment Network"))
         .and_then(|(id, network)| match network.settings {
             alien_core::NetworkSettings::UseDefault
-            | alien_core::NetworkSettings::Create { .. } => Ok(id.as_str()),
+            | alien_core::NetworkSettings::Create { .. } => Ok(id.to_string()),
             _ => Err(invalid(
                 ctx,
                 "Internet sandboxes require a network created by setup",
             )),
         })?;
-    let state = ctx.state.resources.get(network_id).ok_or_else(|| {
+    let state = ctx.state.resources.get(&network_id).ok_or_else(|| {
         AlienError::new(ErrorData::DependencyNotReady {
             resource_id: ctx.desired_config.id().into(),
-            dependency_id: network_id.into(),
+            dependency_id: network_id.clone(),
         })
     })?;
     let network = state.get_internal_controller_typed::<AzureNetworkController>()?;
+    Ok((network_id, network))
+}
+
+pub(super) async fn validate_network(
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<AzureSandboxNetwork> {
+    let (network_id, network) = network_controller(ctx)?;
+    let network_id = network_id.as_str();
     let azure = ctx.get_azure_config()?;
     let client = ctx.service_provider.get_azure_network_client(azure)?;
     let facts = validate_azure_sandbox_network(client.as_ref(), network_id, &network).await?;

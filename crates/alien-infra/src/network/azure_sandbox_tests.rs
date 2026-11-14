@@ -27,6 +27,7 @@ pub(crate) fn fixture() -> (AzureNetworkController, Value, Value, Value, Value) 
                 vec!["10.0.8.0/23".into()],
             )]),
             gateway_cidrs: vec!["10.0.6.0/24".into()],
+            gateway_ips: vec!["10.0.6.4".into(), "10.0.6.5".into()],
             workload_cidrs: vec!["10.0.1.0/24".into()],
             vpc_cidrs: vec!["10.0.0.0/16".into()],
         }),
@@ -212,6 +213,23 @@ async fn refuse_overlapping_or_forged_source_registration() {
         assert!(
             check(&network, vnet, nsg, nat, public).await.is_err(),
             "mutation {mutation}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn gateway_ips_must_be_two_addresses_inside_the_gateway_subnet() {
+    for ips in [
+        vec![],
+        vec!["10.0.6.4".to_string()],
+        vec!["10.0.6.4".to_string(), "10.0.7.5".to_string()],
+        vec!["10.0.6.4".to_string(), "10.0.6.4".to_string()],
+    ] {
+        let (mut network, vnet, nsg, nat, public) = fixture();
+        network.sandbox_network.as_mut().unwrap().gateway_ips = ips.clone();
+        assert!(
+            check(&network, vnet, nsg, nat, public).await.is_err(),
+            "{ips:?}"
         );
     }
 }

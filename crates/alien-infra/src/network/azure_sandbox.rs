@@ -197,6 +197,7 @@ pub async fn validate_azure_sandbox_network(
         ));
     }
     let gateway_cidr = gateway_cidrs.first().ok_or_else(missing)?;
+    validate_gateway_ips(resource, &declared.gateway_ips, gateway_cidr)?;
     let private_id = format!("{id}/subnets/{private}");
     if unique.contains(&private_id.to_ascii_lowercase()) {
         return Err(invalid(
@@ -315,6 +316,7 @@ pub async fn validate_azure_sandbox_network(
     Ok(AzureSandboxNetwork {
         sandbox_cidrs: sandbox_cidrs.into_iter().collect(),
         gateway_cidrs: gateway_cidrs.into_iter().collect(),
+        gateway_ips: declared.gateway_ips.clone(),
         workload_cidrs: workload_cidrs.into_iter().collect(),
         vpc_cidrs: vpc_cidrs.into_iter().collect(),
         ..declared.clone()
@@ -491,3 +493,35 @@ fn cloud_error(resource: &str, operation: &str) -> ErrorData {
 #[cfg(test)]
 #[path = "azure_sandbox_tests.rs"]
 pub(crate) mod tests;
+
+/// The setup-created gateway VMs have static NICs: exactly two distinct addresses inside the
+/// gateway subnet. An empty list means setup predates the VMs, so no gateway can be reached.
+fn validate_gateway_ips(resource: &str, ips: &[String], cidr: &str) -> Result<()> {
+    let bad = |message: &str| invalid(resource, message);
+    if ips.is_empty() {
+        return Err(bad(
+            "The deployment has no egress gateway VMs; re-run setup to create them",
+        ));
+    }
+    let parsed: BTreeSet<std::net::Ipv4Addr> = ips
+        .iter()
+        .map(|ip| ip.parse())
+        .collect::<std::result::Result<_, _>>()
+        .map_err(|_| bad("A gateway VM address is not an IPv4 address"))?;
+    if ips.len() != 2 || parsed.len() != 2 {
+        return Err(bad("Setup must register exactly two distinct gateway VMs"));
+    }
+    let (base, bits) = cidr
+        .split_once('/')
+        .and_then(|(b, n)| Some((b.parse::<std::net::Ipv4Addr>().ok()?, n.parse::<u32>().ok()?)))
+        .filter(|(_, n)| *n <= 32)
+        .ok_or_else(|| bad("The gateway subnet prefix is not an IPv4 range"))?;
+    let mask = u32::MAX.checked_shl(32 - bits).unwrap_or(0);
+    if parsed
+        .iter()
+        .any(|ip| u32::from(*ip) & mask != u32::from(base) & mask)
+    {
+        return Err(bad("A gateway VM address is outside the gateway subnet"));
+    }
+    Ok(())
+}
