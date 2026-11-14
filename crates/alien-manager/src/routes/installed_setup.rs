@@ -465,6 +465,21 @@ async fn prepare_target(
     );
 
     let mut settings = settings.clone();
+    // The cluster's install-time fields (namespace, ownership, cloud) come from
+    // the Operator's own settings, which the manager does not store. Take them
+    // from the baseline this target is compared with, so they never read as a
+    // change.
+    if let Some(cluster) = installed_cluster_settings(deployment, &settings) {
+        match settings.kubernetes.as_mut() {
+            Some(kubernetes) => kubernetes.cluster = Some(cluster),
+            None => {
+                settings.kubernetes = Some(alien_core::KubernetesSettings {
+                    cluster: Some(cluster),
+                    exposure: None,
+                })
+            }
+        }
+    }
     let stripped = alien_deployment::strip_frozen_declines_with_compute_settings(
         source.clone(),
         &answers,
@@ -501,6 +516,36 @@ async fn prepare_target(
         deployment.platform,
     )
     .map_err(|e| e.into_generic())
+}
+
+/// The cluster settings the baseline was prepared with, when the stored
+/// settings name none.
+fn installed_cluster_settings(
+    deployment: &DeploymentRecord,
+    settings: &alien_core::StackSettings,
+) -> Option<alien_core::KubernetesClusterSettings> {
+    if settings
+        .kubernetes
+        .as_ref()
+        .is_some_and(|kubernetes| kubernetes.cluster.is_some())
+    {
+        return None;
+    }
+    let baseline = deployment
+        .runtime_metadata
+        .as_ref()?
+        .prepared_stack
+        .as_ref()?;
+    baseline.resources().find_map(|(_, entry)| {
+        let cluster = entry
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()?;
+        Some(alien_core::KubernetesClusterSettings {
+            ownership: cluster.ownership,
+            namespace: Some(cluster.namespace.clone()),
+            cloud: cluster.cloud.clone(),
+        })
+    })
 }
 
 /// Records the Helm release the report names, so the exact upgrade command can
@@ -854,9 +899,8 @@ pub(super) mod tests {
             .await
             .unwrap();
 
-        let cluster = |stack: &Stack| {
-            serde_json::to_value(&stack.resources["kubernetes"].config).unwrap()
-        };
+        let cluster =
+            |stack: &Stack| serde_json::to_value(&stack.resources["kubernetes"].config).unwrap();
         assert_eq!(
             cluster(&prepared),
             cluster(&target),
