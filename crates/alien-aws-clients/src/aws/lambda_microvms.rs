@@ -1969,6 +1969,128 @@ mod live_image_create {
         println!("BODY: {text}");
     }
 
+    /// What `INACTIVE` does to a version's MicroVMs. Starts two billable MicroVMs on
+    /// `PROBE_VERSION_OLD` and ends them before returning.
+    ///
+    /// Prints, for a RUNNING and a SUSPENDED MicroVM on the version: whether each survives the
+    /// version going `INACTIVE`, whether a new MicroVM can still be started on it, and whether
+    /// the suspended one resumes. The version is set `ACTIVE` again at the end.
+    ///
+    /// Needs an image with two successful versions: `PROBE_IMAGE_ARN`, `PROBE_VERSION_OLD`
+    /// (the one deactivated) and `PROBE_VERSION_NEW`, and optionally `PROBE_EXEC_ROLE_ARN`.
+    #[tokio::test]
+    #[ignore]
+    async fn what_an_inactive_version_does_to_its_microvms() {
+        let image = std::env::var("PROBE_IMAGE_ARN").expect("PROBE_IMAGE_ARN");
+        let old = std::env::var("PROBE_VERSION_OLD").expect("PROBE_VERSION_OLD");
+        let role = std::env::var("PROBE_EXEC_ROLE_ARN")
+            .ok()
+            .filter(|arn| !arn.is_empty());
+        let client = client();
+
+        async fn state_of(client: &LambdaMicrovmsClient, id: &str) -> String {
+            match client.get_microvm(id).await {
+                Ok(vm) => vm.state.unwrap_or_default(),
+                Err(error) => format!("<{error}>"),
+            }
+        }
+        async fn wait_for(client: &LambdaMicrovmsClient, id: &str, want: &str) -> String {
+            let mut last = String::new();
+            for _ in 0..40 {
+                last = state_of(client, id).await;
+                if last == want {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+            last
+        }
+        async fn start(
+            client: &LambdaMicrovmsClient,
+            image: &str,
+            version: &str,
+            role: Option<String>,
+        ) -> std::result::Result<String, AlienError<ErrorData>> {
+            let token = uuid::Uuid::new_v4().simple().to_string();
+            let vm = client
+                .run_microvm(image, version, &token, role, vec![], None, None, None)
+                .await?;
+            Ok(vm.microvm_id.expect("a MicroVM id"))
+        }
+
+        let running = start(&client, &image, &old, role.clone())
+            .await
+            .expect("RunMicrovm on the active version");
+        let suspended = start(&client, &image, &old, role.clone())
+            .await
+            .expect("RunMicrovm on the active version");
+        println!(
+            "running VM {running}: {}",
+            wait_for(&client, &running, "RUNNING").await
+        );
+        println!(
+            "suspended VM {suspended}: {}",
+            wait_for(&client, &suspended, "RUNNING").await
+        );
+        client.suspend_microvm(&suspended).await.expect("suspend");
+        println!(
+            "suspended VM now: {}",
+            wait_for(&client, &suspended, "SUSPENDED").await
+        );
+
+        client
+            .update_microvm_image_version(&image, &old, MicrovmImageVersionStatus::Inactive)
+            .await
+            .expect("UpdateMicrovmImageVersion INACTIVE");
+        let version = client
+            .get_microvm_image_version(&image, &old)
+            .await
+            .expect("GetMicrovmImageVersion");
+        println!(
+            "version {old}: state={:?} status={:?}",
+            version.state, version.status
+        );
+
+        println!(
+            "(2) RUNNING VM after INACTIVE: {}",
+            state_of(&client, &running).await
+        );
+        match start(&client, &image, &old, role.clone()).await {
+            Ok(id) => {
+                println!("(2) RunMicrovm on the INACTIVE version was ACCEPTED: {id}");
+                let _ = client.terminate_microvm(&id).await;
+            }
+            Err(error) => println!("(2) RunMicrovm on the INACTIVE version refused: {error:?}"),
+        }
+
+        println!(
+            "(1) SUSPENDED VM after INACTIVE: {}",
+            state_of(&client, &suspended).await
+        );
+        match client.resume_microvm(&suspended).await {
+            Ok(()) => println!(
+                "(1) resume accepted; VM becomes: {}",
+                wait_for(&client, &suspended, "RUNNING").await
+            ),
+            Err(error) => println!("(1) resume refused: {error:?}"),
+        }
+        println!("RUNNING VM still: {}", state_of(&client, &running).await);
+
+        let versions = client
+            .list_microvm_image_versions(&image)
+            .await
+            .expect("ListMicrovmImageVersions");
+        println!("(3) versions in the image: {}", versions.len());
+
+        for id in [&running, &suspended] {
+            let _ = client.terminate_microvm(id).await;
+        }
+        client
+            .update_microvm_image_version(&image, &old, MicrovmImageVersionStatus::Active)
+            .await
+            .expect("UpdateMicrovmImageVersion ACTIVE");
+    }
+
     /// Terminates the MicroVMs a probe run started.
     ///
     /// A probe MicroVM outlives the stack it was launched from and bills for up to eight hours,
