@@ -852,9 +852,7 @@ impl AlienManagerBuilder {
                 .context(ErrorData::ServerInitFailed {
                     reason: "Failed to initialize identity exchange".to_string(),
                 })?
-                .with_token_store(Arc::new(
-                    crate::stores::sqlite::SqliteTokenStore::new(db.clone()),
-                )),
+                .with_token_store(self.token_store.clone().expect("token store set above")),
             ));
         }
 
