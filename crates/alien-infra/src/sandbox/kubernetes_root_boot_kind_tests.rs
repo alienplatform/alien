@@ -153,32 +153,63 @@ fn field(status: &str, name: &str) -> String {
         .to_string()
 }
 
+/// Deletes the test's own deny policy when the test ends, including when it panics.
+#[derive(Debug)]
+struct PolicyGuard {
+    context: String,
+    namespace: String,
+    name: Option<String>,
+}
+
+impl Drop for PolicyGuard {
+    fn drop(&mut self) {
+        if let Some(name) = &self.name {
+            let _ = kubectl(
+                &self.context,
+                &[
+                    "delete",
+                    "networkpolicy",
+                    "-n",
+                    &self.namespace,
+                    name,
+                    "--ignore-not-found",
+                ],
+            );
+        }
+    }
+}
+
 async fn start(
     pods: &Arc<dyn PodApi>,
     context: &str,
     namespace: &str,
     sandbox: &Sandbox,
     public_key: &str,
-) -> Result<(String, String), alien_error::AlienError<alien_client_core::ErrorData>> {
+) -> Result<(String, String, PolicyGuard), alien_error::AlienError<alien_client_core::ErrorData>> {
+    let pod_name = format!("{}-{:x}", sandbox.id, rand::random::<u32>());
+    // Every pod carries its own label value, so a deny policy selects only this test's pod.
     let mut pod = idle_pool_pod_with_labels(
         sandbox,
         namespace,
         "alien-kind-runc",
         None,
         Some(public_key),
-        BTreeMap::from([(
-            "alien.dev/deployment".to_string(),
-            "root-boot-kind".to_string(),
-        )]),
+        BTreeMap::from([("alien.dev/deployment".to_string(), pod_name.clone())]),
     );
-    pod.metadata.name = Some(format!("{}-{:x}", sandbox.id, rand::random::<u32>()));
+    pod.metadata.name = Some(pod_name.clone());
+    let mut guard = PolicyGuard {
+        context: context.to_string(),
+        namespace: namespace.to_string(),
+        name: None,
+    };
     if std::env::var_os("ALIEN_ROOT_BOOT_KIND_ENFORCES_POLICY").is_some() {
         // The startup gate holds the ENTRYPOINT back until the cluster really drops egress, so on
         // a cluster that enforces NetworkPolicy the pod needs the deny policy the Operator would
-        // attach. Deny all egress and ingress for these pods.
+        // attach. Deny all egress and ingress for this pod only.
         let policy = format!(
-            r#"{{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{{"name":"root-boot-kind-deny","namespace":"{namespace}"}},"spec":{{"podSelector":{{"matchLabels":{{"alien.dev/deployment":"root-boot-kind"}}}},"policyTypes":["Egress","Ingress"]}}}}"#
+            r#"{{"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{{"name":"{pod_name}","namespace":"{namespace}"}},"spec":{{"podSelector":{{"matchLabels":{{"alien.dev/deployment":"{pod_name}"}}}},"policyTypes":["Egress","Ingress"]}}}}"#
         );
+        guard.name = Some(pod_name.clone());
         let applied = Command::new("sh")
             .arg("-c")
             .arg(format!(
@@ -205,7 +236,7 @@ async fn start(
             ],
         );
         if String::from_utf8_lossy(&phase.stdout) == "Running" {
-            return Ok((name, uid));
+            return Ok((name, uid, guard));
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
@@ -222,7 +253,7 @@ async fn kubernetes_root_boot_kind_boots_root_with_the_bounded_set_and_drops_com
     let public_key = BASE64.encode(pair.pk.as_ref());
 
     let sandbox = declared("rootboot", 0);
-    let (pod, uid) = start(&pods, &context, &baseline, &sandbox, &public_key)
+    let (pod, uid, _policy) = start(&pods, &context, &baseline, &sandbox, &public_key)
         .await
         .expect("a root-boot pod is admitted where Pod Security is baseline");
 
@@ -309,7 +340,7 @@ async fn kubernetes_root_boot_kind_a_non_root_image_still_runs_restricted() {
         image: env("ALIEN_ROOT_BOOT_KIND_NONROOT_IMAGE"),
         bundled_from: None,
     };
-    let (pod, uid) = start(&pods, &context, &restricted, &sandbox, &public_key)
+    let (pod, uid, _policy) = start(&pods, &context, &restricted, &sandbox, &public_key)
         .await
         .expect("a non-root image is admitted where Pod Security is restricted");
     let status = run_through_agent(
@@ -389,7 +420,7 @@ async fn kubernetes_root_boot_kind_root_image_code_cannot_replace_the_agent_or_i
     let pair = ed25519_compact::KeyPair::generate();
     let public_key = BASE64.encode(pair.pk.as_ref());
     let sandbox = declared("rootprotect", 0);
-    let (pod, _) = start(&pods, &context, &baseline, &sandbox, &public_key)
+    let (pod, _, _policy) = start(&pods, &context, &baseline, &sandbox, &public_key)
         .await
         .expect("a root-boot pod is admitted where Pod Security is baseline");
     let output = kubectl(
@@ -423,7 +454,7 @@ async fn kubernetes_root_boot_kind_preview_serves_three_ports_over_http_and_webs
 
     let mut sandbox = declared("rootpreview", 0);
     sandbox.preview_ports = vec![8080, 8081, 8090];
-    let (pod, uid) = start(&pods, &context, &baseline, &sandbox, &public_key)
+    let (pod, uid, _policy) = start(&pods, &context, &baseline, &sandbox, &public_key)
         .await
         .expect("a root-boot pod is admitted where Pod Security is baseline");
 
@@ -616,18 +647,15 @@ async fn kubernetes_root_boot_kind_the_entrypoint_waits_for_a_late_network_polic
     assert!(!api.is_empty(), "the cluster API service address");
 
     let sandbox = declared("gatewait", 0);
+    let name = format!("gatewait-{:x}", rand::random::<u32>());
     let mut pod = idle_pool_pod_with_labels(
         &sandbox,
         &baseline,
         "alien-kind-runc",
         None,
         Some(&public_key),
-        BTreeMap::from([(
-            "alien.dev/deployment".to_string(),
-            "root-boot-kind".to_string(),
-        )]),
+        BTreeMap::from([("alien.dev/deployment".to_string(), name.clone())]),
     );
-    let name = format!("gatewait-{:x}", rand::random::<u32>());
     pod.metadata.name = Some(name.clone());
     pod.metadata
         .labels
@@ -643,6 +671,12 @@ async fn kubernetes_root_boot_kind_the_entrypoint_waits_for_a_late_network_polic
             value: Some(target.clone()),
             value_from: None,
         });
+    // The policy this test attaches late is named after the pod; remove it even on failure.
+    let _policy = PolicyGuard {
+        context: context.clone(),
+        namespace: baseline.clone(),
+        name: Some(name.clone()),
+    };
     pods.create_pod(&baseline, &pod).await.expect("create pod");
 
     // No policy yet: the gate must hold the ENTRYPOINT back. Look while it still waits.
