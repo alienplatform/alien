@@ -9075,7 +9075,11 @@
           },
           "body": {
             "type": "object",
-            "description": "The next list's body (`previous`, `adminThreshold`, `signers`,\n`deny`, `recovered`)."
+            "description": "The next list's body (`previous`, `adminThreshold`, `signers`,\n`deny`, `recovered`).",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "summary": {
             "type": "string",
@@ -17251,7 +17255,11 @@
           },
           "body": {
             "type": "object",
-            "description": "The next list's body."
+            "description": "The next list's body.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "createdAt": {
             "type": "string"
