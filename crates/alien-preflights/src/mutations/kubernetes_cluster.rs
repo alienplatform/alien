@@ -10,7 +10,7 @@ use alien_core::{
 use async_trait::async_trait;
 use tracing::info;
 
-const DEFAULT_CLUSTER_ID: &str = "kubernetes";
+const DEFAULT_CLUSTER_ID: &str = alien_core::PREPARED_CLUSTER_ID;
 
 pub struct KubernetesClusterMutation;
 
@@ -73,11 +73,8 @@ impl StackMutation for KubernetesClusterMutation {
                     config: alien_core::Resource::new(cluster),
                     lifecycle: ResourceLifecycle::Frozen,
                     dependencies,
-                    display_name: Some("Kubernetes cluster".to_string()),
-                    description: Some(
-                        "Provides the Kubernetes cluster used by application workloads."
-                            .to_string(),
-                    ),
+                    display_name: Some(alien_core::PREPARED_CLUSTER_DISPLAY_NAME.to_string()),
+                    description: Some(alien_core::PREPARED_CLUSTER_DESCRIPTION.to_string()),
                     remote_access: false,
                     enabled_when: None,
                 },

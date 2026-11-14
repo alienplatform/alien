@@ -8232,15 +8232,25 @@
           "deploymentCount",
           "createdAt",
           "projectId",
-          "workspaceId"
+          "workspaceId",
+          "accessApprover"
         ],
         "properties": {
+          "accessApprover": {
+            "type": "string",
+            "description": "Required by the platform-SDK DeploymentGroup schema, which allows\nonly `customer` or `team`. `customer` is the schema's default for\nevery group; standalone has no approval workflow that reads it."
+          },
           "createdAt": {
             "type": "string"
           },
           "deploymentCount": {
             "type": "integer",
             "format": "int64"
+          },
+          "externalId": {
+            "type": "string",
+            "description": "Required (nullable) by the platform-SDK DeploymentGroup schema.\nStandalone groups have no integrating-application identifier.",
+            "nullable": true
           },
           "id": {
             "type": "string"

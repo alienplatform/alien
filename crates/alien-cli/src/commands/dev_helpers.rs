@@ -1516,7 +1516,7 @@ mod tests {
 
     async fn destroy_manager_groups() -> Json<serde_json::Value> {
         Json(serde_json::json!({ "items": [{
-            "id":"dg_1", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+            "id":"dg_1", "name":"local-dev", "deploymentCount":1, "accessApprover":"customer", "externalId":null, "maxDeployments":100,
             "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"
         }] }))
     }
@@ -1659,7 +1659,7 @@ mod tests {
         type Data = Arc<Mutex<(String, String, usize, bool)>>;
         async fn groups() -> Json<serde_json::Value> {
             Json(
-                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1,
+                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1, "accessApprover":"customer", "externalId":null,
                 "maxDeployments":100, "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"}]}),
             )
         }
@@ -1733,7 +1733,7 @@ mod tests {
         type StateData = Arc<Mutex<(String, bool, Vec<String>)>>;
         async fn groups() -> Json<serde_json::Value> {
             Json(
-                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1, "accessApprover":"customer", "externalId":null, "maxDeployments":100,
                 "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"}]}),
             )
         }
@@ -1854,9 +1854,9 @@ mod tests {
 
         async fn groups() -> Json<serde_json::Value> {
             Json(serde_json::json!({ "items": [
-                { "id":"dg_other", "name":"other", "deploymentCount":1, "maxDeployments":100,
+                { "id":"dg_other", "name":"other", "deploymentCount":1, "accessApprover":"customer", "externalId":null, "maxDeployments":100,
                   "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z" },
-                { "id":"dg_1", "name":"local-dev", "deploymentCount":0, "maxDeployments":100,
+                { "id":"dg_1", "name":"local-dev", "deploymentCount":0, "accessApprover":"customer", "externalId":null, "maxDeployments":100,
                   "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z" }
             ] }))
         }

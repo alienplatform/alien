@@ -473,9 +473,10 @@ pub(crate) fn scan_rendered_for_unindexed(
     Ok(())
 }
 
-/// True when the text starts with a real instance index — `[0]` (any digits)
-/// or the full splat `[*]` — the only bracket forms that are valid directly
-/// on a counted resource address.
+/// True when the text starts with a real instance index — `[0]` (any digits),
+/// `[count.index]` (a counted block reading its own instance) or the full
+/// splat `[*]` — the only bracket forms that are valid directly on a counted
+/// resource address.
 fn is_instance_index(text: &str) -> bool {
     let Some(inner) = text.strip_prefix('[') else {
         return false;
@@ -484,7 +485,9 @@ fn is_instance_index(text: &str) -> bool {
         return false;
     };
     let index = inner[..close].trim();
-    index == "*" || (!index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit()))
+    index == "*"
+        || index == "count.index"
+        || (!index.is_empty() && index.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 /// Byte ranges of `depends_on = [ ... ]` attribute values, where

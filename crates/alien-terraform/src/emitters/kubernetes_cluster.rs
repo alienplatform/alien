@@ -1545,9 +1545,12 @@ fn kubernetes_import_ref(
             })
         })?;
     let label = required_label(ctx)?;
-    let ownership = match cluster.ownership {
-        KubernetesClusterOwnership::Managed => "managed",
-        KubernetesClusterOwnership::Existing => "existing",
+    // What the module is told to do with the cluster decides who owns it: the module builds a
+    // `managed` one in `create` mode and attaches to an `existing` one otherwise, the same
+    // answer it sends as the stack's cluster ownership. A stack that declares the cluster
+    // `managed` therefore registers `existing` for an attached cluster.
+    let attached_ownership = match cluster.ownership {
+        KubernetesClusterOwnership::Managed | KubernetesClusterOwnership::Existing => "existing",
         KubernetesClusterOwnership::External => "external",
     };
     let mut fields = vec![
@@ -1558,7 +1561,7 @@ fn kubernetes_import_ref(
         (
             "ownership",
             expr::raw(format!(
-                "var.kubernetes_cluster_mode == \"create\" ? \"managed\" : \"{ownership}\""
+                "var.kubernetes_cluster_mode == \"create\" ? \"managed\" : \"{attached_ownership}\""
             )),
         ),
         ("namespace", expr::raw("var.kubernetes_namespace")),
