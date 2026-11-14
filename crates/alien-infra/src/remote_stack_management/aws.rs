@@ -631,13 +631,17 @@ fn emit_aws_remote_stack_management_heartbeat(
 }
 
 /// The stack's network, for the management policy: the VPC and subnet IDs once they are known
-/// (the installer named them, or the network is Running), the stack's tags for a network the
-/// Alien network controller has not finished creating, and nothing for the account's default
+/// (the installer named them, or the network has been created), the stack's tags for a network
+/// the Alien network controller has not finished creating, and nothing for the account's default
 /// VPC before it is discovered, which keeps the account-wide reach.
 ///
-/// IDs come from the network controller only once the network is Running: before that its
-/// subnet list can be partial (the VPC exists before its subnets, sandbox gateway subnets come
-/// last), and a policy pinned to part of the network would deny the rest of it.
+/// IDs come from the network controller only once the network has finished creating: during the
+/// first create its subnet list can be partial (the VPC exists before its subnets, sandbox
+/// gateway subnets come last), and a policy pinned to part of the network would deny the rest of
+/// it. After that the lists are always whole: an update replaces an existing VPC's subnets in
+/// one step when it starts, and records sandbox gateway subnets in one step when they all exist,
+/// keeping the previous ones until then. So an updating, failed-update or failed-refresh network
+/// still names its subnets.
 pub(crate) fn aws_network_scope(ctx: &ResourceControllerContext<'_>) -> Option<AwsNetworkScope> {
     use crate::core::state_utils::StackResourceStateExt;
 
@@ -650,7 +654,15 @@ pub(crate) fn aws_network_scope(ctx: &ResourceControllerContext<'_>) -> Option<A
         .state
         .resources
         .get(network_id)
-        .filter(|state| state.status == ResourceStatus::Running)
+        .filter(|state| {
+            matches!(
+                state.status,
+                ResourceStatus::Running
+                    | ResourceStatus::Updating
+                    | ResourceStatus::UpdateFailed
+                    | ResourceStatus::RefreshFailed
+            )
+        })
         .and_then(|state| {
             state
                 .get_internal_controller_typed::<crate::network::AwsNetworkController>()
@@ -2383,6 +2395,42 @@ mod tests {
             )
             .await;
             assert_eq!(scope, None, "{status:?}");
+        }
+    }
+
+    /// A network that finished creating keeps naming its subnets while it is updated, after a
+    /// failed update and after a failed refresh: a setup run in those states must not fall back
+    /// to tags or, for the default VPC, to the account-wide reach.
+    #[tokio::test]
+    async fn a_created_network_stays_pinned_while_it_is_updated() {
+        for status in [
+            ResourceStatus::Updating,
+            ResourceStatus::UpdateFailed,
+            ResourceStatus::RefreshFailed,
+        ] {
+            for settings in [
+                alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                },
+                alien_core::NetworkSettings::UseDefault,
+            ] {
+                let scope = network_scope_at(
+                    settings.clone(),
+                    ResourceLifecycle::Frozen,
+                    Some(crate::network::AwsNetworkController::mock_ready("vpc-1", 2)),
+                    status,
+                )
+                .await;
+                assert!(
+                    matches!(
+                        scope,
+                        Some(AwsNetworkScope::Vpc { ref vpc_id, ref subnet_ids })
+                            if vpc_id == "vpc-1" && subnet_ids.len() == 4
+                    ),
+                    "{status:?} {settings:?}: {scope:?}"
+                );
+            }
         }
     }
 
