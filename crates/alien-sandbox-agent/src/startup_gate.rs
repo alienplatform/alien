@@ -212,7 +212,53 @@ fn probe_from(
     Ok(Probe { blocked, control })
 }
 
+/// Set by the Azure backend: the sandbox sits in a VNet, not a cluster, so there is no API
+/// server to try. The gateway is the positive control and the listed public addresses must drop.
+pub const ENV_STARTUP_GATE_VNET: &str = "ALIEN_SANDBOX_STARTUP_GATE_VNET";
+/// Overrides how long the gate waits (seconds). Azure's first gateway connect can take ~20 s.
+pub const ENV_STARTUP_GATE_BOUND_SECS: &str = "ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS";
+
+fn probe_vnet(public: Option<&str>, control: Option<String>) -> Result<Probe, String> {
+    let Some(control) = control.filter(|control| !control.trim().is_empty()) else {
+        return Err("ALIEN_SANDBOX_EGRESS_GATEWAY is not set: a VNet sandbox with `internet` egress needs the gateway as its positive control".into());
+    };
+    let blocked: Vec<String> = public
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+        .map(str::to_string)
+        .collect();
+    if blocked.is_empty() {
+        return Err(format!(
+            "{} is not set: without a public address that must drop, the check would prove nothing",
+            alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC
+        ));
+    }
+    Ok(Probe {
+        blocked,
+        control: Some(control),
+    })
+}
+
+/// The wait bound: `ENV_STARTUP_GATE_BOUND_SECS` when it is a positive number, else `BOUND`.
+fn bound_from(value: Option<&str>) -> Duration {
+    value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(BOUND)
+}
+
 fn probe_from_env() -> Result<Probe, String> {
+    if std::env::var_os(ENV_STARTUP_GATE_VNET).is_some() {
+        return probe_vnet(
+            std::env::var(alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC)
+                .ok()
+                .as_deref(),
+            std::env::var("ALIEN_SANDBOX_EGRESS_GATEWAY").ok(),
+        );
+    }
     probe_from(
         std::env::var(alien_core::sandbox_image::ENV_MUST_DROP_KUBE_API)
             .ok()
@@ -233,9 +279,10 @@ pub fn enforce_from_env() -> Result<(), String> {
         return Ok(());
     }
     let probe = probe_from_env()?;
+    let bound = bound_from(std::env::var(ENV_STARTUP_GATE_BOUND_SECS).ok().as_deref());
     wait_until_blocked(
         &probe,
-        BOUND,
+        bound,
         ROUND_INTERVAL,
         connect,
         network_up,
@@ -248,7 +295,7 @@ pub fn enforce_from_env() -> Result<(), String> {
                  started. Enable NetworkPolicy enforcement (EKS Auto Mode: ConfigMap \
                  amazon-vpc-cni in kube-system with enable-network-policy-controller \"true\"; \
                  GKE: dataplane v2 or network policy; AKS: Azure CNI powered by Cilium, or Calico)",
-            BOUND.as_secs(),
+            bound.as_secs(),
             problems.join(", ")
         )
     })
@@ -318,6 +365,27 @@ mod tests {
             || up,
             |_| {},
         )
+    }
+
+    #[test]
+    fn a_vnet_gate_needs_the_gateway_and_a_public_target_and_no_kube_api() {
+        let probe = probe_vnet(
+            Some("1.1.1.1:443, 1.1.1.1:8443"),
+            Some("10.0.1.4:3128".into()),
+        )
+        .unwrap();
+        assert_eq!(probe.control.as_deref(), Some("10.0.1.4:3128"));
+        assert_eq!(probe.blocked, vec!["1.1.1.1:443", "1.1.1.1:8443"]);
+        assert!(probe_vnet(Some("1.1.1.1:443"), None).is_err());
+        assert!(probe_vnet(None, Some("10.0.1.4:3128".into())).is_err());
+    }
+
+    #[test]
+    fn the_gate_bound_defaults_to_30s_and_takes_a_positive_override() {
+        assert_eq!(bound_from(None), Duration::from_secs(30));
+        assert_eq!(bound_from(Some("0")), Duration::from_secs(30));
+        assert_eq!(bound_from(Some("x")), Duration::from_secs(30));
+        assert_eq!(bound_from(Some("60")), Duration::from_secs(60));
     }
 
     #[test]

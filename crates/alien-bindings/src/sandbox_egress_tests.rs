@@ -764,7 +764,10 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
 
 #[test]
 fn static_replica_addresses_are_the_write_targets_without_dns() {
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(async {
         let h = Harness::new().await;
         let mut config = h.config.clone();
