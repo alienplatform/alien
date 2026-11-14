@@ -76,6 +76,10 @@ pub struct ChartSettings {
     /// Checks the enrollment code an operator pulls its own image with
     /// before it enrolls. Set by the builder from the identity verifier.
     pub enrollment_codes: Option<Arc<dyn crate::auth::identity_exchange::RuntimeIdentityVerifier>>,
+    /// Tell older Operators (with self-update on) to swap to the chart's
+    /// Operator image on their next sync. Off by default: the swap is
+    /// one-way, so it is opt-in.
+    pub update_older_operators: bool,
 }
 
 impl std::fmt::Debug for ChartSettings {
@@ -84,6 +88,7 @@ impl std::fmt::Debug for ChartSettings {
             .field("operator_image", &self.operator_image)
             .field("operator_upstream", &self.operator_upstream)
             .field("enrollment_codes", &self.enrollment_codes.is_some())
+            .field("update_older_operators", &self.update_older_operators)
             .finish()
     }
 }
@@ -110,7 +115,28 @@ impl ChartSettings {
             operator_image,
             operator_upstream,
             enrollment_codes: None,
+            update_older_operators: false,
         }
+    }
+
+    /// Opt in to sending the chart's Operator image to older Operators.
+    pub fn with_update_older_operators(mut self, enabled: bool) -> Self {
+        self.update_older_operators = enabled;
+        self
+    }
+
+    /// The Operator image to send in a sync response: the chart's image only
+    /// when this manager is set to update older Operators, otherwise the one
+    /// its store reported (`reconciled`), if any.
+    pub fn sync_target_image(
+        settings: Option<&Self>,
+        manager_url: &str,
+        reconciled: Option<String>,
+    ) -> Option<String> {
+        settings
+            .filter(|charts| charts.update_older_operators)
+            .map(|charts| charts.deployed_operator_image(manager_url))
+            .or(reconciled)
     }
 
     /// What to tell an Operator that is too old for this manager: the Operator
@@ -730,5 +756,50 @@ mod upgrade_message_tests {
         assert!(settings
             .operator_upgrade_message(None)
             .starts_with("this Operator is too old"));
+    }
+}
+
+#[cfg(test)]
+mod sync_target_image_tests {
+    use super::ChartSettings;
+
+    fn settings() -> ChartSettings {
+        ChartSettings::new(
+            Some("ghcr.io/alienplatform/alien-operator:v3.3.64".to_string()),
+            false,
+        )
+    }
+
+    #[test]
+    fn by_default_no_chart_image_goes_to_an_operator() {
+        // The same answer for any Operator version, e.g. 3.3.31 or 3.3.62.
+        let settings = settings();
+        assert!(!settings.update_older_operators);
+        let sent = ChartSettings::sync_target_image(Some(&settings), "https://m.example.com", None);
+        assert_eq!(sent, None);
+    }
+
+    #[test]
+    fn opted_in_the_chart_image_goes_out() {
+        let settings = settings().with_update_older_operators(true);
+        let sent = ChartSettings::sync_target_image(Some(&settings), "https://m.example.com", None);
+        assert_eq!(
+            sent.as_deref(),
+            Some("m.example.com/alien-operator:v3.3.64")
+        );
+    }
+
+    #[test]
+    fn the_image_the_store_reported_still_passes_through() {
+        let stored = Some("registry.example.com/alien-operator:v3.3.70".to_string());
+        let off = settings();
+        assert_eq!(
+            ChartSettings::sync_target_image(Some(&off), "https://m.example.com", stored.clone()),
+            stored
+        );
+        assert_eq!(
+            ChartSettings::sync_target_image(None, "https://m.example.com", stored.clone()),
+            stored
+        );
     }
 }

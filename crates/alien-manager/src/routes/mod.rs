@@ -14,6 +14,9 @@ pub mod logs;
 pub mod manager_info;
 pub mod operator_image;
 pub mod platforms;
+pub(crate) mod pull_compat;
+#[cfg(test)]
+mod pull_compat_shapes;
 pub mod registry_proxy;
 pub mod releases;
 pub mod stack;
