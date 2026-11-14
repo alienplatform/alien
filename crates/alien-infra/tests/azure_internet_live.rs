@@ -23,10 +23,11 @@
 
 use alien_core::{
     import::ImportContext, AzureClientConfig, AzureCredentials, ClientConfig, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, Platform, ResourceLifecycle, ResourceStatus, Stack,
+    EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus, Stack,
     StackSettings, StackState,
 };
-use alien_infra::{ImporterRegistry, StackExecutor, StackResourceStateExt};
+use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackResourceStateExt};
+use std::time::Duration;
 use serde_json::Value;
 
 fn env(name: &str) -> String {
@@ -110,36 +111,70 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
         .external_bindings(ExternalBindings::default())
         .allow_frozen_changes(false)
         .build();
-    // The deployment's two phases: setup-owned (Frozen) resources continue from the import, then
-    // the Live phase runs over the same state, which is where the gateway declaration is accepted.
+    // The deployment's two phases, built as `initial_setup.rs` and `provisioning.rs` build them:
+    // setup-owned (Frozen) resources continue from the import one step at a time, then the Live
+    // phase steps over the same state, which is where the gateway declaration is accepted.
     let frozen = StackExecutor::builder(&stack, client_config.clone())
         .deployment_config(&config)
+        .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .step_out_of_scope_resources(false)
         .build()
         .expect("the executor accepts the prepared stack");
-    state = frozen
-        .continue_imported(state)
-        .await
-        .expect("imported setup state continues")
-        .next_state;
-    let finished = frozen.run_until_synced(state).await;
+    let settled = |state: &StackState, lifecycle: ResourceLifecycle| {
+        state
+            .resources
+            .values()
+            .filter(|resource| resource.lifecycle == Some(lifecycle))
+            .all(|resource| resource.status == ResourceStatus::Running)
+    };
+    for step in 0..400 {
+        let result = frozen
+            .continue_imported(state)
+            .await
+            .unwrap_or_else(|error| panic!("setup step {step} failed: {error}"));
+        state = result.next_state;
+        if settled(&state, ResourceLifecycle::Frozen) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(result.suggested_delay_ms.unwrap_or(500))).await;
+    }
     assert!(
-        finished.success,
-        "the Frozen phase did not sync: {:?}",
-        finished.error
+        settled(&state, ResourceLifecycle::Frozen),
+        "the setup phase did not settle: {:#?}",
+        state
+            .resources
+            .iter()
+            .map(|(id, resource)| (id.clone(), resource.status))
+            .collect::<Vec<_>>()
     );
-    state = finished.final_state;
     let live = StackExecutor::builder(&stack, client_config)
         .deployment_config(&config)
+        .lifecycle_filter(vec![ResourceLifecycle::Live])
+        .running_resource_policy(RunningResourcePolicy::OptIn)
         .build()
         .expect("the executor accepts the prepared stack in the Live phase");
-    let finished = live.run_until_synced(state).await;
+    for step in 0..400 {
+        let result = live
+            .step(state)
+            .await
+            .unwrap_or_else(|error| panic!("live step {step} failed: {error}"));
+        state = result.next_state;
+        if settled(&state, ResourceLifecycle::Live) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(result.suggested_delay_ms.unwrap_or(500))).await;
+    }
     assert!(
-        finished.success,
-        "the Live phase did not sync: {:?}",
-        finished.error
+        settled(&state, ResourceLifecycle::Live),
+        "the Live phase did not settle: {:#?}",
+        state
+            .resources
+            .iter()
+            .map(|(id, resource)| (id.clone(), resource.status))
+            .collect::<Vec<_>>()
     );
-    state = finished.final_state;
 
     for (id, resource) in &state.resources {
         eprintln!("[state] {id}: {:?}", resource.status);

@@ -22,6 +22,7 @@
 #   AGENT_BINARY               path to a static (musl) alien-sandbox-agent
 #   GATEWAY_BINARY             path to a static (musl) alien-egress-gateway built from this branch
 #                              (the pinned release image can predate the admin protocol; bump the pin at release)
+#   AZURE_INTERNET_KEEP        set to keep the resources after the run (debugging); tear down with the `teardown` command
 #   AZURE_INTERNET_WORK        working directory, default ./azure-internet-work (kept for the evidence)
 #
 # Every resource lives in two resource groups, `<prefix>-rg` (the module) and `<prefix>-acr-rg`
@@ -94,7 +95,7 @@ export PATH="$HOME/bin:$PATH"
 command -v terraform >/dev/null || { echo "terraform is required"; exit 1; }
 
 # Whatever happens next, tear everything down and prove it.
-trap 'status=$?; trap - EXIT; set +e; teardown; code=$?; [ "$status" -ne 0 ] && exit "$status"; exit "$code"' EXIT
+[ -n "${AZURE_INTERNET_KEEP:-}" ] || trap 'status=$?; trap - EXIT; set +e; teardown; code=$?; [ "$status" -ne 0 ] && exit "$status"; exit "$code"' EXIT
 
 # 1. The registry, in its own group so the module's group can be applied and destroyed freely.
 echo "== registry"
