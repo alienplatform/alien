@@ -1752,10 +1752,12 @@ pub(in crate::routes) mod tests {
         store
             .expect_requires_execution_claims()
             .return_const(options.claims);
-        let stored = record.clone();
+        // The store remembers a saved failure, as a real one does.
+        let stored = Arc::new(Mutex::new(record.clone()));
+        let read = stored.clone();
         store
             .expect_get_deployment()
-            .returning(move |_, _| Ok(Some(stored.clone())));
+            .returning(move |_, _| Ok(Some(read.lock().expect("stored record").clone())));
         let acquired = record.clone();
         let granted = claim.clone();
         if options.claims {
@@ -1776,7 +1778,20 @@ pub(in crate::routes) mod tests {
         store
             .expect_retarget_settled_deployment()
             .returning(|_, _, _, _, _| Ok(false));
+        let writes = stored.clone();
         store.expect_reconcile().returning(move |_, data| {
+            if !data.update_heartbeat {
+                let mut record = writes.lock().expect("stored record");
+                record.status = serde_json::to_value(data.state.status)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                record.error = data
+                    .state
+                    .error
+                    .as_ref()
+                    .and_then(|e| serde_json::to_value(e).ok());
+            }
             received.lock().expect("reconcile log").push(data);
             Ok(ReconcileOutcome {
                 record: reconciled_record.clone(),
@@ -2065,6 +2080,47 @@ pub(in crate::routes) mod tests {
             DeploymentStatus::UpdateFailed
         );
         assert_eq!(sync.released.len(), 1);
+    }
+
+    /// A refusal saved without a claim stays: the heartbeat the same sync
+    /// records is written from the stored record read after the refusal, not
+    /// the one read before it.
+    #[tokio::test]
+    async fn a_saved_refusal_is_not_overwritten_by_the_heartbeat_of_the_same_sync() {
+        let sync = sync_with_options(
+            deployment_record_with_state("update-pending", None),
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                stack: stack_with_egress(),
+                operator_version: Some("3.3.31"),
+                claims: false,
+                update_older_operators: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        let refusal = sync
+            .reconciled
+            .iter()
+            .find(|data| !data.update_heartbeat)
+            .expect("the refusal is saved");
+        assert_eq!(refusal.state.status, DeploymentStatus::UpdateFailed);
+        let heartbeats: Vec<_> = sync
+            .reconciled
+            .iter()
+            .filter(|data| data.update_heartbeat)
+            .collect();
+        assert!(!heartbeats.is_empty(), "the sync records its heartbeat");
+        for data in heartbeats {
+            assert_eq!(data.state.status, DeploymentStatus::UpdateFailed);
+            assert_eq!(
+                data.state.error.as_ref().map(|e| e.message.clone()),
+                refusal.state.error.as_ref().map(|e| e.message.clone()),
+                "the refusal's error is kept"
+            );
+        }
     }
 
     /// With an image to send, an already saved refusal is also answered with
@@ -6238,6 +6294,22 @@ async fn agent_sync(
                         if saved.status().is_server_error() {
                             return saved;
                         }
+                        // The refusal changed the stored record. The rest of
+                        // the sync records its heartbeat against the stored
+                        // state, so read it again: writing the record loaded
+                        // before would put the old status and error back.
+                        deployment = match state
+                            .deployment_store
+                            .get_deployment(&subject, &req.deployment_id)
+                            .await
+                        {
+                            Ok(Some(d)) => d,
+                            Ok(None) => {
+                                return ErrorData::not_found_deployment(&req.deployment_id)
+                                    .into_response()
+                            }
+                            Err(e) => return e.into_response(),
+                        };
                     } else if image.is_none() {
                         return refusal.into_response();
                     }
