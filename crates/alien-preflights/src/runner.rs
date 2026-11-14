@@ -207,7 +207,7 @@ impl PreflightRunner {
         results: &mut Vec<CheckResult>,
     ) -> Result<Option<DeploymentConfig>> {
         use crate::runtime::azure_compute::ComputeRoom;
-        use alien_core::{instance_catalog, ComputeCluster, Container};
+        use alien_core::{ComputeCluster, Container};
         if stack_state.platform != Platform::Azure
             || !stack.resources.values().any(|entry| {
                 entry.config.downcast_ref::<Container>().is_some()
@@ -238,31 +238,22 @@ impl PreflightRunner {
         let Some(room) = ComputeRoom::read(&skus, &usages, region).await else {
             return Ok(None);
         };
-        let asked = std::cell::RefCell::new(Vec::<(&'static str, u32, bool)>::new());
-        let has_room = |spec: &instance_catalog::InstanceTypeSpec, machines: u32| {
-            let fits = room.has_room(spec, machines);
-            asked.borrow_mut().push((spec.series, machines, fits));
-            fits
-        };
-        let chosen = crate::mutations::ComputeClusterMutation.choose_new_pool_machines(
+        let ledger = crate::runtime::azure_compute::PoolQuotaLedger::new(&room, stack_state);
+        let chosen = crate::mutations::ComputeClusterMutation.choose_pool_machines(
             stack.clone(),
             stack_state,
             config,
-            &has_room,
+            &ledger,
         )?;
-        let asked = asked.into_inner();
-        if !asked.is_empty() && asked.iter().all(|(_, _, fits)| !fits) {
-            let mut series: Vec<String> = Vec::new();
-            for (name, machines, _) in &asked {
-                let entry = format!("{name} ({machines} machines)");
-                if !series.contains(&entry) {
-                    series.push(entry);
-                }
-            }
+        for (pool, asked) in ledger.without_room() {
+            let checked: Vec<String> = asked
+                .iter()
+                .map(|(series, machines)| format!("{series} ({machines} machines)"))
+                .collect();
             results.push(
                 CheckResult::with_warnings(vec![format!(
-                    "No VM series has enough free quota in {region}. Checked: {}.",
-                    series.join(", ")
+                    "No VM series has enough free quota in {region} for pool '{pool}'. Checked: {}.",
+                    checked.join(", ")
                 )])
                 .with_check_description("Automatic machine selection".into()),
             );

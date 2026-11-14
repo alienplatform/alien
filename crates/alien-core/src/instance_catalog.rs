@@ -347,26 +347,31 @@ pub fn select_instance_type(
 type MachineFilter<'a> = &'a dyn Fn(&InstanceTypeSpec) -> bool;
 
 /// Like [`select_instance_type`], but only from the series that have room for `machines`
-/// machines. `has_room` answers for one machine of the series; the catalog's series order
-/// is the preference order, so the first series with room wins. When no series has room,
-/// the result is the plain selection, so the caller's quota check reports the refusal.
-/// Pass the same `machines` the pool launches with at first setup.
+/// machines. `has_room` answers for one machine type of a series. The ordinary selection runs
+/// first; a pick whose series has no room removes that series and selection runs again, so
+/// every preference of the ordinary selection (local disk before a configurable one, the
+/// smallest machine that fits, catalog order between equal machines) still applies to the
+/// series that remain. When no series has room, the result is the plain selection, so the
+/// caller's quota check reports the refusal. Pass the machines the pool launches with.
 pub fn select_instance_type_with_room(
     platform: Platform,
     requirements: &WorkloadRequirements,
     machines: u32,
     has_room: &dyn Fn(&InstanceTypeSpec, u32) -> bool,
 ) -> Result<InstanceSelection, String> {
-    for series in auto_select_series(platform) {
-        let in_series = |spec: &InstanceTypeSpec| spec.series == series;
-        let Ok(selection) = select_instance_type_where(platform, requirements, &in_series) else {
-            continue;
+    let mut without_room: Vec<&'static str> = Vec::new();
+    loop {
+        let remaining = |spec: &InstanceTypeSpec| !without_room.contains(&spec.series);
+        let Ok(selection) = select_instance_type_where(platform, requirements, &remaining) else {
+            break;
         };
-        let fits = find_instance_type(platform, selection.instance_type)
-            .is_some_and(|spec| has_room(spec, machines));
-        if fits {
+        let Some(spec) = find_instance_type(platform, selection.instance_type) else {
+            break;
+        };
+        if has_room(spec, machines) {
             return Ok(selection);
         }
+        without_room.push(spec.series);
     }
     select_instance_type(platform, requirements)
 }
@@ -1848,6 +1853,35 @@ mod tests {
         })
         .unwrap();
         assert!(asked.borrow().iter().all(|(_, machines)| *machines == 3));
+    }
+
+    /// A local disk is preferred to a configurable one whatever the series that has room:
+    /// the machines of series without room are skipped, not the storage preference.
+    #[test]
+    fn local_storage_is_preferred_among_the_series_with_room() {
+        let requirements = WorkloadRequirements {
+            max_ephemeral_storage_bytes: 500 * GI,
+            nested_virt: false,
+            ..general_requirements()
+        };
+        let plain = select_instance_type(Platform::Azure, &requirements).unwrap();
+        let plain_spec = find_instance_type(Platform::Azure, plain.instance_type).unwrap();
+        assert!(
+            !plain_spec.has_configurable_ephemeral_storage(),
+            "the plain pick has a local disk: {}",
+            plain.instance_type
+        );
+        let with_room =
+            select_instance_type_with_room(Platform::Azure, &requirements, 1, &|_, _| true)
+                .unwrap();
+        assert_eq!(with_room.instance_type, plain.instance_type);
+        // Series that cannot give a local disk have room too, and still lose to it.
+        let local_only =
+            select_instance_type_with_room(Platform::Azure, &requirements, 1, &|spec, _| {
+                spec.series == plain_spec.series || spec.series.starts_with("Dsv")
+            })
+            .unwrap();
+        assert_eq!(local_only.instance_type, plain.instance_type);
     }
 
     #[test]

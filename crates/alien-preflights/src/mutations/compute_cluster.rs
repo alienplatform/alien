@@ -40,7 +40,7 @@ impl ComputeClusterMutation {
         stack: &Stack,
         stack_state: &StackState,
         config: &DeploymentConfig,
-        room: Option<MachineRoom>,
+        room: Option<&dyn MachineRoom>,
     ) -> Result<DeploymentConfig> {
         let mut resolved_config = config.clone();
         if matches!(
@@ -123,15 +123,17 @@ impl ComputeClusterMutation {
         Ok(resolved_config)
     }
 
-    /// Settings with the machine each pool that is not installed yet gets when automatic
-    /// selection takes the first series with room, as `room` answers. An installed pool
-    /// keeps its machine: this never changes the machine of a pool that exists.
-    pub fn choose_new_pool_machines(
+    /// Settings with the machine each pool that chooses automatically gets, as `room` answers.
+    /// A pool that is not installed takes the first series with room. An installed pool whose
+    /// settings leave the machine automatic keeps the series it runs, and a pool that is
+    /// installed and has no settings keeps its machine: an unchanged release never moves
+    /// installed machines to another series.
+    pub fn choose_pool_machines(
         &self,
         stack: Stack,
         stack_state: &StackState,
         config: &DeploymentConfig,
-        room: MachineRoom,
+        room: &dyn MachineRoom,
     ) -> Result<DeploymentConfig> {
         let stack = place_unplaced_cloud_containers(stack, stack_state.platform)?;
         let resolved = self.resolve_compute_settings(&stack, stack_state, config, Some(room))?;
@@ -149,11 +151,11 @@ impl ComputeClusterMutation {
         };
         let settings = chosen.stack_settings.compute.get_or_insert_default();
         for (pool_id, selection) in resolved.pools {
-            let automatic = settings
-                .pools
-                .get(&pool_id)
-                .is_none_or(|selection| selection.machine().is_none());
-            if automatic && !installed.contains(&pool_id.as_str()) {
+            let choice_is_automatic = match settings.pools.get(&pool_id) {
+                Some(saved) => saved.machine().is_none(),
+                None => !installed.contains(&pool_id.as_str()),
+            };
+            if choice_is_automatic {
                 settings.pools.insert(pool_id, selection);
             }
         }
@@ -1570,6 +1572,7 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::instance_catalog::InstanceTypeSpec;
     use alien_core::{
         compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
         ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
@@ -3238,59 +3241,98 @@ mod tests {
             .map(ToString::to_string)
     }
 
+    /// Answers `has_room` from a function and records what was asked and committed.
+    struct StubRoom<F: Fn(&InstanceTypeSpec, u32) -> bool> {
+        fits: F,
+        asked: std::cell::RefCell<Vec<(&'static str, u32)>>,
+    }
+
+    impl<F: Fn(&InstanceTypeSpec, u32) -> bool> StubRoom<F> {
+        fn new(fits: F) -> Self {
+            Self {
+                fits,
+                asked: Default::default(),
+            }
+        }
+    }
+
+    impl<F: Fn(&InstanceTypeSpec, u32) -> bool> MachineRoom for StubRoom<F> {
+        fn has_room(&self, _pool_id: &str, spec: &InstanceTypeSpec, machines: u32) -> bool {
+            self.asked.borrow_mut().push((spec.series, machines));
+            (self.fits)(spec, machines)
+        }
+
+        fn commit(&self, _pool_id: &str, _spec: &InstanceTypeSpec, _machines: u32) {}
+    }
+
+    fn installed_state(machine: &str) -> StackState {
+        let cluster = ComputeCluster::new("compute".into())
+            .capacity_group(CapacityGroup {
+                group_id: "general".into(),
+                instance_type: Some(machine.into()),
+                min_size: 1,
+                max_size: 2,
+                profile: None,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        azure_state(vec![(
+            "compute",
+            alien_core::StackResourceState::new_pending(
+                "compute-cluster".into(),
+                alien_core::Resource::new(cluster),
+                Some(ResourceLifecycle::Live),
+                Vec::new(),
+            ),
+        )])
+    }
+
+    fn automatic_pool(machines: u32) -> DeploymentConfig {
+        general_selection(ComputePoolSelection::Fixed {
+            machines,
+            machine: None,
+            failure_domains: None,
+            data_disk_gib: None,
+        })
+    }
+
     #[test]
     fn a_new_azure_pool_takes_the_first_series_with_room() {
         let state = azure_state(vec![]);
         // Only Dsv6 has quota in the region: the first series with room wins.
         let chosen = ComputeClusterMutation
-            .choose_new_pool_machines(
+            .choose_pool_machines(
                 generated_pool_stack(),
                 &state,
                 &empty_config(),
-                &|spec, _| spec.series == "Dsv6",
+                &StubRoom::new(|spec, _| spec.series == "Dsv6"),
             )
             .unwrap();
         let machine = pool_machine(&chosen).expect("the new pool gets a machine");
         assert!(machine.ends_with("s_v6"), "{machine}");
         // With room in Dsv5 the earlier series stays the pick.
         let chosen = ComputeClusterMutation
-            .choose_new_pool_machines(generated_pool_stack(), &state, &empty_config(), &|_, _| {
-                true
-            })
+            .choose_pool_machines(
+                generated_pool_stack(),
+                &state,
+                &empty_config(),
+                &StubRoom::new(|_, _| true),
+            )
             .unwrap();
         let machine = pool_machine(&chosen).unwrap();
         assert!(!machine.ends_with("s_v6"), "{machine}");
     }
 
     #[test]
-    fn an_installed_azure_pool_keeps_its_machine_whatever_the_quota() {
-        let mut group = CapacityGroup {
-            group_id: "general".into(),
-            instance_type: Some("Standard_D4s_v5".into()),
-            min_size: 1,
-            max_size: 2,
-            profile: None,
-            scale_policy: None,
-            nested_virtualization: None,
-            data_disk_gib_range: None,
-        };
-        group.profile = None;
-        let cluster = ComputeCluster::new("compute".into())
-            .capacity_group(group)
-            .build();
-        let installed = alien_core::StackResourceState::new_pending(
-            "compute-cluster".into(),
-            alien_core::Resource::new(cluster),
-            Some(ResourceLifecycle::Live),
-            Vec::new(),
-        );
-        let state = azure_state(vec![("compute", installed)]);
+    fn an_installed_azure_pool_without_settings_keeps_its_machine_whatever_the_quota() {
         let chosen = ComputeClusterMutation
-            .choose_new_pool_machines(
+            .choose_pool_machines(
                 generated_pool_stack(),
-                &state,
+                &installed_state("Standard_D4s_v5"),
                 &empty_config(),
-                &|spec, _| spec.series != "Dsv5",
+                &StubRoom::new(|spec, _| spec.series != "Dsv5"),
             )
             .unwrap();
         assert_eq!(
@@ -3298,6 +3340,63 @@ mod tests {
             None,
             "no new choice for an installed pool"
         );
+    }
+
+    /// First setup lands on Dsv6 because Dsv5 has no quota. The next release has the same
+    /// settings, which still leave the machine automatic, and the same quota: the pool must
+    /// stay on Dsv6 instead of going back to the plain Dsv5 pick.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn an_unchanged_release_keeps_the_series_first_setup_chose() {
+        let room = crate::runtime::azure_compute::ComputeRoom::eastus2_fixture();
+        let settings = automatic_pool(1);
+        let first = {
+            let ledger = crate::runtime::azure_compute::PoolQuotaLedger::new(
+                &room,
+                &StackState::new(Platform::Azure),
+            );
+            ComputeClusterMutation
+                .choose_pool_machines(
+                    generated_pool_stack(),
+                    &azure_state(vec![]),
+                    &settings,
+                    &ledger,
+                )
+                .unwrap()
+        };
+        let installed = pool_machine(&first).expect("first setup chooses a machine");
+        assert!(installed.ends_with("s_v6"), "{installed}");
+        let state = installed_state(&installed);
+        let ledger = crate::runtime::azure_compute::PoolQuotaLedger::new(&room, &state);
+        let next = ComputeClusterMutation
+            .choose_pool_machines(generated_pool_stack(), &state, &settings, &ledger)
+            .unwrap();
+        let machine = pool_machine(&next).expect("an installed automatic pool is resolved");
+        assert!(machine.ends_with("s_v6"), "went back to {machine}");
+    }
+
+    /// The installer chose three machines and left the machine automatic: room is asked for
+    /// three machines, not for the release's default of one.
+    #[test]
+    fn room_is_asked_for_the_installers_machine_count() {
+        let room = StubRoom::new(|spec, machines| {
+            spec.series == "Dsv6" || (spec.series == "Dsv5" && machines <= 1)
+        });
+        let chosen = ComputeClusterMutation
+            .choose_pool_machines(
+                generated_pool_stack(),
+                &azure_state(vec![]),
+                &automatic_pool(3),
+                &room,
+            )
+            .unwrap();
+        assert!(room
+            .asked
+            .borrow()
+            .iter()
+            .all(|(_, machines)| *machines == 3));
+        let machine = pool_machine(&chosen).unwrap();
+        assert!(machine.ends_with("s_v6"), "{machine}");
     }
 
     async fn prepare_generated_pool(selection: ComputePoolSelection) -> Result<CapacityGroup> {
