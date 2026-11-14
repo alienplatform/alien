@@ -3744,6 +3744,7 @@ fn database_password_input() -> alien_core::StackInputDefinition {
         description: "Password of the customer's database".to_string(),
         placeholder: None,
         default: None,
+        setup_default: None,
         platforms: None,
         validation: None,
         generate: None,

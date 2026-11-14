@@ -203,6 +203,7 @@ impl AuthoredInput {
             description: self.description,
             placeholder: self.placeholder,
             default,
+            setup_default: None,
             platforms: self.platforms,
             when: self.when,
             validation: input_validation(&self.kind, validation),

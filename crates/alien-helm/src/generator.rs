@@ -5836,7 +5836,7 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
             ));
             continue;
         }
-        if let Some(default) = &input.default {
+        if let Some(default) = input.setup_template_default() {
             let value = match default {
                 alien_core::StackInputDefaultValue::String(value) => serde_json::json!(value),
                 alien_core::StackInputDefaultValue::Number(value) => serde_json::from_str(value)
@@ -11716,6 +11716,7 @@ infrastructureExistingSecret: customer-bindings
                 description: "Ingest endpoint".to_string(),
                 placeholder: None,
                 default: None,
+                setup_default: None,
                 platforms: Some(vec![Platform::Kubernetes]),
                 validation: Some(alien_core::StackInputValidation {
                     min_length: None,
@@ -11802,6 +11803,7 @@ infrastructureExistingSecret: customer-bindings
             description: String::new(),
             placeholder: None,
             default: None,
+            setup_default: None,
             platforms: None,
             validation: None,
             generate: None,

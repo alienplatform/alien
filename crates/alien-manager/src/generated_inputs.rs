@@ -98,6 +98,7 @@ mod tests {
             description: "Key the service signs internal tokens with.".to_string(),
             placeholder: None,
             default: None,
+            setup_default: None,
             platforms,
             validation: None,
             generate: Some(StackInputGenerate { length }),

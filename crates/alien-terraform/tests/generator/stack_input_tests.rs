@@ -20,6 +20,7 @@ fn plain_input_stack() -> Stack {
             description: "Base URL inside the customer environment.".to_string(),
             placeholder: None,
             default: None,
+            setup_default: None,
             platforms: None,
             validation: Some(StackInputValidation {
                 min_length: Some(8),
@@ -77,6 +78,7 @@ fn deployer_secret_stack(provided_by: Vec<StackInputProvider>) -> Stack {
             description: "Secret key for setup.".to_string(),
             placeholder: None,
             default: None,
+            setup_default: None,
             platforms: None,
             validation: None,
             generate: None,
@@ -200,6 +202,7 @@ fn inputs_colliding_after_normalization_are_refused() {
             description: format!("Test input {id}."),
             placeholder: None,
             default: None,
+            setup_default: None,
             platforms: None,
             validation: None,
             generate: None,
@@ -326,4 +329,35 @@ fn conditional_inputs_validate_with_terraform_plan_for_provider(provider: StackI
         ],
     )
     .assert_ok("active valid input");
+}
+
+#[test]
+fn terraform_offers_the_setup_default_over_the_declared_default() {
+    let variables = |setup_default: Option<&str>| {
+        let mut stack = plain_input_stack();
+        let input = &mut stack.inputs[0];
+        input.required = false;
+        input.validation = None;
+        input.default = Some(alien_core::StackInputDefaultValue::String(
+            "declared".into(),
+        ));
+        input.setup_default =
+            setup_default.map(|v| alien_core::StackInputDefaultValue::String(v.into()));
+        let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+        module
+            .get("variables.tf")
+            .expect("variables.tf")
+            .to_string()
+    };
+    let without = variables(None);
+    assert!(
+        without.contains("default     = \"declared\"")
+            || without.contains("default = \"declared\""),
+        "{without}"
+    );
+    let with = variables(Some("offered"));
+    assert!(
+        with.contains("\"offered\"") && !with.contains("\"declared\""),
+        "{with}"
+    );
 }

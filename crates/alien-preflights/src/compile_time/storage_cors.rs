@@ -343,6 +343,7 @@ mod tests {
                 description: "Create the upload bucket.".to_string(),
                 placeholder: None,
                 default: None,
+                setup_default: None,
                 platforms: Some(platforms),
                 validation: None,
                 generate: None,

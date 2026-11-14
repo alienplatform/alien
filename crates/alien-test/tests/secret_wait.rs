@@ -29,6 +29,7 @@ fn secret_input(id: &str, env_name: &str, targets: &[&str]) -> StackInputDefinit
         description: "Proof secret".to_string(),
         placeholder: None,
         default: None,
+        setup_default: None,
         platforms: None,
         validation: None,
         generate: None,

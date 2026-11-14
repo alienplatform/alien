@@ -318,6 +318,24 @@ fn scrub_declined_profile(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_setup_default_never_decides_an_answer() {
+        let mut input =
+            StackInputDefinition::deployer_boolean("gate", "Gate", "A gate.", Some(false));
+        input.setup_default = Some(StackInputDefaultValue::Boolean(true));
+        let inputs = vec![input];
+        assert_eq!(
+            gate_resolves_true(&inputs, "gate", &HashMap::new(), "res", Platform::Aws),
+            Ok(false),
+            "no recorded answer resolves to the declared default"
+        );
+        assert_eq!(
+            inputs[0].setup_template_default(),
+            Some(&StackInputDefaultValue::Boolean(true)),
+            "the setup template offers the setup default"
+        );
+    }
+
     use super::*;
 
     #[test]

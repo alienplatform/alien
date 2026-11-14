@@ -15,10 +15,7 @@ use alien_preflights::runner::PreflightRunner;
 use serde_json::json;
 
 fn fixture(name: &str) -> Stack {
-    let path = format!(
-        "{}/tests/fixtures/{name}.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
     serde_json::from_str(&std::fs::read_to_string(path).expect("fixture exists"))
         .expect("fixture is a stack")
 }
@@ -99,10 +96,9 @@ async fn an_installed_stack_takes_the_release_when_no_regions_are_listed() {
 async fn listing_regions_on_an_installed_stack_asks_for_a_setup_update() {
     let errors = update_errors(Some(json!(["us-west-2"]))).await;
     assert!(
-        errors
-            .iter()
-            .any(|error| error.starts_with("Frozen resource 'artifact-registry' was modified")
-                && error.contains("replicationRegionsInput")),
+        errors.iter().any(|error| error
+            .starts_with("Frozen resource 'artifact-registry' was modified")
+            && error.contains("replicationRegionsInput")),
         "listing regions needs setup and names the field: {errors:?}"
     );
 }

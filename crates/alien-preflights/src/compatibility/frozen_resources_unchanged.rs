@@ -3,8 +3,8 @@ use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
     permissions::PermissionSet, AzureStorageAccount, CapacityGroup, CapacityGroupScalePolicy,
-    ComputeCluster, ComputePoolSelection, DeploymentConfig, InputAnswers, Platform, Resource, ResourceLifecycle, Sandbox,
-    SandboxCode, ServiceAccount, Stack,
+    ComputeCluster, ComputePoolSelection, DeploymentConfig, InputAnswers, Platform, Resource,
+    ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
 };
 use alien_error::Context;
 use std::borrow::Cow;
@@ -455,12 +455,14 @@ impl FrozenResourcesUnchangedCheck {
                 let new_config = on_platform(self.platform, &new_entry.config);
                 // A reference to an input nobody filled in is not a change to what setup
                 // recorded without the reference (a release that adds an optional input).
-                let answers = config
-                    .map(|config| InputAnswers::new(&new_stack.inputs, &config.input_values));
+                let answers =
+                    config.map(|config| InputAnswers::new(&new_stack.inputs, &config.input_values));
                 let no_value_reference = answers.is_some_and(|answers| {
                     new_config
                         .with_empty_input_references_removed(&answers)
-                        .is_some_and(|resolved| *old_config == *on_platform(self.platform, &resolved))
+                        .is_some_and(|resolved| {
+                            *old_config == *on_platform(self.platform, &resolved)
+                        })
                 });
                 if old_config != new_config
                     && !no_value_reference

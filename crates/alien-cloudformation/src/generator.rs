@@ -1052,7 +1052,9 @@ fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
             | StackInputKind::Enum => "String".to_string(),
         },
         description: Some(input.description.clone()),
-        default: input.default.as_ref().map(stack_input_default_expression),
+        default: input
+            .setup_template_default()
+            .map(stack_input_default_expression),
         allowed_values: validation
             .and_then(|validation| validation.values.as_ref())
             .map(|values| values.iter().cloned().map(CfExpression::from).collect()),

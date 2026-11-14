@@ -51,6 +51,14 @@ interface CommonInputOptions<TDefault extends StackInputValue> {
   description: string
   placeholder?: string
   default?: TDefault
+  /**
+   * The default the generated setup templates (CloudFormation parameter, Terraform variable, Helm
+   * values) offer instead of `default`. It is never used to resolve an answer: a stack installed
+   * before the input existed has no recorded answer and resolves to `default`. Use it to leave an
+   * input off for installed stacks while a new install, or a setup rerun with the new template,
+   * is offered it on. Requires `default`.
+   */
+  setupDefault?: TDefault
   when?: StackInputCondition
   platforms?: readonly Platform[]
   env?: OneOrMany<StackInputEnvMapping>
@@ -78,7 +86,8 @@ export interface StringInputOptions extends CommonInputOptions<string> {
  * path. The validation options apply only to developer values, because Alien
  * never sees a deployer's.
  */
-export interface SecretInputOptions extends Omit<CommonInputOptions<string>, "default"> {
+export interface SecretInputOptions
+  extends Omit<CommonInputOptions<string>, "default" | "setupDefault"> {
   minLength?: number
   maxLength?: number
   pattern?: string
@@ -187,6 +196,7 @@ export function inputs<const T extends Record<string, StackInputDraft>>(
       description: draft.options.description,
       placeholder: draft.options.placeholder,
       default: toDefaultValue(draft.kind, draft.options.default),
+      setupDefault: toDefaultValue(draft.kind, draft.options.setupDefault),
       when: draft.options.when,
       platforms: draft.options.platforms ? [...draft.options.platforms] : undefined,
       validation: Object.keys(draft.validation).length > 0 ? draft.validation : undefined,

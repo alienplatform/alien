@@ -183,6 +183,7 @@ mod tests {
             description: id.to_string(),
             placeholder: None,
             default: None,
+            setup_default: None,
             platforms,
             validation: None,
             generate: generate.map(|length| StackInputGenerate { length }),
