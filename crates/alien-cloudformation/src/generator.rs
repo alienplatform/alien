@@ -2447,18 +2447,18 @@ fn add_compute_parameters(
                     .chain(std::iter::once(CfExpression::from("")))
                     .collect()
             });
-        template.parameters.insert(
-            machine_parameter,
-            string_parameter(
-                &format!(
-                    "Optional machine override for runtime compute pool '{}'. Leave empty for automatic sizing.",
-                    group.group_id
-                ),
-                Some(selection.machine().unwrap_or_default().to_string()),
-                allowed_values,
-                false,
-            ),
+        let description = format!(
+            "Optional machine override for runtime compute pool '{}'. Leave empty for automatic sizing.",
+            group.group_id
         );
+        let default = Some(selection.machine().unwrap_or_default().to_string());
+        // The value is inserted into the registration's JSON text, so without a list of
+        // machines it still needs the pattern that keeps quotes and control characters out.
+        let parameter = match allowed_values {
+            Some(values) => string_parameter(&description, default, Some(values), false),
+            None => text_parameter(&description, default),
+        };
+        template.parameters.insert(machine_parameter, parameter);
 
         if let Some(range) = offered_data_disk_sizes(group) {
             let without_disk = if range.min == 0 {

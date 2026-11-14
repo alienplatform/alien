@@ -1421,10 +1421,12 @@ async fn update_egress(
     Json(update): Json<EgressUpdate>,
 ) -> std::result::Result<StatusCode, ApiError> {
     authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
-    let egress = state
-        .gateway_egress
-        .as_ref()
-        .ok_or_else(|| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    let egress = state.gateway_egress.as_ref().ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::egress_unverified(
+            "egress-update",
+            "this sandbox has no gateway egress configured",
+        )))
+    })?;
     if let Some(certificate) = update.ca_certificate {
         egress.install_ca(&certificate)?;
     }
@@ -1472,14 +1474,19 @@ async fn run_egress_hook(
         gateway: String,
         audience: String,
     }
-    let hook: RunHook = serde_json::from_slice(&body)
-        .map_err(|_| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    let refused = |cause: &str| {
+        ApiError::from(AlienError::new(ErrorData::egress_unverified(
+            "run-hook", cause,
+        )))
+    };
+    let hook: RunHook =
+        serde_json::from_slice(&body).map_err(|_| refused("the run hook body is not readable"))?;
     let bootstrap: Bootstrap = serde_json::from_str(&hook.run_hook_payload)
-        .map_err(|_| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+        .map_err(|_| refused("the run hook payload is not readable"))?;
     let egress = state
         .gateway_egress
         .as_ref()
-        .ok_or_else(|| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+        .ok_or_else(|| refused("this sandbox has no gateway egress configured"))?;
     egress
         .set_gateway(&bootstrap.gateway, &bootstrap.audience, &hook.microvm_id)
         .await?;

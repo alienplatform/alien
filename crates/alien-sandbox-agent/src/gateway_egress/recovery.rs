@@ -171,6 +171,7 @@ impl GatewayEgress {
                             self.ready.store(true, Ordering::Release);
                         }
                         PolicyCheck::Rejected(error) => {
+                            self.remember_unverified(&error);
                             self.ready.store(false, Ordering::Release);
                             tracing::warn!(code=%error.code, "gateway policy check failed");
                         }
@@ -179,8 +180,11 @@ impl GatewayEgress {
                             if since.elapsed() < timing.grace {
                                 retry = true;
                                 tracing::warn!(code=%error.code, "gateway policy check unanswered; retrying on a new connection");
-                            } else if self.ready.swap(false, Ordering::AcqRel) {
-                                tracing::warn!(code=%error.code, "gateway policy check failed");
+                            } else {
+                                self.remember_unverified(&error);
+                                if self.ready.swap(false, Ordering::AcqRel) {
+                                    tracing::warn!(code=%error.code, "gateway policy check failed");
+                                }
                             }
                         }
                     }
@@ -203,7 +207,10 @@ enum PolicyCheck {
 
 impl PolicyCheck {
     fn answer(status: u16) -> Self {
-        let error = AlienError::new(ErrorData::EgressPathUnexpected);
+        let error = AlienError::new(ErrorData::egress_unverified(
+            "gateway-policy-check",
+            format!("the gateway answered {status}"),
+        ));
         if (500..600).contains(&status) {
             Self::Unanswered(error)
         } else {
@@ -266,7 +273,38 @@ mod tests {
             identity: RwLock::new(Some(("p/r".into(), "box".into()))),
             update_lock: tokio::sync::Mutex::new(()),
             unanswered_since: std::sync::Mutex::new(None),
+            last_unverified: std::sync::Mutex::new(None),
         }
+    }
+    #[test]
+    fn a_refusal_names_the_failed_step_and_cause() {
+        let egress = agent("127.0.0.1:9".parse().unwrap());
+        egress.awaiting_delivery.store(true, Ordering::Release);
+        egress.path_verified.store(false, Ordering::Release);
+        egress.remember_unverified(&AlienError::new(ErrorData::egress_unverified(
+            "direct-connect",
+            "1.1.1.1:443 is reachable without the gateway",
+        )));
+        let health = egress.status().unwrap_err();
+        assert!(
+            health.message.contains("direct-connect")
+                && health.message.contains("1.1.1.1:443 is reachable"),
+            "health names step and cause: {}",
+            health.message
+        );
+        assert!(health.message.starts_with("EGRESS_PATH_UNEXPECTED:"));
+        // A session refused later keeps the precise step instead of a generic cause.
+        let refused = egress.ensure_ready().unwrap_err();
+        assert!(
+            refused.message.contains("direct-connect"),
+            "{}",
+            refused.message
+        );
+        // Nothing recorded yet: still names a step.
+        let fresh = agent("127.0.0.1:9".parse().unwrap());
+        fresh.awaiting_delivery.store(true, Ordering::Release);
+        fresh.path_verified.store(false, Ordering::Release);
+        assert!(fresh.status().unwrap_err().message.contains("path-check"));
     }
     #[tokio::test]
     async fn only_missing_state_triggers_reregistration_with_the_retained_record() {
@@ -461,6 +499,38 @@ mod tests {
             wait_closed(&agent).await;
             assert_eq!(agent.awaiting_delivery.load(Ordering::Acquire), rejected);
             monitor.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_monitor_failure_keeps_the_gateway_status_as_the_cause() {
+        // A refusal and a 5xx that outlasts the grace both leave the current gateway status.
+        for (status, grace) in [(409, Duration::from_secs(60)), (503, Duration::from_millis(100))] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let agent = Arc::new(agent(listener.local_addr().unwrap()));
+            agent.ready.store(true, Ordering::Release);
+            agent.record_unverified("direct-connect", "an older failure");
+            let monitor = tokio::spawn(agent.clone().monitor_policy_with(MonitorTiming {
+                period: Duration::from_millis(20),
+                retry: Duration::from_millis(10),
+                grace,
+            }));
+            let server = tokio::spawn(async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    answer(socket, status).await;
+                }
+            });
+            wait_closed(&agent).await;
+            let refused = agent.ensure_ready().unwrap_err();
+            assert!(
+                refused.message.contains(&status.to_string())
+                    && !refused.message.contains("an older failure"),
+                "status {status}: {}",
+                refused.message
+            );
+            monitor.abort();
+            server.abort();
         }
     }
 
