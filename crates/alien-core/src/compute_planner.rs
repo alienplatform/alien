@@ -171,6 +171,22 @@ pub fn plan_compute_with_state(
     selected_settings: Option<&crate::ComputeSettings>,
     previous_state: Option<&StackState>,
 ) -> Result<ComputePlan, ErrorData> {
+    plan_compute_with_room(stack, platform, selected_settings, previous_state, None)
+}
+
+/// Whether the cloud account has room for `machines` of a machine type in its quota.
+pub type MachineRoom<'a> = &'a dyn Fn(&instance_catalog::InstanceTypeSpec, u32) -> bool;
+
+/// [`plan_compute_with_state`] where automatic selection takes the first series that has
+/// room for the pool's machines, per `room`. Callers pass `room` only while the pool is
+/// being installed; an installed pool keeps its machine through the selection they pass.
+pub fn plan_compute_with_room(
+    stack: &Stack,
+    platform: Platform,
+    selected_settings: Option<&crate::ComputeSettings>,
+    previous_state: Option<&StackState>,
+    room: Option<MachineRoom>,
+) -> Result<ComputePlan, ErrorData> {
     let mut resolved_stack = stack.clone();
     crate::container_resources::resolve_container_resources(
         &mut resolved_stack,
@@ -332,6 +348,7 @@ pub fn plan_compute_with_state(
             group.requires_failure_domain,
             group.generated,
             machine_override,
+            room,
         )?;
         let mut selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
         if selected.is_none() {
@@ -684,10 +701,25 @@ fn recommended_selection(
     requires_failure_domain: bool,
     generated: bool,
     machine_override: Option<&str>,
+    room: Option<MachineRoom>,
 ) -> Result<ComputePoolSelection, ErrorData> {
+    // The machines the pool launches with at first setup.
+    let launch_machines = match scale {
+        CapacityGroupScalePolicy::Fixed { machines } => machines.default,
+        CapacityGroupScalePolicy::Autoscale { min, .. } => min.default,
+    }
+    .max(1);
     let machine = match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Some(
-            match instance_catalog::select_instance_type(platform, requirements) {
+            match match room {
+                Some(room) => instance_catalog::select_instance_type_with_room(
+                    platform,
+                    requirements,
+                    launch_machines,
+                    room,
+                ),
+                None => instance_catalog::select_instance_type(platform, requirements),
+            } {
                 Ok(selection) => selection.instance_type.to_string(),
                 Err(message) => {
                     // Automatic recommendations add headroom. A valid explicit

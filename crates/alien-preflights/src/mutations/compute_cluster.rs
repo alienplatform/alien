@@ -13,7 +13,8 @@ use crate::{
 use alien_core::{
     compute_planner::{
         capacity_group_requirements, check_pool_capacity, default_persistent_failure_domains,
-        generated_pool_scale_policy, plan_compute_with_state, validate_compute_pool_selection,
+        generated_pool_scale_policy, plan_compute_with_room, plan_compute_with_state,
+        validate_compute_pool_selection, MachineRoom,
     },
     instance_catalog::{self, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, ComputeSettings,
@@ -32,6 +33,133 @@ use tracing::{debug, info};
 /// with a "general" capacity group whose instance type and machine profile are
 /// computed from the containers' resource requirements.
 pub struct ComputeClusterMutation;
+
+impl ComputeClusterMutation {
+    fn resolve_compute_settings(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+        room: Option<MachineRoom>,
+    ) -> Result<DeploymentConfig> {
+        let mut resolved_config = config.clone();
+        if matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) {
+            let installed = installed_pool_selections(
+                stack,
+                stack_state,
+                config.stack_settings.compute.as_ref(),
+            );
+            let mut planning_settings = config.stack_settings.compute.clone();
+            if !installed.is_empty() {
+                planning_settings
+                    .get_or_insert_default()
+                    .pools
+                    .extend(installed.clone());
+            }
+            let plan = plan_compute_with_room(
+                stack,
+                stack_state.platform,
+                planning_settings.as_ref(),
+                Some(stack_state),
+                room,
+            )
+            .context(crate::error::ErrorData::StackMutationFailed {
+                mutation_name: self.description().to_string(),
+                message: "Could not resolve deployment compute choices".to_string(),
+                resource_id: None,
+            })?;
+            let settings = resolved_config
+                .stack_settings
+                .compute
+                .get_or_insert_default();
+            for pool in plan.pools {
+                if !pool.errors.is_empty() {
+                    if let Some(kept) = installed.get(&pool.pool_id) {
+                        return Err(AlienError::new(crate::error::ErrorData::SetupRequired {
+                            message: format!(
+                                "Select compute for {} capacity group '{}' in the installation setup. The deployment has no compute choice for it, and the installed {} x {} no longer fits this release: {}",
+                                stack_state.platform,
+                                pool.pool_id,
+                                kept.max_size(),
+                                kept.machine().unwrap_or_default(),
+                                pool.errors.join("; "),
+                            ),
+                        }));
+                    }
+                    return Err(AlienError::new(
+                        crate::error::ErrorData::StackMutationFailed {
+                            mutation_name: self.description().to_string(),
+                            message: pool.errors.join("; "),
+                            resource_id: None,
+                        },
+                    ));
+                }
+                let mut selection = pool.selected;
+                // Resolving capacity must not turn an omitted topology choice into
+                // an explicit default. Existing pools retain their installed zones.
+                let domains = config
+                    .stack_settings
+                    .compute
+                    .as_ref()
+                    .and_then(|settings| settings.pools.get(&pool.pool_id))
+                    .and_then(ComputePoolSelection::failure_domains)
+                    .cloned();
+                match &mut selection {
+                    ComputePoolSelection::Fixed {
+                        failure_domains, ..
+                    }
+                    | ComputePoolSelection::Autoscale {
+                        failure_domains, ..
+                    } => {
+                        *failure_domains = domains;
+                    }
+                }
+                settings.pools.insert(pool.pool_id, selection);
+            }
+        }
+        Ok(resolved_config)
+    }
+
+    /// Settings with the machine each pool that is not installed yet gets when automatic
+    /// selection takes the first series with room, as `room` answers. An installed pool
+    /// keeps its machine: this never changes the machine of a pool that exists.
+    pub fn choose_new_pool_machines(
+        &self,
+        stack: Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+        room: MachineRoom,
+    ) -> Result<DeploymentConfig> {
+        let stack = place_unplaced_cloud_containers(stack, stack_state.platform)?;
+        let resolved = self.resolve_compute_settings(&stack, stack_state, config, Some(room))?;
+        let installed: Vec<&str> = stack_state
+            .resources
+            .values()
+            .filter_map(|state| state.config.downcast_ref::<ComputeCluster>())
+            .flat_map(|cluster| &cluster.capacity_groups)
+            .filter(|group| group.instance_type.is_some())
+            .map(|group| group.group_id.as_str())
+            .collect();
+        let mut chosen = config.clone();
+        let Some(resolved) = resolved.stack_settings.compute else {
+            return Ok(chosen);
+        };
+        let settings = chosen.stack_settings.compute.get_or_insert_default();
+        for (pool_id, selection) in resolved.pools {
+            let automatic = settings
+                .pools
+                .get(&pool_id)
+                .is_none_or(|selection| selection.machine().is_none());
+            if automatic && !installed.contains(&pool_id.as_str()) {
+                settings.pools.insert(pool_id, selection);
+            }
+        }
+        Ok(chosen)
+    }
+}
 
 #[async_trait]
 impl StackMutation for ComputeClusterMutation {
@@ -200,83 +328,7 @@ impl StackMutation for ComputeClusterMutation {
         config: &DeploymentConfig,
     ) -> Result<Stack> {
         let stack = place_unplaced_cloud_containers(stack, stack_state.platform)?;
-        let mut resolved_config = config.clone();
-        if matches!(
-            stack_state.platform,
-            Platform::Aws | Platform::Gcp | Platform::Azure
-        ) {
-            let installed = installed_pool_selections(
-                &stack,
-                stack_state,
-                config.stack_settings.compute.as_ref(),
-            );
-            let mut planning_settings = config.stack_settings.compute.clone();
-            if !installed.is_empty() {
-                planning_settings
-                    .get_or_insert_default()
-                    .pools
-                    .extend(installed.clone());
-            }
-            let plan = plan_compute_with_state(
-                &stack,
-                stack_state.platform,
-                planning_settings.as_ref(),
-                Some(stack_state),
-            )
-            .context(crate::error::ErrorData::StackMutationFailed {
-                mutation_name: self.description().to_string(),
-                message: "Could not resolve deployment compute choices".to_string(),
-                resource_id: None,
-            })?;
-            let settings = resolved_config
-                .stack_settings
-                .compute
-                .get_or_insert_default();
-            for pool in plan.pools {
-                if !pool.errors.is_empty() {
-                    if let Some(kept) = installed.get(&pool.pool_id) {
-                        return Err(AlienError::new(crate::error::ErrorData::SetupRequired {
-                            message: format!(
-                                "Select compute for {} capacity group '{}' in the installation setup. The deployment has no compute choice for it, and the installed {} x {} no longer fits this release: {}",
-                                stack_state.platform,
-                                pool.pool_id,
-                                kept.max_size(),
-                                kept.machine().unwrap_or_default(),
-                                pool.errors.join("; "),
-                            ),
-                        }));
-                    }
-                    return Err(AlienError::new(
-                        crate::error::ErrorData::StackMutationFailed {
-                            mutation_name: self.description().to_string(),
-                            message: pool.errors.join("; "),
-                            resource_id: None,
-                        },
-                    ));
-                }
-                let mut selection = pool.selected;
-                // Resolving capacity must not turn an omitted topology choice into
-                // an explicit default. Existing pools retain their installed zones.
-                let domains = config
-                    .stack_settings
-                    .compute
-                    .as_ref()
-                    .and_then(|settings| settings.pools.get(&pool.pool_id))
-                    .and_then(ComputePoolSelection::failure_domains)
-                    .cloned();
-                match &mut selection {
-                    ComputePoolSelection::Fixed {
-                        failure_domains, ..
-                    }
-                    | ComputePoolSelection::Autoscale {
-                        failure_domains, ..
-                    } => {
-                        *failure_domains = domains;
-                    }
-                }
-                settings.pools.insert(pool.pool_id, selection);
-            }
-        }
+        let resolved_config = self.resolve_compute_settings(&stack, stack_state, config, None)?;
         // Resolve only for this mutation. Persisted settings retain the absent
         // machine so the next resource update is planned automatically too.
         let config = &resolved_config;
@@ -3153,6 +3205,99 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    fn azure_state(resources: Vec<(&str, alien_core::StackResourceState)>) -> StackState {
+        StackState {
+            platform: Platform::Azure,
+            resources: resources
+                .into_iter()
+                .map(|(id, state)| (id.to_string(), state))
+                .collect(),
+            resource_prefix: "test".to_string(),
+        }
+    }
+
+    fn empty_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build()
+    }
+
+    fn pool_machine(config: &DeploymentConfig) -> Option<String> {
+        config
+            .stack_settings
+            .compute
+            .as_ref()?
+            .pools
+            .get("general")?
+            .machine()
+            .map(ToString::to_string)
+    }
+
+    #[test]
+    fn a_new_azure_pool_takes_the_first_series_with_room() {
+        let state = azure_state(vec![]);
+        // Only Dsv6 has quota in the region: the first series with room wins.
+        let chosen = ComputeClusterMutation
+            .choose_new_pool_machines(
+                generated_pool_stack(),
+                &state,
+                &empty_config(),
+                &|spec, _| spec.series == "Dsv6",
+            )
+            .unwrap();
+        let machine = pool_machine(&chosen).expect("the new pool gets a machine");
+        assert!(machine.ends_with("s_v6"), "{machine}");
+        // With room in Dsv5 the earlier series stays the pick.
+        let chosen = ComputeClusterMutation
+            .choose_new_pool_machines(generated_pool_stack(), &state, &empty_config(), &|_, _| {
+                true
+            })
+            .unwrap();
+        let machine = pool_machine(&chosen).unwrap();
+        assert!(!machine.ends_with("s_v6"), "{machine}");
+    }
+
+    #[test]
+    fn an_installed_azure_pool_keeps_its_machine_whatever_the_quota() {
+        let mut group = CapacityGroup {
+            group_id: "general".into(),
+            instance_type: Some("Standard_D4s_v5".into()),
+            min_size: 1,
+            max_size: 2,
+            profile: None,
+            scale_policy: None,
+            nested_virtualization: None,
+            data_disk_gib_range: None,
+        };
+        group.profile = None;
+        let cluster = ComputeCluster::new("compute".into())
+            .capacity_group(group)
+            .build();
+        let installed = alien_core::StackResourceState::new_pending(
+            "compute-cluster".into(),
+            alien_core::Resource::new(cluster),
+            Some(ResourceLifecycle::Live),
+            Vec::new(),
+        );
+        let state = azure_state(vec![("compute", installed)]);
+        let chosen = ComputeClusterMutation
+            .choose_new_pool_machines(
+                generated_pool_stack(),
+                &state,
+                &empty_config(),
+                &|spec, _| spec.series != "Dsv5",
+            )
+            .unwrap();
+        assert_eq!(
+            pool_machine(&chosen),
+            None,
+            "no new choice for an installed pool"
+        );
     }
 
     async fn prepare_generated_pool(selection: ComputePoolSelection) -> Result<CapacityGroup> {

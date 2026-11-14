@@ -232,6 +232,52 @@ fn availability(sku: &ResourceSku, region: &str, selected: &[String]) -> QuotaOu
     }
 }
 
+/// The compute SKUs and quota rows of one region, read once for automatic machine selection.
+/// Selection and the quota check below read the same rows through [`observation`].
+pub struct ComputeRoom {
+    region: String,
+    skus: Vec<ResourceSku>,
+    usages: Vec<Usage>,
+}
+
+impl ComputeRoom {
+    /// `None` when either read fails: selection then stays on the plain catalog pick and the
+    /// quota check reports what it can read.
+    pub async fn read(
+        skus: &dyn ResourceSkusApi,
+        usages: &dyn ComputeUsagesApi,
+        region: &str,
+    ) -> Option<Self> {
+        Some(Self {
+            region: region.to_string(),
+            skus: skus.list_resource_skus(region).await.ok()?,
+            usages: usages.list_compute_usages(region).await.ok()?,
+        })
+    }
+
+    /// Free vCPUs of the machine's quota family and of the region, or `None` when a row is
+    /// missing or the SKU is unavailable here.
+    pub fn free_cores(&self, machine: &str) -> Option<f64> {
+        let sku = sku(&self.skus, machine)?;
+        if availability(sku, &self.region, &[]).blocks() {
+            return None;
+        }
+        let family = sku.family.as_deref().filter(|family| !family.is_empty())?;
+        let free = |metric: &str| observation(&self.usages, metric).map(|row| row.limit - row.used);
+        Some(free(family)?.min(free("cores")?))
+    }
+
+    /// Whether `machines` of the machine fit the family and regional quota.
+    pub fn has_room(
+        &self,
+        spec: &alien_core::instance_catalog::InstanceTypeSpec,
+        machines: u32,
+    ) -> bool {
+        self.free_cores(spec.machine_type)
+            .is_some_and(|free| free >= f64::from(spec.vcpu) * f64::from(machines))
+    }
+}
+
 /// Missing observations or an unfinished operation cannot establish a certain
 /// launch. Image-driven replacements may also be resolved after this check.
 fn launches_now(group: &CapacityGroup, current: Option<&StackResourceState>) -> Option<bool> {
@@ -647,6 +693,57 @@ mod tests {
         let mut duplicate = usages.clone();
         duplicate.extend(usages);
         assert!(observation(&duplicate, "cores").is_none());
+    }
+
+    /// eastus2 as the first real proof saw it: Dsv5 limit 0, Dsv6 limit 10.
+    fn room() -> ComputeRoom {
+        let mut skus = skus();
+        for row in &mut skus {
+            row.restrictions.clear();
+        }
+        skus.extend(
+            serde_json::from_str::<Vec<ResourceSku>>(include_str!(
+                "fixtures/azure-compute-skus-v6.json"
+            ))
+            .unwrap(),
+        );
+        let mut usages: Vec<Usage> =
+            serde_json::from_str(include_str!("fixtures/azure-compute-usages.json")).unwrap();
+        usages.retain(|row| row.name.value.as_deref() != Some("cores"));
+        usages.extend(
+            serde_json::from_str::<Vec<Usage>>(include_str!(
+                "fixtures/azure-compute-usages-v6.json"
+            ))
+            .unwrap(),
+        );
+        ComputeRoom {
+            region: "eastus".into(),
+            skus,
+            usages,
+        }
+    }
+
+    #[test]
+    fn room_follows_the_family_and_regional_quota_rows() {
+        let room = room();
+        let spec = |name| find_instance_type(Platform::Azure, name).unwrap();
+        assert!(
+            !room.has_room(spec("Standard_D2s_v5"), 1),
+            "Dsv5 limit is 0"
+        );
+        assert!(
+            room.has_room(spec("Standard_D2s_v6"), 2),
+            "4 of 4 free cores"
+        );
+        assert!(
+            !room.has_room(spec("Standard_D2s_v6"), 3),
+            "regional cores run out"
+        );
+        assert!(
+            !room.has_room(spec("Standard_D4s_v6"), 2),
+            "8 cores need 4 free"
+        );
+        assert_eq!(room.free_cores("Standard_B1s"), None, "unknown SKU");
     }
 
     #[test]
