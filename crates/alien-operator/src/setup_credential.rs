@@ -31,7 +31,22 @@ const MAX_LIFETIME: chrono::Duration = chrono::Duration::minutes(20);
     name = "operator setup-credential",
     about = "Print a short-lived key for rerunning this installation"
 )]
-struct SetupCredentialArgs {}
+struct SetupCredentialArgs {
+    /// Print the key issued last if it has at least two minutes left, instead
+    /// of issuing a new one (which revokes the last). For read-only commands.
+    #[arg(long)]
+    reuse: bool,
+}
+
+/// A reused key must have at least this long left, so the caller can finish.
+const MIN_REUSE_LEFT: chrono::Duration = chrono::Duration::minutes(2);
+
+/// What the command sends the Operator over the socket.
+#[derive(Serialize, Deserialize, Default)]
+struct Request {
+    #[serde(default)]
+    reuse: bool,
+}
 
 /// Where the running Operator listens. The directory is local to the container
 /// (the chart mounts an emptyDir at /tmp), not the data volume, so no socket file
@@ -50,7 +65,7 @@ struct Printed<'a> {
     expires_at: DateTime<Utc>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Issued {
     token: String,
@@ -149,6 +164,16 @@ async fn run(args: SetupCredentialArgs) -> Result<String, Failure> {
         .await
         .map_err(|_| Failure::Unavailable)?
         .map_err(|_| Failure::NotRunning)?;
+        let request = serde_json::to_vec(&Request { reuse: args.reuse })
+            .map_err(|_| Failure::Unavailable)?;
+        {
+            use tokio::io::AsyncWriteExt;
+            stream
+                .write_all(&request)
+                .await
+                .map_err(|_| Failure::Unavailable)?;
+            stream.shutdown().await.map_err(|_| Failure::Unavailable)?;
+        }
         let mut answer = Vec::new();
         tokio::time::timeout(
             Duration::from_secs(30),
@@ -279,7 +304,8 @@ pub async fn serve(db: std::sync::Arc<OperatorDb>, cancel: tokio_util::sync::Can
         }
     };
     // One request at a time: each one revokes the previous key at the manager.
-    let busy = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+    // The last key issued is kept here, in memory only, for `--reuse`.
+    let busy = std::sync::Arc::new(tokio::sync::Mutex::new(None::<Issued>));
     loop {
         let stream = tokio::select! {
             _ = cancel.cancelled() => break,
@@ -293,23 +319,9 @@ pub async fn serve(db: std::sync::Arc<OperatorDb>, cancel: tokio_util::sync::Can
         tokio::spawn(async move {
             use tokio::io::AsyncWriteExt;
             let mut stream = stream;
-            let _guard = busy.lock().await;
-            // Read at most nothing from the client: the request carries no input.
-            let answer = match mint(&db).await {
-                Ok(issued) => {
-                    tracing::info!("Issued a short-lived setup key");
-                    Answer {
-                        credential: Some(issued.token),
-                        expires_at: Some(issued.expires_at),
-                        error: None,
-                    }
-                }
-                Err(failure) => Answer {
-                    credential: None,
-                    expires_at: None,
-                    error: Some(failure.code().to_string()),
-                },
-            };
+            let request = read_request(&mut stream).await;
+            let mut last = busy.lock().await;
+            let answer = answer_for(&mut last, request.reuse, Utc::now(), || mint(&db)).await;
             if let Ok(bytes) = serde_json::to_vec(&answer) {
                 let _ = stream.write_all(&bytes).await;
             }
@@ -317,6 +329,62 @@ pub async fn serve(db: std::sync::Arc<OperatorDb>, cancel: tokio_util::sync::Can
         });
     }
     let _ = std::fs::remove_file(&path);
+}
+
+/// What the client asked. Anything unreadable means a plain request for a new key.
+#[cfg(unix)]
+async fn read_request(stream: &mut tokio::net::UnixStream) -> Request {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = Vec::new();
+    let read = tokio::time::timeout(
+        Duration::from_secs(5),
+        stream.take(1024).read_to_end(&mut bytes),
+    )
+    .await;
+    match read {
+        Ok(Ok(_)) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        _ => Request::default(),
+    }
+}
+
+/// The key to answer with: the last one issued when `reuse` is set and it has
+/// at least two minutes left, otherwise a new one, which becomes the last.
+async fn answer_for<F, Fut>(
+    last: &mut Option<Issued>,
+    reuse: bool,
+    now: DateTime<Utc>,
+    mint: F,
+) -> Answer
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Issued, Failure>>,
+{
+    if reuse {
+        if let Some(issued) = last.as_ref().filter(|i| i.expires_at - now >= MIN_REUSE_LEFT) {
+            return Answer {
+                credential: Some(issued.token.clone()),
+                expires_at: Some(issued.expires_at),
+                error: None,
+            };
+        }
+    }
+    match mint().await {
+        Ok(issued) => {
+            tracing::info!("Issued a short-lived setup key");
+            let answer = Answer {
+                credential: Some(issued.token.clone()),
+                expires_at: Some(issued.expires_at),
+                error: None,
+            };
+            *last = Some(issued);
+            answer
+        }
+        Err(failure) => Answer {
+            credential: None,
+            expires_at: None,
+            error: Some(failure.code().to_string()),
+        },
+    }
 }
 
 fn endpoint(manager_url: &str, deployment_id: &str) -> Result<reqwest::Url, Failure> {
@@ -427,6 +495,61 @@ mod tests {
             check_socket(&path, own_uid().wrapping_add(1)),
             Err(Failure::UnsafeSocket)
         );
+    }
+
+    fn issued(token: &str, left_minutes: i64) -> Issued {
+        Issued {
+            token: token.into(),
+            expires_at: Utc::now() + chrono::Duration::minutes(left_minutes),
+        }
+    }
+
+    #[tokio::test]
+    async fn reuse_returns_the_cached_key_and_mints_once_it_has_under_two_minutes() {
+        let mints = std::sync::atomic::AtomicUsize::new(0);
+        let mint = |token: &'static str, left: i64| {
+            let mints = &mints;
+            move || async move {
+                mints.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(issued(token, left))
+            }
+        };
+        let mut last = None;
+        // Nothing cached: reuse mints.
+        let first = answer_for(&mut last, true, Utc::now(), mint("one", 15)).await;
+        assert_eq!(first.credential.as_deref(), Some("one"));
+        // Plenty left: the cached key, no mint.
+        let again = answer_for(&mut last, true, Utc::now(), mint("two", 15)).await;
+        assert_eq!(again.credential.as_deref(), Some("one"));
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // A plain request always mints, and the new key is the one reused after.
+        let newer = answer_for(&mut last, false, Utc::now(), mint("two", 15)).await;
+        assert_eq!(newer.credential.as_deref(), Some("two"));
+        let reused = answer_for(&mut last, true, Utc::now(), mint("three", 15)).await;
+        assert_eq!(reused.credential.as_deref(), Some("two"));
+        // Under two minutes left: reuse mints a new one.
+        let later = Utc::now() + chrono::Duration::minutes(14);
+        let fresh = answer_for(&mut last, true, later, mint("three", 15)).await;
+        assert_eq!(fresh.credential.as_deref(), Some("three"));
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn a_failed_mint_keeps_the_cached_key_and_reports_the_code() {
+        let mut last = Some(issued("kept", 1));
+        let answer = answer_for(&mut last, true, Utc::now(), || async {
+            Err::<Issued, _>(Failure::Refused)
+        })
+        .await;
+        assert_eq!(answer.error.as_deref(), Some("refused"));
+        assert!(answer.credential.is_none());
+    }
+
+    #[test]
+    fn reuse_is_an_accepted_flag() {
+        let args = SetupCredentialArgs::try_parse_from(["x", "--reuse"]).unwrap();
+        assert!(args.reuse);
+        assert!(!SetupCredentialArgs::try_parse_from(["x"]).unwrap().reuse);
     }
 
     #[test]

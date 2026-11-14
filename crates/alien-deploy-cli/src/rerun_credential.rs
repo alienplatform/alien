@@ -92,6 +92,32 @@ pub async fn resolve(
     cli_name: &str,
     verb: &str,
 ) -> Result<RerunToken> {
+    resolve_with(explicit, tracked, access, cli_name, verb, |release, namespace, reuse| async move {
+        fetch(&release, &namespace, access, reuse).await
+    })
+    .await
+}
+
+/// `status` only reads, so it asks the Operator for the key it last issued
+/// instead of a new one: a new key would revoke the one a running deploy, down
+/// or Terraform apply is using. `deploy` and `down` always get a new key, so a
+/// newer update takes over.
+fn reuses_key(verb: &str) -> bool {
+    verb == "status"
+}
+
+async fn resolve_with<F, Fut>(
+    explicit: Option<String>,
+    tracked: &TrackedDeployment,
+    access: &KubeAccess,
+    cli_name: &str,
+    verb: &str,
+    fetch: F,
+) -> Result<RerunToken>
+where
+    F: FnOnce(String, String, bool) -> Fut,
+    Fut: std::future::Future<Output = std::result::Result<(String, DateTime<Utc>), String>>,
+{
     if let Some(token) = explicit {
         return Ok(RerunToken {
             token,
@@ -104,7 +130,7 @@ pub async fn resolve(
     let mut missing_install = None;
     if tracked.platform == "kubernetes" {
         let (release, namespace) = helm_target(tracked, access);
-        match fetch(&release, &namespace, access).await {
+        match fetch(release.clone(), namespace.clone(), reuses_key(verb)).await {
             Ok((token, expires_at)) => {
                 return Ok(RerunToken {
                     token,
@@ -157,7 +183,60 @@ async fn fetch(
     release: &str,
     namespace: &str,
     access: &KubeAccess,
+    reuse: bool,
 ) -> std::result::Result<(String, DateTime<Utc>), String> {
+    let first = exec_once(release, namespace, access, reuse).await;
+    // An Operator from before `--reuse` answers with a usage error: ask it
+    // again without the flag, which mints as before.
+    match first {
+        Err(ExecFailure::UsageError) if reuse => exec_once(release, namespace, access, false)
+            .await
+            .map_err(|failure| failure.reason(release, namespace)),
+        other => other.map_err(|failure| failure.reason(release, namespace)),
+    }
+}
+
+enum ExecFailure {
+    /// The command did not accept its arguments.
+    UsageError,
+    Reason(String),
+    Stderr(String),
+}
+
+impl ExecFailure {
+    fn reason(self, release: &str, namespace: &str) -> String {
+        match self {
+            Self::UsageError => "the installed Operator is too old to issue one".into(),
+            Self::Reason(reason) => reason,
+            Self::Stderr(stderr) => failure_reason(&stderr, release, namespace),
+        }
+    }
+}
+
+/// The arguments of `kubectl exec` for the Operator's `setup-credential`.
+fn exec_args(release: &str, namespace: &str, reuse: bool) -> Vec<String> {
+    let mut args = vec![
+        "exec".to_string(),
+        format!("deploy/{release}"),
+        "-n".into(),
+        namespace.into(),
+        "--".into(),
+        // `/proc/1/exe` is the Operator's own binary, whatever the image names it.
+        "/proc/1/exe".into(),
+        "setup-credential".into(),
+    ];
+    if reuse {
+        args.push("--reuse".into());
+    }
+    args
+}
+
+async fn exec_once(
+    release: &str,
+    namespace: &str,
+    access: &KubeAccess,
+    reuse: bool,
+) -> std::result::Result<(String, DateTime<Utc>), ExecFailure> {
     let mut command = Command::new("kubectl");
     if let Some(kubeconfig) = &access.kubeconfig {
         // The same variable kubectl reads, so a list of files works too.
@@ -166,34 +245,34 @@ async fn fetch(
     if let Some(context) = &access.kube_context {
         command.arg("--context").arg(context);
     }
-    // `/proc/1/exe` is the Operator's own binary, whatever the image names it.
     command
-        .args(["exec", &format!("deploy/{release}"), "-n", namespace])
-        .args(["--", "/proc/1/exe", "setup-credential"])
+        .args(exec_args(release, namespace, reuse))
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true);
     let output = command.output().await.map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
+        ExecFailure::Reason(if error.kind() == std::io::ErrorKind::NotFound {
             "kubectl is not installed".to_string()
         } else {
             "kubectl could not run".to_string()
-        }
+        })
     })?;
     if !output.status.success() {
-        return Err(failure_reason(
-            &String::from_utf8_lossy(&output.stderr),
-            release,
-            namespace,
-        ));
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        if reuse && stderr.to_ascii_lowercase().contains("unexpected argument '--reuse'") {
+            return Err(ExecFailure::UsageError);
+        }
+        return Err(ExecFailure::Stderr(stderr));
     }
     let printed: Printed = String::from_utf8_lossy(&output.stdout)
         .lines()
         .rev()
         .find(|line| !line.trim().is_empty())
         .and_then(|line| serde_json::from_str(line).ok())
-        .ok_or_else(|| "the Operator returned an unreadable answer".to_string())?;
+        .ok_or_else(|| ExecFailure::Reason("the Operator returned an unreadable answer".into()))?;
     if printed.credential.is_empty() || printed.expires_at <= Utc::now() {
-        return Err("the Operator returned an expired answer".to_string());
+        return Err(ExecFailure::Reason(
+            "the Operator returned an expired answer".into(),
+        ));
     }
     Ok((printed.credential, printed.expires_at))
 }
@@ -397,6 +476,82 @@ mod tests {
         .unwrap();
         assert_eq!(resolved.token, "explicit");
         assert!(!resolved.in_cluster);
+    }
+
+    fn fetched(
+        calls: &std::sync::Mutex<Vec<bool>>,
+        result: std::result::Result<(String, DateTime<Utc>), String>,
+    ) -> impl FnOnce(String, String, bool) -> std::future::Ready<
+        std::result::Result<(String, DateTime<Utc>), String>,
+    > + '_ {
+        move |_, _, reuse| {
+            calls.lock().unwrap().push(reuse);
+            std::future::ready(result)
+        }
+    }
+
+    fn kubernetes(token: Option<&str>) -> TrackedDeployment {
+        TrackedDeployment {
+            platform: "kubernetes".into(),
+            ..tracked(token)
+        }
+    }
+
+    #[tokio::test]
+    async fn status_asks_for_the_last_key_and_deploy_and_down_ask_for_a_new_one() {
+        for (verb, reuse) in [("status", true), ("deploy", false), ("down", false)] {
+            let calls = std::sync::Mutex::new(Vec::new());
+            let key = Ok(("k".to_string(), Utc::now() + chrono::Duration::minutes(10)));
+            let resolved = resolve_with(
+                None,
+                &kubernetes(None),
+                &KubeAccess::default(),
+                "cli",
+                verb,
+                fetched(&calls, key),
+            )
+            .await
+            .unwrap();
+            assert!(resolved.in_cluster);
+            assert_eq!(*calls.lock().unwrap(), vec![reuse], "{verb}");
+        }
+    }
+
+    #[test]
+    fn the_exec_command_carries_reuse_only_when_asked() {
+        assert!(exec_args("r", "n", true).ends_with(&["setup-credential".into(), "--reuse".into()]));
+        assert_eq!(exec_args("r", "n", false).last().unwrap(), "setup-credential");
+    }
+
+    /// A first install that failed before the Operator enrolled is tracked with no key. A plain
+    /// rerun gets the setup-token message, not a raw error.
+    #[tokio::test]
+    async fn a_plain_rerun_after_a_failed_first_install_asks_for_the_setup_token() {
+        for stderr in [
+            "Error from server (NotFound): deployments.apps \"alien-operator\" not found",
+            "error: unable to upgrade connection: container not found (\"operator\")",
+            "setup-credential: not-enrolled",
+        ] {
+            let calls = std::sync::Mutex::new(Vec::new());
+            let reason = failure_reason(stderr, "alien-operator", "alien-prod");
+            let error = resolve_with(
+                None,
+                &kubernetes(None),
+                &KubeAccess::default(),
+                "acme-deploy",
+                "deploy",
+                fetched(&calls, Err(reason)),
+            )
+            .await
+            .unwrap_err();
+            let text = error.to_string();
+            assert!(text.contains("Cannot update \"prod\" without a setup token: "), "{text}");
+            assert!(
+                text.contains("Run this again with the setup token you were given: acme-deploy deploy --name 'prod' --token-file <path>"),
+                "{text}"
+            );
+            assert!(text.contains("Your deployment keeps running."), "{text}");
+        }
     }
 
     #[tokio::test]
