@@ -138,6 +138,36 @@ fn kubernetes_reads_and_remediation_remain_distinct() {
 }
 
 #[test]
+fn workload_patch_is_a_mutating_tier_rule_for_three_kinds_only() {
+    let rule = |group: &str, resource: &str, verb: &str| json!({"schemaVersion":1,"rules":[{"apiGroup":group,"resource":resource,"verbs":[verb],"reason":"Restart workloads"}]});
+    let validate = |permissions: Value, tier: &str| {
+        run(json!({"task":"validateKubernetes","permissions":permissions,"tier":tier}))["ok"].clone()
+    };
+    for resource in ["deployments", "statefulsets", "daemonsets"] {
+        assert_eq!(validate(rule("apps", resource, "patch"), "mutating"), true);
+        assert_eq!(validate(rule("apps", resource, "patch"), "read-only"), false);
+    }
+    // No other write verb or workload resource is newly allowed.
+    for (group, resource, verb) in [
+        ("apps", "deployments", "update"),
+        ("apps", "deployments", "delete"),
+        ("apps", "deployments", "create"),
+        ("apps", "replicasets", "patch"),
+        ("batch", "jobs", "patch"),
+        ("", "deployments", "patch"),
+        ("", "pods", "patch"),
+        ("", "nodes", "patch"),
+        ("apps", "deployments/status", "patch"),
+    ] {
+        assert_eq!(
+            validate(rule(group, resource, verb), "mutating"),
+            false,
+            "{group}/{resource} {verb} must stay rejected"
+        );
+    }
+}
+
+#[test]
 fn raw_kubernetes_grants_are_validated_before_mode_filtering() {
     let grant = |resource: &str, verbs: &[&str], names: &[&str]| json!({"apiGroup":"","resource":resource,"verbs":verbs,"resourceNames":names,"sources":[]});
     for (mode, verbs) in [
