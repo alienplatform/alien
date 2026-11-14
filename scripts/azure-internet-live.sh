@@ -167,11 +167,13 @@ private_probe=$(jq -r '[.values.root_module.resources[] | select(.address=="azur
 echo "vault=$vault vms=$vms ips=$ips subnet=$subnet"
 
 # 5. The principal needs the data-plane role on the group and secret rights on the vault.
-role_id() { arm GET "/subscriptions/$SUB/providers/Microsoft.Authorization/roleDefinitions?api-version=2022-04-01&\$filter=roleName%20eq%20'$1'" | jq -r '.value[0].id'; }
+role_id() { arm GET "/subscriptions/$SUB/providers/Microsoft.Authorization/roleDefinitions?api-version=2022-04-01&\$filter=roleName%20eq%20'${1// /%20}'" | jq -r '.value[0].id'; }
 sp=$(sp_object_id)
 assign() { # assign <scope> <role name>
-  arm PUT "$1/providers/Microsoft.Authorization/roleAssignments/$(python3 -c 'import uuid,sys;print(uuid.uuid5(uuid.NAMESPACE_URL,sys.argv[1]))' "$1$2$sp")?api-version=2022-04-01" \
-    -d "{\"properties\":{\"roleDefinitionId\":\"$(role_id "$2")\",\"principalId\":\"$sp\",\"principalType\":\"ServicePrincipal\"}}" | jq -e '.id or (.error.code=="RoleAssignmentExists")' >/dev/null
+  local body
+  body=$(arm PUT "$1/providers/Microsoft.Authorization/roleAssignments/$(python3 -c 'import uuid,sys;print(uuid.uuid5(uuid.NAMESPACE_URL,sys.argv[1]))' "$1$2$sp")?api-version=2022-04-01" \
+    -d "{\"properties\":{\"roleDefinitionId\":\"$(role_id "$2")\",\"principalId\":\"$sp\",\"principalType\":\"ServicePrincipal\"}}")
+  jq -e '.id or (.error.code=="RoleAssignmentExists")' <<<"$body" >/dev/null || { echo "role assignment failed: $body"; exit 1; }
 }
 assign "/subscriptions/$SUB/resourceGroups/$RG" "Container Apps SandboxGroup Data Owner"
 assign "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.KeyVault/vaults/$vault" "Key Vault Secrets Officer"
