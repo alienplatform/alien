@@ -756,7 +756,6 @@ mod tests {
             description: String::new(),
             placeholder: None,
             default: None,
-            setup_default: None,
             platforms: None,
             validation: None,
             generate: None,

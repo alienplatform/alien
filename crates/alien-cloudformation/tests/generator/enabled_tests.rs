@@ -388,31 +388,3 @@ fn the_outputs_fallback_omits_a_declined_resource() {
         assert_eq!(ids, expected, "gate {answer} registers exactly what exists");
     }
 }
-
-/// A setup default changes only what the template offers. Without one the template offers the
-/// declared default.
-#[test]
-fn the_template_offers_the_setup_default_over_the_declared_default() {
-    let offered = |setup_default: Option<bool>| {
-        let mut input = gate();
-        input.default = Some(alien_core::StackInputDefaultValue::Boolean(false));
-        input.setup_default = setup_default.map(alien_core::StackInputDefaultValue::Boolean);
-        let stack = Stack::new("gated-stack".to_string())
-            .inputs(vec![input])
-            .add_enabled_when(
-                Kv::new("store".to_string()).build(),
-                ResourceLifecycle::Frozen,
-                "storeEnabled",
-            )
-            .build();
-        generate(&stack, "setup default")
-            .expect("renders")
-            .parameters
-            .get(GATE_PARAMETER)
-            .expect("gate parameter")
-            .default
-            .clone()
-    };
-    assert_eq!(offered(None), Some(CfExpression::from("false")));
-    assert_eq!(offered(Some(true)), Some(CfExpression::from("true")));
-}

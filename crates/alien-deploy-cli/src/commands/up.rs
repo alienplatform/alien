@@ -3969,7 +3969,6 @@ machine = "m8i.xlarge"
             description: "Test input".to_string(),
             placeholder: None,
             default: None,
-            setup_default: None,
             platforms: None,
             validation: None,
             generate: None,

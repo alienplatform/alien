@@ -3954,10 +3954,7 @@ fn stack_input_variable_block(input: &StackInputDefinition) -> Block {
             Expression::String(stack_input_description(&input.label, &input.description)),
         ),
     ];
-    if let Some(default) = input
-        .setup_template_default()
-        .map(stack_input_default_expression)
-    {
+    if let Some(default) = input.default.as_ref().map(stack_input_default_expression) {
         body.push(attr("default", default));
     } else if !input.required || input.when.is_some() {
         body.push(attr("default", expr::raw("null")));

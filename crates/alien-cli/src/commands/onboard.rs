@@ -2242,7 +2242,6 @@ mod tests {
             description: "API key issued by the control plane.".to_string(),
             placeholder: None,
             default: None,
-            setup_default: None,
             platforms: None,
             validation: None,
             generate: None,

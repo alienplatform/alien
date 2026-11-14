@@ -23,7 +23,6 @@ fn stack_with_inputs() -> Stack {
             description: "Base URL inside the customer environment.".to_string(),
             placeholder: None,
             default: None,
-            setup_default: None,
             platforms: None,
             validation: Some(StackInputValidation {
                 min_length: Some(8),
@@ -114,7 +113,6 @@ fn deployer_secret_input(provided_by: Vec<StackInputProvider>) -> StackInputDefi
         description: "Auth key used by the setup runtime.".to_string(),
         placeholder: None,
         default: None,
-        setup_default: None,
         platforms: None,
         validation: None,
         generate: None,

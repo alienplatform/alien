@@ -40,9 +40,6 @@ get "providedBy"(){
                 return z.array(StackInputProviderSchema.describe("Who can provide a stack input value.")).describe("Who can provide this value.")
               },
 "required": z.boolean().describe("Whether a resolved value is required before deployment can proceed."),
-get "setupDefault"(){
-                return z.union([StackInputDefaultValueSchema, z.null()]).optional()
-              },
 get "validation"(){
                 return z.union([StackInputValidationSchema, z.null()]).optional()
               },

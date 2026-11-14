@@ -48,10 +48,7 @@ fn aws_registry_declared_regions_emit_replication_and_no_creation_template() {
     let rendered = try_render_registry(&registry_stack(&["us-east-2", "eu-west-1"])).unwrap();
     // The rules go through a merge-on-write custom resource, never the native account-wide
     // resource, which replaces every rule and clears them all on delete.
-    assert!(
-        rendered.contains("Custom::EcrReplicationRule"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("Custom::EcrReplicationRule"), "{rendered}");
     assert!(
         !rendered.contains("AWS::ECR::ReplicationConfiguration"),
         "{rendered}"
@@ -116,11 +113,7 @@ fn aws_registry_replication_names_stay_within_aws_limits_for_long_ids() {
         .build();
     let template = render_template_json(&stack);
     let resources = template["Resources"].as_object().unwrap();
-    let helper_types = [
-        "AWS::Lambda::Function",
-        "AWS::Logs::LogGroup",
-        "AWS::IAM::Role",
-    ];
+    let helper_types = ["AWS::Lambda::Function", "AWS::Logs::LogGroup", "AWS::IAM::Role"];
     let mut checked_function = false;
     for (logical_id, resource) in resources {
         let kind = resource["Type"].as_str().unwrap();
@@ -128,11 +121,7 @@ fn aws_registry_replication_names_stay_within_aws_limits_for_long_ids() {
             continue;
         }
         checked_function |= kind == "AWS::Lambda::Function";
-        for (property, limit) in [
-            ("FunctionName", 64),
-            ("LogGroupName", 512),
-            ("RoleName", 64),
-        ] {
+        for (property, limit) in [("FunctionName", 64), ("LogGroupName", 512), ("RoleName", 64)] {
             let Some(value) = resource["Properties"].get(property) else {
                 continue;
             };
@@ -721,9 +710,7 @@ fn aws_registry_replication_role_may_create_only_the_ecr_replication_service_lin
         slr["Condition"]["StringEquals"]["iam:AWSServiceName"],
         "replication.ecr.amazonaws.com"
     );
-    assert!(slr["Resource"]
-        .to_string()
-        .contains("AWSServiceRoleForECRReplication"));
+    assert!(slr["Resource"].to_string().contains("AWSServiceRoleForECRReplication"));
 }
 
 #[test]
@@ -733,27 +720,20 @@ fn aws_registry_replication_write_grant_is_on_the_custom_resource_role_only() {
     let granted: Vec<&String> = resources
         .iter()
         .filter(|(_, r)| {
-            r.to_string()
-                .contains("\"ecr:PutReplicationConfiguration\"")
+            r.to_string().contains("\"ecr:PutReplicationConfiguration\"")
                 && r["Type"] != "AWS::IAM::ManagedPolicy"
                 && r["Type"] != "Custom::EcrReplicationRule"
         })
         .map(|(id, _)| id)
         .collect();
-    assert_eq!(
-        granted.len(),
-        1,
-        "write grant must be on one role: {granted:?}"
-    );
+    assert_eq!(granted.len(), 1, "write grant must be on one role: {granted:?}");
     assert!(granted[0].ends_with("ReplicationRole"), "{granted:?}");
     // The Lambda that uses it is the only function assuming that role.
     let function = resources
         .values()
         .find(|r| r["Type"] == "AWS::Lambda::Function" && r.to_string().contains("ReplicationRole"))
         .expect("replication function");
-    assert!(function["Properties"]["Role"]
-        .to_string()
-        .contains(granted[0].as_str()));
+    assert!(function["Properties"]["Role"].to_string().contains(granted[0].as_str()));
 }
 
 #[test]
@@ -774,10 +754,7 @@ fn aws_registry_conditional_regions_input_is_split_from_a_string_and_honors_its_
     stack.inputs.insert(0, gate);
     let template = render_template_json(&stack);
     // A conditional list input is a String parameter; the slots must not Join it as a list.
-    assert_eq!(
-        template["Parameters"]["InputDeploymentRegions"]["Type"],
-        "String"
-    );
+    assert_eq!(template["Parameters"]["InputDeploymentRegions"]["Type"], "String");
     let slot0 = template["Conditions"]
         .as_object()
         .unwrap()
@@ -815,9 +792,7 @@ fn conditional_regions_stack_with_off_platform_controller(equals: bool) -> Stack
 fn aws_registry_regions_input_whose_controller_is_off_platform_and_false_is_a_plain_list() {
     // The parameter loses its condition on AWS; the slots must read it as a list and must not
     // reference a `...Applies` condition that is never defined.
-    let template = render_template_json(&conditional_regions_stack_with_off_platform_controller(
-        false,
-    ));
+    let template = render_template_json(&conditional_regions_stack_with_off_platform_controller(false));
     assert_eq!(
         template["Parameters"]["InputDeploymentRegions"]["Type"],
         "CommaDelimitedList"
@@ -828,10 +803,7 @@ fn aws_registry_regions_input_whose_controller_is_off_platform_and_false_is_a_pl
         .keys()
         .all(|name| !name.ends_with("RegionsApplies")));
     let everything = template.to_string();
-    assert!(
-        !everything.contains("InputDeploymentRegionsApplies"),
-        "{everything}"
-    );
+    assert!(!everything.contains("InputDeploymentRegionsApplies"), "{everything}");
 }
 
 #[test]
@@ -847,10 +819,7 @@ fn aws_registry_regions_input_that_is_not_a_parameter_fails_with_a_clear_error()
     )
     .err()
     .expect("a regions input that is dropped must not render a template that references it");
-    assert!(
-        format!("{error:?}").contains("not a deployer-provided input"),
-        "{error:?}"
-    );
+    assert!(format!("{error:?}").contains("not a deployer-provided input"), "{error:?}");
 }
 
 fn eks_registry_stack(platforms: Vec<alien_core::Platform>) -> Stack {

@@ -109,20 +109,3 @@ describe("conditional inputs", () => {
     ).toThrow("unconditional")
   })
 })
-
-describe("setup default", () => {
-  it("is written beside the declared default, which stays the only resolution value", () => {
-    const [gate] = getStackInputDefinitions(
-      inputs({ gate: boolean({ ...options, required: false, default: false, setupDefault: true }) }),
-    )
-    expect(gate?.default).toEqual({ type: "boolean", value: false })
-    expect(gate?.setupDefault).toEqual({ type: "boolean", value: true })
-  })
-
-  it("is omitted when not set", () => {
-    const [gate] = getStackInputDefinitions(
-      inputs({ gate: boolean({ ...options, required: false, default: false }) }),
-    )
-    expect("setupDefault" in (gate ?? {}) && gate?.setupDefault !== undefined).toBe(false)
-  })
-})

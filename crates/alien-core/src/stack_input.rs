@@ -203,15 +203,6 @@ pub struct StackInputDefinition {
     /// Default value for optional/plain inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<StackInputDefaultValue>,
-    /// Default the generated setup templates (CloudFormation parameter, Terraform variable, Helm
-    /// values) offer instead of `default`. Only the setup generators read it, so a new install
-    /// and a setup rerun with the new template start from this value.
-    ///
-    /// It is never used to resolve an answer: an installed stack with no recorded answer
-    /// resolves to `default`. That lets an input be off for stacks installed before it existed
-    /// while a fresh install is offered it on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub setup_default: Option<StackInputDefaultValue>,
     /// Platforms where this input applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platforms: Option<Vec<Platform>>,
@@ -232,12 +223,6 @@ pub struct StackInputDefinition {
 }
 
 impl StackInputDefinition {
-    /// The default a generated setup template offers: `setup_default`, else `default`.
-    /// Resolving an answer never uses this; see `setup_default`.
-    pub fn setup_template_default(&self) -> Option<&StackInputDefaultValue> {
-        self.setup_default.as_ref().or(self.default.as_ref())
-    }
-
     /// Whether this input is available on the deployment platform, independently of its base cloud.
     /// Empty scopes retain their legacy all-platform meaning for existing releases.
     /// Build-time checks reject empty scopes in new releases.
@@ -324,7 +309,6 @@ impl StackInputDefinition {
             description: description.to_string(),
             placeholder: None,
             default: default.map(StackInputDefaultValue::Boolean),
-            setup_default: None,
             platforms: None,
             validation: None,
             generate: None,
@@ -479,7 +463,6 @@ mod environment_tests {
             description: id.to_string(),
             placeholder: None,
             default: None,
-            setup_default: None,
             generate: None,
             platforms: None,
             validation: None,

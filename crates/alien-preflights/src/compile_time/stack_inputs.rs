@@ -164,22 +164,6 @@ fn validate_input(
     if let Some(default) = &input.default {
         validate_default_matches_kind(input, default, errors);
     }
-    if let Some(setup_default) = &input.setup_default {
-        if input.default.is_none() {
-            errors.push(format!(
-                "Input '{}' sets a setup default without a default. The default is what an installed stack with no answer resolves to",
-                input.id
-            ));
-        }
-        if input.kind == StackInputKind::Secret {
-            errors.push(format!(
-                "Input '{}' is a secret and cannot declare a setup default",
-                input.id
-            ));
-        } else {
-            validate_default_matches_kind(input, setup_default, errors);
-        }
-    }
 
     if let Some(validation) = &input.validation {
         validate_constraints(input, validation, errors);
@@ -537,7 +521,6 @@ mod tests {
             description: "Lowercase tenant identifier.".to_string(),
             placeholder: None,
             default: None,
-            setup_default: None,
             platforms: None,
             validation: Some(StackInputValidation {
                 min_length: Some(3),
@@ -701,7 +684,6 @@ mod tests {
             description: "Password the app uses for its database.".to_string(),
             placeholder: None,
             default: None,
-            setup_default: None,
             platforms: None,
             validation: None,
             generate: Some(StackInputGenerate { length }),
