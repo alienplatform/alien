@@ -118,16 +118,18 @@ pub async fn status_command(
     args: StatusArgs,
     embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
-    let in_cluster = InClusterUse::default();
-    status_command_with(args, embedded_config, &in_cluster)
-        .await
-        .map_err(|error| in_cluster.explain(error))
+    rerun_credential::with_one_new_key_retry(|new_key, in_cluster| {
+        let args = args.clone();
+        async move { status_command_with(args, embedded_config, &in_cluster, new_key).await }
+    })
+    .await
 }
 
 async fn status_command_with(
     args: StatusArgs,
     embedded_config: Option<&DeployCliConfig>,
     in_cluster: &InClusterUse,
+    new_key: bool,
 ) -> Result<()> {
     let tracker = DeploymentTracker::new()?;
 
@@ -142,19 +144,18 @@ async fn status_command_with(
             let cli_name = embedded_config
                 .and_then(|config| config.name.as_deref())
                 .unwrap_or("alien-deploy");
-            let rerun = rerun_credential::resolve(
-                explicit,
-                tracked,
-                &KubeAccess {
-                    release: args.helm_release.clone(),
-                    namespace: args.namespace.clone(),
-                    kubeconfig: args.kubeconfig.clone(),
-                    kube_context: args.kube_context.clone(),
-                },
-                cli_name,
-                "status",
-            )
-            .await?;
+            let access = KubeAccess {
+                release: args.helm_release.clone(),
+                namespace: args.namespace.clone(),
+                kubeconfig: args.kubeconfig.clone(),
+                kube_context: args.kube_context.clone(),
+            };
+            let rerun = if new_key {
+                rerun_credential::resolve_new_key(explicit, tracked, &access, cli_name, "status")
+                    .await?
+            } else {
+                rerun_credential::resolve(explicit, tracked, &access, cli_name, "status").await?
+            };
             in_cluster.note(&args.name, &rerun);
             Some(rerun.token)
         }

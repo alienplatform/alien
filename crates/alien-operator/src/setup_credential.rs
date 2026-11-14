@@ -32,14 +32,11 @@ const MAX_LIFETIME: chrono::Duration = chrono::Duration::minutes(20);
     about = "Print a short-lived key for rerunning this installation"
 )]
 struct SetupCredentialArgs {
-    /// Print the key issued last if it has at least two minutes left, instead
-    /// of issuing a new one (which revokes the last). For read-only commands.
+    /// Print the key issued last if it has not expired, instead of issuing a
+    /// new one (which revokes the last). For read-only commands.
     #[arg(long)]
     reuse: bool,
 }
-
-/// A reused key must have at least this long left, so the caller can finish.
-const MIN_REUSE_LEFT: chrono::Duration = chrono::Duration::minutes(2);
 
 /// What the command sends the Operator over the socket.
 #[derive(Serialize, Deserialize, Default)]
@@ -348,7 +345,9 @@ async fn read_request(stream: &mut tokio::net::UnixStream) -> Request {
 }
 
 /// The key to answer with: the last one issued when `reuse` is set and it has
-/// at least two minutes left, otherwise a new one, which becomes the last.
+/// not expired (a status call takes seconds, so even a nearly expired key
+/// serves it), otherwise a new one, which becomes the last. An expired key is
+/// dead already, so replacing it revokes nothing that still works.
 async fn answer_for<F, Fut>(
     last: &mut Option<Issued>,
     reuse: bool,
@@ -360,7 +359,7 @@ where
     Fut: std::future::Future<Output = Result<Issued, Failure>>,
 {
     if reuse {
-        if let Some(issued) = last.as_ref().filter(|i| i.expires_at - now >= MIN_REUSE_LEFT) {
+        if let Some(issued) = last.as_ref().filter(|i| i.expires_at > now) {
             return Answer {
                 credential: Some(issued.token.clone()),
                 expires_at: Some(issued.expires_at),
@@ -505,7 +504,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reuse_returns_the_cached_key_and_mints_once_it_has_under_two_minutes() {
+    async fn reuse_returns_the_cached_key_until_it_expires() {
         let mints = std::sync::atomic::AtomicUsize::new(0);
         let mint = |token: &'static str, left: i64| {
             let mints = &mints;
@@ -527,16 +526,21 @@ mod tests {
         assert_eq!(newer.credential.as_deref(), Some("two"));
         let reused = answer_for(&mut last, true, Utc::now(), mint("three", 15)).await;
         assert_eq!(reused.credential.as_deref(), Some("two"));
-        // Under two minutes left: reuse mints a new one.
-        let later = Utc::now() + chrono::Duration::minutes(14);
-        let fresh = answer_for(&mut last, true, later, mint("three", 15)).await;
+        // Under two minutes left: still the cached key, nothing minted.
+        let late = Utc::now() + chrono::Duration::minutes(14);
+        let kept = answer_for(&mut last, true, late, mint("three", 15)).await;
+        assert_eq!(kept.credential.as_deref(), Some("two"));
+        assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // Expired: reuse mints a new one.
+        let expired = Utc::now() + chrono::Duration::minutes(16);
+        let fresh = answer_for(&mut last, true, expired, mint("three", 15)).await;
         assert_eq!(fresh.credential.as_deref(), Some("three"));
         assert_eq!(mints.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
     async fn a_failed_mint_keeps_the_cached_key_and_reports_the_code() {
-        let mut last = Some(issued("kept", 1));
+        let mut last = Some(issued("kept", -1));
         let answer = answer_for(&mut last, true, Utc::now(), || async {
             Err::<Issued, _>(Failure::Refused)
         })
