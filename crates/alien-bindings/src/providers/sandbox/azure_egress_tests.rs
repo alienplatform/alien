@@ -142,14 +142,10 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
     assert_eq!(floor.default_action, "Allow");
     assert_eq!(floor.traffic_inspection.as_deref(), Some("Partial"));
     assert_eq!(floor.host_rules[0].pattern, "127.0.0.1:3128");
-    assert_eq!(floor.host_rules.len(), 3);
-    assert_eq!(floor.host_rules[1].action, "Allow");
-    assert_eq!(
-        floor.host_rules[1].pattern,
-        h.reopen().await.gateway_admin_authority()
-    );
-    assert_eq!(floor.host_rules[2].action, "Deny");
-    assert_eq!(floor.host_rules[2].pattern, "*");
+    // No rule for the gateway admin port: the sandbox must not reach it at all.
+    assert_eq!(floor.host_rules.len(), 2);
+    assert_eq!(floor.host_rules[1].action, "Deny");
+    assert_eq!(floor.host_rules[1].pattern, "*");
 
     // Reopening the manager loses all in-process state; the provider label remains authoritative.
     let reopened = AzureSandbox {
@@ -345,7 +341,7 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         ("/enforcementMode", serde_json::json!("Audit")),
         ("/http/enforcementMode", serde_json::json!("Audit")),
         ("/http/defaultAction", serde_json::json!("Deny")),
-        ("/http/hostRules/2/action", serde_json::json!("Allow")),
+        ("/http/hostRules/1/action", serde_json::json!("Allow")),
         ("/hostRules/0/pattern", serde_json::json!("*")),
         ("/http", serde_json::json!(null)),
     ];
