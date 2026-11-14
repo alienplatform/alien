@@ -494,6 +494,7 @@ dependencies = [
  "alien-signing",
  "alien-stack-toml",
  "alien-terraform",
+ "alien-test",
  "alien-worker-runtime",
  "async-trait",
  "axum 0.8.9",

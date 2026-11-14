@@ -114,6 +114,7 @@ http = { workspace = true }
 snapbox = "0.6.0"
 predicates = "3.0.4"
 insta = { workspace = true }
+alien-test = { path = "../alien-test" }
 
 [[test]]
 name = "signing_flow"
