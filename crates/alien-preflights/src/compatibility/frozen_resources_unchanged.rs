@@ -4,7 +4,7 @@ use alien_core::instance_catalog::{find_instance_type, is_same_architecture_mach
 use alien_core::{
     permissions::PermissionSet, AzureStorageAccount, CapacityGroup, CapacityGroupScalePolicy,
     ComputeCluster, ComputePoolSelection, DeploymentConfig, InputAnswers, Platform, Resource,
-    ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
+    ResourceEntry, ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
 };
 use alien_error::Context;
 use std::borrow::Cow;
@@ -399,30 +399,50 @@ impl FrozenResourcesUnchangedCheck {
         let old_frozen_ids: HashSet<_> = old_frozen.keys().copied().collect();
         // A resource that is new in this release and gated by an input declared with default
         // false stays out of an installed stack until setup answers the gate, as the setup
-        // templates leave it out, so it is not an addition while the gate resolves false. An
-        // answer that turns true, a gate that cannot be resolved, or a gate declared with
-        // another default makes it one. A resource the installed stack already has is never
-        // excused here: it is compared below exactly as before.
+        // templates leave it out, so it is not an addition while the gate resolves false. So is
+        // the identity of a permission profile whose every user is such a resource: it carries
+        // nothing of its own and nothing would use it. An answer that turns true, a gate that
+        // cannot be resolved, another declared default, a profile with an ungated user, and a
+        // resource the installed stack already has are compared as before.
+        let gate_is_off = |gate: &str, resource_id: &str| {
+            config.is_some_and(|config| {
+                new_stack.inputs.iter().any(|input| {
+                    input.id == gate
+                        && input.default == Some(alien_core::StackInputDefaultValue::Boolean(false))
+                }) && alien_core::gate_resolves_true(
+                    &new_stack.inputs,
+                    gate,
+                    &config.input_values,
+                    resource_id,
+                    self.platform,
+                ) == Ok(false)
+            })
+        };
+        let excused_while_gated_off = |id: &str, entry: &ResourceEntry| {
+            if let Some(gate) = entry.enabled_when.as_deref() {
+                return gate_is_off(gate, id);
+            }
+            // The derived identity of a profile (`<profile>-sa`): excused when it has users and
+            // every one of them carries the same gate.
+            let Some(profile) = id.strip_suffix("-sa") else {
+                return false;
+            };
+            if entry.config.downcast_ref::<ServiceAccount>().is_none() {
+                return false;
+            }
+            let mut users = new_stack
+                .resources()
+                .filter(|(_, user)| user.config.get_permissions() == Some(profile))
+                .map(|(_, user)| user.enabled_when.as_deref());
+            let Some(Some(gate)) = users.next() else {
+                return false;
+            };
+            users.all(|other| other == Some(gate)) && gate_is_off(gate, id)
+        };
         let added_frozen: Vec<_> = new_frozen
             .iter()
             .filter(|(id, _)| !old_frozen_ids.contains(*id))
-            .filter(|(id, entry)| {
-                !(config.is_some_and(|config| {
-                    entry.enabled_when.as_deref().is_some_and(|gate| {
-                        new_stack.inputs.iter().any(|input| {
-                            input.id == gate
-                                && input.default
-                                    == Some(alien_core::StackInputDefaultValue::Boolean(false))
-                        }) && alien_core::gate_resolves_true(
-                            &new_stack.inputs,
-                            gate,
-                            &config.input_values,
-                            id,
-                            self.platform,
-                        ) == Ok(false)
-                    })
-                }))
-            })
+            .filter(|(id, entry)| !excused_while_gated_off(id, entry))
             .map(|(id, _)| id)
             .collect();
 
@@ -2047,6 +2067,68 @@ mod azure_storage_settings_tests {
                 .await
                 .unwrap();
             assert!(!removed.success, "{:?}", removed.errors);
+        }
+
+        /// A stack whose profile `app` has the identity `app-sa` and one worker per entry of
+        /// `gates` running as it.
+        fn with_profile_users(gates: &[Option<&str>], inputs: Vec<StackInputDefinition>) -> Stack {
+            let mut builder = Stack::new("gated".to_string())
+                .inputs(inputs)
+                .add(
+                    Storage::new("kept".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    ServiceAccount::new("app-sa".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                );
+            for (index, gate) in gates.iter().enumerate() {
+                let worker = alien_core::Worker::new(format!("w{index}"))
+                    .permissions("app".to_string())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "example.com/app:latest".to_string(),
+                    })
+                    .build();
+                builder = match gate {
+                    Some(gate) => builder.add_enabled_when(worker, ResourceLifecycle::Live, *gate),
+                    None => builder.add(worker, ResourceLifecycle::Live),
+                };
+            }
+            builder.build()
+        }
+
+        fn identity_added(errors: &[String]) -> bool {
+            errors
+                .iter()
+                .any(|e| e.starts_with("Cannot add frozen resources during update: 'app-sa'"))
+        }
+
+        #[tokio::test]
+        async fn the_identity_of_a_profile_whose_users_are_all_gated_off_is_not_an_addition() {
+            let new =
+                with_profile_users(&[Some("feature"), Some("feature")], vec![gate(Some(false))]);
+            assert!(errors(new, &config(None)).await.is_empty());
+        }
+
+        #[tokio::test]
+        async fn that_identity_is_an_addition_when_the_gate_turns_true_or_a_user_is_ungated() {
+            let on = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            assert!(identity_added(&errors(on, &config(Some(true))).await));
+            let mixed = with_profile_users(&[Some("feature"), None], vec![gate(Some(false))]);
+            assert!(identity_added(&errors(mixed, &config(None)).await));
+            let none = with_profile_users(&[], vec![gate(Some(false))]);
+            assert!(identity_added(&errors(none, &config(None)).await));
+            let mut other = gate(Some(false));
+            other.id = "other".to_string();
+            let different = with_profile_users(
+                &[Some("feature"), Some("other")],
+                vec![gate(Some(false)), other],
+            );
+            assert!(identity_added(&errors(different, &config(None)).await));
+            let default_true = with_profile_users(&[Some("feature")], vec![gate(Some(true))]);
+            assert!(identity_added(
+                &errors(default_true, &config(Some(false))).await
+            ));
         }
 
         #[tokio::test]

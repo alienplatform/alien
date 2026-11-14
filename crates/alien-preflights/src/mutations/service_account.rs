@@ -17,20 +17,6 @@ use tracing::{debug, info};
 /// creates a ServiceAccount resource with resolved permission sets.
 pub struct ServiceAccountMutation;
 
-/// The input gate a profile's service account follows: the one gate shared by every resource
-/// that runs as the profile. A profile with any ungated user, users with different gates, or
-/// no user at all has an ungated service account, as it always did.
-fn gate_of_profile_users(stack: &Stack, profile_name: &str) -> Option<String> {
-    let mut users = stack
-        .resources()
-        .filter(|(_, entry)| entry.config.get_permissions() == Some(profile_name))
-        .map(|(_, entry)| entry.enabled_when.as_deref());
-    let first = users.next()??;
-    users
-        .all(|gate| gate == Some(first))
-        .then(|| first.to_string())
-}
-
 #[async_trait]
 impl StackMutation for ServiceAccountMutation {
     fn description(&self) -> &'static str {
@@ -113,7 +99,7 @@ impl StackMutation for ServiceAccountMutation {
 
             // Add as a frozen resource (ServiceAccounts are infrastructure)
             let resource_entry = ResourceEntry {
-                enabled_when: gate_of_profile_users(&stack, profile_name),
+                enabled_when: None,
                 config: alien_core::Resource::new(service_account),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
@@ -233,87 +219,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    fn worker(id: &str, gate: Option<&str>) -> (Worker, Option<String>) {
-        (
-            Worker::new(id.to_string())
-                .permissions("app".to_string())
-                .code(WorkerCode::Image {
-                    image: "example.com/app:latest".to_string(),
-                })
-                .build(),
-            gate.map(str::to_string),
-        )
-    }
-
-    fn stack_of(workers: Vec<(Worker, Option<String>)>) -> Stack {
-        let mut builder = Stack::new("test-stack".to_string()).permissions(
-            alien_core::PermissionsConfig::default().with_profile("app", PermissionProfile::new()),
-        );
-        for (worker, _) in &workers {
-            builder = builder.add(worker.clone(), ResourceLifecycle::Live);
-        }
-        let mut stack = builder.build();
-        for (worker, gate) in workers {
-            stack.resources.get_mut(&worker.id).unwrap().enabled_when = gate;
-        }
-        stack
-    }
-
-    #[test]
-    fn a_service_account_follows_the_one_gate_its_users_share() {
-        let both = stack_of(vec![worker("a", Some("g")), worker("b", Some("g"))]);
-        assert_eq!(gate_of_profile_users(&both, "app").as_deref(), Some("g"));
-    }
-
-    #[test]
-    fn a_gated_and_an_ungated_user_leave_the_service_account_ungated() {
-        let stack = stack_of(vec![worker("a", Some("g")), worker("b", None)]);
-        assert_eq!(gate_of_profile_users(&stack, "app"), None);
-        let reversed = stack_of(vec![worker("b", None), worker("a", Some("g"))]);
-        assert_eq!(gate_of_profile_users(&reversed, "app"), None);
-    }
-
-    #[test]
-    fn users_with_different_gates_leave_the_service_account_ungated() {
-        let stack = stack_of(vec![worker("a", Some("g")), worker("b", Some("h"))]);
-        assert_eq!(gate_of_profile_users(&stack, "app"), None);
-    }
-
-    #[test]
-    fn a_profile_nobody_uses_has_an_ungated_service_account() {
-        let stack = stack_of(vec![]);
-        assert_eq!(gate_of_profile_users(&stack, "app"), None);
-    }
-
-    #[tokio::test]
-    async fn the_mutation_gates_the_service_account_of_a_gated_only_user() {
-        let state = StackState::new(Platform::Aws);
-        let config = DeploymentConfig::builder()
-            .stack_settings(Default::default())
-            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
-                variables: Vec::new(),
-                hash: "empty".to_string(),
-                created_at: "2026-10-25T00:00:00Z".to_string(),
-            })
-            .allow_frozen_changes(false)
-            .external_bindings(Default::default())
-            .build();
-        let stack = ServiceAccountMutation
-            .mutate(stack_of(vec![worker("a", Some("g"))]), &state, &config)
-            .await
-            .unwrap();
-        assert_eq!(stack.resources["app-sa"].enabled_when.as_deref(), Some("g"));
-        let stack = ServiceAccountMutation
-            .mutate(
-                stack_of(vec![worker("a", Some("g")), worker("b", None)]),
-                &state,
-                &config,
-            )
-            .await
-            .unwrap();
-        assert_eq!(stack.resources["app-sa"].enabled_when, None);
     }
 
     #[test]
