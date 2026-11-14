@@ -29,6 +29,7 @@ impl SqliteTokenStore {
             "deployment" => TokenType::Deployment,
             "commands-receiver" => TokenType::CommandsReceiver,
             "setup" => TokenType::Setup,
+            "setup-import" => TokenType::SetupImport,
             other => return Err(db_error(&format!("Unknown token type: {}", other))),
         };
         Ok(TokenRecord {
@@ -321,6 +322,7 @@ impl TokenStore for SqliteTokenStore {
 
     async fn create_setup_token(
         &self,
+        token_type: TokenType,
         deployment_id: &str,
         key_prefix: &str,
         key_hash: &str,
@@ -329,6 +331,10 @@ impl TokenStore for SqliteTokenStore {
         let failed = || GenericError {
             message: "Setup token creation failed".to_string(),
         };
+        if !matches!(token_type, TokenType::Setup | TokenType::SetupImport) {
+            return Err(AlienError::new(failed()));
+        }
+        let type_name = token_type.to_string();
         let id = alien_core::new_id(alien_core::IdType::Token);
         let now = Utc::now();
         let mut conn = self.db.conn().lock().await;
@@ -340,17 +346,18 @@ impl TokenStore for SqliteTokenStore {
         // The earlier setup tokens go in the same transaction as the new one is
         // stored, so two reruns never both hold a live token.
         tx.execute(
-            "DELETE FROM tokens WHERE type = 'setup' AND deployment_id = ?1",
-            [deployment_id.to_owned()],
+            "DELETE FROM tokens WHERE type = ?1 AND deployment_id = ?2",
+            (type_name.clone(), deployment_id.to_owned()),
         )
         .await
         .into_alien_error()
         .context(failed())?;
         tx.execute(
             "INSERT INTO tokens (id, type, key_prefix, key_hash, deployment_group_id, deployment_id, created_at, expires_at) \
-             VALUES (?1, 'setup', ?2, ?3, NULL, ?4, ?5, ?6)",
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
             (
                 id.clone(),
+                type_name,
                 key_prefix.to_owned(),
                 key_hash.to_owned(),
                 deployment_id.to_owned(),
@@ -364,7 +371,7 @@ impl TokenStore for SqliteTokenStore {
         tx.commit().await.into_alien_error().context(failed())?;
         Ok(TokenRecord {
             id,
-            token_type: TokenType::Setup,
+            token_type,
             key_prefix: key_prefix.to_owned(),
             key_hash: key_hash.to_owned(),
             deployment_group_id: None,

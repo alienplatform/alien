@@ -433,7 +433,13 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
         let expires_at = now + SETUP_CREDENTIAL_LIFETIME;
         let (raw, key_prefix, key_hash) = crate::ids::generate_token(TokenType::Setup.prefix());
         tokens
-            .create_setup_token(&record.id, &key_prefix, &key_hash, expires_at)
+            .create_setup_token(
+                TokenType::Setup,
+                &record.id,
+                &key_prefix,
+                &key_hash,
+                expires_at,
+            )
             .await
             .map_err(|_| unavailable())?;
         Ok(IssuedSetupCredential {
@@ -460,7 +466,13 @@ impl RuntimeIdentityVerifier for StandaloneRuntimeIdentity {
         let expires_at = now + SETUP_CREDENTIAL_LIFETIME;
         let (raw, key_prefix, key_hash) = crate::ids::generate_token(TokenType::Setup.prefix());
         tokens
-            .create_setup_token(&record.id, &key_prefix, &key_hash, expires_at)
+            .create_setup_token(
+                TokenType::SetupImport,
+                &record.id,
+                &key_prefix,
+                &key_hash,
+                expires_at,
+            )
             .await
             .map_err(|_| unavailable())?;
         Ok(IssuedSetupCredential {
@@ -922,8 +934,62 @@ mod tests {
             .await
             .unwrap()
             .expect("the newest key is live");
-        assert_eq!(live.token_type, TokenType::Setup);
+        assert_eq!(live.token_type, TokenType::SetupImport);
         assert_eq!(live.deployment_id.as_deref(), Some("dep-1"));
+    }
+
+    /// Each issuer has its own slot: an import mint never revokes the Operator-issued key,
+    /// and the other way round.
+    #[tokio::test]
+    async fn operator_and_import_setup_keys_do_not_revoke_each_other() {
+        let (verifier, _directory) = verifier(
+            vec![record("dep-1", Platform::Kubernetes, None)],
+            Arc::new(Utc::now),
+            None,
+        )
+        .await;
+        enroll_operator(&verifier, "dep-1", "ax_day_v1_one").await;
+        let tokens = verifier.tokens.clone().unwrap();
+        let dep = record("dep-1", Platform::Kubernetes, None);
+        let live = |raw: String| {
+            let tokens = tokens.clone();
+            async move {
+                tokens
+                    .validate_token(&sha256_hash(&raw))
+                    .await
+                    .unwrap()
+                    .is_some()
+            }
+        };
+
+        let operator = verifier
+            .issue_setup_credential("dep-1", "ax_day_v1_one")
+            .await
+            .unwrap();
+        let import = verifier
+            .issue_setup_credential_for_group(&dep)
+            .await
+            .unwrap();
+        // An import mint leaves the Operator key live.
+        assert!(live(operator.token.clone()).await);
+        assert!(live(import.token.clone()).await);
+
+        // An Operator mint leaves the import key live, and replaces its own earlier key.
+        let operator2 = verifier
+            .issue_setup_credential("dep-1", "ax_day_v1_one")
+            .await
+            .unwrap();
+        assert!(!live(operator.token).await);
+        assert!(live(operator2.token).await);
+        assert!(live(import.token.clone()).await);
+
+        // A second import mint replaces the first import key only.
+        let import2 = verifier
+            .issue_setup_credential_for_group(&dep)
+            .await
+            .unwrap();
+        assert!(!live(import.token).await);
+        assert!(live(import2.token).await);
     }
 
     #[tokio::test]
@@ -1019,6 +1085,7 @@ mod tests {
         let tokens = verifier.tokens.clone().unwrap();
         tokens
             .create_setup_token(
+                TokenType::Setup,
                 "dep-1",
                 "ax_setup_exp",
                 &sha256_hash("expired"),

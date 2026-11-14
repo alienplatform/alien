@@ -19,6 +19,10 @@ pub enum TokenType {
     /// own Operator identity, so a rerun needs no saved token; see
     /// [`TokenStore::create_setup_token`].
     Setup,
+    /// Same access as [`TokenType::Setup`], minted by a stack import for the
+    /// group's install credential. Kept apart so an import and an Operator
+    /// mint never revoke each other's key.
+    SetupImport,
 }
 
 impl std::fmt::Display for TokenType {
@@ -29,6 +33,7 @@ impl std::fmt::Display for TokenType {
             TokenType::Deployment => write!(f, "deployment"),
             TokenType::CommandsReceiver => write!(f, "commands-receiver"),
             TokenType::Setup => write!(f, "setup"),
+            TokenType::SetupImport => write!(f, "setup-import"),
         }
     }
 }
@@ -41,7 +46,7 @@ impl TokenType {
             TokenType::DeploymentGroup => "ax_dg_",
             TokenType::Deployment => "ax_deploy_",
             TokenType::CommandsReceiver => "ax_cmds_",
-            TokenType::Setup => "ax_setup_",
+            TokenType::Setup | TokenType::SetupImport => "ax_setup_",
         }
     }
 }
@@ -113,10 +118,12 @@ pub trait TokenStore: Send + Sync {
 
     /// Store a setup token for `deployment_id` that expires at `expires_at`, and
     /// delete the deployment's earlier setup tokens, in one step, so at most one
-    /// is live. Stores are expected to refuse a missing implementation: the
+    /// is live. Only earlier tokens of the same `token_type` (`Setup` or
+    /// `SetupImport`) are deleted: each issuer has its own slot. Stores are expected to refuse a missing implementation: the
     /// default refuses.
     async fn create_setup_token(
         &self,
+        _token_type: TokenType,
         _deployment_id: &str,
         _key_prefix: &str,
         _key_hash: &str,
