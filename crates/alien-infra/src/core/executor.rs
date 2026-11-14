@@ -1157,6 +1157,51 @@ impl StackExecutor {
         rolled
     }
 
+    /// Whether the resource's controller asks for an update with its config unchanged, from
+    /// inputs that are not part of the config (such as a rotated secret).
+    fn controller_needs_update(
+        &self,
+        controller: &dyn crate::ResourceController,
+        desired: &ResourceConfig,
+        current: &StackResourceState,
+        state: &StackState,
+    ) -> Result<bool> {
+        let context = ResourceControllerContext {
+            desired_config: &desired.resource,
+            platform: controller_platform_for_state(self.client_config.platform(), current),
+            client_config: self.client_config.clone(),
+            state,
+            resource_prefix: &state.resource_prefix,
+            registry: &self.resource_registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &self.deployment_config,
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: HeartbeatCollector::default(),
+        };
+        controller.needs_update(&context)
+    }
+
+    /// Whether the controller asks for an update with the config unchanged. A controller that
+    /// cannot be read or asked keeps the wait; `plan` reports the failure.
+    fn needs_update_requested(
+        &self,
+        desired: &ResourceConfig,
+        current: &StackResourceState,
+        state: &StackState,
+    ) -> bool {
+        if !status_allows_update_planning(current.status) {
+            return false;
+        }
+        match current.get_internal_controller() {
+            Ok(Some(controller)) => self
+                .controller_needs_update(controller.as_ref(), desired, current, state)
+                .unwrap_or(true),
+            Ok(None) => false,
+            Err(_) => true,
+        }
+    }
+
     fn dependency_rolled_uncached(
         &self,
         dependency_id: &str,
@@ -1185,6 +1230,7 @@ impl StackExecutor {
             || self
                 .external_binding_drifted(dependency_id, current)
                 .unwrap_or(true)
+            || self.needs_update_requested(desired, current, state)
         {
             return false;
         }
@@ -1792,24 +1838,12 @@ impl StackExecutor {
                         if let Some(resource_controller) =
                             current_resource_state.get_internal_controller()?
                         {
-                            let context = ResourceControllerContext {
-                                desired_config: &desired_config.resource,
-                                platform: controller_platform_for_state(
-                                    self.client_config.platform(),
-                                    current_resource_state,
-                                ),
-                                client_config: self.client_config.clone(),
+                            if self.controller_needs_update(
+                                resource_controller.as_ref(),
+                                desired_config,
+                                current_resource_state,
                                 state,
-                                resource_prefix: &state.resource_prefix,
-                                registry: &self.resource_registry,
-                                desired_stack: &self.desired_stack,
-                                service_provider: &self.service_provider,
-                                deployment_config: &self.deployment_config,
-                                initial_setup_authority: self.initial_setup_authority,
-                                heartbeat_collector: HeartbeatCollector::default(),
-                            };
-
-                            if resource_controller.needs_update(&context)? {
+                            )? {
                                 debug!(
                                     "Scheduling UPDATE transition for '{}' due to deployment config drift",
                                     resource_id

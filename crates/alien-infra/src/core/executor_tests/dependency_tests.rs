@@ -965,6 +965,49 @@ mod rollout_order {
         Ok(())
     }
 
+    /// A dependency whose controller asks for an update with its config unchanged (a rotated
+    /// secret) has not rolled yet, so a linked dependent whose own config changed waits for
+    /// that update instead of starting in the same plan.
+    #[tokio::test]
+    async fn a_dependency_with_a_requested_update_holds_its_dependent_back() -> Result<()> {
+        let stack = |release: &str| {
+            Stack::new("rollout-requested".to_owned())
+                .add(
+                    worker("dep-requested", "r1", false),
+                    ResourceLifecycle::Live,
+                )
+                .add_with_dependencies(
+                    worker("app-requested", release, false),
+                    ResourceLifecycle::Live,
+                    vec![ResourceRef::new(Worker::RESOURCE_TYPE, "dep-requested")],
+                )
+                .build()
+        };
+        let mut state = run_to_synced(&new_executor(&stack("r1"))?, new_test_state()).await?;
+        assert_all_running(&state, &["dep-requested", "app-requested"]);
+
+        crate::worker::request_test_worker_update("dep-requested", true);
+        let executor = new_executor(&stack("r2"))?;
+        state = executor.step(state).await?.next_state;
+
+        assert_eq!(
+            get_status(&state, "dep-requested"),
+            Some(ResourceStatus::Updating)
+        );
+        assert_eq!(
+            image(&state, "app-requested"),
+            "app-requested-r1",
+            "the dependent started in the same plan as its dependency's update"
+        );
+        crate::worker::request_test_worker_update("dep-requested", false);
+        for _ in 0..40 {
+            state = executor.step(state).await?.next_state;
+        }
+        assert_eq!(image(&state, "app-requested"), "app-requested-r2");
+        assert_all_running(&state, &["dep-requested", "app-requested"]);
+        Ok(())
+    }
+
     /// A dependency this executor does not update (a Frozen resource under a Live-only run)
     /// never holds its dependents back, though its recorded config differs from the desired.
     #[tokio::test]

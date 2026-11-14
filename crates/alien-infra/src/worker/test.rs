@@ -30,6 +30,22 @@ pub fn test_worker_deletes_issued(identifier: &str) -> Vec<Worker> {
         .collect()
 }
 
+/// Workers whose controller asks for an update with their config unchanged, as a rotated secret
+/// does for a real one.
+static UPDATE_REQUESTED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Makes the test controller of the worker with this identifier ask for an update while its
+/// config is unchanged (`true`), or stop asking (`false`).
+pub fn request_test_worker_update(identifier: &str, requested: bool) {
+    let mut ids = UPDATE_REQUESTED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    ids.retain(|id| id != identifier);
+    if requested {
+        ids.push(identifier.to_string());
+    }
+}
+
 /// Workers whose delete the test controller denies, as a role without the delete permission
 /// would, and how many deletes it denied for each.
 static DENIED_DELETES: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
@@ -232,6 +248,15 @@ impl TestWorkerController {
 
     fn updates_during_dependency_change(&self, _dependency: &ResourceRef) -> bool {
         self.updates_during_dependency_change
+    }
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let worker = ctx.desired_resource_config::<Worker>()?;
+        Ok(UPDATE_REQUESTED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .any(|id| id == &worker.id))
     }
 
     fn nothing_deleted_yet(&self) -> bool {
