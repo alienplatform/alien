@@ -19531,6 +19531,10 @@
             },
             "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
           },
+          "dependencyUpdatePending": {
+            "type": "boolean",
+            "description": "Whether this resource owes an update because a dependency is changing, though its own\nconfig is not. The update waits until the dependency has rolled to the release being\napplied, so the owed update must survive between plans and restarts. Cleared when the\nupdate starts. State written before this field existed reads as not owing one."
+          },
           "description": {
             "type": "string",
             "nullable": true

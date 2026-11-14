@@ -1339,6 +1339,7 @@ mod tests {
             last_failed_state: None,
             remote_binding_params: None,
             external_binding: false,
+            dependency_update_pending: false,
         }
     }
 

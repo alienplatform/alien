@@ -345,6 +345,14 @@ pub struct StackResourceState {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[builder(default)]
     pub external_binding: bool,
+
+    /// Whether this resource owes an update because a dependency is changing, though its own
+    /// config is not. The update waits until the dependency has rolled to the release being
+    /// applied, so the owed update must survive between plans and restarts. Cleared when the
+    /// update starts. State written before this field existed reads as not owing one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[builder(default)]
+    pub dependency_update_pending: bool,
 }
 
 impl StackResourceState {
@@ -373,6 +381,7 @@ impl StackResourceState {
             last_failed_state: None,
             remote_binding_params: None,
             external_binding: false,
+            dependency_update_pending: false,
         }
     }
 
@@ -409,6 +418,29 @@ mod tests {
         ExposeProtocol, PublicEndpointOutput, ResourceType, Storage, StorageOutputs, Worker,
         WorkerCode, WorkerOutputs,
     };
+
+    /// State saved before `dependencyUpdatePending` existed reads as owing no update, and the
+    /// field stays out of the saved form while it is false.
+    #[test]
+    fn a_resource_state_saved_without_the_pending_marker_reads_as_not_owing_an_update() {
+        let saved = serde_json::json!({
+            "type": "storage",
+            "status": "running",
+            "config": { "type": "storage", "id": "data" },
+        });
+        let state: StackResourceState = serde_json::from_value(saved).unwrap();
+        assert!(!state.dependency_update_pending);
+        assert!(serde_json::to_value(&state)
+            .unwrap()
+            .get("dependencyUpdatePending")
+            .is_none());
+
+        let mut owing = state;
+        owing.dependency_update_pending = true;
+        let round_trip: StackResourceState =
+            serde_json::from_value(serde_json::to_value(&owing).unwrap()).unwrap();
+        assert!(round_trip.dependency_update_pending);
+    }
 
     #[test]
     fn resource_prefix_validation_accepts_canonical_prefixes() {
@@ -670,6 +702,7 @@ mod tests {
             remote_binding_params: None,
             controller_platform: None,
             external_binding: false,
+            dependency_update_pending: false,
         };
 
         stack_state

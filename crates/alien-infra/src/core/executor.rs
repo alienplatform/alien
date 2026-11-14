@@ -63,6 +63,11 @@ pub struct PlanResult {
     /// grants. The new dependencies are recorded in state; their controllers do not run.
     #[serde(default)]
     pub dependency_records: Vec<String>,
+    /// Running resource IDs that owe an update only because a dependency is changing, and must
+    /// wait for it. The step marks them, so the update is planned once the dependency has
+    /// rolled, in a later plan or after a restart.
+    #[serde(default)]
+    pub dependency_update_pending: Vec<String>,
 }
 
 /// Represents the outcome of a single step in the stack execution process.
@@ -1148,7 +1153,8 @@ impl StackExecutor {
         {
             return true;
         }
-        if desired.resource != current.config
+        if current.dependency_update_pending
+            || desired.resource != current.config
             || desired.dependencies != current.dependencies
             // A drift that cannot be read is reported by `plan`; here it keeps the wait.
             || self
@@ -1840,6 +1846,17 @@ impl StackExecutor {
             dependency_propagation_needed = false;
             let current_updates = plan_result.updates.keys().cloned().collect::<HashSet<_>>();
             let current_creates: HashSet<String> = plan_result.creates.iter().cloned().collect();
+            // Resources that owe an update but wait for a dependency: marked in an earlier plan
+            // or earlier in this one. Their dependents owe one too.
+            let owing: HashSet<String> = state
+                .resources
+                .iter()
+                .filter(|(id, resource)| {
+                    resource.dependency_update_pending && self.resources.contains_key(*id)
+                })
+                .map(|(id, _)| id.clone())
+                .chain(plan_result.dependency_update_pending.iter().cloned())
+                .collect();
 
             for (resource_id, desired_config) in &self.resources {
                 // Skip if this resource is already marked for update, creation, or deletion
@@ -1860,9 +1877,12 @@ impl StackExecutor {
                 }
 
                 // Check if this resource has any dependencies that are being updated or created
-                let has_dependency_change = desired_config.dependencies.iter().any(|dep_ref| {
-                    current_updates.contains(dep_ref.id()) || current_creates.contains(dep_ref.id())
-                });
+                let has_dependency_change = owing.contains(resource_id)
+                    || desired_config.dependencies.iter().any(|dep_ref| {
+                        current_updates.contains(dep_ref.id())
+                            || current_creates.contains(dep_ref.id())
+                            || owing.contains(dep_ref.id())
+                    });
 
                 if has_dependency_change {
                     // Check if the resource exists in current state and is in a status that allows updates
@@ -1902,6 +1922,15 @@ impl StackExecutor {
                                         "Deferring UPDATE for '{}' due to dependency changes - dependencies not ready yet",
                                         resource_id
                                     );
+                                    // Its own config may not change, so nothing else brings
+                                    // it back once the dependency has rolled: remember it.
+                                    if !plan_result.dependency_update_pending.contains(resource_id)
+                                    {
+                                        plan_result
+                                            .dependency_update_pending
+                                            .push(resource_id.clone());
+                                        dependency_propagation_needed = true;
+                                    }
                                 }
                             }
                             _ => {
@@ -2528,6 +2557,13 @@ impl StackExecutor {
             }
         }
 
+        // Remember the updates that wait for a dependency to roll.
+        for resource_id in &plan_result.dependency_update_pending {
+            if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
+                resource_state.dependency_update_pending = true;
+            }
+        }
+
         // Handle Updates - create initial update transition states
         for (resource_id, new_config) in &plan_result.updates {
             if let Some(current_state) = state.resources.get(resource_id) {
@@ -2575,6 +2611,7 @@ impl StackExecutor {
                         match controller.transition_to_update() {
                             Ok(()) => {
                                 let updated_state = update_state.with_updates(|state| {
+                                    state.dependency_update_pending = false;
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config =
                                         previous_config_for_update(current_state);

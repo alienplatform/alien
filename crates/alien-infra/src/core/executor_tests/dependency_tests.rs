@@ -816,7 +816,7 @@ mod rollout_order {
         Ok(state)
     }
 
-    /// The customer's shape: the first step of the release fails. The resources linked to it
+    /// A release whose first step fails. The resources linked to it
     /// stay on the previous release, though their own config changed.
     #[tokio::test]
     async fn failed_dependency_update_keeps_dependents_on_the_previous_release() -> Result<()> {
@@ -911,6 +911,57 @@ mod rollout_order {
         );
         assert_eq!(image(&state, "runner"), "runner-r1");
         assert_eq!(get_status(&state, "runner"), Some(ResourceStatus::Running));
+        Ok(())
+    }
+
+    /// A resource of another type that depends on `func` and whose own config does not change
+    /// is still updated when `func` changes, but only once `func` has rolled: the owed update
+    /// is remembered in the state, so it survives plan boundaries and a restart in between.
+    #[tokio::test]
+    async fn an_owed_update_waits_for_the_dependency_across_plans_and_restarts() -> Result<()> {
+        let stack = |image: &str| {
+            Stack::new("owed-update".to_owned())
+                .add(
+                    test_function_with_image("func", image),
+                    ResourceLifecycle::Live,
+                )
+                .add_with_dependencies(
+                    test_storage("store"),
+                    ResourceLifecycle::Live,
+                    vec![ResourceRef::new(Worker::RESOURCE_TYPE, "func")],
+                )
+                .build()
+        };
+        let mut state = run_to_synced(&new_executor(&stack("v1"))?, new_test_state()).await?;
+        assert_all_running(&state, &["func", "store"]);
+        let executor = new_executor(&stack("v2"))?;
+
+        // The first step starts `func` only; `store` owes an update and records it.
+        state = executor.step(state).await?.next_state;
+        assert_eq!(get_status(&state, "func"), Some(ResourceStatus::Updating));
+        assert_eq!(get_status(&state, "store"), Some(ResourceStatus::Running));
+        assert!(state.resources["store"].dependency_update_pending);
+
+        let mut store_updated = false;
+        for _ in 0..80 {
+            // A restart between steps: the marker is all the new executor has to go on.
+            state = serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+            let before = state.clone();
+            state = executor.step(state).await?.next_state;
+            if get_status(&state, "store") == Some(ResourceStatus::Updating) {
+                store_updated = true;
+                assert_eq!(
+                    get_status(&before, "func"),
+                    Some(ResourceStatus::Running),
+                    "store started updating while func was still changing"
+                );
+                assert_eq!(image(&before, "func"), "v2");
+            }
+        }
+
+        assert!(store_updated, "the owed update never ran");
+        assert_all_running(&state, &["func", "store"]);
+        assert!(!state.resources["store"].dependency_update_pending);
         Ok(())
     }
 
