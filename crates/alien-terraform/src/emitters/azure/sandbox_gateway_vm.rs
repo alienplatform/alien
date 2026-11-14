@@ -156,14 +156,20 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
                     ])]),
                 ),
                 attr("admin_username", Expression::String("gateway".into())),
-                // Nothing can log in: the password is generated in state and never exported,
-                // and the gateway subnet's NSG admits no SSH. The VM is administered through
-                // Azure (run command, redeploy).
-                attr(
-                    "admin_password",
-                    expr::traversal(["random_password", &label, "result"]),
-                ),
-                attr("disable_password_authentication", Expression::Bool(false)),
+                // Nothing can log in: key-only auth with a key generated in state and never
+                // output, no inbound 22 in the gateway subnet's NSG and no public IP. The VM is
+                // administered through Azure (run command, redeploy).
+                attr("disable_password_authentication", Expression::Bool(true)),
+                nested(block(
+                    "admin_ssh_key",
+                    [
+                        attr("username", Expression::String("gateway".into())),
+                        attr(
+                            "public_key",
+                            expr::traversal(["tls_private_key", &label, "public_key_openssh"]),
+                        ),
+                    ],
+                )),
                 attr("custom_data", custom_data.clone()),
                 attr(
                     "patch_mode",
@@ -213,12 +219,9 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
         ));
     }
     fragment.resource_blocks.push(resource_block(
-        "random_password",
+        "tls_private_key",
         &label,
-        [
-            attr("length", Expression::Number(48.into())),
-            attr("special", Expression::Bool(true)),
-        ],
+        [attr("algorithm", Expression::String("ED25519".into()))],
     ));
     Ok(())
 }
@@ -327,6 +330,14 @@ mod tests {
         assert_eq!(text.matches("%s").count(), 4, "{text}");
         // jsonencode keeps the vault binding valid JSON whatever the vault name holds.
         assert!(text.contains("jsonencode"));
+    }
+
+    #[test]
+    fn the_vm_takes_a_key_and_no_password() {
+        let src = include_str!("sandbox_gateway_vm.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(code.contains("tls_private_key") && code.contains("admin_ssh_key"));
+        assert!(!code.contains("random_password") && !code.contains("\"admin_password\""));
     }
 
     #[test]
