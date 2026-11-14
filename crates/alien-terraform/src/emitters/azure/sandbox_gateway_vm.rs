@@ -148,7 +148,9 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
                     "computer_name",
                     Expression::String(format!("alien-egress-gateway-{index}")),
                 ),
-                attr("size", Expression::String("Standard_B2s".into())),
+                // A general-purpose size every region offers to every subscription; burstable
+                // B-series sizes are restricted on some subscriptions.
+                attr("size", Expression::String("Standard_D2s_v5".into())),
                 attr(
                     "availability_set_id",
                     expr::traversal(["azurerm_availability_set", &label, "id"]),
