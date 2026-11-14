@@ -1,7 +1,7 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: af040b759440c57979f7b3443b6e5a36
+  docChecksum: 7ef87d26dbe19f04654942a3216e9b37
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
@@ -10,9 +10,9 @@ management:
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: 8b483df0-0327-4130-9446-7117f6e437c8
-  pristine_commit_hash: ef4d7880eff802bfd30e782ad6da11549044bd6c
-  pristine_tree_hash: 26ca2c15040ed0637e596c56e5d5b1c77a1c78d8
+  generation_id: 8081a139-b0b8-4960-9fb7-98f1fdbda4c1
+  pristine_commit_hash: 4db3f1d378278f4f27260938ec44179d358a8a00
+  pristine_tree_hash: 7839aebaa928cab20f441307dc835b2cba292272
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -1649,8 +1649,8 @@ trackedFiles:
     pristine_git_object: 260ee30989c17fa59bd6cd35d75bff06e11230dd
   docs/models/projectsigningresponse.md:
     id: 40cab8be9f36
-    last_write_checksum: sha1:902abc0a2b109b873beb0c6c9c8ce430cc232ed5
-    pristine_git_object: c332939defbab01be037c6554561558e714799da
+    last_write_checksum: sha1:a360843c5bf6ed7a47a9f0fec2803439e784bbd1
+    pristine_git_object: 31de65c21e34f6311ed89dd61fa8f6b6d6289fe5
   docs/models/promotereleaserequest.md:
     id: e98a6541f5d1
     last_write_checksum: sha1:8a0349b7f647ac744be7cbd0960871be2fe15283
@@ -2303,10 +2303,6 @@ trackedFiles:
     id: c6313e9d637b
     last_write_checksum: sha1:019fb5f9039445ae4cd5528a32711fd56c842bdb
     pristine_git_object: 58c2d8dcfe8f5df718a172b1222b7abe3db65a83
-  docs/models/setuphosting.md:
-    id: 4bccf4799c04
-    last_write_checksum: sha1:13e1089baa8348734d8ea974b206a2df33a6796b
-    pristine_git_object: 6f972b13fe0e730718b821b3afa0882165a70733
   docs/models/setupmanagement.md:
     id: 3c48763034c0
     last_write_checksum: sha1:a8e3472151ab7cac5b4b45dc36fd3c8b1d90f8b4
@@ -4245,8 +4241,8 @@ trackedFiles:
     pristine_git_object: 7d8809e296e2720222b0928ee22ed093c29b7956
   src/models/projectsigningresponse.ts:
     id: b3307655d284
-    last_write_checksum: sha1:bbf21e148bc5c474b0799c9f1406cbd8774a8403
-    pristine_git_object: 89a9686c4ddc3d0be8988071e3dd6627932fc94e
+    last_write_checksum: sha1:17143a1e101adbe49555a70b28c53980be66cf75
+    pristine_git_object: 668b4f3975d222b7f34fc0fa9d59f4b2cf0a9e56
   src/models/promotereleaserequest.ts:
     id: 440a13ba25f2
     last_write_checksum: sha1:93d837f6a21b088bce328fae0195cc13351d7ffb
