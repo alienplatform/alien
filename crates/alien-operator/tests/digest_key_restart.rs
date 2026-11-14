@@ -41,6 +41,8 @@ fn runtime_secrets_hash() -> String {
         logs_auth_header: "authorization=Bearer logs-token".to_string(),
         metrics_endpoint: None,
         metrics_auth_header: None,
+        traces_endpoint: None,
+        traces_auth_header: None,
         resource_attributes: Default::default(),
     };
     inject_monitoring_environment_variables(&mut stack, &monitoring, Platform::Kubernetes).unwrap();

@@ -6087,6 +6087,8 @@ fn default_monitoring(
         logs_auth_header: format!("authorization=Bearer {token}"),
         metrics_endpoint: Some(format!("{}/v1/metrics", config.base_url())),
         metrics_auth_header: Some(format!("authorization=Bearer {token}")),
+        traces_endpoint: Some(format!("{}/v1/traces", config.base_url())),
+        traces_auth_header: Some(format!("authorization=Bearer {token}")),
         resource_attributes: std::collections::HashMap::from([(
             "alien.deployment_id".to_string(),
             deployment.id.clone(),

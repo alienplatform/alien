@@ -637,6 +637,8 @@ fn signed_telemetry(endpoint: &str) -> OtlpConfig {
         logs_auth_header: String::new(),
         metrics_endpoint: Some(format!("{base}/v1/metrics")),
         metrics_auth_header: None,
+        traces_endpoint: Some(format!("{base}/v1/traces")),
+        traces_auth_header: None,
         resource_attributes: HashMap::new(),
     }
 }
@@ -1545,6 +1547,8 @@ pub(crate) mod tests {
             logs_auth_header: "authorization=Bearer attacker".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
+            traces_endpoint: None,
+            traces_auth_header: None,
             resource_attributes: HashMap::new(),
         });
         let (protected, _, _) = signing()
@@ -1570,6 +1574,8 @@ pub(crate) mod tests {
                 logs_auth_header: String::new(),
                 metrics_endpoint: Some("https://otel.shop.example/v1/metrics".to_string()),
                 metrics_auth_header: None,
+                traces_endpoint: None,
+                traces_auth_header: None,
                 resource_attributes: HashMap::new(),
             })
         );

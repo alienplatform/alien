@@ -56,6 +56,7 @@ fn running_linked_resource<'a>(
 
 pub const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
 pub const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
+pub const OTEL_EXPORTER_OTLP_TRACES_HEADERS: &str = "OTEL_EXPORTER_OTLP_TRACES_HEADERS";
 
 /// Whether a failed resource's recorded config and its desired config describe the same create
 /// or update, so a retry may resume the saved checkpoint instead of re-planning it.
@@ -204,6 +205,15 @@ pub fn direct_monitoring_auth_headers(
             OTEL_EXPORTER_OTLP_METRICS_HEADERS.to_string(),
             monitoring
                 .metrics_auth_header
+                .clone()
+                .unwrap_or_else(|| monitoring.logs_auth_header.clone()),
+        );
+    }
+    if monitoring.traces_endpoint.is_some() {
+        headers.insert(
+            OTEL_EXPORTER_OTLP_TRACES_HEADERS.to_string(),
+            monitoring
+                .traces_auth_header
                 .clone()
                 .unwrap_or_else(|| monitoring.logs_auth_header.clone()),
         );

@@ -1573,6 +1573,8 @@ mod tests {
                     logs_auth_header: "authorization=Bearer logs-token".to_string(),
                     metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
                     metrics_auth_header: Some("authorization=Bearer metrics-token".to_string()),
+                    traces_endpoint: None,
+                    traces_auth_header: None,
                     resource_attributes: Default::default(),
                 });
         let monitoring_headers = direct_monitoring_auth_headers(&harness.ctx());

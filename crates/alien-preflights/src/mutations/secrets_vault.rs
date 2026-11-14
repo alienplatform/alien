@@ -1426,6 +1426,8 @@ mod tests {
             logs_auth_header: "authorization=Bearer test".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
+            traces_endpoint: None,
+            traces_auth_header: None,
             resource_attributes: Default::default(),
         });
         let kubernetes_stack = mutation

@@ -26,6 +26,7 @@ use tracing::{debug, info, warn};
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
 const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
+const OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT";
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 // These vault secret key strings keep the historical `__alien_runtime_otlp_*`
 // spelling on purpose. They are looked up by name in already-deployed stacks'
@@ -623,6 +624,12 @@ pub fn inject_monitoring_environment_variables(
                 env.insert(
                     OTEL_EXPORTER_OTLP_METRICS_ENDPOINT.to_string(),
                     metrics_endpoint.clone(),
+                );
+            }
+            if let Some(traces_endpoint) = &monitoring.traces_endpoint {
+                env.insert(
+                    OTEL_EXPORTER_OTLP_TRACES_ENDPOINT.to_string(),
+                    traces_endpoint.clone(),
                 );
             }
             if is_worker {
@@ -3016,6 +3023,8 @@ mod tests {
             logs_auth_header: "authorization=Bearer token".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
+            traces_endpoint: None,
+            traces_auth_header: None,
             resource_attributes: std::collections::HashMap::from([
                 ("alien.workspace_id".to_string(), "ws_test".to_string()),
                 ("alien.deployment_id".to_string(), "dep_test".to_string()),
@@ -3057,6 +3066,8 @@ mod tests {
             logs_auth_header: "authorization=Bearer token".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
+            traces_endpoint: None,
+            traces_auth_header: None,
             resource_attributes: std::collections::HashMap::from([(
                 "alien.deployment_id".to_string(),
                 "dep_test".to_string(),
@@ -3137,6 +3148,8 @@ mod tests {
             logs_auth_header: "authorization=Bearer logs-token".to_string(),
             metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
             metrics_auth_header: None,
+            traces_endpoint: Some("https://manager.test/v1/traces".to_string()),
+            traces_auth_header: None,
             resource_attributes: std::collections::HashMap::new(),
         }
     }
@@ -3378,6 +3391,8 @@ mod tests {
             logs_auth_header: "authorization=Bearer current".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
+            traces_endpoint: None,
+            traces_auth_header: None,
             resource_attributes: HashMap::new(),
         });
         let desired = desired_vault_secrets(
@@ -3834,6 +3849,8 @@ mod tests {
             logs_auth_header: "authorization=Bearer next".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
+            traces_endpoint: None,
+            traces_auth_header: None,
             resource_attributes: HashMap::new(),
         });
         assert!(sync_secrets_to_vault(
@@ -4063,6 +4080,8 @@ mod tests {
             logs_auth_header: "monitoring-value".to_string(),
             metrics_endpoint: None,
             metrics_auth_header: None,
+            traces_endpoint: None,
+            traces_auth_header: None,
             resource_attributes: HashMap::new(),
         });
         let mut metadata = RuntimeMetadata {
@@ -4184,6 +4203,15 @@ mod tests {
                 worker_env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
                 "{platform:?}: worker gets the runtime-secrets pointer"
             );
+            assert_eq!(
+                worker_env.get(OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).unwrap(),
+                "https://manager.test/v1/traces",
+                "{platform:?}: worker gets the traces endpoint"
+            );
+            assert!(
+                !worker_env.values().any(|value| value.contains("logs-token")),
+                "{platform:?}: no OTLP auth header in worker env"
+            );
 
             for id in ["web", "agent"] {
                 let env = resource_env(&stack, id);
@@ -4217,6 +4245,11 @@ mod tests {
                     "{platform:?}: '{id}' gets the metrics endpoint"
                 );
                 assert_eq!(
+                    env.get(OTEL_EXPORTER_OTLP_TRACES_ENDPOINT).unwrap(),
+                    "https://manager.test/v1/traces",
+                    "{platform:?}: '{id}' gets the traces endpoint"
+                );
+                assert_eq!(
                     env.get(OTEL_SERVICE_NAME).unwrap(),
                     id,
                     "{platform:?}: '{id}' gets its name as service name"
@@ -4238,6 +4271,7 @@ mod tests {
                 for header in [
                     OTEL_EXPORTER_OTLP_HEADERS,
                     OTEL_EXPORTER_OTLP_METRICS_HEADERS,
+                    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
                 ] {
                     assert!(
                         !env.contains_key(header),
