@@ -2074,6 +2074,18 @@ mod live_image_create {
             ),
             Err(error) => println!("(1) resume refused: {error:?}"),
         }
+        // The 2026-10 experiment saw a VM on a deleted version die only on a later resume, so
+        // one successful resume proves little.
+        for cycle in 1..=4 {
+            if client.suspend_microvm(&suspended).await.is_err() {
+                println!("(1) cycle {cycle}: suspend refused");
+                break;
+            }
+            let down = wait_for(&client, &suspended, "SUSPENDED").await;
+            let resumed = client.resume_microvm(&suspended).await;
+            let up = wait_for(&client, &suspended, "RUNNING").await;
+            println!("(1) cycle {cycle}: suspend -> {down}; resume {resumed:?} -> {up}");
+        }
         println!("RUNNING VM still: {}", state_of(&client, &running).await);
 
         let versions = client
