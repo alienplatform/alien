@@ -133,6 +133,27 @@ impl StackMutation for ProtectedManagementRefusalMutation {
                 ));
             }
         }
+        // Management may write the values of every vault whose values start with `<prefix>-<id>-`.
+        // A vault id that is a leading part of a reserved vault's id (`deployer` of
+        // `deployer-secrets`) would reach the reserved vault's values too.
+        for reserved in [
+            alien_core::SECRETS_VAULT_ID,
+            alien_core::DEPLOYER_SECRETS_VAULT_ID,
+        ] {
+            if let Some((id, _)) = stack.resources().find(|(id, entry)| {
+                entry.config.resource_type() == alien_core::Vault::RESOURCE_TYPE
+                    && id.as_str() != reserved
+                    && format!("{reserved}-").starts_with(&format!("{id}-"))
+            }) {
+                return Err(refusal(
+                    format!(
+                        "Vault id '{id}' can't be used on a protected deployment: its values \
+                         would share a name prefix with the deployer's secrets. Rename the vault"
+                    ),
+                    id,
+                ));
+            }
+        }
         match stack.management() {
             ManagementPermissions::Auto => {}
             ManagementPermissions::Override(_) => {
@@ -385,6 +406,43 @@ mod tests {
             prepared(named(), platform, config(false, SetupManagement::Manual))
                 .await
                 .unwrap_or_else(|error| panic!("{platform:?}: unsigned keeps it: {error}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_vault_id_sharing_the_deployers_secrets_prefix_is_refused_when_protected() {
+        let stack = |id: &str| {
+            Stack::new("shop".to_string())
+                .add(
+                    alien_core::Vault::new(id.to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let error = prepared(
+                stack("deployer"),
+                platform,
+                config(true, SetupManagement::Manual),
+            )
+            .await
+            .expect_err(&format!("{platform:?}: 'deployer' is refused"));
+            assert!(
+                error.contains("Vault id 'deployer'"),
+                "{platform:?}: {error}"
+            );
+            prepared(
+                stack("deployer"),
+                platform,
+                config(false, SetupManagement::Manual),
+            )
+            .await
+            .expect("an unprotected install keeps the vault");
+            for id in ["secret", "secrets-x", "deployer-x", "oauth"] {
+                prepared(stack(id), platform, config(true, SetupManagement::Manual))
+                    .await
+                    .unwrap_or_else(|error| panic!("{platform:?} {id}: {error}"));
+            }
         }
     }
 }

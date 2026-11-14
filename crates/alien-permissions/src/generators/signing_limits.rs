@@ -241,6 +241,16 @@ pub fn aws_management_limits(
                 "NotResource": writable
             },
             {
+                // An application vault named `deployer` would otherwise write
+                // `<prefix>-deployer-*`, which covers the deployer's own values.
+                "Sid": "NeverTheDeployersSecrets",
+                "Effect": "Deny",
+                "Action": AWS_PARAMETER_WRITES,
+                "Resource": format!(
+                    "arn:aws:ssm:{region}:{account}:parameter/{prefix}-deployer-secrets-*"
+                )
+            },
+            {
                 "Sid": "OnlySetupChangesWhatRolesMayDo",
                 "Effect": "Deny",
                 "Action": AWS_ROLE_POLICY_WRITES,
@@ -835,6 +845,39 @@ mod tests {
                 "signed/acme/state",
             ] {
                 assert!(denies(&limits, action, &arn(name)), "{action} {name}");
+            }
+        }
+    }
+
+    /// A vault id that is a leading part of a reserved vault's id must not open the reserved
+    /// vault's values: `deployer` would otherwise write `acme-deployer-*`, which covers the
+    /// deployer's `acme-deployer-secrets-*`.
+    #[test]
+    fn an_application_vault_id_never_reaches_the_deployers_secrets() {
+        let arn = |name: &str| format!("arn:aws:ssm:us-east-1:111122223333:parameter/{name}");
+        for vault in ["deployer", "secret", "secrets-x"] {
+            let limits =
+                aws_management_limits("acme", "111122223333", "us-east-1", &[vault.to_string()]);
+            for action in ["ssm:PutParameter", "ssm:DeleteParameter"] {
+                for name in [
+                    "acme-deployer-secrets-DB_PASSWORD",
+                    "acme-secrets-DB_PASSWORD",
+                ] {
+                    assert!(
+                        denies(&limits, action, &arn(name)),
+                        "{vault}: {action} {name}"
+                    );
+                }
+                for name in [
+                    "acme-secrets-__alien_runtime_otlp_logs_auth_header",
+                    "acme-secrets-__alien_runtime_otlp_metrics_auth_header",
+                    "acme-secrets-ALIEN_COMMANDS_TOKEN",
+                ] {
+                    assert!(
+                        !denies(&limits, action, &arn(name)),
+                        "{vault}: {action} {name}"
+                    );
+                }
             }
         }
     }
