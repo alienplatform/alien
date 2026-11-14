@@ -63,9 +63,17 @@ async fn prepare(stack: Stack, config: &DeploymentConfig) -> Stack {
 /// Compatibility errors of updating the installed `before` stack to the `after` release, with
 /// the deployer's answer for `deploymentRegions` (`None`: never answered).
 async fn update_errors(regions: Option<serde_json::Value>) -> Vec<String> {
-    let installed = prepare(before(), &deployment_config(None)).await;
+    update_errors_between(before(), after(), regions).await
+}
+
+async fn update_errors_between(
+    installed: Stack,
+    release: Stack,
+    regions: Option<serde_json::Value>,
+) -> Vec<String> {
+    let installed = prepare(installed, &deployment_config(None)).await;
     let config = deployment_config(regions);
-    let next = prepare(after(), &config).await;
+    let next = prepare(release, &config).await;
     PreflightRunner::new()
         .run_compatibility_checks(&installed, &next, &config, Platform::Aws)
         .await
@@ -97,4 +105,69 @@ async fn listing_regions_on_an_installed_instance_asks_for_a_setup_update() {
                 && error.contains("replicationRegionsInput")),
         "listing regions needs setup and names the field: {errors:?}"
     );
+}
+
+fn registry(stack: &mut Stack) -> &mut alien_core::ArtifactRegistry {
+    stack
+        .resources
+        .get_mut("artifact-registry")
+        .expect("the stack has a registry")
+        .config
+        .downcast_mut::<alien_core::ArtifactRegistry>()
+        .expect("it is an artifact registry")
+}
+
+fn registry_modified(errors: &[String]) -> bool {
+    errors
+        .iter()
+        .any(|error| error.starts_with("Frozen resource 'artifact-registry' was modified"))
+}
+
+#[tokio::test]
+async fn dropping_the_regions_a_setup_recorded_needs_a_setup_update() {
+    // Recorded with the reference, new without: the excuse is one-directional.
+    let errors = update_errors_between(after(), before(), None).await;
+    assert!(registry_modified(&errors), "{errors:?}");
+}
+
+#[tokio::test]
+async fn a_reference_to_an_undeclared_input_is_still_a_change() {
+    let mut release = after();
+    release.inputs.clear();
+    let errors = update_errors_between(before(), release, Some(json!([]))).await;
+    assert!(registry_modified(&errors), "{errors:?}");
+}
+
+#[tokio::test]
+async fn another_registry_change_is_not_excused_by_the_empty_reference() {
+    let mut release = after();
+    registry(&mut release).replication_regions = vec!["eu-west-1".to_string()];
+    let errors = update_errors_between(before(), release, Some(json!([]))).await;
+    assert!(registry_modified(&errors), "{errors:?}");
+}
+
+#[tokio::test]
+async fn a_declared_default_with_regions_applies_when_nothing_was_answered() {
+    let mut release = after();
+    let input = release
+        .inputs
+        .iter_mut()
+        .find(|input| input.id == "deploymentRegions")
+        .expect("the input is declared");
+    input.default = Some(alien_core::StackInputDefaultValue::StringList(vec![
+        "us-west-2".to_string(),
+    ]));
+    let errors = update_errors_between(before(), release.clone(), None).await;
+    assert!(registry_modified(&errors), "{errors:?}");
+    // An explicit empty answer overrides that default.
+    let errors = update_errors_between(before(), release, Some(json!([]))).await;
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[tokio::test]
+async fn blank_entries_and_a_comma_string_count_like_the_list() {
+    let errors = update_errors(Some(json!([" ", ""]))).await;
+    assert!(errors.is_empty(), "{errors:?}");
+    let errors = update_errors(Some(json!("us-west-2, eu-west-1"))).await;
+    assert!(registry_modified(&errors), "{errors:?}");
 }
