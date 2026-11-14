@@ -259,6 +259,27 @@ impl SandboxEgress {
 /// Per-session deadline metadata read by the external lifecycle reaper.
 pub const SANDBOX_EXPIRY_LABEL: &str = "alienExpiresAtMs";
 
+/// Label that lets a retried or second-process `get_or_create` find the sandbox the first made.
+pub const SANDBOX_REQUEST_KEY_LABEL: &str = "alienRequestKey";
+
+/// Longest accepted request key.
+pub const SANDBOX_REQUEST_KEY_MAX_LEN: usize = 64;
+
+/// Whether `value` is a well-formed request key: 1..=64 characters of `[A-Za-z0-9_-]`. The
+/// binding, the manager route and the verifier all call this one function.
+pub fn is_valid_request_key(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= SANDBOX_REQUEST_KEY_MAX_LEN
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+/// Whether `value` is a well-formed expiry: a positive integer of milliseconds.
+pub fn is_valid_sandbox_expiry(value: &str) -> bool {
+    value.parse::<u64>().is_ok_and(|ms| ms > 0)
+}
+
 /// Azure gateway identities cannot renew without an in-guest agent.
 pub const AZURE_GATEWAY_MAX_LIFETIME_SECONDS: u32 = 24 * 60 * 60;
 
@@ -455,17 +476,20 @@ impl SandboxCapabilities {
         Self {
             files: true,
             reconnect: true,
-            // No Alien process runs inside the sandbox to own a command between two calls.
-            jobs: false,
+            // The in-sandbox agent owns a job between two calls, so a caller reconnects with
+            // `poll_job`. A catalog image has no agent and refuses at call time.
+            jobs: true,
             // Through the in-sandbox agent: the client streams `/v1/interactive` over the
             // sandbox's authenticated port. A session without the agent (the platform's own exec
             // takes no stdin) reports false from `session_capabilities`.
             interactive_commands: true,
-            // A sandbox port carries a URL and an auth config, and the auth config offers two
-            // things: anonymous, or Entra ID with an allowlist of human email addresses.
-            // Neither is a credential scoped to a port for a fixed time, which is what a
-            // preview capability is. Returning the anonymous URL would publish the port.
-            preview: false,
+            // The in-sandbox agent issues a capability for one declared port and verifies it on
+            // its own route. Azure's port auth cannot be that gate: it is anonymous, or
+            // Entra ID with an object-id allowlist (a person or a service principal), and the
+            // edge removes the caller's `Authorization`, which the workload needs. So the agent
+            // port stays anonymous and the capability is its only gate. A catalog image runs
+            // without the agent, which `validate_capabilities` refuses.
+            preview: true,
             pause_resume: true,
             // False for a client reason, not a cloud one: this client has no snapshot call, and
             // `CreateSandboxRequest` has no field to consume the id it would return. Also
@@ -478,10 +502,11 @@ impl SandboxCapabilities {
             // sizing rule at plan time instead of matching a tier.
             enforced_limits: true,
             process_limit: false,
-            // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
-            // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
-            // to prevent, so this is a decision rather than a gap.
-            sandbox_lifetime: false,
+            // Azure has no wall-clock ceiling, so the binding stamps a deadline label on
+            // each sandbox and the controller's reaper deletes by it; every verb on the binding
+            // also refuses a sandbox past its label, so the ceiling does not wait for a reaper
+            // tick.
+            sandbox_lifetime: true,
             // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
             supervisor_pid_namespace: false,
             // No Alien process runs the command at all — the platform's own data plane does,
@@ -1213,6 +1238,16 @@ impl Sandbox {
 
         if !self.preview_ports.is_empty() {
             capabilities.require(SandboxCapability::Preview, platform)?;
+            if platform == Platform::Azure
+                && matches!(self.azure_image(), Ok(AzureSandboxImage::Catalog(_)))
+            {
+                return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                    capability: "preview (a catalog image runs without the Alien agent that issues \
+                                 the capability; build the sandbox from source)"
+                        .to_string(),
+                    platform: platform.to_string(),
+                }));
+            }
         }
 
         if self.lifecycle.idle_pause_seconds.is_some() {
@@ -1991,11 +2026,9 @@ mod tests {
         // outside `n×250m`, with the rule in the message.
         assert!(azure.enforced_limits);
         assert!(azure.pause_resume);
-        // Both stay false for reasons that are not "unbuilt": a snapshot id has nothing to
-        // consume it on any backend, and an Azure port's auth is anonymous or a human allowlist,
-        // neither of which is a port-scoped credential.
+        // A snapshot id has nothing to consume it on any backend.
         assert!(!azure.snapshot);
-        assert!(!azure.preview);
+        assert!(azure.preview, "the in-sandbox agent issues a port-scoped capability");
 
         let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
         assert!(!aws.snapshot, "AWS has no user-callable sandbox snapshot");
@@ -2293,12 +2326,29 @@ mod tests {
             .validate_for_platform(Platform::Kubernetes)
             .expect("Kubernetes serves preview to in-cluster callers through the agent");
 
-        for platform in [Platform::Azure, Platform::Gcp] {
-            let error = sandbox
-                .validate_for_platform(platform)
-                .expect_err("these backends have no port-scoped credential");
-            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        }
+        let error = sandbox
+            .validate_for_platform(Platform::Gcp)
+            .expect_err("GCP has no port-scoped credential yet");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+    }
+
+    /// On Azure the Alien agent issues the capability, and a catalog image runs without it.
+    #[test]
+    fn azure_preview_needs_an_image_that_carries_the_agent() {
+        let catalog = sandbox_with(SandboxEgress::None, vec![8080]);
+        let error = catalog
+            .validate_for_platform(Platform::Azure)
+            .expect_err("a catalog image has no agent to issue a capability");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+
+        let mut registry = sandbox_with(SandboxEgress::None, vec![8080]);
+        registry.code = SandboxCode::Image {
+            image: "registry.example.com/workload/sandbox:1".to_string(),
+            bundled_from: None,
+        };
+        registry
+            .validate_for_platform(Platform::Azure)
+            .expect("a registry image is built with the agent");
     }
 
     /// A grant nothing reads is the silent no-op the capability contract exists to prevent, and
@@ -2506,7 +2556,12 @@ mod tests {
 
         for (declared, mut sandbox) in [("with", with_limits), ("without", without_limits)] {
             sandbox.lifecycle.max_lifetime_seconds = Some(0);
-            for platform in [Platform::Aws, Platform::Kubernetes, Platform::Gcp] {
+            for platform in [
+                Platform::Aws,
+                Platform::Kubernetes,
+                Platform::Gcp,
+                Platform::Azure,
+            ] {
                 let error = sandbox
                     .validate_for_platform(platform)
                     .expect_err("a zero lifetime is refused");
@@ -2521,7 +2576,7 @@ mod tests {
             }
 
             // Where the field is unsupported, that is the answer, not the value.
-            for platform in [Platform::Azure, Platform::Local] {
+            for platform in [Platform::Local] {
                 let error = sandbox
                     .validate_for_platform(platform)
                     .expect_err("a lifetime is refused where nothing applies it");
@@ -2691,9 +2746,9 @@ mod tests {
         assert!(label.chars().all(|c| c.is_ascii_hexdigit()), "{label}");
     }
 
-    /// A deadline is accepted only where the platform itself terminates on it — the kubelet's
-    /// `activeDeadlineSeconds` and Lambda's `maximumDurationInSeconds`. Everywhere else it would
-    /// need a reaper that does not exist, so it is refused rather than accepted and dropped.
+    /// A deadline is accepted only where something terminates on it: the kubelet's
+    /// `activeDeadlineSeconds`, Lambda's `maximumDurationInSeconds`, or on Azure the controller's
+    /// reaper. Elsewhere it is refused rather than accepted and dropped.
     #[test]
     fn a_sandbox_deadline_is_accepted_only_where_the_platform_applies_it() {
         let mut sandbox = sandbox_with(SandboxEgress::None, vec![]);
@@ -2706,7 +2761,11 @@ mod tests {
             .validate_for_platform(Platform::Aws)
             .expect("Lambda terminates the MicroVM at maximumDurationInSeconds");
 
-        for platform in [Platform::Azure, Platform::Local] {
+        sandbox
+            .validate_for_platform(Platform::Azure)
+            .expect("the binding stamps a deadline label and the controller's reaper deletes by it");
+
+        for platform in [Platform::Local] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("a deadline nothing applies must be refused");
@@ -2947,10 +3006,8 @@ mod tests {
     /// Azure declares an idle-pause policy but not a wall-clock ceiling.
     ///
     /// The two travel together in `SandboxLifecyclePolicy` and are gated separately on purpose:
-    /// Azure pauses on idle and has no maximum lifetime, so accepting one and refusing the
-    /// other is the honest split rather than an inconsistency.
     #[test]
-    fn azure_takes_an_idle_policy_and_still_refuses_a_lifetime_ceiling() {
+    fn azure_takes_an_idle_policy_and_a_lifetime_ceiling() {
         let with_policy = |lifecycle: SandboxLifecyclePolicy| {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
@@ -2969,17 +3026,11 @@ mod tests {
         })
         .expect("Azure pauses a sandbox on idle");
 
-        let error = with_policy(SandboxLifecyclePolicy {
+        with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
             idle_pause_seconds: None,
         })
-        .expect_err("Azure has no wall-clock ceiling to enforce one with");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        assert!(
-            error.message.contains("sandboxLifetime"),
-            "names the capability: {}",
-            error.message
-        );
+        .expect("the reaper enforces a wall-clock ceiling");
     }
 
     /// An allowlist naming nothing is a deny-all wearing an allowlist's label.
@@ -3079,5 +3130,28 @@ mod tests {
             "the next write stores the current names"
         );
         assert!(rewritten.get("session").is_none());
+    }
+}
+
+#[cfg(test)]
+mod label_format_tests {
+    use super::*;
+
+    #[test]
+    fn request_keys_are_bounded_and_safe() {
+        for good in ["a", "A-z_9", &"x".repeat(64)] {
+            assert!(is_valid_request_key(good), "{good}");
+        }
+        for bad in ["", "a b", "a/b", "a.b", "é", &"x".repeat(65)] {
+            assert!(!is_valid_request_key(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn expiry_is_a_positive_integer() {
+        assert!(is_valid_sandbox_expiry("1700000000000"));
+        for bad in ["", "0", "-1", "1.5", "never", "+5 "] {
+            assert!(!is_valid_sandbox_expiry(bad), "{bad}");
+        }
     }
 }

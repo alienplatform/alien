@@ -242,9 +242,11 @@ async fn write_owned(
         return Ok(());
     }
     let written = match put {
-        Put::Direct => client
-            .put_bucket_notification_configuration(bucket, &document)
-            .await,
+        Put::Direct => {
+            client
+                .put_bucket_notification_configuration(bucket, &document)
+                .await
+        }
         Put::Verified {
             verifier,
             release,
@@ -258,10 +260,12 @@ async fn write_owned(
                 release,
                 *config,
                 id,
-                vec![crate::core::verifier::ResourceWrite::PutBucketNotification {
-                    bucket: bucket.to_string(),
-                    configuration,
-                }],
+                vec![
+                    crate::core::verifier::ResourceWrite::PutBucketNotification {
+                        bucket: bucket.to_string(),
+                        configuration,
+                    },
+                ],
             )
             .await?;
             Ok(())

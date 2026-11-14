@@ -10217,12 +10217,13 @@ mod tests {
                 &[("auditSink", serde_json::json!("https://audit.example"))],
                 1,
             );
-            let (url, requests) = crate::core::verifier_test_support::http_verifier_stub_with_inputs(
-                axum::http::StatusCode::OK,
-                written(2),
-                &[("audit", audit)],
-            )
-            .await;
+            let (url, requests) =
+                crate::core::verifier_test_support::http_verifier_stub_with_inputs(
+                    axum::http::StatusCode::OK,
+                    written(2),
+                    &[("audit", audit)],
+                )
+                .await;
             let mut executor = SingleControllerExecutor::builder()
                 .resource(worker.clone())
                 .controller(protected_controller())

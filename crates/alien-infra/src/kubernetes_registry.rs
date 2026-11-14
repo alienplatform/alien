@@ -404,7 +404,10 @@ mod pull_secret_tests {
                 .map(|s: k8s_openapi::api::core::v1::LocalObjectReference| s.name)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(names(workload_pull_secrets(&config, None)), ["mirror", "shared"]);
+        assert_eq!(
+            names(workload_pull_secrets(&config, None)),
+            ["mirror", "shared"]
+        );
         assert_eq!(
             names(workload_pull_secrets(&config, Some("shared"))),
             ["shared", "mirror"]

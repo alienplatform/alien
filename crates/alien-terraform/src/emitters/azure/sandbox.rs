@@ -213,6 +213,27 @@ impl TfEmitter for AzureSandboxEmitter {
             ));
         }
 
+        // Both are read by the provider at create: the ports the agent may forward preview to,
+        // and the ceiling the reaper holds each sandbox to.
+        if !sandbox.preview_ports.is_empty() {
+            fields.push((
+                "previewPorts",
+                Expression::Array(
+                    sandbox
+                        .preview_ports
+                        .iter()
+                        .map(|port| Expression::Number(i64::from(*port).into()))
+                        .collect(),
+                ),
+            ));
+        }
+        if let Some(seconds) = sandbox.lifecycle.max_lifetime_seconds {
+            fields.push((
+                "maxLifetimeSeconds",
+                Expression::Number(i64::from(seconds).into()),
+            ));
+        }
+
         // The data plane takes the ceilings at create and nowhere else, so a declaration that
         // stops here is one the sandbox never hears about. Emitted only when declared: absent
         // means the data plane's own default, which is not the same as asserting a size.
@@ -365,7 +386,12 @@ fn emit_image_management(
                 &applier_label,
                 Vec::<hcl::structure::Structure>::new(),
             ));
-            expr::traversal(["data", "azurerm_client_config", applier_label.as_str(), "object_id"])
+            expr::traversal([
+                "data",
+                "azurerm_client_config",
+                applier_label.as_str(),
+                "object_id",
+            ])
         }
     };
     let permission_set = alien_permissions::get_permission_set(IMAGES).ok_or_else(|| {
@@ -812,8 +838,9 @@ mod tests {
                         max_processes: None,
                     })
                     .egress(egress)
+                    .preview_ports(vec![8080])
                     .lifecycle(SandboxLifecyclePolicy {
-                        max_lifetime_seconds: None,
+                        max_lifetime_seconds: Some(3600),
                         idle_pause_seconds,
                     })
                     .build(),
@@ -884,6 +911,8 @@ mod tests {
             resource_group: BindingValue::Value("rg".to_string()),
             egress: SandboxEgress::Internet.into(),
             idle_pause_seconds: Some(900),
+            preview_ports: vec![8080],
+            max_lifetime_seconds: Some(3600),
             disk_image: BindingValue::Value("ubuntu".to_string()),
             cpu: Some(BindingValue::Value("1000m".to_string())),
             memory: Some(BindingValue::Value("2048Mi".to_string())),

@@ -8,11 +8,12 @@ use crate::error::{ErrorData, Result};
 
 /// Starts deleting every expired sandbox in the group. The next controller tick observes
 /// in-flight deletions; repeated delete requests are safe. A declaration bounds even a caller
-/// that omits or widens its per-session deadline label.
+/// that omits or widens its per-session deadline label. A sandbox with no label, in a group whose
+/// declaration sets no ceiling, has no deadline and is never touched.
 pub(super) async fn reap_expired_azure_sandboxes(
     client: &dyn SandboxDataPlaneApi,
     group: &str,
-    max_lifetime_seconds: u32,
+    max_lifetime_seconds: Option<u32>,
 ) -> Result<Vec<String>> {
     let context = || ErrorData::CloudPlatformError {
         message: "Could not enforce Azure sandbox lifetimes".to_string(),
@@ -26,15 +27,17 @@ pub(super) async fn reap_expired_azure_sandboxes(
         if session.state.eq_ignore_ascii_case("Deleting") {
             continue;
         }
-        let declared =
-            session.created_at.timestamp_millis() + i64::from(max_lifetime_seconds) * 1000;
+        let declared = max_lifetime_seconds
+            .map(|seconds| session.created_at.timestamp_millis() + i64::from(seconds) * 1000);
         let requested = session.labels.get(SANDBOX_EXPIRY_LABEL).map(|value| {
             value.parse::<i64>().unwrap_or_else(|_| {
                 tracing::warn!(sandbox_id = %session.id, "invalid expiry label; deleting the session");
                 i64::MIN
             })
         });
-        let expires = requested.map_or(declared, |requested| declared.min(requested));
+        let Some(expires) = [declared, requested].into_iter().flatten().min() else {
+            continue;
+        };
         if expires <= now {
             match client.delete_sandbox(group, &session.id).await {
                 Ok(()) => deleted.push(session.id),
@@ -99,7 +102,7 @@ mod tests {
                 .times(1)
                 .returning(|_, _| Ok(()));
         }
-        let deleted = reap_expired_azure_sandboxes(&client, "group", 30)
+        let deleted = reap_expired_azure_sandboxes(&client, "group", Some(30))
             .await
             .expect("reap");
         assert_eq!(deleted, ["omitted", "widened", "shortened"]);
@@ -129,8 +132,29 @@ mod tests {
             .withf(|_, id| id == "other")
             .times(1)
             .returning(|_, _| Ok(()));
-        reap_expired_azure_sandboxes(&client, "group", 30)
+        reap_expired_azure_sandboxes(&client, "group", Some(30))
             .await
             .expect_err("failure remains visible for retry");
+    }
+
+    #[tokio::test]
+    async fn a_sandbox_with_no_label_and_no_declared_ceiling_is_never_reaped() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_list_sandboxes().returning(|_| {
+            Ok(vec![
+                session("old-and-unlabelled", 10 * 24 * 3600, None),
+                session("expired-label", 0, Some(-1)),
+                session("live-label", 0, Some(3600)),
+            ])
+        });
+        client
+            .expect_delete_sandbox()
+            .withf(|_, id| id == "expired-label")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let deleted = reap_expired_azure_sandboxes(&client, "group", None)
+            .await
+            .expect("reap");
+        assert_eq!(deleted, ["expired-label"]);
     }
 }

@@ -489,6 +489,10 @@ impl ResolvedRemoteBinding {
                         cpu: binding.cpu.map(alien_core::BindingValue::Value),
                         memory: binding.memory.map(alien_core::BindingValue::Value),
                         disk: binding.disk.map(alien_core::BindingValue::Value),
+                        // A remote caller gets neither: the manager refuses a remote sandbox that
+                        // isn't open-egress, and preview is not offered through remote access.
+                        max_lifetime_seconds: None,
+                        preview_ports: Vec::new(),
                     }),
                     create_via_manager,
                     client_config: Box::new(alien_core::AzureClientConfig {

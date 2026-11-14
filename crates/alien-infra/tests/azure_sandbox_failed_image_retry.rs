@@ -44,6 +44,8 @@ async fn a_failed_build_is_rebuilt_on_retry() {
     client
         .expect_list_disk_images()
         .returning(|_| Ok(vec![failed_image()]));
+    // The Ready tick lists every sandbox group to reap past-deadline sandboxes.
+    client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
     let deletes = Arc::new(AtomicUsize::new(0));
     let deleted = deletes.clone();
     client

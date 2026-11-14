@@ -9163,6 +9163,16 @@
               "type": "string"
             }
           },
+          "labels": {
+            "type": "object",
+            "description": "Request-key and expiry labels, the only labels a caller sets. Each is format-checked\nhere and again by the verifier.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "resourceId": {
             "type": "string"
           }

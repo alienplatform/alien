@@ -97,6 +97,11 @@ async fn not_found_response(
 }
 
 impl AzureSandbox {
+    #[cfg(test)]
+    async fn invalidate_connection_for_test(&self, sandbox_id: &str) {
+        *self.connection_slot(sandbox_id).await.lock().await = None;
+    }
+
     async fn invalidate_connection(&self, sandbox_id: &str, request: &reqwest::Request) {
         let slot = self.connection_slot(sandbox_id).await;
         let mut cached = slot.lock().await;
@@ -288,6 +293,164 @@ impl AzureSandbox {
         )
         .await?;
         Ok(())
+    }
+}
+
+/// A granted capability kept until shortly before it expires.
+#[derive(Debug, Clone)]
+pub(super) struct CachedGrant {
+    capability: String,
+    expires_at: i64,
+    /// The boot credential of the agent that signed it. A grant is only good for that boot: a
+    /// resumed or replaced sandbox runs a new agent with a new key.
+    boot_token: String,
+}
+
+/// A cached grant is replaced this many seconds before it stops working, so a caller never holds
+/// one that expires in flight.
+const GRANT_RENEW_MARGIN_SECONDS: i64 = 60;
+
+impl AzureSandbox {
+    pub(super) async fn preview_through_agent(
+        &self,
+        sandbox_id: &str,
+        port: u16,
+    ) -> Result<crate::traits::PreviewCapability> {
+        const OPERATION: &str = "sandbox.preview";
+        // The port first: an undeclared port is refused without spending a call.
+        if !self.preview_ports.contains(&port) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: OPERATION.to_string(),
+                reason: format!(
+                    "port {port} is not one of this sandbox's declared preview ports {:?}",
+                    self.preview_ports
+                ),
+            }));
+        }
+        Self::checked_sandbox_id(OPERATION, sandbox_id)?;
+        let record = self
+            .read_sandbox(OPERATION, sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".into(),
+                    reason: format!("{OPERATION}: sandbox '{sandbox_id}' does not exist"),
+                })
+            })?;
+        if !uses_agent(&record)? {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: OPERATION.to_string(),
+                reason: "this sandbox runs without the Alien agent, which issues the preview \
+                         capability; rebuild it from source"
+                    .to_string(),
+            }));
+        }
+        let now = chrono::Utc::now().timestamp();
+        // A capability never outlives the sandbox's own deadline: the agent is told it, and a
+        // sandbox already past it gets none.
+        let deadline = record
+            .labels
+            .get(alien_core::SANDBOX_EXPIRY_LABEL)
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(|millis| millis.div_euclid(1000));
+        if deadline.is_some_and(|deadline| deadline <= now) {
+            return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+                sandbox_id: sandbox_id.to_string(),
+                restriction: "lifetime".to_string(),
+                reason: "its lifetime has ended; create a new sandbox".to_string(),
+            }));
+        }
+        let current_boot = self
+            .connection_slot(sandbox_id)
+            .await
+            .lock()
+            .await
+            .as_ref()
+            .map(|connection| connection.token.clone());
+        let cached = self
+            .preview_grants
+            .lock()
+            .expect("grants lock")
+            .get(&(sandbox_id.to_string(), port))
+            .filter(|grant| {
+                grant.expires_at - now > GRANT_RENEW_MARGIN_SECONDS
+                    && current_boot.as_deref() == Some(grant.boot_token.as_str())
+            })
+            .cloned();
+        let grant = match cached {
+            Some(grant) => grant,
+            None => {
+                let mut body = serde_json::json!({
+                    "v": 1,
+                    "op": "previewGrant",
+                    "sandbox": sandbox_id,
+                    "port": port,
+                });
+                if let Some(deadline) = deadline {
+                    body["deadline"] = serde_json::json!(deadline);
+                }
+                let request = AgentTransport::request(self, sandbox_id, reqwest::Method::POST, "/")
+                    .await?
+                    .json(&body);
+                let response = AgentTransport::send(self, sandbox_id, request, OPERATION).await?;
+                #[derive(serde::Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Granted {
+                    capability: String,
+                    expires_at: i64,
+                }
+                let granted: Granted = response.json().await.into_alien_error().context(
+                    agent_protocol::unanswered(
+                        OPERATION,
+                        "the agent's preview grant was unreadable",
+                    ),
+                )?;
+                let boot_token = self
+                    .connection_slot(sandbox_id)
+                    .await
+                    .lock()
+                    .await
+                    .as_ref()
+                    .map(|connection| connection.token.clone())
+                    .unwrap_or_default();
+                let grant = CachedGrant {
+                    capability: granted.capability,
+                    expires_at: granted.expires_at,
+                    boot_token,
+                };
+                self.preview_grants
+                    .lock()
+                    .expect("grants lock")
+                    .insert((sandbox_id.to_string(), port), grant.clone());
+                tracing::info!(sandbox = %sandbox_id, port, "preview capability granted");
+                grant
+            }
+        };
+        let endpoint = self
+            .client
+            .agent_port_url(&self.sandbox_group, sandbox_id, AGENT_PORT)
+            .await
+            .map_err(|error| Self::failed(OPERATION, error))?;
+        Ok(crate::traits::PreviewCapability {
+            endpoint: format!("{}/v1/preview/{port}", endpoint.trim_end_matches('/')),
+            headers: std::collections::BTreeMap::from([
+                (
+                    alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER.to_string(),
+                    grant.capability,
+                ),
+                (
+                    alien_core::sandbox_image::PREVIEW_PORT_HEADER.to_string(),
+                    port.to_string(),
+                ),
+            ]),
+            allowed_ports: vec![port],
+            // The agent port is anonymous on Azure, so the caller's own bearer rides `Authorization`
+            // untouched and the capability has its own header.
+            caller_authorization_header: "Authorization".to_string(),
+            subprotocols: Vec::new(),
+            expires_in_seconds: u64::try_from(grant.expires_at - chrono::Utc::now().timestamp())
+                .unwrap_or(0),
+        })
     }
 }
 
@@ -511,7 +674,11 @@ mod tests {
             )
             .with_agent(false);
             if cached_boot {
-                *provider.connection_slot("session").await.lock().await = Some(Connection {
+                *provider
+                    .connection_slot("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+                    .await
+                    .lock()
+                    .await = Some(Connection {
                     client: reqwest::Client::builder().no_proxy().build().unwrap(),
                     url: cached_url.parse().unwrap(),
                     token: STANDARD.encode([3u8; 32]),
@@ -521,11 +688,13 @@ mod tests {
             // Session metadata must also select it through a rollback binding.
             let ready = async {
                 if resume {
-                    provider.resume("session").await
+                    provider
+                        .resume("6f9619ff-8b86-d011-b42d-00c04fc964ff")
+                        .await
                 } else {
                     provider
                         .get_or_create(CreateSandboxRequest {
-                            sandbox_id: Some("session".into()),
+                            sandbox_id: Some("6f9619ff-8b86-d011-b42d-00c04fc964ff".into()),
                             ..Default::default()
                         })
                         .await
@@ -711,7 +880,11 @@ mod tests {
         assert!(output.next().await.is_none());
         server.abort();
     }
-    fn interactive_provider(url: String, token: String, labels: BTreeMap<String, String>) -> AzureSandbox {
+    fn interactive_provider(
+        url: String,
+        token: String,
+        labels: BTreeMap<String, String>,
+    ) -> AzureSandbox {
         let mut native = MockSandboxDataPlaneApi::new();
         native.expect_execute_shell_command().never();
         native.expect_get_sandbox().returning(move |_, id| {
@@ -810,7 +983,11 @@ mod tests {
             .await
             .unwrap();
         command.input.write(b"hi").await.unwrap();
-        assert_eq!(seen_stdin.lock().unwrap().len(), 1, "input reached the agent");
+        assert_eq!(
+            seen_stdin.lock().unwrap().len(),
+            1,
+            "input reached the agent"
+        );
         assert!(
             matches!(command.output.next().await.unwrap().unwrap(), CommandOutput::Stdout { data, .. } if data == b"ok")
         );
@@ -885,7 +1062,11 @@ mod tests {
             command.output.next().await.unwrap().unwrap(),
             CommandOutput::Exit { code: 0, .. }
         ));
-        assert_eq!(started.load(Ordering::SeqCst), 1, "the command started once");
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            1,
+            "the command started once"
+        );
         server.abort();
     }
 
@@ -1741,5 +1922,378 @@ mod tests {
         );
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
+    }
+
+    /// A grant server: answers `previewGrant` only to the boot token, counting the grants.
+    async fn grant_server(token: &str) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let expected = format!("Bearer {token}");
+        let grants = Arc::new(AtomicUsize::new(0));
+        let counted = grants.clone();
+        let router = Router::new()
+            .route(
+                "/v1/activate",
+                post(|| async { axum::http::StatusCode::NO_CONTENT }),
+            )
+            .route(
+                "/",
+                post(
+                    move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                        let (expected, counted) = (expected.clone(), counted.clone());
+                        async move {
+                            if headers["authorization"] != expected {
+                                return (
+                                    axum::http::StatusCode::UNAUTHORIZED,
+                                    Json(serde_json::json!({})),
+                                );
+                            }
+                            assert_eq!(body["op"], "previewGrant");
+                            assert_eq!(body["sandbox"], "session");
+                            let n = counted.fetch_add(1, Ordering::SeqCst);
+                            (
+                                axum::http::StatusCode::OK,
+                                Json(serde_json::json!({
+                                    "capability": format!("cap-{n}"),
+                                    "expiresAt": chrono::Utc::now().timestamp() + 900,
+                                })),
+                            )
+                        }
+                    },
+                ),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (url, grants, server)
+    }
+
+    #[tokio::test]
+    async fn preview_returns_the_agent_route_and_its_own_headers_and_caches_the_grant() {
+        let token = STANDARD.encode([7u8; 32]);
+        let (url, grants, server) = grant_server(&token).await;
+        let provider = interactive_provider(
+            url.clone(),
+            token,
+            BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
+        )
+        .with_agent(true)
+        .with_preview_ports(vec![8080, 8081]);
+        assert!(provider.capabilities().preview);
+
+        let first = provider.preview("session", 8080).await.unwrap();
+        assert_eq!(first.endpoint, format!("{url}/v1/preview/8080"));
+        assert_eq!(first.headers["x-alien-preview-capability"], "cap-0");
+        assert_eq!(first.headers["x-alien-preview-port"], "8080");
+        assert!(
+            !first
+                .headers
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case("authorization")),
+            "the caller's Authorization belongs to the daemon"
+        );
+        assert_eq!(first.allowed_ports, vec![8080]);
+        assert_eq!(first.caller_authorization_header, "Authorization");
+        assert!(first.subprotocols.is_empty());
+        assert!(first.expires_in_seconds > 800 && first.expires_in_seconds <= 900);
+
+        // Cached per (sandbox, port): a second call asks nothing, another port asks again.
+        let second = provider.preview("session", 8080).await.unwrap();
+        assert_eq!(second.headers["x-alien-preview-capability"], "cap-0");
+        let other = provider.preview("session", 8081).await.unwrap();
+        assert_eq!(other.headers["x-alien-preview-capability"], "cap-1");
+        assert_eq!(grants.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn preview_refuses_an_undeclared_port_before_any_agent_call() {
+        let token = STANDARD.encode([7u8; 32]);
+        let (url, grants, server) = grant_server(&token).await;
+        let provider = interactive_provider(
+            url,
+            token,
+            BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
+        )
+        .with_agent(true)
+        .with_preview_ports(vec![8080]);
+        let error = provider.preview("session", 22).await.unwrap_err();
+        assert!(
+            error.to_string().contains("declared preview ports"),
+            "{error}"
+        );
+        assert_eq!(grants.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn preview_is_refused_for_a_session_without_the_agent_and_a_binding_without_ports() {
+        let token = STANDARD.encode([7u8; 32]);
+        let (url, grants, server) = grant_server(&token).await;
+        let native = interactive_provider(url.clone(), token.clone(), BTreeMap::new())
+            .with_preview_ports(vec![8080]);
+        assert!(native.preview("session", 8080).await.is_err());
+        let portless = interactive_provider(
+            url,
+            token,
+            BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]),
+        )
+        .with_agent(true);
+        assert!(!portless.capabilities().preview);
+        assert!(portless.preview("session", 8080).await.is_err());
+        assert_eq!(grants.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
+
+    /// A job the agent owns outlives the client that started it: a second provider, as a second
+    /// process would be, polls it to its end with the credential it reads itself.
+    #[tokio::test]
+    async fn a_job_started_by_one_provider_is_polled_by_another() {
+        let token = STANDARD.encode([7u8; 32]);
+        let expected = format!("Bearer {token}");
+        let (start_auth, poll_auth) = (expected.clone(), expected);
+        let router = Router::new()
+            .route(
+                "/v1/activate",
+                post(|| async { axum::http::StatusCode::NO_CONTENT }),
+            )
+            .route(
+                "/v1/jobs/start",
+                post(
+                    move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                        let auth = start_auth.clone();
+                        async move {
+                            assert_eq!(headers["authorization"], auth);
+                            assert_eq!(body["command"], serde_json::json!(["sleep", "1"]));
+                            Json(serde_json::json!({"jobId": "j-1"}))
+                        }
+                    },
+                ),
+            )
+            .route(
+                "/v1/jobs/poll",
+                post(
+                    move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                        let auth = poll_auth.clone();
+                        async move {
+                            assert_eq!(headers["authorization"], auth);
+                            assert_eq!(body["jobId"], "j-1");
+                            Json(serde_json::json!({
+                                "running": false,
+                                "frames": [{"t": "stdout", "seq": 0, "data": "b2s="}],
+                                "exitCode": 0,
+                                "truncated": false,
+                            }))
+                        }
+                    },
+                ),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let labels = BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]);
+        let first =
+            interactive_provider(url.clone(), token.clone(), labels.clone()).with_agent(true);
+        assert!(first.capabilities().jobs);
+        assert!(first.session_capabilities("session").await.unwrap().jobs);
+        let started = first
+            .start_job(
+                "session",
+                RunCommandRequest {
+                    command: "sleep".into(),
+                    args: vec!["1".into()],
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    timeout: Duration::from_secs(5),
+                },
+            )
+            .await
+            .unwrap();
+        drop(first);
+
+        let second = interactive_provider(url, token, labels).with_agent(true);
+        let polled = second
+            .poll_job("session", &started.job_id, None)
+            .await
+            .unwrap();
+        assert!(!polled.running);
+        assert_eq!(polled.exit.map(|exit| exit.code), Some(0));
+        assert_eq!(polled.frames.len(), 1);
+        server.abort();
+    }
+
+    /// A fake agent: counts `previewGrant` requests and keeps their bodies; answers every grant
+    /// with a capability that names the boot it came from.
+    struct PreviewAgent {
+        url: String,
+        grants: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        boot_byte: Arc<AtomicUsize>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    async fn preview_agent() -> PreviewAgent {
+        let grants = Arc::new(std::sync::Mutex::new(Vec::<serde_json::Value>::new()));
+        let seen = grants.clone();
+        let router = Router::new()
+            .route("/v1/activate", post(|| async { axum::http::StatusCode::NO_CONTENT }))
+            .route(
+                "/v1/health",
+                axum::routing::get(|| async {
+                    Json(serde_json::json!({
+                        "protocolVersion": 1, "status": "ready", "imageCommand": { "status": "running" }
+                    }))
+                }),
+            )
+            .route(
+                "/",
+                post(move |Json(body): Json<serde_json::Value>| {
+                    let seen = seen.clone();
+                    async move {
+                        seen.lock().unwrap().push(body);
+                        Json(serde_json::json!({
+                            "capability": "v1.cap",
+                            "expiresAt": chrono::Utc::now().timestamp() + 900,
+                        }))
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        PreviewAgent {
+            url,
+            grants,
+            boot_byte: Arc::new(AtomicUsize::new(1)),
+            server,
+        }
+    }
+
+    fn preview_provider(agent: &PreviewAgent, expiry_millis: Option<i64>) -> AzureSandbox {
+        let mut labels = BTreeMap::from([(TRANSPORT_LABEL.into(), TRANSPORT_VERSION.into())]);
+        if let Some(expiry) = expiry_millis {
+            labels.insert(alien_core::SANDBOX_EXPIRY_LABEL.into(), expiry.to_string());
+        }
+        let mut native = MockSandboxDataPlaneApi::new();
+        native.expect_get_sandbox().returning(move |_, id| {
+            Ok(AzureRecord {
+                id: id.into(),
+                labels: labels.clone(),
+                vnet_connection_name: None,
+                egress_policy: super::super::egress_policy(&SandboxEgress::None),
+                state: Some("Running".into()),
+            })
+        });
+        let url = agent.url.clone();
+        native
+            .expect_agent_port_url()
+            .returning(move |_, _, _| Ok(url.clone()));
+        let boot = agent.boot_byte.clone();
+        native.expect_read_file().returning(move |_, _, _| {
+            Ok(STANDARD
+                .encode([boot.load(Ordering::SeqCst) as u8; 32])
+                .into_bytes())
+        });
+        AzureSandbox::new(
+            Arc::new(native),
+            "group".into(),
+            "image".into(),
+            SandboxEgress::None,
+            None,
+            "1000m".into(),
+            "2048Mi".into(),
+            None,
+        )
+        .with_agent(true)
+        .with_preview_ports(vec![8080])
+    }
+
+    const PREVIEW_SANDBOX: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
+
+    #[tokio::test]
+    async fn a_preview_grant_carries_the_sandbox_deadline_and_none_is_issued_past_it() {
+        let agent = preview_agent().await;
+        let expiry = (chrono::Utc::now().timestamp() + 120) * 1000;
+        let provider = preview_provider(&agent, Some(expiry));
+        let capability = provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        assert!(capability.expires_in_seconds > 0);
+        assert_eq!(agent.grants.lock().unwrap()[0]["deadline"], expiry / 1000);
+
+        let ended = preview_provider(&agent, Some((chrono::Utc::now().timestamp() - 1) * 1000));
+        let error = ended
+            .preview(PREVIEW_SANDBOX, 8080)
+            .await
+            .err()
+            .expect("a sandbox past its deadline gets no capability");
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
+        assert_eq!(
+            agent.grants.lock().unwrap().len(),
+            1,
+            "no agent call for the refusal"
+        );
+        agent.server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_new_boot_does_not_reuse_the_previous_boots_grant() {
+        let agent = preview_agent().await;
+        let provider = preview_provider(&agent, None);
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        assert_eq!(agent.grants.lock().unwrap().len(), 1, "same boot: cached");
+        assert!(agent.grants.lock().unwrap()[0].get("deadline").is_none());
+
+        // The sandbox came back as a different agent (new boot credential) behind the same URL.
+        agent.boot_byte.store(2, Ordering::SeqCst);
+        provider
+            .invalidate_connection_for_test(PREVIEW_SANDBOX)
+            .await;
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        assert_eq!(
+            agent.grants.lock().unwrap().len(),
+            2,
+            "new boot: asked again"
+        );
+        agent.server.abort();
+    }
+
+    #[tokio::test]
+    async fn resume_drops_the_cached_grant() {
+        let agent = preview_agent().await;
+        let provider = preview_provider(&agent, None);
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        provider.resume(PREVIEW_SANDBOX).await.unwrap();
+        provider.preview(PREVIEW_SANDBOX, 8080).await.unwrap();
+        assert_eq!(
+            agent.grants.lock().unwrap().len(),
+            2,
+            "after resume the agent is asked again"
+        );
+        agent.server.abort();
+    }
+
+    #[tokio::test]
+    async fn session_capabilities_advertise_preview_only_with_the_agent_and_declared_ports() {
+        let agent = preview_agent().await;
+        let with_ports = preview_provider(&agent, None);
+        assert!(
+            with_ports
+                .session_capabilities(PREVIEW_SANDBOX)
+                .await
+                .unwrap()
+                .preview
+        );
+        let without_ports = preview_provider(&agent, None).with_preview_ports(vec![]);
+        assert!(
+            !without_ports
+                .session_capabilities(PREVIEW_SANDBOX)
+                .await
+                .unwrap()
+                .preview
+        );
+        agent.server.abort();
     }
 }

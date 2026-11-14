@@ -1683,6 +1683,13 @@ mod tests {
             r.environment = [("ANY".to_string(), "thing".to_string())].into();
         });
         check(&group, &signed, &own_env, None).expect("another environment");
+        let keyed = request(&|r| {
+            r.labels.insert(
+                alien_core::SANDBOX_REQUEST_KEY_LABEL.into(),
+                "3f2a9c-Key_01".into(),
+            );
+        });
+        check(&group, &signed, &keyed, None).expect("a signed create carrying both labels");
 
         let mut with_field = signed_body.clone();
         with_field["identity"] = json!({"type": "SystemAssigned"});
@@ -1801,6 +1808,60 @@ mod tests {
                 signed.clone(),
                 request(&|r| {
                     r.labels.insert("identity".into(), "gateway".into());
+                }),
+                None,
+            ),
+            (
+                "an overlong request key",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels.insert(
+                        alien_core::SANDBOX_REQUEST_KEY_LABEL.into(),
+                        "a".repeat(65),
+                    );
+                }),
+                None,
+            ),
+            (
+                "a request key outside the safe charset",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels.insert(
+                        alien_core::SANDBOX_REQUEST_KEY_LABEL.into(),
+                        "a/b c".into(),
+                    );
+                }),
+                None,
+            ),
+            (
+                "an empty request key",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels
+                        .insert(alien_core::SANDBOX_REQUEST_KEY_LABEL.into(), String::new());
+                }),
+                None,
+            ),
+            (
+                "a zero expiry",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels
+                        .insert(alien_core::SANDBOX_EXPIRY_LABEL.into(), "0".into());
+                }),
+                None,
+            ),
+            (
+                "a negative expiry",
+                group.clone(),
+                signed.clone(),
+                request(&|r| {
+                    r.labels
+                        .insert(alien_core::SANDBOX_EXPIRY_LABEL.into(), "-5".into());
                 }),
                 None,
             ),
