@@ -433,6 +433,15 @@ pub(super) fn gateway_handoff(ctx: &EmitContext<'_>, network: &str) -> Result<Op
             Expression::Array(vec![expr::traversal(["azurerm_subnet", &gateway, "id"])]),
         ),
         ("sandboxCidrs", Expression::Array(cidrs)),
+        (
+            "gatewayIps",
+            Expression::Array(
+                super::sandbox_gateway_vm::GATEWAY_HOSTS
+                    .into_iter()
+                    .map(|host| gateway_ip(network, host))
+                    .collect(),
+            ),
+        ),
         ("sandboxCidrsByResource", expr::object(cidrs_by_resource)),
         (
             "gatewayCidrs",
