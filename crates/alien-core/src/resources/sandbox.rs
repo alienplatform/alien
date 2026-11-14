@@ -351,7 +351,8 @@ pub struct SandboxCapabilities {
     /// The process supervising a command is a different identity from the command.
     ///
     /// False where a command runs as the agent's own user: it can then read the supervisor's
-    /// environment and signal it. Separate from `supervisorPidNamespace`, which is about
+    /// environment and signal it. On Kubernetes this is the backend's offer: a declaration whose
+    /// image USER is root gets the split; a non-root image still runs as one user. Separate from `supervisorPidNamespace`, which is about
     /// visibility rather than identity — a backend can have one without the other.
     pub supervisor_isolation: bool,
 }
@@ -433,10 +434,12 @@ impl SandboxCapabilities {
                 // need to unshare. That is also what denies `ptrace`, so this stays false rather
                 // than the pod being weakened to make it true.
                 supervisor_pid_namespace: false,
-                // The pod runs as the image's one non-root user with `capabilities.drop: [ALL]`
-                // and `allow_privilege_escalation: false`, so no process can setuid to split the
-                // command off from a supervisor. No uid split is possible, so none exists.
-                supervisor_isolation: false,
+                // A declaration whose image USER is root boots with the agent as root and a
+                // bounded capability set, and every command is dropped to a fixed non-root uid
+                // with no capabilities and no_new_privs, so the command's identity differs from
+                // its supervisor's. A non-root image keeps the single pinned uid and has no
+                // split; this row describes what the backend offers, the declaration selects it.
+                supervisor_isolation: true,
             }),
             Platform::Local => Ok(Self {
                 files: true,
@@ -807,10 +810,21 @@ impl Sandbox {
             }
             policy.validate()?;
         }
-        if self.image_user == Some(0) && matches!(platform, Platform::Local | Platform::Kubernetes)
-        {
+        if self.image_user == Some(0) && platform == Platform::Local {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
                 capability: "root image USER: this backend does not yet separate bounded root boot from non-root exec; use a non-root image USER".into(),
+                platform: platform.to_string(),
+            }));
+        }
+        // A Kubernetes pod boots a root image with a bounded capability set. The sandboxed
+        // RuntimeClass is the kernel boundary; the egress boundary must also sit outside the pod,
+        // and only the gateway (`internet`) or a denying policy (`none`) does.
+        if self.image_user == Some(0)
+            && platform == Platform::Kubernetes
+            && !matches!(self.egress, SandboxEgress::Internet | SandboxEgress::None)
+        {
+            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                capability: "root image USER with this egress mode: a root image on Kubernetes needs egress `internet` or `none`, because `allow` and `allowDomains` have no enforcement outside the pod".into(),
                 platform: platform.to_string(),
             }));
         }
@@ -2046,9 +2060,9 @@ mod tests {
     ///
     /// Values are measured, not inferred. AWS: the agent runs as uid 0 with
     /// `CapEff: 00000000a80425fb` and `setuid`s the command to uid 60000, so the two differ.
-    /// Kubernetes: the sandbox pod pins `run_as_user: 65534` on both pod and container with
-    /// `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no uid split is
-    /// possible (`kubernetes_spec.rs`). Local: `docker exec` runs as the workload uid while the
+    /// Kubernetes: a root-image pod runs the agent as uid 0 with exactly the boot capabilities
+    /// and the agent drops every command to a fixed non-root uid (`kubernetes_spec.rs`); a
+    /// non-root pod has no split, so the row describes what the backend offers. Local: `docker exec` runs as the workload uid while the
     /// manager supervises from the host. Azure and Agent Platform have no in-sandbox supervisor.
     #[test]
     fn supervisor_isolation_is_per_platform() {
@@ -2067,8 +2081,8 @@ mod tests {
             "the supervisor is on the host, outside the container"
         );
         assert!(
-            !value(Platform::Kubernetes),
-            "a single pinned uid cannot be split"
+            value(Platform::Kubernetes),
+            "root boot splits the command off the supervisor"
         );
         assert!(!value(Platform::Azure), "no Alien process runs the command");
         assert!(
@@ -2312,6 +2326,37 @@ mod tests {
 
         let over_disk = sized("250m", "512Mi", "20Gi").expect_err("20Gi needs a full core");
         assert!(over_disk.to_string().contains("disk"), "{over_disk}");
+    }
+
+    /// A root image on Kubernetes boots under the bounded root contract only where nothing but the
+    /// gateway or nothing at all leaves the pod; any other egress has no boundary outside the guest.
+    #[test]
+    fn kubernetes_root_image_needs_gateway_or_no_egress() {
+        let root = |egress| {
+            let mut sandbox = sandbox_with(egress, vec![]);
+            sandbox.image_user = Some(0);
+            sandbox
+        };
+        for egress in [SandboxEgress::Internet, SandboxEgress::None] {
+            root(egress)
+                .validate_for_platform(Platform::Kubernetes)
+                .expect("root boot is allowed with an external egress boundary");
+        }
+        for egress in [
+            SandboxEgress::Allow,
+            SandboxEgress::AllowDomains {
+                domains: vec!["example.com".to_string()],
+            },
+        ] {
+            let error = root(egress)
+                .validate_for_platform(Platform::Kubernetes)
+                .expect_err("a root image under unenforced egress is refused");
+            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            assert!(error.to_string().contains("root image USER"), "{error}");
+        }
+        root(SandboxEgress::Internet)
+            .validate_for_platform(Platform::Local)
+            .expect_err("Local still refuses a root image");
     }
 
     #[test]

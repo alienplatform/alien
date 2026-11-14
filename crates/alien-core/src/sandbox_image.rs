@@ -43,6 +43,30 @@ pub const ENV_CALLER_AUTHORIZATION_HEADER: &str = "ALIEN_SANDBOX_CALLER_AUTHORIZ
 /// Longest a preview capability lives, in seconds. A grant never outlives the session either.
 pub const PREVIEW_CAPABILITY_MAX_SECONDS: i64 = 15 * 60;
 
+/// Set by the Kubernetes backend only: the pod mounts the agent binary and `/opt/alien`
+/// read-only itself, so the agent verifies that instead of building a private mount namespace
+/// (a pod's default seccomp profile blocks `unshare`). The agent refuses to start if the mounts
+/// are not there, so setting it elsewhere cannot turn protection off.
+pub const ENV_PROTECTED_MOUNTS: &str = "ALIEN_SANDBOX_PROTECTED_MOUNTS";
+
+/// Comma-separated `host:port` addresses of the Kubernetes API server (its Service ClusterIP and
+/// the real endpoint IPs) that the startup gate must see dropped. The Operator sets it on every
+/// Kubernetes sandbox pod, because service links are off and the pod has no
+/// `KUBERNETES_SERVICE_HOST` to learn the address from.
+pub const ENV_MUST_DROP_KUBE_API: &str = "ALIEN_SANDBOX_MUST_DROP_KUBE_API";
+/// A public `host:port` the startup gate must also see dropped. The Operator sets it only where
+/// the declared egress forbids direct public traffic (`none`, and `internet`, which goes through
+/// the gateway). It is unset when the policy allows that address, so an `allow` pod is not
+/// refused for reaching it.
+pub const ENV_MUST_DROP_PUBLIC: &str = "ALIEN_SANDBOX_MUST_DROP_PUBLIC";
+/// The public address the Operator asks the gate to probe.
+pub const MUST_DROP_PUBLIC_PROBE: &str = "1.1.1.1:443";
+/// The agent's first argument that stages the protected files (the Kubernetes init container).
+pub const STAGE_PROTECTED_FILES_ARGUMENT: &str = "--stage-protected-files";
+/// Names inside the staging directory the pod mounts over the agent binary and `/opt/alien`.
+pub const STAGED_AGENT_NAME: &str = "agent";
+pub const STAGED_METADATA_NAME: &str = "opt";
+
 /// Mode of the agent binary, owned by `0:0` so the exec uid cannot rewrite its supervisor.
 pub const AGENT_MODE: u32 = 0o755;
 
@@ -54,6 +78,39 @@ pub const SESSION_ROOT_MODE: u32 = 0o700;
 
 /// `RUST_LOG` for a GCP image, which the agent needs set before it logs anything.
 pub const GCP_AGENT_LOG_FILTER: &str = "info";
+
+/// Linux capabilities a root image process keeps: Docker's default set without `NET_RAW`.
+///
+/// `(name, number)` pairs, one list for both sides of the contract. The agent keeps exactly
+/// this set for the image's command and a Kubernetes pod grants exactly this set to the agent
+/// (`drop: [ALL]`, then these), so the agent can start the command with what it is entitled to
+/// and nothing more. Never `NET_ADMIN`, `SYS_ADMIN` or `NET_RAW`.
+pub const IMAGE_ROOT_CAPABILITY_SET: &[(&str, u8)] = &[
+    ("CHOWN", 0),
+    ("DAC_OVERRIDE", 1),
+    ("FOWNER", 3),
+    ("FSETID", 4),
+    ("KILL", 5),
+    ("SETGID", 6),
+    ("SETUID", 7),
+    ("SETPCAP", 8),
+    ("NET_BIND_SERVICE", 10),
+    ("SYS_CHROOT", 18),
+    ("MKNOD", 27),
+    ("AUDIT_WRITE", 29),
+    ("SETFCAP", 31),
+];
+
+/// [`IMAGE_ROOT_CAPABILITY_SET`] as the 32-bit `CapEff` mask the agent applies.
+pub const IMAGE_ROOT_CAPABILITY_MASK: u32 = {
+    let mut mask = 0u32;
+    let mut index = 0;
+    while index < IMAGE_ROOT_CAPABILITY_SET.len() {
+        mask |= 1 << IMAGE_ROOT_CAPABILITY_SET[index].1;
+        index += 1;
+    }
+    mask
+};
 
 /// How an image ends, and the isolation that ending permits.
 ///
@@ -560,6 +617,18 @@ mod tests {
     fn the_gcp_agent_leaves_port_8080_to_the_workload() {
         assert_ne!(GCP_AGENT_PLATFORM.port, 8080);
         assert_eq!(GCP_AGENT_PLATFORM.port, AGENT_PORT);
+    }
+
+    /// The published contract value (Docker's default set without `NET_RAW`); the name list the
+    /// pod grants must equal the mask the agent applies.
+    #[test]
+    fn root_capability_set_is_dockers_default_without_net_raw() {
+        assert_eq!(IMAGE_ROOT_CAPABILITY_MASK, 0xa80405fb);
+        for forbidden in ["NET_ADMIN", "SYS_ADMIN", "NET_RAW"] {
+            assert!(IMAGE_ROOT_CAPABILITY_SET
+                .iter()
+                .all(|(name, _)| *name != forbidden));
+        }
     }
 
     fn committed_path(relative: &str) -> std::path::PathBuf {

@@ -31,6 +31,15 @@ use alien_macros::controller;
 /// sets the variable and this is no longer consulted. The Operator never picks a class otherwise.
 const LEGACY_RUNTIME_CLASS: &str = "gvisor";
 
+/// The namespace the administrator reserved for sandbox pods (`sandbox.namespace`), when set.
+/// Unset keeps every sandbox object in the release namespace, as before.
+pub fn configured_sandbox_namespace() -> Option<String> {
+    std::env::var(alien_core::ENV_ALIEN_SANDBOX_NAMESPACE)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 /// The class the chart chose, which the Operator only checks. `None` for a chart that predates it.
 fn chart_runtime_class() -> Option<String> {
     std::env::var(alien_core::ENV_ALIEN_SANDBOX_RUNTIME_CLASS)
@@ -129,7 +138,8 @@ impl KubernetesSandboxController {
         // Recorded as soon as it is known, because the binding and the outputs both read it
         // directly rather than through the fallback: leaving it unset publishes no binding at
         // all, and the sandbox comes up Running with nothing able to reach it.
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let release_namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let namespace = sandbox_namespace(ctx.get_kubernetes_config()?)?;
         self.namespace = Some(namespace.clone());
         let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
         self.deployment_label_key = Some(deployment_label_key);
@@ -144,7 +154,7 @@ impl KubernetesSandboxController {
             super::kubernetes_egress::configure(
                 ctx,
                 config,
-                &namespace,
+                &release_namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
                 &mut self.egress_replica_secret_sourced,
@@ -203,12 +213,49 @@ impl KubernetesSandboxController {
         confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
         self.default_policy = config.default_policy.clone();
         self.broker_url = Some(broker_url(&config.id)?);
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let release_namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        // Follows the chart's current `sandbox.namespace`, so the binding points where new pods go.
+        let new_namespace = sandbox_namespace(ctx.get_kubernetes_config()?)?;
+        if let Some(old_namespace) = self
+            .namespace
+            .as_deref()
+            .filter(|old| *old != new_namespace)
+        {
+            // Sessions and warm-pool pods are found by namespace only. Moving over live ones would
+            // orphan them: nothing would list, reap or delete them again.
+            let client = ctx
+                .service_provider
+                .get_kubernetes_pod_client(ctx.get_kubernetes_config()?)
+                .await?;
+            let (key, value) = kubernetes_deployment_scope_label(ctx);
+            let remaining = client
+                .list_pods(
+                    old_namespace,
+                    Some(format!("{LABEL_SANDBOX}={},{key}={value}", config.id)),
+                    None,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to list sandbox pods in the previous namespace".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?
+                .items
+                .len();
+            if let Some(message) =
+                namespace_change_refusal(old_namespace, &new_namespace, remaining)
+            {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message,
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
+        self.namespace = Some(new_namespace);
         self.egress = Some(
             super::kubernetes_egress::configure(
                 ctx,
                 config,
-                &namespace,
+                &release_namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
                 &mut self.egress_replica_secret_sourced,
@@ -237,7 +284,7 @@ impl KubernetesSandboxController {
     async fn deleting(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let namespace = sandbox_namespace(ctx.get_kubernetes_config()?)?;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let client = ctx
             .service_provider
@@ -432,7 +479,8 @@ impl KubernetesSandboxController {
     ) -> Result<()> {
         confirm_runtime_class(&mut self.runtime_class, ctx, &config.id).await?;
 
-        let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let release_namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let namespace = sandbox_namespace(ctx.get_kubernetes_config()?)?;
         self.broker_url = Some(broker_url(&config.id)?);
         let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
         self.deployment_label_key = Some(deployment_label_key);
@@ -443,7 +491,7 @@ impl KubernetesSandboxController {
             super::kubernetes_egress::configure(
                 ctx,
                 config,
-                &namespace,
+                &release_namespace,
                 &mut self.egress_public_key,
                 &mut self.egress_config_digest,
                 &mut self.egress_replica_secret_sourced,
@@ -667,8 +715,12 @@ async fn replenish_warm_pool(
     .await;
 
     let mut created = 0;
-    let Some(egress_environment) =
-        super::kubernetes_egress::bootstrap_environment(ctx, sandbox, namespace).await?
+    let Some(egress_environment) = super::kubernetes_egress::bootstrap_environment(
+        ctx,
+        sandbox,
+        &deployment_namespace(kubernetes_config)?,
+    )
+    .await?
     else {
         return Ok(WarmPool {
             idle: without_terminating(idle.items).len(),
@@ -746,6 +798,12 @@ async fn replenish_warm_pool(
         match client.create_pod(namespace, &pod).await {
             Ok(_) => created += 1,
             Err(error) => {
+                if let Some(message) = pod_security_rejection(&sandbox.id, namespace, &error) {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message,
+                        resource_id: Some(sandbox.id.clone()),
+                    }));
+                }
                 warn!(sandbox_id = %sandbox.id, %namespace, error = %error, "Failed to create a pool pod")
             }
         }
@@ -817,7 +875,7 @@ async fn ensure_image_pull_secret(
 async fn reap_expired_sessions_of(ctx: &ResourceControllerContext<'_>, sandbox: &Sandbox) {
     let prepared = async {
         let kubernetes_config = ctx.get_kubernetes_config()?;
-        let namespace = deployment_namespace(kubernetes_config)?;
+        let namespace = sandbox_namespace(kubernetes_config)?;
         let client = ctx
             .service_provider
             .get_kubernetes_pod_client(kubernetes_config)
@@ -1150,6 +1208,41 @@ fn deployment_namespace(config: &alien_core::KubernetesClientConfig) -> Result<S
     })
 }
 
+/// The namespace a sandbox's own objects live in: its pods, their pool, the capability Secret and
+/// the image pull Secret. The administrator's `sandbox.namespace` when the chart sets one,
+/// otherwise the release namespace. The egress gateway and the broker's callers stay in the
+/// release namespace either way.
+fn sandbox_namespace(config: &alien_core::KubernetesClientConfig) -> Result<String> {
+    match configured_sandbox_namespace() {
+        Some(namespace) => Ok(namespace),
+        None => deployment_namespace(config),
+    }
+}
+
+/// The message for a pod the API server refused under Pod Security, or `None` for any other
+/// refusal. A root-boot sandbox needs a namespace that admits `baseline`; without this the pool
+/// would stay empty and the only trace would be a warning per tick.
+pub(crate) fn pod_security_rejection(
+    sandbox_id: &str,
+    namespace: &str,
+    refusal: &(impl serde::Serialize + ?Sized),
+) -> Option<String> {
+    // The serialized error escapes the quotes around the level, so read it unescaped.
+    let text = serde_json::to_string(refusal).ok()?.replace("\\\"", "\"");
+    if !text.contains("violates PodSecurity") {
+        return None;
+    }
+    let level = ["restricted", "baseline", "privileged"]
+        .into_iter()
+        .find(|level| text.contains(&format!("violates PodSecurity \"{level}:")))
+        .unwrap_or("restricted");
+    Some(format!(
+        "sandbox {sandbox_id} needs a namespace that admits Pod Security baseline; namespace \
+         {namespace} enforces {level} and refused its pods. Set sandbox.namespace to a namespace \
+         labelled pod-security.kubernetes.io/enforce=baseline (see the Kubernetes sandbox docs)"
+    ))
+}
+
 /// Counts the Live pods belonging to one sandbox.
 async fn list_session_pods(
     ctx: &ResourceControllerContext<'_>,
@@ -1188,6 +1281,38 @@ fn count_session_pods(pods: Vec<k8s_openapi::api::core::v1::Pod>) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_pod_security_refusal_names_the_namespace_and_the_fix() {
+        let refusal = AlienError::new(ErrorData::CloudPlatformError {
+            message: "pods \"agent-1\" is forbidden: violates PodSecurity \"restricted:latest\": \
+                      allowPrivilegeEscalation != false"
+                .to_string(),
+            resource_id: None,
+        });
+        let message = super::pod_security_rejection("agent", "sandboxes", &refusal)
+            .expect("a Pod Security refusal is recognised");
+        assert!(
+            message.contains("sandbox agent needs a namespace that admits Pod Security baseline")
+        );
+        assert!(
+            message.contains("sandboxes enforces restricted"),
+            "{message}"
+        );
+        assert!(message.contains("sandbox.namespace"));
+    }
+
+    #[test]
+    fn other_refusals_are_not_reported_as_pod_security() {
+        let refusal = AlienError::new(ErrorData::CloudPlatformError {
+            message: "pods is forbidden: exceeded quota".to_string(),
+            resource_id: None,
+        });
+        assert_eq!(
+            super::pod_security_rejection("agent", "sandboxes", &refusal),
+            None
+        );
+    }
+
     use super::*;
     use k8s_openapi::api::core::v1::Pod;
 
@@ -1913,4 +2038,35 @@ fn broker_url_from(sandbox_id: &str, value: Option<String>) -> Result<String> {
                 ),
             })
         })
+}
+
+/// Why `sandbox.namespace` may not move now: sandbox pods (sessions or the warm pool) still
+/// run in the old namespace, and nothing would manage them from the new one.
+fn namespace_change_refusal(old: &str, new: &str, remaining_pods: usize) -> Option<String> {
+    (old != new && remaining_pods > 0).then(|| {
+        format!(
+            "sandbox.namespace cannot change from '{old}' to '{new}' while {remaining_pods} \
+             sandbox pod(s) (sessions or warm-pool pods) remain in '{old}'. End the sessions \
+             (terminate them) and wait for the warm pool to drain there, then apply the new value"
+        )
+    })
+}
+
+#[cfg(test)]
+mod namespace_change_tests {
+    use super::namespace_change_refusal;
+
+    #[test]
+    fn a_move_with_pods_left_behind_is_refused_and_says_what_to_drain() {
+        let message = namespace_change_refusal("sbx-a", "sbx-b", 2).expect("refused");
+        assert!(message.contains("sbx-a") && message.contains("sbx-b"));
+        assert!(message.contains("2 sandbox pod(s)"));
+        assert!(message.contains("terminate"));
+    }
+
+    #[test]
+    fn a_drained_namespace_or_no_move_is_allowed() {
+        assert!(namespace_change_refusal("sbx-a", "sbx-b", 0).is_none());
+        assert!(namespace_change_refusal("sbx-a", "sbx-a", 3).is_none());
+    }
 }

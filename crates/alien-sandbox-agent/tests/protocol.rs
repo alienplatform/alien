@@ -1832,9 +1832,11 @@ async fn preview_forwards_only_a_declared_port_to_a_capability_for_that_port() {
         let client = client.clone();
         let base = agent.base_url.clone();
         async move {
+            // The capability has its own header; `Authorization` is the daemon's.
             client
                 .get(format!("{base}{path}"))
-                .bearer_auth(token)
+                .header("x-alien-preview-capability", token)
+                .header("authorization", "Bearer daemon-secret")
                 .send()
                 .await
                 .expect("request")
@@ -1848,8 +1850,14 @@ async fn preview_forwards_only_a_declared_port_to_a_capability_for_that_port() {
     {
         let seen = seen.lock().unwrap();
         assert!(seen[0].starts_with("GET /a/b?x=1 HTTP/1.0"), "{}", seen[0]);
+        let head = seen[0].to_ascii_lowercase();
         assert!(
-            !seen[0].to_ascii_lowercase().contains("authorization"),
+            head.contains("authorization: bearer daemon-secret"),
+            "the caller's own Authorization must reach the daemon unchanged: {}",
+            seen[0]
+        );
+        assert!(
+            !head.contains("x-alien-preview"),
             "the capability must not reach the code inside: {}",
             seen[0]
         );
@@ -1869,6 +1877,10 @@ async fn preview_forwards_only_a_declared_port_to_a_capability_for_that_port() {
         ("an execute capability", agent.capability()),
         ("another pod's capability", agent.mint(wrong_pod)),
         ("an expired capability", agent.mint(expired)),
+        (
+            "a forged capability",
+            format!("v1.{}.{}", i64::MAX / 2, "00".repeat(32)),
+        ),
     ] {
         let refused = get(format!("/v1/preview/{port}/"), token).await;
         assert!(
@@ -1887,10 +1899,19 @@ async fn preview_forwards_only_a_declared_port_to_a_capability_for_that_port() {
     // No credential at all.
     let anonymous = client
         .get(format!("{}/v1/preview/{port}/", agent.base_url))
+        .header("authorization", "Bearer daemon-secret")
         .send()
         .await
         .unwrap();
     assert_eq!(anonymous.status(), 401);
+    // A capability in `Authorization` is no longer accepted: that header is the daemon's.
+    let misplaced = client
+        .get(format!("{}/v1/preview/{port}/", agent.base_url))
+        .bearer_auth(preview(port))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(misplaced.status(), 401);
     assert_eq!(
         seen.lock().unwrap().len(),
         1,
@@ -1931,7 +1952,7 @@ async fn preview_passes_an_upgrade_through_as_a_byte_stream() {
     client
         .write_all(
             format!(
-                "GET /v1/preview/{port}/socket HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+                "GET /v1/preview/{port}/socket HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer daemon-secret\r\nX-Alien-Preview-Capability: {token}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
             )
             .as_bytes(),
         )
