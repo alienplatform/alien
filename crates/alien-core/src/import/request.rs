@@ -97,6 +97,11 @@ pub struct StackImportRequest {
     /// accept the field for setup package compatibility.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub input_values: HashMap<String, serde_json::Value>,
+    /// Set by a client that can use a short-lived deployment token for this run
+    /// only and will not store it. Without it, the response carries no new
+    /// token for an installation whose Operator already holds its own key.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub accepts_short_lived_deployment_token: bool,
     /// Imported resources with typed per-resource payloads.
     pub resources: Vec<ImportedResource>,
 }
@@ -126,6 +131,10 @@ pub struct StackImportResponse {
     /// Deployment bearer token for the imported deployment, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deployment_token: Option<String>,
+    /// When `deployment_token` stops working. Set only for a short-lived token,
+    /// which a client uses for this run and does not store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_token_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Stack settings persisted for the deployment.
     pub stack_settings: StackSettings,
     /// Fully populated imported stack state.

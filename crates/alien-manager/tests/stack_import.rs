@@ -293,6 +293,7 @@ fn aws_s3_import_request(
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
         input_values: Default::default(),
+        accepts_short_lived_deployment_token: false,
         resources: vec![
             ImportedResource {
                 id: resource_id.to_string(),
@@ -381,6 +382,7 @@ fn aws_remote_management_import_request(
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
         input_values: Default::default(),
+        accepts_short_lived_deployment_token: false,
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -417,6 +419,7 @@ fn eks_cluster_import_request(deployment_name: &str, region: &str) -> StackImpor
             managing_role_arn: "arn:aws:iam::123456789012:role/AlienManager".to_string(),
         })),
         input_values: Default::default(),
+        accepts_short_lived_deployment_token: false,
         resources: vec![
             // Managed EKS setup owns the shared cloud network alongside the cluster.
             ImportedResource {
@@ -517,6 +520,7 @@ fn gcp_remote_management_import_request(
             service_account_email: "manager@example.iam.gserviceaccount.com".to_string(),
         })),
         input_values: Default::default(),
+        accepts_short_lived_deployment_token: false,
         resources: vec![ImportedResource {
             id: resource_id.to_string(),
             resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),
@@ -599,6 +603,7 @@ fn azure_remote_management_import_request(
             oidc_subject: "system:serviceaccount:alien:manager".to_string(),
         })),
         input_values: Default::default(),
+        accepts_short_lived_deployment_token: false,
         resources: vec![ImportedResource {
                 id: resource_id.to_string(),
                 resource_type: RemoteStackManagement::RESOURCE_TYPE.into(),

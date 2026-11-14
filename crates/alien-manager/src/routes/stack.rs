@@ -612,6 +612,7 @@ async fn stack_import_as(
                     Json(StackImportResponse {
                         deployment_id: existing.id,
                         deployment_token,
+                        deployment_token_expires_at: None,
                         stack_settings,
                         stack_state,
                     }),
@@ -665,6 +666,7 @@ async fn stack_import_as(
                 Json(StackImportResponse {
                     deployment_id: existing.id,
                     deployment_token,
+                    deployment_token_expires_at: None,
                     stack_settings,
                     stack_state,
                 }),
@@ -816,6 +818,7 @@ async fn stack_import_as(
             Json(StackImportResponse {
                 deployment_id: updated.id,
                 deployment_token,
+                deployment_token_expires_at: None,
                 stack_settings,
                 stack_state,
             }),
@@ -934,6 +937,7 @@ async fn stack_import_as(
         Json(StackImportResponse {
             deployment_id: created.id,
             deployment_token: Some(raw_token),
+            deployment_token_expires_at: None,
             stack_settings,
             stack_state,
         }),
@@ -2191,6 +2195,7 @@ mod setup_update_authorization_tests {
             stack_settings: Default::default(),
             management_config: None,
             input_values: HashMap::new(),
+            accepts_short_lived_deployment_token: false,
             resources: vec![],
         }
     }
