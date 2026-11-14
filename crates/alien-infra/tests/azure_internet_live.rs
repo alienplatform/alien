@@ -44,6 +44,16 @@ fn json_field(registration: &Value, field: &str) -> Value {
     }
 }
 
+/// Prints what is not Running, with the failure the controller recorded, so a stuck or failed
+/// step explains itself in the log.
+fn report(state: &StackState) {
+    for (id, resource) in &state.resources {
+        if resource.status != ResourceStatus::Running {
+            eprintln!("[state] {id}: {:?} {:?}", resource.status, resource.error);
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "runs against a real subscription with the setup module applied; see the module docs"]
 async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
@@ -130,11 +140,16 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
             .all(|resource| resource.status == ResourceStatus::Running)
     };
     for step in 0..400 {
-        let result = frozen
-            .continue_imported(state)
-            .await
-            .unwrap_or_else(|error| panic!("setup step {step} failed: {error}"));
+        let before = state.clone();
+        let result = match frozen.continue_imported(state).await {
+            Ok(result) => result,
+            Err(error) => {
+                report(&before);
+                panic!("setup step {step} failed: {error}")
+            }
+        };
         state = result.next_state;
+        report(&state);
         if settled(&state, ResourceLifecycle::Frozen) {
             break;
         }
@@ -161,6 +176,7 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
             .await
             .unwrap_or_else(|error| panic!("live step {step} failed: {error}"));
         state = result.next_state;
+        report(&state);
         if settled(&state, ResourceLifecycle::Live) {
             break;
         }
