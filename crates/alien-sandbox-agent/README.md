@@ -326,6 +326,13 @@ Create and label it first, because Helm fails with `namespaces "<name>" not foun
 A pre-install hook creates a probe pod and fails the install with the namespace and fix when the
 namespace rejects root boot.
 
+API server target: the Operator reads the `default/kubernetes` Service and EndpointSlice and gives
+the pod `ALIEN_SANDBOX_MUST_DROP_KUBE_API` (ClusterIP and endpoint addresses with ports). The
+startup gate probes each and fails closed, with no ENTRYPOINT, when the target is missing. The
+chart creates a Role and RoleBinding in the `default` namespace (get on those two named objects).
+An installer that cannot write to `default` makes sandboxes refuse, with an error naming the
+missing target.
+
 NetworkPolicy enforcement: the install is refused until the cluster enforces NetworkPolicy (a
 probe checks it with live traffic). On EKS Auto Mode, enforcement is off until you apply a
 ConfigMap `amazon-vpc-cni` in `kube-system` with `enable-network-policy-controller: "true"`; the

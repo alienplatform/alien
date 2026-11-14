@@ -379,7 +379,7 @@ async fn kube_api_environment(
         .await?;
     let context = || {
         ErrorData::CloudPlatformError {
-        message: "Failed to read the Kubernetes API server address (default/kubernetes Service and EndpointSlice); the operator needs get access to both".into(),
+        message: "Failed to read the Kubernetes API server address (the default/kubernetes Service and EndpointSlice), so sandboxes are refused: the startup gate fails closed without it. The Operator needs get access to both; the chart grants it with a Role and RoleBinding in the default namespace, so an installer that cannot write to default must grant it another way".into(),
         resource_id: Some(sandbox.id.clone()),
     }
     };

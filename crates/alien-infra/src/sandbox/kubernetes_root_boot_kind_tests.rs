@@ -570,9 +570,9 @@ print(json.dumps(out))
 }
 
 /// The ENTRYPOINT must not start before the pod's egress restriction is proven, including under
-/// `none` egress. The cluster API address is given to the pod explicitly (service links are
-/// off, so the kubelet does not inject it), which makes the gate see a reachable blocked target
-/// until a NetworkPolicy that drops it is attached late.
+/// `none` egress. The cluster API address is given to the pod the way the Operator gives it
+/// (`ALIEN_SANDBOX_MUST_DROP_KUBE_API`, from the `default/kubernetes` Service), which makes the
+/// gate see a reachable blocked target until a NetworkPolicy that drops it is attached late.
 #[tokio::test]
 #[ignore = "needs a Kind cluster; with ALIEN_ROOT_BOOT_KIND_ENFORCES_POLICY set it also attaches a policy late"]
 async fn kubernetes_root_boot_kind_the_entrypoint_waits_for_a_late_network_policy() {
@@ -616,19 +616,15 @@ async fn kubernetes_root_boot_kind_the_entrypoint_waits_for_a_late_network_polic
         .get_or_insert_default()
         .insert("a2657-gate-test".to_string(), name.clone());
     let container = &mut pod.spec.as_mut().unwrap().containers[0];
-    for (key, value) in [
-        ("KUBERNETES_SERVICE_HOST", api.as_str()),
-        ("KUBERNETES_SERVICE_PORT", "443"),
-    ] {
-        container
-            .env
-            .get_or_insert_default()
-            .push(k8s_openapi::api::core::v1::EnvVar {
-                name: key.to_string(),
-                value: Some(value.to_string()),
-                value_from: None,
-            });
-    }
+    let target = format!("{api}:443");
+    container
+        .env
+        .get_or_insert_default()
+        .push(k8s_openapi::api::core::v1::EnvVar {
+            name: alien_core::sandbox_image::ENV_MUST_DROP_KUBE_API.to_string(),
+            value: Some(target.clone()),
+            value_from: None,
+        });
     pods.create_pod(&baseline, &pod).await.expect("create pod");
 
     // No policy yet: the gate must hold the ENTRYPOINT back. Look while it still waits.
@@ -665,6 +661,10 @@ async fn kubernetes_root_boot_kind_the_entrypoint_waits_for_a_late_network_polic
         assert!(
             logs.contains("egress restriction not proven"),
             "the gate refused to start the workload: {logs:?}"
+        );
+        assert!(
+            logs.contains(&target),
+            "the refusal names the API server target {target}: {logs:?}"
         );
         let _ = kubectl(
             &context,
