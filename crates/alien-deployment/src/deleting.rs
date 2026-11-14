@@ -1792,6 +1792,212 @@ mod tests {
         }
     }
 
+    /// Deletes an AWS deployment whose management role waits for its network (a policy-read
+    /// edge) and returns how many of each EC2 network delete ran, plus the final state.
+    async fn delete_deployment_with_management_and_network(
+        setup_management: SetupManagement,
+        lifecycle: ResourceLifecycle,
+    ) -> (DeploymentState, Vec<String>) {
+        use alien_aws_clients::ec2::MockEc2Api;
+        use std::sync::Mutex;
+
+        let calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut ec2 = MockEc2Api::new();
+        macro_rules! record {
+            ($method:ident, $name:literal, $times:expr, $ok:expr) => {{
+                let log = calls.clone();
+                ec2.$method().times($times).returning(move |_| {
+                    log.lock().unwrap().push($name.to_string());
+                    Ok($ok)
+                });
+            }};
+        }
+        let expected = usize::from(setup_management == SetupManagement::Automatic);
+        record!(
+            expect_delete_nat_gateway,
+            "nat-gateway",
+            expected,
+            serde_json::from_value(serde_json::json!({})).unwrap()
+        );
+        record!(expect_release_address, "elastic-ip", expected, ());
+        record!(expect_delete_security_group, "security-group", expected, ());
+        record!(expect_delete_subnet, "subnet", 4 * expected, ());
+        record!(expect_delete_route_table, "route-table", 2 * expected, ());
+        record!(
+            expect_delete_internet_gateway,
+            "internet-gateway",
+            expected,
+            ()
+        );
+        record!(expect_delete_vpc, "vpc", expected, ());
+        ec2.expect_describe_nat_gateways().returning(|_| {
+            Ok(serde_json::from_value(serde_json::json!({
+                "natGatewaySet": {"item": [{"natGatewayId": "nat-vpc-1", "state": "deleted"}]}
+            }))
+            .unwrap())
+        });
+        ec2.expect_describe_flow_logs()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        let log = calls.clone();
+        ec2.expect_detach_internet_gateway().returning(move |_| {
+            log.lock().unwrap().push("detach-gateway".to_string());
+            Ok(())
+        });
+        ec2.expect_disassociate_route_table().returning(|_| Ok(()));
+        ec2.expect_describe_network_interfaces()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        ec2.expect_describe_security_groups()
+            .returning(|_| Ok(serde_json::from_value(serde_json::json!({})).unwrap()));
+        let ec2 = Arc::new(ec2);
+
+        let mut stack = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+        let mut management = resource_state(
+            Resource::new(alien_core::RemoteStackManagement::new("management".to_string()).build()),
+            ResourceLifecycle::Frozen,
+            ResourceStatus::Running,
+        );
+        management
+            .set_internal_controller(Some(Box::new(
+                AwsRemoteStackManagementController::mock_ready("test-management"),
+            )))
+            .unwrap();
+        // The preflight edge: the management policy reads the network's VPC and subnet IDs.
+        management.dependencies = vec![ResourceRef::new(
+            alien_core::Network::RESOURCE_TYPE,
+            "default-network",
+        )];
+        stack.resources.insert("management".to_string(), management);
+        let mut network = resource_state(
+            Resource::new(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(alien_core::NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+            ),
+            lifecycle,
+            ResourceStatus::Running,
+        );
+        network
+            .set_internal_controller(Some(Box::new(
+                alien_infra::AwsNetworkController::mock_ready("vpc-1", 2),
+            )))
+            .unwrap();
+        stack
+            .resources
+            .insert("default-network".to_string(), network);
+
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_runtime_setup_authority()
+            .returning(|_| None);
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        let provider = Arc::new(provider);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                setup_management,
+                ..Default::default()
+            })
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+        let mut current = DeploymentState {
+            status: DeploymentStatus::Deleting,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(RuntimeMetadata {
+                deletion_policy: alien_core::DeletionPolicy::Erase,
+                vault_credentials_revoked: true,
+                ..Default::default()
+            }),
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        for _ in 0..40 {
+            current = handle_deleting(current, config.clone(), client.clone(), provider.clone())
+                .await
+                .expect("delete step")
+                .state;
+            if current.status != DeploymentStatus::Deleting {
+                break;
+            }
+            current = serde_json::from_value(serde_json::to_value(current).unwrap()).unwrap();
+        }
+        let calls = calls.lock().unwrap().clone();
+        (current, calls)
+    }
+
+    /// Under automatic setup the manager created the network, so runtime cleanup deletes it
+    /// (NAT gateway, address, subnets, route tables, gateway, security group, VPC) before the
+    /// deployment hands the management role to setup teardown. The management role's edge to
+    /// the network only orders its policy read, so it must not hold the network back.
+    #[tokio::test]
+    async fn automatic_setup_deletes_the_manager_created_network_before_teardown() {
+        let (state, calls) = delete_deployment_with_management_and_network(
+            SetupManagement::Automatic,
+            ResourceLifecycle::Frozen,
+        )
+        .await;
+        assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+        let stack = state.stack_state.unwrap();
+        assert_eq!(
+            stack.resources["default-network"].status,
+            ResourceStatus::Deleted
+        );
+        assert_ne!(
+            stack.resources["management"].status,
+            ResourceStatus::Deleted
+        );
+        for name in [
+            "nat-gateway",
+            "elastic-ip",
+            "security-group",
+            "subnet",
+            "route-table",
+            "internet-gateway",
+            "vpc",
+        ] {
+            assert!(
+                calls.iter().any(|call| call == name),
+                "{name} not deleted: {calls:?}"
+            );
+        }
+        let position = |name: &str| calls.iter().position(|call| call == name).unwrap();
+        assert!(position("nat-gateway") < position("elastic-ip"));
+        assert!(position("subnet") < position("vpc"));
+        assert!(position("internet-gateway") < position("vpc"));
+    }
+
+    /// Under manual setup the network belongs to the stack: runtime cleanup leaves it for the
+    /// stack's own teardown, exactly as before, and calls nothing on EC2.
+    #[tokio::test]
+    async fn manual_setup_leaves_the_stack_owned_network_for_teardown() {
+        let (state, calls) = delete_deployment_with_management_and_network(
+            SetupManagement::Manual,
+            ResourceLifecycle::Frozen,
+        )
+        .await;
+        assert!(calls.is_empty(), "no network delete may run: {calls:?}");
+        let stack = state.stack_state.unwrap();
+        assert_ne!(
+            stack.resources["default-network"].status,
+            ResourceStatus::Deleted
+        );
+    }
+
     async fn runtime_cleanup_of_an_empty_stack(
         runtime_metadata: Option<alien_core::RuntimeMetadata>,
     ) -> DeploymentStatus {
