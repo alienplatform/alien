@@ -1560,3 +1560,51 @@ async fn automatic_identity_cleanup_rechecks_ownership_after_partial_failure() -
     }
     Ok(())
 }
+
+/// The management role waits for the stack's network when setup creates it. Under automatic
+/// setup the runtime creates the network and runtime cleanup must delete it, so it cannot be
+/// held for setup teardown by a dependent that only needs its IDs while it exists.
+#[tokio::test]
+async fn automatic_runtime_cleanup_plans_the_network_the_management_role_waits_for() -> Result<()> {
+    // The test platform has no controllers for these types, so two storages are synced and
+    // then recorded as the management role and the network.
+    let stack = Stack::new("network-cleanup".to_owned())
+        .add_with_dependencies(
+            test_storage("management"),
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(Storage::RESOURCE_TYPE, "default-network")],
+        )
+        .add(test_storage("default-network"), ResourceLifecycle::Frozen)
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    let management = state.resources.get_mut("management").unwrap();
+    management.config = Resource::new(RemoteStackManagement::new("management".to_string()).build());
+    management.resource_type = RemoteStackManagement::RESOURCE_TYPE.to_string();
+    management.dependencies = vec![ResourceRef::new(
+        alien_core::Network::RESOURCE_TYPE,
+        "default-network",
+    )];
+    let network = state.resources.get_mut("default-network").unwrap();
+    network.config = Resource::new(
+        alien_core::Network::new("default-network".to_string())
+            .settings(alien_core::NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            })
+            .build(),
+    );
+    network.resource_type = alien_core::Network::RESOURCE_TYPE.to_string();
+    let mut config = default_deployment_config();
+    config.stack_settings.setup_management = SetupManagement::Automatic;
+    let executor = StackExecutor::for_runtime_cleanup_deletion_with_service_provider(
+        ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+        &config,
+        Arc::new(MockPlatformServiceProvider::new()),
+    )?;
+    assert_eq!(
+        executor.pending_deletions(&state)?,
+        vec!["default-network"],
+        "runtime cleanup must delete the network it created"
+    );
+    Ok(())
+}
