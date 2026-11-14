@@ -1010,6 +1010,18 @@ pub trait Kv: Binding {
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> Result<ScanResult>;
+
+    /// Like `scan_prefix`, but a backend whose scans can lag behind acknowledged writes reads
+    /// consistently, at some extra cost. For callers that decide something from what a scan
+    /// returns (whether a copy finished). Defaults to `scan_prefix`.
+    async fn scan_prefix_consistent(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> Result<ScanResult> {
+        self.scan_prefix(prefix, limit, cursor).await
+    }
 }
 
 /// JSON/Text message payload for Queue

@@ -566,9 +566,9 @@ mod tests {
         let link = scope("link:lnk_1");
         assert_eq!(link.kind(), ScopeKind::SetupLink);
         assert_eq!(link.id(), "lnk_1");
-        assert_eq!(link.deployment_id(), None);
+        assert_eq!(link.deployment_scope_id(), None);
         assert_eq!(scope("reg:reg_1").kind(), ScopeKind::Registration);
-        assert_eq!(scope("dep:dep_1").deployment_id(), Some("dep_1"));
+        assert_eq!(scope("dep:dep_1").deployment_scope_id(), Some("dep_1"));
         for bad in ["link:", "reg:a:b", "other:x", "lnk_1", "link:a/b"] {
             assert!(bad.parse::<ValueScope>().is_err(), "{bad}");
         }

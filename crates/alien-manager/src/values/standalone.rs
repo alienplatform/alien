@@ -50,7 +50,7 @@ impl ValueAccessAuthorizer for StandaloneValueAccess {
         needed: ValueAccess,
     ) -> std::result::Result<ValueGrant, AlienError<ErrorData>> {
         let subject = self.subject(headers).await?;
-        let Some(deployment_id) = scope.deployment_id() else {
+        let Some(deployment_id) = scope.deployment_scope_id() else {
             return Err(ErrorData::forbidden(
                 "This manager holds values only for deployments",
             ));

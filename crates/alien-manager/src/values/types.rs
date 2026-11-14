@@ -70,8 +70,14 @@ impl ValueScope {
         id
     }
 
-    /// The deployment this scope belongs to, for a deployment scope.
-    pub fn deployment_id(&self) -> Option<&str> {
+    /// The id after the scope's prefix. Kept for callers written when every scope was a
+    /// deployment's; code that can see other scopes uses `deployment_scope_id`.
+    pub fn deployment_id(&self) -> &str {
+        self.id()
+    }
+
+    /// The deployment this scope belongs to, or `None` for a setup link or registration.
+    pub fn deployment_scope_id(&self) -> Option<&str> {
         (self.kind() == ScopeKind::Deployment).then(|| self.id())
     }
 }
