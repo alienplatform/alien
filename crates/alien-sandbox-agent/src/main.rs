@@ -69,7 +69,33 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // The Kubernetes init container: fill the volume the pod mounts read-only over the agent.
+    #[cfg(target_os = "linux")]
+    if std::env::args().nth(1).as_deref()
+        == Some(alien_sandbox_agent::read_only_mounts::STAGE_ARGUMENT)
+    {
+        let Some(destination) = std::env::args_os().nth(2) else {
+            eprintln!("usage: alien-sandbox-agent --stage-protected-files <directory>");
+            std::process::exit(2);
+        };
+        if let Err(error) = alien_sandbox_agent::read_only_mounts::stage(
+            std::path::Path::new(&destination),
+            std::path::Path::new("/opt/alien"),
+        ) {
+            eprintln!("cannot stage the protected files: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     tracing_subscriber::fmt::init();
+
+    // Kubernetes: never start the workload before the pod's egress restriction is in force.
+    if let Err(message) = alien_sandbox_agent::startup_gate::enforce_from_env() {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+    alien_sandbox_agent::startup_gate::spawn_recheck();
 
     let aws_image_transport =
         image_command_enabled()? && alien_sandbox_agent::image_command::defer_to_run_hook()?;
@@ -82,7 +108,8 @@ fn main() -> Result<()> {
     let state = Arc::new(load_state()?);
     let port: u16 = parse(ENV_PORT)?;
     state.preview.set_own_ports(&[port]);
-    let network_admin = std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport;
+    let network_admin = (std::env::var_os("ALIEN_SANDBOX_EGRESS").is_some() || aws_image_transport)
+        && !alien_sandbox_agent::gateway_egress::network_enforced_externally()?;
     #[cfg(target_os = "linux")]
     if aws_image_transport && state.gateway_egress.is_none() {
         alien_sandbox_agent::gateway_egress::isolate_control_callers()?;
@@ -109,16 +136,22 @@ fn main() -> Result<()> {
                 "cannot write the image's passwd/group entries".to_string(),
             ))?;
             if image_command_enabled()? {
-                alien_sandbox_agent::protected_files::protect(
-                    &state.agent_binary,
-                    std::path::Path::new("/opt/alien"),
-                )
-                .into_alien_error()
-                .context(failed(
-                    "protect agent bootstrap files",
-                    "cannot make the agent binary and metadata read-only before image startup"
-                        .into(),
-                ))?;
+                // The flag only selects who provides the protection. Either way the agent
+                // refuses to continue unless it is in place.
+                let protect = if std::env::var_os(alien_core::sandbox_image::ENV_PROTECTED_MOUNTS)
+                    .is_some()
+                {
+                    alien_sandbox_agent::read_only_mounts::require
+                } else {
+                    alien_sandbox_agent::protected_files::protect
+                };
+                protect(&state.agent_binary, std::path::Path::new("/opt/alien"))
+                    .into_alien_error()
+                    .context(failed(
+                        "protect agent bootstrap files",
+                        "cannot make the agent binary and metadata read-only before image startup"
+                            .into(),
+                    ))?;
             }
             alien_sandbox_agent::privilege::restrict_supervisor(network_admin)
                 .into_alien_error()

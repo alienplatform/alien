@@ -911,10 +911,7 @@ impl Sandbox for KubernetesSandbox {
                 })?;
         Ok(PreviewCapability {
             endpoint: grant.endpoint,
-            headers: BTreeMap::from([(
-                "Authorization".to_string(),
-                format!("Bearer {}", grant.capability),
-            )]),
+            headers: preview_headers(grant.capability, port),
             allowed_ports: vec![port],
             expires_in_seconds: u64::try_from(grant.expires_at - chrono::Utc::now().timestamp())
                 .unwrap_or(0),
@@ -983,8 +980,35 @@ impl Sandbox for KubernetesSandbox {
     }
 }
 
+/// The headers a caller merges into its own request. The capability has its own header, never
+/// `Authorization`: the caller's own bearer token belongs to the code inside the sandbox and
+/// reaches it untouched. The URL already names the port; the header repeats it so the agent can
+/// refuse a mismatch.
+fn preview_headers(capability: String, port: u16) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        (
+            alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER.to_string(),
+            capability,
+        ),
+        (
+            alien_core::sandbox_image::PREVIEW_PORT_HEADER.to_string(),
+            port.to_string(),
+        ),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preview_headers_never_use_authorization() {
+        let headers = super::preview_headers("cap".to_string(), 8081);
+        assert!(!headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("authorization")));
+        assert_eq!(headers["x-alien-preview-capability"], "cap");
+        assert_eq!(headers["x-alien-preview-port"], "8081");
+    }
+
     /// An Operator that predates `tenantKey` and `timeoutMs` rejects unknown fields, so a caller
     /// that sets neither must send neither: the body is what an old Operator accepts.
     #[test]

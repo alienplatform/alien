@@ -37,6 +37,7 @@ pub use alien_core::{
 };
 
 // Re-export helper functions
+pub use ai_access_check::check_declared_ai_models;
 pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
 pub use helpers::deployment_state_error_from_headline;
@@ -47,7 +48,6 @@ pub use helpers::{
     set_ephemeral_secrets_digest_key, set_secrets_digest_key, set_secrets_digest_key_if_unset,
     value_digest,
 };
-pub use ai_access_check::check_declared_ai_models;
 pub use observe::run_observe_pass;
 
 use tracing::{debug, info, warn};

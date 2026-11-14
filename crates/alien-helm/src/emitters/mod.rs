@@ -14,6 +14,7 @@ pub mod kv;
 pub mod queue;
 pub mod sandbox;
 pub(crate) mod sandbox_cni;
+pub(crate) mod sandbox_root_boot_check;
 pub mod service_account;
 pub mod storage;
 pub mod vault;

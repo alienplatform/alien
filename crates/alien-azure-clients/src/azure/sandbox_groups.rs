@@ -292,12 +292,10 @@ mod tests {
             .get_default_vnet_connection("rg", "group")
             .await
             .unwrap();
-        assert!(
-            connection
-                .properties
-                .subnet_id
-                .ends_with("/subnets/sandbox")
-        );
+        assert!(connection
+            .properties
+            .subnet_id
+            .ends_with("/subnets/sandbox"));
         assert_eq!(
             connection.properties.provisioning_state.as_deref(),
             Some("Succeeded")

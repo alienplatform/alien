@@ -236,7 +236,10 @@ impl LiteralAwsPrincipals<'_> {
 
 impl AwsKeyPrincipals for LiteralAwsPrincipals<'_> {
     fn account_root(&self) -> Value {
-        json!(format!("arn:{}:iam::{}:root", self.partition, self.account_id))
+        json!(format!(
+            "arn:{}:iam::{}:root",
+            self.partition, self.account_id
+        ))
     }
 
     fn management_role(&self) -> Option<Value> {
@@ -271,7 +274,9 @@ pub fn aws_key_policy_for_stack(
     }
     aws_key_policy(
         names.account_root(),
-        names.management_role().filter(|_| plan.has_management_identity),
+        names
+            .management_role()
+            .filter(|_| plan.has_management_identity),
         names.stack_role_pattern(),
         plan.native_service_use,
         runtime_role_arns,
