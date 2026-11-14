@@ -309,7 +309,7 @@ pub fn plan_compute_with_room(
                 let machines = selected
                     .map(ComputePoolSelection::min_size)
                     .unwrap_or_else(|| groups[pool_id].scale.default_min_size());
-                room.commit(pool_id, spec, machines.max(1));
+                room.commit(pool_id, spec, machines);
             }
         }
     }
@@ -437,7 +437,7 @@ pub fn plan_compute_with_room(
                 .machine()
                 .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
             {
-                room.commit(&pool_id, spec, selected_choice.min_size().max(1));
+                room.commit(&pool_id, spec, selected_choice.min_size());
             }
         }
         let mut errors = validate_compute_pool_selection(

@@ -3245,6 +3245,7 @@ mod tests {
     struct StubRoom<F: Fn(&InstanceTypeSpec, u32) -> bool> {
         fits: F,
         asked: std::cell::RefCell<Vec<(&'static str, u32)>>,
+        committed: std::cell::RefCell<Vec<(String, u32)>>,
     }
 
     impl<F: Fn(&InstanceTypeSpec, u32) -> bool> StubRoom<F> {
@@ -3252,6 +3253,7 @@ mod tests {
             Self {
                 fits,
                 asked: Default::default(),
+                committed: Default::default(),
             }
         }
     }
@@ -3262,7 +3264,11 @@ mod tests {
             (self.fits)(spec, machines)
         }
 
-        fn commit(&self, _pool_id: &str, _spec: &InstanceTypeSpec, _machines: u32) {}
+        fn commit(&self, pool_id: &str, _spec: &InstanceTypeSpec, machines: u32) {
+            self.committed
+                .borrow_mut()
+                .push((pool_id.to_string(), machines));
+        }
     }
 
     fn installed_state(machine: &str) -> StackState {
@@ -3397,6 +3403,37 @@ mod tests {
             .all(|(_, machines)| *machines == 3));
         let machine = pool_machine(&chosen).unwrap();
         assert!(machine.ends_with("s_v6"), "{machine}");
+    }
+
+    /// A pool whose minimum is zero launches nothing, so it must not hold a machine's cores
+    /// that another automatic pool needs: both an automatic and an explicit zero-minimum
+    /// pool commit zero machines.
+    #[test]
+    fn a_pool_with_no_minimum_machines_holds_no_quota() {
+        let zero_min = |machine: Option<&str>| {
+            general_selection(ComputePoolSelection::Autoscale {
+                min: 0,
+                max: 2,
+                machine: machine.map(ToString::to_string),
+                failure_domains: None,
+                data_disk_gib: None,
+            })
+        };
+        for machine in [None, Some("Standard_D4s_v6")] {
+            let room = StubRoom::new(|_, _| true);
+            // Validation may refuse a zero minimum later; the hold is taken before that.
+            let _ = ComputeClusterMutation.choose_pool_machines(
+                generated_pool_stack(),
+                &azure_state(vec![]),
+                &zero_min(machine),
+                &room,
+            );
+            let committed = room.committed.borrow();
+            assert!(
+                !committed.is_empty() && committed.iter().all(|(_, machines)| *machines == 0),
+                "machine {machine:?} committed {committed:?}"
+            );
+        }
     }
 
     async fn prepare_generated_pool(selection: ComputePoolSelection) -> Result<CapacityGroup> {
