@@ -11,8 +11,8 @@ use alien_aws_clients::{
 };
 use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
-    InitialSetupAuthority, KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState,
-    RemoteStackManagement, RemoteStackManagementHeartbeatData,
+    InitialSetupAuthority, KubernetesCluster, Network, NetworkSettings, ObservedHealth, Platform,
+    ProviderLifecycleState, RemoteStackManagement, RemoteStackManagementHeartbeatData,
     RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus, Worker,
 };
@@ -24,7 +24,7 @@ use alien_permissions::{
         AwsIamStatement, AwsRuntimePermissionsGenerator, MAX_ATTACHED_MANAGEMENT_POLICIES,
         MAX_MANAGED_POLICY_BYTES,
     },
-    get_permission_set, BindingTarget, PermissionContext,
+    get_permission_set, AwsNetworkScope, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
 
@@ -630,6 +630,71 @@ fn emit_aws_remote_stack_management_heartbeat(
     Ok(())
 }
 
+/// The stack's network, for the management policy: the VPC and subnet IDs once they are known
+/// (the installer named them, or the network exists), the stack's tags for a network the
+/// Alien network controller is still to create, and nothing for the account's default VPC
+/// before it is discovered, which keeps the account-wide reach.
+pub(crate) fn aws_network_scope(ctx: &ResourceControllerContext<'_>) -> Option<AwsNetworkScope> {
+    use crate::core::state_utils::StackResourceStateExt;
+
+    let (network_id, network) = ctx
+        .desired_stack
+        .resources
+        .iter()
+        .find_map(|(id, entry)| entry.config.downcast_ref::<Network>().map(|n| (id, n)))?;
+    let controller = ctx.state.resources.get(network_id).and_then(|state| {
+        state
+            .get_internal_controller_typed::<crate::network::AwsNetworkController>()
+            .ok()
+    });
+    // Sandbox gateway subnets hold the internal load balancers that link sandboxes to
+    // containers.
+    let gateway_subnet_ids = || {
+        controller
+            .as_ref()
+            .and_then(|controller| controller.sandbox_network.as_ref())
+            .map(|sandbox| sandbox.gateway_subnet_ids.clone())
+            .unwrap_or_default()
+    };
+    match &network.settings {
+        NetworkSettings::ByoVpcAws {
+            vpc_id,
+            public_subnet_ids,
+            private_subnet_ids,
+            ..
+        } => Some(AwsNetworkScope::Vpc {
+            vpc_id: vpc_id.clone(),
+            subnet_ids: [
+                public_subnet_ids.clone(),
+                private_subnet_ids.clone(),
+                gateway_subnet_ids(),
+            ]
+            .concat(),
+        }),
+        NetworkSettings::Create { .. } | NetworkSettings::UseDefault => {
+            match controller.as_ref().and_then(|c| c.vpc_id.clone()) {
+                Some(vpc_id) => {
+                    let controller = controller.as_ref().expect("checked");
+                    Some(AwsNetworkScope::Vpc {
+                        vpc_id,
+                        subnet_ids: [
+                            controller.public_subnet_ids.clone(),
+                            controller.private_subnet_ids.clone(),
+                            gateway_subnet_ids(),
+                        ]
+                        .concat(),
+                    })
+                }
+                None if matches!(network.settings, NetworkSettings::Create { .. }) => {
+                    Some(AwsNetworkScope::StackTagged)
+                }
+                None => None,
+            }
+        }
+        NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. } => None,
+    }
+}
+
 // Separate impl block for helper methods
 impl AwsRemoteStackManagementController {
     /// Generate trust policy for cross-account access with specific role restriction
@@ -666,6 +731,7 @@ impl AwsRemoteStackManagementController {
 
         permission_context.aws_permissions_boundary_arn = self.permissions_boundary_arn.clone();
         permission_context = permission_context.with_signing(&ctx.deployment_config.stack_settings);
+        permission_context.aws_network = aws_network_scope(ctx);
 
         // Add managing role ARN from stack settings for cross-account access (required)
         let aws_management = ctx.get_aws_management_config()?
@@ -698,6 +764,10 @@ impl AwsRemoteStackManagementController {
             &ctx.get_aws_config()?.account_id,
             &permissions_boundary_name(ctx.resource_prefix),
         ));
+        // The boundary is a ceiling and management checks it without the stack's network
+        // (`validate_installed_aws_permissions_boundary`); the network narrows the role's own
+        // policies only.
+        context.aws_network = None;
         aws_permissions_boundary_for_stack(ctx.desired_stack, ctx.state, &context)
     }
 
@@ -2158,6 +2228,179 @@ mod tests {
                         == serde_json::json!(["arn:aws:ssm:*:*:parameter/private/*"])
             }),
             "{statements:#?}"
+        );
+    }
+
+    async fn network_scope(
+        settings: alien_core::NetworkSettings,
+        lifecycle: ResourceLifecycle,
+        created: Option<crate::network::AwsNetworkController>,
+    ) -> Option<AwsNetworkScope> {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .with_stack_resource(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(settings)
+                    .build(),
+                lifecycle,
+            )
+            .build()
+            .await
+            .expect("executor builds");
+        if let Some(created) = created {
+            let mut saved = executor.stack_state().resources["default-network"].clone();
+            saved.status = ResourceStatus::Running;
+            saved
+                .set_internal_controller(Some(Box::new(created)))
+                .unwrap();
+            executor.insert_saved_resource("default-network", saved);
+        }
+        executor.with_context(aws_network_scope)
+    }
+
+    /// The installer named the VPC and its subnets: they are the stack's network before
+    /// anything exists, and a blank entry stays blank, matching no subnet.
+    #[tokio::test]
+    async fn a_named_vpc_scopes_management_to_its_ids() {
+        let scope = network_scope(
+            alien_core::NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                public_subnet_ids: vec!["subnet-0aaaaaaaaaaaaaaa1".to_string()],
+                private_subnet_ids: vec!["subnet-0aaaaaaaaaaaaaaa2".to_string()],
+                security_group_ids: vec![String::new()],
+            },
+            ResourceLifecycle::Frozen,
+            None,
+        )
+        .await;
+        assert_eq!(
+            scope,
+            Some(AwsNetworkScope::Vpc {
+                vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                subnet_ids: vec![
+                    "subnet-0aaaaaaaaaaaaaaa1".to_string(),
+                    "subnet-0aaaaaaaaaaaaaaa2".to_string()
+                ],
+            })
+        );
+    }
+
+    /// A network setup created, or management created on an earlier release, is named by its
+    /// IDs.
+    #[tokio::test]
+    async fn a_created_network_scopes_management_to_its_ids() {
+        for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+            let scope = network_scope(
+                alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                },
+                lifecycle,
+                Some(crate::network::AwsNetworkController::mock_ready("vpc-1", 2)),
+            )
+            .await;
+            assert_eq!(
+                scope,
+                Some(AwsNetworkScope::Vpc {
+                    vpc_id: "vpc-1".to_string(),
+                    subnet_ids: vec![
+                        "subnet-pub-vpc-1-0".to_string(),
+                        "subnet-pub-vpc-1-1".to_string(),
+                        "subnet-priv-vpc-1-0".to_string(),
+                        "subnet-priv-vpc-1-1".to_string(),
+                    ],
+                })
+            );
+        }
+    }
+
+    /// The network controller tags what it creates with the stack's tags, so a network that
+    /// does not exist yet is the one carrying them.
+    #[tokio::test]
+    async fn a_network_still_to_be_created_scopes_management_by_its_tags() {
+        let scope = network_scope(
+            alien_core::NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            },
+            ResourceLifecycle::Live,
+            None,
+        )
+        .await;
+        assert_eq!(scope, Some(AwsNetworkScope::StackTagged));
+    }
+
+    /// What direct setup installs on the management role names the stack's VPC and subnets.
+    #[tokio::test]
+    async fn direct_setup_installs_the_network_conditions() {
+        let executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .with_stack_resource(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(alien_core::NetworkSettings::ByoVpcAws {
+                        vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                        public_subnet_ids: vec!["subnet-0aaaaaaaaaaaaaaa1".to_string()],
+                        private_subnet_ids: vec![],
+                        security_group_ids: vec![String::new()],
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .management_permissions(alien_core::permissions::ManagementPermissions::extend(
+                alien_core::PermissionProfile::new().global([
+                    alien_core::PermissionSetReference::from("compute-cluster/management"),
+                    alien_core::PermissionSetReference::from("container/provision"),
+                ]),
+            ))
+            .build()
+            .await
+            .expect("executor builds");
+        let documents = executor
+            .with_context(|ctx| {
+                AwsRemoteStackManagementController::default()
+                    .planned_management_policy_documents(ctx, "stack-management")
+            })
+            .expect("policies render");
+        let text = documents.join("\n");
+        for expected in [
+            r#""ec2:Vpc":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0aaaaaaaaaaaaaaa1""#,
+            r#""ec2:VpcID":"vpc-0aaaaaaaaaaaaaaa1""#,
+            r#""elasticloadbalancing:Subnet":["subnet-0aaaaaaaaaaaaaaa1"]"#,
+            r#""autoscaling:VPCZoneIdentifiers":["subnet-0aaaaaaaaaaaaaaa1"]"#,
+        ] {
+            assert!(text.contains(expected), "{expected} missing from {text}");
+        }
+    }
+
+    /// The account's default VPC carries no stack tags; before it is discovered, management
+    /// keeps the account-wide reach.
+    #[tokio::test]
+    async fn an_undiscovered_default_vpc_leaves_the_network_open() {
+        let scope = network_scope(
+            alien_core::NetworkSettings::UseDefault,
+            ResourceLifecycle::Live,
+            None,
+        )
+        .await;
+        assert_eq!(scope, None);
+        let scope = network_scope(
+            alien_core::NetworkSettings::UseDefault,
+            ResourceLifecycle::Live,
+            Some(crate::network::AwsNetworkController::mock_ready(
+                "vpc-default",
+                1,
+            )),
+        )
+        .await;
+        assert!(
+            matches!(scope, Some(AwsNetworkScope::Vpc { ref vpc_id, .. }) if vpc_id == "vpc-default"),
+            "{scope:?}"
         );
     }
 }
