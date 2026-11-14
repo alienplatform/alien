@@ -850,12 +850,12 @@ async fn protected_public_read(
             resource_id: Some(resource_id.to_string()),
         })?;
     let changed = set_public_viewer(&mut policy, public);
-    let policy = serde_json::to_value(&policy)
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
+    let policy = serde_json::to_value(&policy).into_alien_error().context(
+        ErrorData::CloudPlatformError {
             message: "The bucket IAM policy does not serialize".to_string(),
             resource_id: Some(resource_id.to_string()),
-        })?;
+        },
+    )?;
     let writes = public_read_writes(bucket_name, policy, changed, public);
     apply_resource_write(
         &gcp_verifier(ctx)?,
@@ -1830,7 +1830,9 @@ mod tests {
         let public = serde_json::to_value(&policy).unwrap();
         let writes = public_read_writes("acme-assets", public.clone(), changed, true);
         assert_eq!(writes.len(), 2);
-        assert!(matches!(&writes[0], ResourceWrite::SetPublicAccessPrevention { value, .. } if value == "inherited"));
+        assert!(
+            matches!(&writes[0], ResourceWrite::SetPublicAccessPrevention { value, .. } if value == "inherited")
+        );
         let ResourceWrite::SetBucketIamPolicy { policy: sent, .. } = &writes[1] else {
             panic!("second write is the policy: {writes:?}")
         };
@@ -1841,10 +1843,18 @@ mod tests {
 
         // Becoming private: the grant goes first, then the prevention is enforced.
         let writes = public_read_writes("acme-assets", held.clone(), true, false);
-        assert!(matches!(&writes[0], ResourceWrite::SetBucketIamPolicy { .. }));
-        assert!(matches!(&writes[1], ResourceWrite::SetPublicAccessPrevention { value, .. } if value == "enforced"));
+        assert!(matches!(
+            &writes[0],
+            ResourceWrite::SetBucketIamPolicy { .. }
+        ));
+        assert!(
+            matches!(&writes[1], ResourceWrite::SetPublicAccessPrevention { value, .. } if value == "enforced")
+        );
         // Nothing to remove: only the prevention.
-        assert_eq!(public_read_writes("acme-assets", held, false, false).len(), 1);
+        assert_eq!(
+            public_read_writes("acme-assets", held, false, false).len(),
+            1
+        );
     }
 
     /// Test that verifies public read configuration generates correct IAM policy
