@@ -23,13 +23,14 @@ use std::{
 
 use alien_client_core::runtime_credentials::RuntimeCredentials;
 use axum::{
-    body::Bytes,
-    extract::{DefaultBodyLimit, State},
-    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
+    body::{Body, Bytes},
+    extract::State,
+    http::{header, HeaderMap, HeaderName, HeaderValue, Request, StatusCode},
     routing::post,
     Router,
 };
 use tokio::{net::TcpListener, sync::Semaphore};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 pub const ENV_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
@@ -41,6 +42,10 @@ const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
 const MAX_IN_FLIGHT: usize = 16;
 /// Deadline for one upstream request.
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(10);
+/// Deadline for the application to finish uploading one request body.
+const BODY_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often a non-zero drop count is reported.
+const DROP_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 
 /// One signal's destination and the static headers that authorize it.
 #[derive(Clone, Debug)]
@@ -63,13 +68,22 @@ struct RelayState {
     credentials: Option<Arc<RuntimeCredentials>>,
     in_flight: Arc<Semaphore>,
     dropped: Arc<AtomicU64>,
+    shutdown: CancellationToken,
     target: RelayTarget,
 }
 
-/// A running relay. Dropping it does not stop it; it ends with the process.
+/// A running relay. Dropping it stops the listener and cancels requests that
+/// are still in flight.
 pub struct TelemetryRelay {
     address: SocketAddr,
     dropped: Arc<AtomicU64>,
+    shutdown: CancellationToken,
+}
+
+impl Drop for TelemetryRelay {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+    }
 }
 
 impl TelemetryRelay {
@@ -81,6 +95,14 @@ impl TelemetryRelay {
         config: RelayConfig,
         credentials: Option<Arc<RuntimeCredentials>>,
     ) -> std::io::Result<Self> {
+        Self::start_reporting(config, credentials, DROP_REPORT_INTERVAL).await
+    }
+
+    async fn start_reporting(
+        config: RelayConfig,
+        credentials: Option<Arc<RuntimeCredentials>>,
+        report_interval: Duration,
+    ) -> std::io::Result<Self> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(UPSTREAM_TIMEOUT)
@@ -88,11 +110,13 @@ impl TelemetryRelay {
             .map_err(std::io::Error::other)?;
         let in_flight = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
         let dropped = Arc::new(AtomicU64::new(0));
+        let shutdown = CancellationToken::new();
         let state = |target: RelayTarget| RelayState {
             client: client.clone(),
             credentials: credentials.clone(),
             in_flight: in_flight.clone(),
             dropped: dropped.clone(),
+            shutdown: shutdown.clone(),
             target,
         };
 
@@ -111,16 +135,32 @@ impl TelemetryRelay {
                     .with_state(state(target)),
             );
         }
-        let router = router.layer(DefaultBodyLimit::max(MAX_BODY_BYTES));
-
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let address = listener.local_addr()?;
+        let stop = shutdown.clone();
         tokio::spawn(async move {
-            if let Err(error) = axum::serve(listener, router).await {
+            let served =
+                axum::serve(listener, router).with_graceful_shutdown(stop.cancelled_owned());
+            if let Err(error) = served.await {
                 warn!(error = %error, "Telemetry relay stopped");
             }
         });
-        Ok(Self { address, dropped })
+        tokio::spawn(report_drops(
+            dropped.clone(),
+            shutdown.clone(),
+            report_interval,
+            |count| {
+                warn!(
+                    dropped = count,
+                    "Telemetry relay dropped metric or trace batches it could not forward"
+                )
+            },
+        ));
+        Ok(Self {
+            address,
+            dropped,
+            shutdown,
+        })
     }
 
     /// The URL the application sends `path` (`/v1/metrics` or `/v1/traces`) to.
@@ -134,12 +174,59 @@ impl TelemetryRelay {
     }
 }
 
-async fn forward(State(state): State<RelayState>, headers: HeaderMap, body: Bytes) -> StatusCode {
+/// Calls `report` with the number of drops since the last report, at most once
+/// per `interval` and only when the count is not zero, until `stop` fires.
+async fn report_drops(
+    dropped: Arc<AtomicU64>,
+    stop: CancellationToken,
+    interval: Duration,
+    report: impl Fn(u64),
+) {
+    let mut reported = 0;
+    let mut ticker = tokio::time::interval(interval);
+    ticker.tick().await;
+    loop {
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = ticker.tick() => {}
+        }
+        let total = dropped.load(Ordering::Relaxed);
+        if total > reported {
+            report(total - reported);
+            reported = total;
+        }
+    }
+}
+
+async fn forward(State(state): State<RelayState>, request: Request<Body>) -> StatusCode {
+    // The permit comes before the body is read, so the memory held by bodies
+    // is bounded by MAX_IN_FLIGHT * MAX_BODY_BYTES however slowly the
+    // application uploads. It is held until forwarding ends.
     let Ok(_permit) = state.in_flight.clone().try_acquire_owned() else {
         state.dropped.fetch_add(1, Ordering::Relaxed);
         return StatusCode::SERVICE_UNAVAILABLE;
     };
-    match send(&state, &headers, body).await {
+    let shutdown = state.shutdown.clone();
+    tokio::select! {
+        _ = shutdown.cancelled() => StatusCode::SERVICE_UNAVAILABLE,
+        status = receive_and_send(&state, request) => status,
+    }
+}
+
+async fn receive_and_send(state: &RelayState, request: Request<Body>) -> StatusCode {
+    let (parts, body) = request.into_parts();
+    let body = match tokio::time::timeout(BODY_TIMEOUT, axum::body::to_bytes(body, MAX_BODY_BYTES))
+        .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(_)) => return StatusCode::PAYLOAD_TOO_LARGE,
+        Err(_) => {
+            state.dropped.fetch_add(1, Ordering::Relaxed);
+            return StatusCode::REQUEST_TIMEOUT;
+        }
+    };
+    let headers = parts.headers;
+    match send(state, &headers, body).await {
         Ok(status) if status.is_success() => StatusCode::OK,
         Ok(status) => {
             state.dropped.fetch_add(1, Ordering::Relaxed);
@@ -429,7 +516,8 @@ mod tests {
             ),
         ]);
 
-        let overrides = crate::runtime::start_telemetry_relay(&env, &secrets, None, true).await;
+        let (overrides, _relay) =
+            crate::runtime::start_telemetry_relay(&env, &secrets, None, true).await;
         let overrides: HashMap<_, _> = overrides.into_iter().collect();
 
         assert_eq!(overrides.len(), 2);
@@ -462,18 +550,115 @@ mod tests {
             ENV_METRICS_ENDPOINT.to_string(),
             "https://manager.test/v1/metrics".to_string(),
         )]);
-        assert!(
-            crate::runtime::start_telemetry_relay(&env, &HashMap::new(), None, false)
-                .await
-                .is_empty()
-        );
-        assert!(crate::runtime::start_telemetry_relay(
-            &HashMap::new(),
-            &HashMap::new(),
-            None,
-            true
-        )
-        .await
-        .is_empty());
+        let (overrides, relay) =
+            crate::runtime::start_telemetry_relay(&env, &HashMap::new(), None, false).await;
+        assert!(overrides.is_empty() && relay.is_none());
+        let (overrides, relay) =
+            crate::runtime::start_telemetry_relay(&HashMap::new(), &HashMap::new(), None, true)
+                .await;
+        assert!(overrides.is_empty() && relay.is_none());
+    }
+
+    /// Opens a connection that announces a body and sends only part of it.
+    async fn slow_upload(address: &str) -> tokio::net::TcpStream {
+        use tokio::io::AsyncWriteExt;
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(
+                b"POST /v1/metrics HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\npartial",
+            )
+            .await
+            .unwrap();
+        stream
+    }
+
+    #[tokio::test]
+    async fn slow_uploads_beyond_the_in_flight_limit_are_refused_before_their_body_is_read() {
+        use tokio::io::AsyncReadExt;
+        let (manager, _seen) = fake_manager(StatusCode::OK).await;
+        let relay = TelemetryRelay::start(relay_config(&manager), None)
+            .await
+            .unwrap();
+        let address = relay
+            .url("/")
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .to_string();
+
+        let mut streams = Vec::new();
+        for _ in 0..MAX_IN_FLIGHT + 4 {
+            streams.push(slow_upload(&address).await);
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // None of the bodies is complete, so the 16 admitted uploads wait for
+        // more data. The four over the limit are answered at once.
+        let mut refused = 0;
+        for stream in &mut streams {
+            let mut buffer = [0u8; 64];
+            if let Ok(Ok(read)) =
+                tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buffer)).await
+            {
+                if read > 0 && buffer.starts_with(b"HTTP/1.1 503") {
+                    refused += 1;
+                }
+            }
+        }
+        assert_eq!(refused, 4);
+        assert_eq!(relay.dropped(), 4);
+    }
+
+    #[tokio::test]
+    async fn the_port_refuses_connections_after_the_relay_is_dropped() {
+        let (manager, _seen) = fake_manager(StatusCode::OK).await;
+        let relay = TelemetryRelay::start(relay_config(&manager), None)
+            .await
+            .unwrap();
+        let address = relay
+            .url("/")
+            .trim_start_matches("http://")
+            .trim_end_matches('/')
+            .to_string();
+        let mut upload = slow_upload(&address).await;
+        assert_eq!(app_posts(&relay, "/v1/metrics", b"m").await, 200);
+
+        drop(relay);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert!(tokio::net::TcpStream::connect(&address).await.is_err());
+        // The upload that was still in flight is ended too.
+        use tokio::io::AsyncReadExt;
+        let mut buffer = Vec::new();
+        let ended =
+            tokio::time::timeout(Duration::from_secs(2), upload.read_to_end(&mut buffer)).await;
+        assert!(ended.is_ok(), "in-flight upload was left open");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn drops_are_reported_once_per_interval_and_only_when_non_zero() {
+        let dropped = Arc::new(AtomicU64::new(0));
+        let stop = CancellationToken::new();
+        let reports = Arc::new(Mutex::new(Vec::new()));
+        let sink = reports.clone();
+        let task = tokio::spawn(report_drops(
+            dropped.clone(),
+            stop.clone(),
+            Duration::from_secs(60),
+            move |count| sink.lock().unwrap().push(count),
+        ));
+
+        tokio::time::sleep(Duration::from_secs(61)).await;
+        assert!(reports.lock().unwrap().is_empty());
+
+        dropped.fetch_add(3, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        dropped.fetch_add(2, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        assert_eq!(*reports.lock().unwrap(), vec![3]);
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        assert_eq!(*reports.lock().unwrap(), vec![3, 2]);
+
+        stop.cancel();
+        task.await.unwrap();
     }
 }

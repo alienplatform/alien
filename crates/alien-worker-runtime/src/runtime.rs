@@ -206,7 +206,7 @@ pub async fn run(
         None
     };
 
-    let application_startup: Result<(Child, Option<CommandPushConfig>)> = async {
+    let application_startup: Result<(Child, Option<CommandPushConfig>, Option<TelemetryRelay>)> = async {
         // 2. Load user secrets from vault if a secrets list is present.
         let secrets = if let Some(ref provider) = bindings_provider {
             let process_env = std::env::vars().collect::<HashMap<_, _>>();
@@ -263,7 +263,7 @@ pub async fn run(
         }
 
         let command_push = command_push_config(&config, &secrets)?;
-        let telemetry_env = start_telemetry_relay(
+        let (telemetry_env, telemetry_relay) = start_telemetry_relay(
             &identity_env,
             &runtime_secrets,
             runtime_identity,
@@ -271,11 +271,12 @@ pub async fn run(
         )
         .await;
         let child = start_application(&config, &secrets, log_exporter, &telemetry_env).await?;
-        Ok((child, command_push))
+        Ok((child, command_push, telemetry_relay))
     }
     .await;
 
-    let (mut child, command_push) = match application_startup {
+    // The relay stops when this guard drops at the end of `run`.
+    let (mut child, command_push, _telemetry_relay) = match application_startup {
         Ok(started) => started,
         Err(error) => {
             if let Some(transport) = prestarted_transport {
@@ -767,18 +768,18 @@ async fn start_application(
 }
 
 /// Starts the loopback relay for the application's metrics and traces and
-/// returns the endpoint variables that point the application at it. Returns
-/// nothing, and leaves the application's variables alone, when there is
-/// nothing to relay or the relay cannot start: telemetry never stops the
-/// application from running.
+/// returns the endpoint variables that point the application at it, with the
+/// relay, which stops when dropped. Returns nothing, and leaves the
+/// application's variables alone, when there is nothing to relay or the relay
+/// cannot start: telemetry never stops the application from running.
 pub(crate) async fn start_telemetry_relay(
     env: &HashMap<String, String>,
     runtime_secrets: &HashMap<String, String>,
     credentials: Option<Arc<alien_client_core::runtime_credentials::RuntimeCredentials>>,
     export_logs: bool,
-) -> Vec<(&'static str, String)> {
+) -> (Vec<(&'static str, String)>, Option<TelemetryRelay>) {
     if !export_logs || crate::config::runtime_otlp_disabled(env) {
-        return Vec::new();
+        return (Vec::new(), None);
     }
     // Static headers: the shared header, overridden by the signal's own
     // header when the deployment has one. Both may come from the runtime-only
@@ -806,7 +807,7 @@ pub(crate) async fn start_telemetry_relay(
         traces: target(ENV_TRACES_ENDPOINT, "OTEL_EXPORTER_OTLP_TRACES_HEADERS"),
     };
     if config.metrics.is_none() && config.traces.is_none() {
-        return Vec::new();
+        return (Vec::new(), None);
     }
     let (relays_metrics, relays_traces) = (config.metrics.is_some(), config.traces.is_some());
     match TelemetryRelay::start(config, credentials).await {
@@ -818,11 +819,11 @@ pub(crate) async fn start_telemetry_relay(
             if relays_traces {
                 overrides.push((ENV_TRACES_ENDPOINT, relay.url("/v1/traces")));
             }
-            overrides
+            (overrides, Some(relay))
         }
         Err(error) => {
             warn!(error = %error, "Telemetry relay did not start; metrics and traces are not relayed");
-            Vec::new()
+            (Vec::new(), None)
         }
     }
 }

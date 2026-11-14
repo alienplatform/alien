@@ -1574,7 +1574,7 @@ pub(crate) mod tests {
                 logs_auth_header: String::new(),
                 metrics_endpoint: Some("https://otel.shop.example/v1/metrics".to_string()),
                 metrics_auth_header: None,
-                traces_endpoint: None,
+                traces_endpoint: Some("https://otel.shop.example/v1/traces".to_string()),
                 traces_auth_header: None,
                 resource_attributes: HashMap::new(),
             })
