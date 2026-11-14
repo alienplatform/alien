@@ -22,8 +22,8 @@ use alien_core::{
     ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
-    generate_product_terraform_module, TerraformHelmInstall, TerraformOptions,
-    TerraformRegistration, TerraformTarget, TfRegistry,
+    generate_product_terraform_module, generate_terraform_module, TerraformHelmInstall,
+    TerraformOptions, TerraformRegistration, TerraformTarget, TfRegistry,
 };
 
 fn storage_data_read_service_account() -> ServiceAccount {
@@ -809,6 +809,90 @@ fn managed_kubernetes_cluster_emitters_do_not_apply_in_cluster_manifests() {
             ),
         );
     }
+}
+
+/// Terraform destroys the guard before the Helm release and the registration,
+/// so the Operator still runs when retained data stops the destroy.
+#[test]
+fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
+    let stack = Stack::new("eks-destroy-guard".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("production".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let registry = TfRegistry::built_in();
+    let options = |helm_install| TerraformOptions {
+        setup_identity: None,
+        pins: alien_core::SetupPins::compiled_in(),
+        display_name: None,
+        registry: &registry,
+        stack_settings: StackSettings::default(),
+        registration: Some(TerraformRegistration {
+            provider_name: "acme_app".to_string(),
+            provider_source: "pkg.example.com/acme/app".to_string(),
+            provider_version: "1.0.0".to_string(),
+            resource_type: "deployment".to_string(),
+            release_id: Some("rel-test".to_string()),
+            setup_target: "kubernetes".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
+        }),
+        helm_install,
+        supported_aws_regions: Vec::new(),
+    };
+    let helm_install = || {
+        Some(TerraformHelmInstall {
+            chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+            release_name: "acme-operator".to_string(),
+        })
+    };
+    let product = generate_product_terraform_module(
+        &stack,
+        TerraformTarget::Eks,
+        options(helm_install()),
+        false,
+    )
+    .expect("product module should render");
+    let plain = generate_terraform_module(&stack, TerraformTarget::Eks, options(helm_install()))
+        .expect("plain module should render");
+    let without_helm = generate_terraform_module(&stack, TerraformTarget::Eks, options(None))
+        .expect("module without Helm should render");
+
+    for (mode, module) in [("product", &product), ("plain", &plain)] {
+        let helm = module.get("helm.tf").expect("helm.tf");
+        let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            compact.contains("resource \"acme_app_destroy_guard\" \"this\" {"),
+            "{mode}: {helm}"
+        );
+        assert!(
+            compact.contains("depends_on = [ acme_app_deployment.this, helm_release.runtime, ]")
+                || compact
+                    .contains("depends_on = [ acme_app_deployment.this, helm_release.runtime ]"),
+            "{mode}: {helm}"
+        );
+        assert!(compact.contains("deployment_id = acme_app_deployment.this.deployment_id"));
+        assert!(compact.contains("management_url = var.management_url"));
+        let readme = module.get("README.md").expect("README.md");
+        assert!(
+            readme.contains("alien deployments delete --erase-data"),
+            "{mode} README names the erase-first order"
+        );
+        assert!(
+            readme.contains("needs one `terraform apply` with this module"),
+            "{mode} README names the upgrade step"
+        );
+    }
+    // Without a Helm install there is no Operator to order before: no guard.
+    assert!(without_helm
+        .iter()
+        .all(|(_, contents)| !contents.contains("destroy_guard")));
 }
 
 #[test]
