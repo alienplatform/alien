@@ -1975,10 +1975,27 @@ mod tests {
                 "{name} not deleted: {calls:?}"
             );
         }
-        let position = |name: &str| calls.iter().position(|call| call == name).unwrap();
-        assert!(position("nat-gateway") < position("elastic-ip"));
-        assert!(position("subnet") < position("vpc"));
-        assert!(position("internet-gateway") < position("vpc"));
+        // Every dependent call (the mock records one entry per delete, so subnets and route
+        // tables appear once per instance) comes before the one VPC delete, and the NAT gateway
+        // is gone before its address is released.
+        let first = |name: &str| calls.iter().position(|call| call == name).unwrap();
+        let last = |name: &str| calls.iter().rposition(|call| call == name).unwrap();
+        assert_eq!(
+            calls.iter().filter(|call| *call == "vpc").count(),
+            1,
+            "{calls:?}"
+        );
+        assert!(last("nat-gateway") < first("elastic-ip"), "{calls:?}");
+        for dependent in [
+            "subnet",
+            "route-table",
+            "internet-gateway",
+            "security-group",
+            "nat-gateway",
+            "elastic-ip",
+        ] {
+            assert!(last(dependent) < first("vpc"), "{dependent} after vpc: {calls:?}");
+        }
     }
 
     /// Under manual setup the network belongs to the stack: runtime cleanup leaves it for the
@@ -1990,6 +2007,8 @@ mod tests {
             ResourceLifecycle::Frozen,
         )
         .await;
+        // The deployment must have finished runtime cleanup, not stalled in `Deleting`.
+        assert_eq!(state.status, DeploymentStatus::TeardownRequired);
         assert!(calls.is_empty(), "no network delete may run: {calls:?}");
         let stack = state.stack_state.unwrap();
         assert_ne!(
