@@ -256,7 +256,7 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
             Role::SandboxImagePusher,
             Role::VerifiedSetupImporter,
             Role::OperatorSync,
-            ] {
+        ] {
             let (status, body) = pull(&state, role, path).await;
             assert_eq!(
                 status,
