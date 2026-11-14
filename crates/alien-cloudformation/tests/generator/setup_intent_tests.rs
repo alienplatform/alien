@@ -228,19 +228,62 @@ fn intent_resources_carry_no_null_for_any_zone_count() {
                     .expect("native network resolves"),
             )
             .unwrap();
-            for field in ["publicSubnetIds", "privateSubnetIds", "availabilityZones"] {
-                assert_eq!(
-                    native_network["importData"][field]
-                        .as_array()
-                        .unwrap()
-                        .len(),
-                    zones,
-                    "{field} for {zones} zones"
-                );
-            }
-            assert_eq!(data.public_subnet_ids.len(), zones);
-            assert_eq!(data.private_subnet_ids.len(), zones);
-            assert_eq!(data.availability_zones.len(), zones);
+            let expect_refs = |prefix: &str| -> Vec<Value> {
+                (1..=zones)
+                    .map(|n| serde_json::json!({ "Ref": format!("{prefix}{n}") }))
+                    .collect()
+            };
+            let expect_zones: Vec<Value> = (0..zones)
+                .map(|n| {
+                    serde_json::json!({
+                        "Fn::Select": [n, { "Fn::GetAZs": { "Ref": "AWS::Region" } }]
+                    })
+                })
+                .collect();
+            let native_list = |field: &str| -> Vec<Value> {
+                native_network["importData"][field]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{field} is a list"))
+                    .clone()
+            };
+            // Exact ids in zone order: swapped public/private lists, repeated ids or
+            // reordered zones must fail, not only a wrong length.
+            assert_eq!(
+                native_list("publicSubnetIds"),
+                expect_refs("DefaultNetworkPublicSubnet"),
+                "native publicSubnetIds for {zones} zones"
+            );
+            assert_eq!(
+                native_list("privateSubnetIds"),
+                expect_refs("DefaultNetworkPrivateSubnet"),
+                "native privateSubnetIds for {zones} zones"
+            );
+            assert_eq!(
+                native_list("availabilityZones"),
+                expect_zones,
+                "native availabilityZones for {zones} zones"
+            );
+            // The verified text path resolves to placeholders in the same order.
+            let placeholders = |prefix: &str| -> Vec<String> {
+                (1..=zones).map(|n| format!("${{{prefix}{n}}}")).collect()
+            };
+            assert_eq!(
+                data.public_subnet_ids,
+                placeholders("DefaultNetworkPublicSubnet"),
+                "text publicSubnetIds for {zones} zones"
+            );
+            assert_eq!(
+                data.private_subnet_ids,
+                placeholders("DefaultNetworkPrivateSubnet"),
+                "text privateSubnetIds for {zones} zones"
+            );
+            assert_eq!(
+                data.availability_zones,
+                (0..zones)
+                    .map(|n| format!("${{Select{n}}}"))
+                    .collect::<Vec<_>>(),
+                "text availabilityZones for {zones} zones"
+            );
         }
     }
 }
