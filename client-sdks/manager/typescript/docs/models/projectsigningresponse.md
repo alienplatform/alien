@@ -8,7 +8,11 @@ What a release of the project needs to know to sign its setup templates.
 import { ProjectSigningResponse } from "@alienplatform/manager-api/models";
 
 let value: ProjectSigningResponse = {
-  setupHosting: {},
+  setupHosting: {
+    "key": "<value>",
+    "key1": "<value>",
+    "key2": "<value>",
+  },
 };
 ```
 
@@ -16,4 +20,4 @@ let value: ProjectSigningResponse = {
 
 | Field                                                                                                             | Type                                                                                                              | Required                                                                                                          | Description                                                                                                       |
 | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `setupHosting`                                                                                                    | [models.SetupHosting](../models/setuphosting.md)                                                                  | :heavy_check_mark:                                                                                                | What this manager renders setup templates with, so the digests a<br/>release signs are of the templates installs get. |
+| `setupHosting`                                                                                                    | Record<string, *any*>                                                                                             | :heavy_check_mark:                                                                                                | What this manager renders setup templates with, so the digests a<br/>release signs are of the templates installs get. |

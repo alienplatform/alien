@@ -13,6 +13,13 @@ export type CreateRemoteSandboxRequest = {
    * Variables placed in the sandbox.
    */
   env?: { [k: string]: string } | undefined;
+  /**
+   * Request-key and expiry labels, the only labels a caller sets. Each is format-checked
+   *
+   * @remarks
+   * here and again by the verifier.
+   */
+  labels?: { [k: string]: string } | undefined;
   resourceId: string;
 };
 
@@ -20,6 +27,7 @@ export type CreateRemoteSandboxRequest = {
 export type CreateRemoteSandboxRequest$Outbound = {
   deploymentId: string;
   env?: { [k: string]: string } | undefined;
+  labels?: { [k: string]: string } | undefined;
   resourceId: string;
 };
 
@@ -30,6 +38,7 @@ export const CreateRemoteSandboxRequest$outboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   env: z.record(z.string(), z.string()).optional(),
+  labels: z.record(z.string(), z.string()).optional(),
   resourceId: z.string(),
 });
 

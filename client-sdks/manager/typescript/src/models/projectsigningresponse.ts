@@ -8,14 +8,6 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
- * What this manager renders setup templates with, so the digests a
- *
- * @remarks
- * release signs are of the templates installs get.
- */
-export type SetupHosting = {};
-
-/**
  * What a release of the project needs to know to sign its setup templates.
  */
 export type ProjectSigningResponse = {
@@ -25,29 +17,15 @@ export type ProjectSigningResponse = {
    * @remarks
    * release signs are of the templates installs get.
    */
-  setupHosting: SetupHosting;
+  setupHosting: { [k: string]: any };
 };
-
-/** @internal */
-export const SetupHosting$inboundSchema: z.ZodType<SetupHosting, unknown> = z
-  .object({});
-
-export function setupHostingFromJSON(
-  jsonString: string,
-): SafeParseResult<SetupHosting, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SetupHosting$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SetupHosting' from JSON`,
-  );
-}
 
 /** @internal */
 export const ProjectSigningResponse$inboundSchema: z.ZodType<
   ProjectSigningResponse,
   unknown
 > = z.object({
-  setupHosting: z.lazy(() => SetupHosting$inboundSchema),
+  setupHosting: z.record(z.string(), z.any()),
 });
 
 export function projectSigningResponseFromJSON(
