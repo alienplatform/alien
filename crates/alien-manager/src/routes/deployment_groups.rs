@@ -57,6 +57,13 @@ pub struct DeploymentGroupResponse {
     pub project_id: String,
     /// Required by the platform-SDK DeploymentGroup schema.
     pub workspace_id: String,
+    /// Required (nullable) by the platform-SDK DeploymentGroup schema.
+    /// Standalone groups have no integrating-application identifier.
+    pub external_id: Option<String>,
+    /// Required by the platform-SDK DeploymentGroup schema, which allows
+    /// only `customer` or `team`. `customer` is the schema's default for
+    /// every group; standalone has no approval workflow that reads it.
+    pub access_approver: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -105,6 +112,8 @@ fn record_to_response(dg: &DeploymentGroupRecord) -> DeploymentGroupResponse {
         // prj_ + 28 lowercase alphanumerics; ws_ + 24 alphanumerics.
         project_id: "prj_standalone000000000000000000".to_string(),
         workspace_id: "ws_standalone00000000000000".to_string(),
+        external_id: None,
+        access_approver: "customer".to_string(),
     }
 }
 
