@@ -15,10 +15,11 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        downcast, emit_iam_managed_policy_chunks, ensure_unique_statement_sids,
+        downcast, emit_iam_managed_policy_chunks_with, ensure_unique_statement_sids,
         iam_role_name_template, jsonencode, jsonencode_policy_value, managing_role_trust_statement,
         policy_document_expr, required_label, stack_permission_context, tags,
     },
+    emitters::aws::management_network::{fill_network_scope, network_expressions, network_scope},
     expr,
 };
 use alien_core::{
@@ -66,7 +67,20 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             ],
         ));
         let generator = AwsRuntimePermissionsGenerator::new();
-        let context = stack_permission_context(ctx).with_signing(ctx.stack_settings);
+        let mut context = stack_permission_context(ctx).with_signing(ctx.stack_settings);
+        context.aws_network = network_scope(ctx);
+        let network = network_expressions(ctx, label)?;
+        // Set when a policy names the network, so its locals are declared only then.
+        let names_network = std::cell::Cell::new(false);
+        let fill = |document: &mut Expression| {
+            if let Some(network) = &network {
+                let before = document.clone();
+                fill_network_scope(document, network);
+                if *document != before {
+                    names_network.set(true);
+                }
+            }
+        };
         let stack_context = context.clone().with_resource_name("management".to_string());
         let mut statements = Vec::<AwsIamStatement>::new();
         // Keyed by gate input so resources sharing one input share a policy.
@@ -135,12 +149,13 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                 }
             }
         }
-        emit_iam_managed_policy_chunks(
+        emit_iam_managed_policy_chunks_with(
             &mut fragment,
             label,
             &format!("{label}_managed_policy"),
             "deployment-management",
             statements,
+            fill,
         )?;
         for (input_id, mut statements) in gated_statements {
             // Two resources gated on one input each contribute the same
@@ -148,6 +163,8 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
             // IAM rejects a policy document that repeats one.
             ensure_unique_statement_sids(&mut statements);
             let suffix = crate::generator::stack_input_variable_name(&input_id);
+            let mut policy = policy_document_expr(statements)?;
+            fill(&mut policy);
             let block = resource_block(
                 "aws_iam_role_policy",
                 &format!("{label}_{suffix}"),
@@ -157,10 +174,19 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
                         Expression::String(format!("deployment-management-{suffix}")),
                     ),
                     attr("role", expr::traversal(["aws_iam_role", label, "id"])),
-                    attr("policy", policy_document_expr(statements)?),
+                    attr("policy", policy),
                 ],
             );
             fragment.push_gated_resource(block, std::slice::from_ref(&input_id));
+        }
+        if let Some(network) = network.as_ref().filter(|_| names_network.get()) {
+            fragment.locals.extend(network.locals.iter().cloned());
+            if let Some(role) = fragment.resource_blocks.iter_mut().find(|block| {
+                block.labels.first().map(|label| label.as_str()) == Some("aws_iam_role")
+                    && block.labels.get(1).map(|label| label.as_str()) == Some(label)
+            }) {
+                role.body.0.extend(network.subnet_limit_lifecycle());
+            }
         }
 
         // The management role always needs to read its own role —

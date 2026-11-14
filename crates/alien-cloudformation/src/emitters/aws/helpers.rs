@@ -565,7 +565,7 @@ pub(crate) fn network_mode_names_subnets(stack: &alien_core::Stack) -> bool {
 ///
 /// The innermost branch exists only for use-default. A stack that cannot offer that mode collapses
 /// to two branches, because leaving the third in place is template logic nothing can reach.
-fn created_or_provided(
+pub(crate) fn created_or_provided(
     ctx: &EmitContext<'_>,
     created: CfExpression,
     provided: CfExpression,

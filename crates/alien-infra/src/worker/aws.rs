@@ -1056,6 +1056,7 @@ impl AwsWorkerController {
         // If the image URI points to ECR in a different region (e.g., the management
         // region), rewrite it to reference the local region where the replicated copy
         // lives. ECR private image replication must be configured separately.
+        Self::ensure_image_replicated(ctx, aws_cfg, &image_uri, &cfg.id).await?;
         let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
 
         let code = FunctionCode::builder().image_uri(image_uri).build();
@@ -3314,7 +3315,7 @@ impl AwsWorkerController {
         if code_changed && !protected {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-            let image_uri = Self::function_image_uri(ctx, &current_config)?;
+            let image_uri = Self::checked_function_image_uri(ctx, &current_config).await?;
 
             let request = UpdateFunctionCodeRequest::builder()
                 .image_uri(image_uri)
@@ -3470,7 +3471,7 @@ impl AwsWorkerController {
                 // A published version would carry the new image with the previous release's
                 // configuration until the write after this one lands.
                 let code = UpdateFunctionCodeRequest::builder()
-                    .image_uri(Self::function_image_uri(ctx, &current_config)?)
+                    .image_uri(Self::checked_function_image_uri(ctx, &current_config).await?)
                     .publish(false)
                     .build();
                 writes.push(verifier::CloudWrite::UpdateFunctionCode {
@@ -5660,6 +5661,34 @@ impl AwsWorkerController {
         }
     }
 
+    /// Fails closed before Lambda create/update when the image is in another
+    /// region and the exact image has not reached the Lambda's region.
+    async fn ensure_image_replicated(
+        ctx: &ResourceControllerContext<'_>,
+        aws_cfg: &alien_core::AwsClientConfig,
+        image_uri: &str,
+        resource_id: &str,
+    ) -> Result<()> {
+        let Some(image) = super::ecr_region::parse_ecr_image_ref(image_uri) else {
+            return Ok(());
+        };
+        if image.region == aws_cfg.region {
+            return Ok(());
+        }
+        let mut source_cfg = aws_cfg.clone();
+        source_cfg.region = image.region.clone();
+        let source = ctx.service_provider.get_aws_ecr_client(&source_cfg).await?;
+        let target = ctx.service_provider.get_aws_ecr_client(aws_cfg).await?;
+        super::ecr_region::ensure_image_in_region(
+            image_uri,
+            &aws_cfg.region,
+            source.as_ref(),
+            target.as_ref(),
+            resource_id,
+        )
+        .await
+    }
+
     /// Rewrite an ECR image URI to use the given region if it points to a different one.
     ///
     /// Lambda requires container images in the same region as the worker.
@@ -6212,9 +6241,25 @@ impl AwsWorkerController {
         .map(|rendered| rendered.variables))
     }
 
-    /// The image the function pulls in this install: the configured image, with a proxy URI
-    /// resolved to the native ECR one and the ECR region matched to the function's.
-    fn function_image_uri(ctx: &ResourceControllerContext<'_>, config: &Worker) -> Result<String> {
+    /// The image URI for a create/update of the function, after checking that the exact
+    /// image has reached the function's region. Fails closed before any Lambda write.
+    async fn checked_function_image_uri(
+        ctx: &ResourceControllerContext<'_>,
+        config: &Worker,
+    ) -> Result<String> {
+        let uri = Self::function_image_uri(ctx, config)?;
+        let aws_cfg = ctx.get_aws_config()?;
+        // The check needs the image's own region, so give it the URI before the region rewrite.
+        let source = Self::function_source_image_uri(ctx, config)?;
+        Self::ensure_image_replicated(ctx, aws_cfg, &source, &config.id).await?;
+        Ok(uri)
+    }
+
+    /// The function's image URI before it is rewritten to the function's region.
+    fn function_source_image_uri(
+        ctx: &ResourceControllerContext<'_>,
+        config: &Worker,
+    ) -> Result<String> {
         let image_uri = match &config.code {
             alien_core::WorkerCode::Image { image } => image.clone(),
             alien_core::WorkerCode::Source { .. } => {
@@ -6224,12 +6269,20 @@ impl AwsWorkerController {
                 }));
             }
         };
-        let image_uri = if let Some(ref native_host) = ctx.deployment_config.native_image_host {
-            alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
-                .unwrap_or(image_uri)
-        } else {
-            image_uri
-        };
+        Ok(
+            if let Some(ref native_host) = ctx.deployment_config.native_image_host {
+                alien_core::image_rewrite::resolve_native_image_uri(&image_uri, native_host)
+                    .unwrap_or(image_uri)
+            } else {
+                image_uri
+            },
+        )
+    }
+
+    /// The image the function pulls in this install: the configured image, with a proxy URI
+    /// resolved to the native ECR one and the ECR region matched to the function's.
+    fn function_image_uri(ctx: &ResourceControllerContext<'_>, config: &Worker) -> Result<String> {
+        let image_uri = Self::function_source_image_uri(ctx, config)?;
         Ok(Self::rewrite_ecr_region_if_needed(
             &image_uri,
             &ctx.get_aws_config()?.region,

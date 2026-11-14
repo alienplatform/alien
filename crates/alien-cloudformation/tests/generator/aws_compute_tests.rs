@@ -15,23 +15,214 @@ use alien_core::{
     ResourceLifecycle, Stack, StackSettings, Worker, WorkerCode,
 };
 
-#[test]
-fn aws_registry_replication_settings_allow_package_emission() {
+fn registry_stack(regions: &[&str]) -> Stack {
     let mut registry = ArtifactRegistry::new("images".to_string()).build();
-    registry.replication_regions = vec!["us-west-2".to_string()];
-    let stack = Stack::new("app".to_string())
+    registry.replication_regions = regions.iter().map(|r| r.to_string()).collect();
+    Stack::new("app".to_string())
         .add(registry, ResourceLifecycle::Frozen)
-        .build();
-    let rendered = super::helpers::try_render_built_ins(
-        &stack,
+        .build()
+}
+
+fn try_render_registry(stack: &Stack) -> Result<String, String> {
+    super::helpers::try_render_built_ins(
+        stack,
         StackSettings::default(),
         RegistrationMode::OutputsFallback,
         alien_cloudformation::CloudFormationTarget::Aws,
         "aws",
-        "unsupported registry replication",
+        "registry replication",
     )
-    .expect("legacy replication settings must still render");
-    assert!(!format!("{rendered:?}").contains("ReplicationConfiguration"));
+    .map(|rendered| format!("{rendered:?}"))
+    .map_err(|e| e.to_string())
+}
+
+#[test]
+fn aws_registry_without_regions_emits_no_replication() {
+    let rendered = try_render_registry(&registry_stack(&[])).unwrap();
+    assert!(!rendered.contains("ReplicationConfiguration"));
+    assert!(!rendered.contains("RepositoryCreationTemplate"));
+}
+
+#[test]
+fn aws_registry_declared_regions_emit_replication_and_no_creation_template() {
+    let rendered = try_render_registry(&registry_stack(&["us-east-2", "eu-west-1"])).unwrap();
+    // The rules go through a merge-on-write custom resource, never the native account-wide
+    // resource, which replaces every rule and clears them all on delete.
+    assert!(rendered.contains("Custom::EcrReplicationRule"), "{rendered}");
+    assert!(
+        !rendered.contains("AWS::ECR::ReplicationConfiguration"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("RepositoryCreationTemplate"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("us-east-2") && rendered.contains("eu-west-1"));
+    // The rule's prefix is the registry's own, so only that rule is ever replaced or removed.
+    assert!(rendered.contains("-images"), "{rendered}");
+    // The template carries no repository policy: grants are written per region.
+    assert!(!rendered.contains("\"RepositoryPolicy\""));
+}
+
+fn input_registry_stack() -> Stack {
+    let mut input = alien_core::StackInputDefinition::deployer_boolean(
+        "deploymentRegions",
+        "Deployment regions",
+        "Regions deployments run in",
+        Some(false),
+    );
+    input.kind = alien_core::StackInputKind::StringList;
+    input.default = Some(alien_core::StackInputDefaultValue::StringList(vec![]));
+    let mut registry = ArtifactRegistry::new("images".to_string()).build();
+    registry.replication_regions_input = Some("deploymentRegions".to_string());
+    Stack::new("app".to_string())
+        .inputs(vec![input])
+        .add(registry, ResourceLifecycle::Frozen)
+        .build()
+}
+
+fn render_template_json(stack: &Stack) -> serde_json::Value {
+    let template = super::helpers::try_render_built_ins(
+        stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "registry replication input",
+    )
+    .expect("template should render");
+    // CI has cfn-lint and must pass; a box without it skips the lint.
+    let yaml = alien_cloudformation::to_yaml(&template).unwrap();
+    let lint = alien_cloudformation::test_utils::cfn_lint(&yaml);
+    if !matches!(
+        lint.status,
+        alien_cloudformation::test_utils::LinterStatus::Skipped(_)
+    ) {
+        lint.assert_ok("registry replication input");
+    }
+    serde_json::to_value(&template).unwrap()
+}
+
+#[test]
+fn aws_registry_replication_names_stay_within_aws_limits_for_long_ids() {
+    let id = "i".repeat(40);
+    let mut registry = ArtifactRegistry::new(id.clone()).build();
+    registry.replication_regions = vec!["us-east-2".to_string()];
+    let stack = Stack::new("s".repeat(40))
+        .add(registry, ResourceLifecycle::Frozen)
+        .build();
+    let template = render_template_json(&stack);
+    let resources = template["Resources"].as_object().unwrap();
+    let helper_types = ["AWS::Lambda::Function", "AWS::Logs::LogGroup", "AWS::IAM::Role"];
+    let mut checked_function = false;
+    for (logical_id, resource) in resources {
+        let kind = resource["Type"].as_str().unwrap();
+        if !logical_id.contains("Replication") || !helper_types.contains(&kind) {
+            continue;
+        }
+        checked_function |= kind == "AWS::Lambda::Function";
+        for (property, limit) in [("FunctionName", 64), ("LogGroupName", 512), ("RoleName", 64)] {
+            let Some(value) = resource["Properties"].get(property) else {
+                continue;
+            };
+            // CloudFormation stack names go up to 128 characters; substitute the worst case.
+            let name = value
+                .to_string()
+                .replace("${AWS::StackName}", &"x".repeat(128));
+            let length = name.trim_matches('"').chars().count();
+            assert!(
+                length <= limit,
+                "{logical_id}.{property} is {length} characters, over {limit}: {value}"
+            );
+        }
+    }
+    assert!(checked_function, "replication helper function not emitted");
+}
+
+#[test]
+fn aws_registry_regions_input_is_read_at_deploy_time_and_empty_writes_nothing() {
+    let template = render_template_json(&input_registry_stack());
+    let resources = &template["Resources"];
+    let configuration = resources
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|r| r["Type"] == "Custom::EcrReplicationRule")
+        .expect("replication configuration");
+    // Nothing is written until the deployer answers at least one region.
+    let gate = configuration["Condition"].as_str().unwrap();
+    assert!(gate.ends_with("ReplicaRegion0Set"), "{gate}");
+    assert!(template["Conditions"][gate].is_object());
+    let rendered = configuration.to_string();
+    // The region comes from the parameter, never a literal.
+    assert!(rendered.contains("InputDeploymentRegions"), "{rendered}");
+    assert!(rendered.contains("too-many-regions"), "{rendered}");
+    assert!(!resources
+        .as_object()
+        .unwrap()
+        .values()
+        .any(|r| r["Type"] == "AWS::ECR::RepositoryCreationTemplate"));
+    assert_eq!(
+        template["Parameters"]["InputDeploymentRegions"]["Type"],
+        "CommaDelimitedList"
+    );
+}
+
+#[test]
+fn aws_registry_regions_input_with_custom_resource_registration_defines_every_condition() {
+    let template = super::helpers::try_render_built_ins(
+        &input_registry_stack(),
+        StackSettings::default(),
+        RegistrationMode::CustomResource {
+            lambda_arn: "arn:aws:lambda:us-east-1:123456789012:function:register".to_string(),
+            callback_url: None,
+        },
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "registry replication input custom resource",
+    )
+    .expect("template should render");
+    let value = serde_json::to_value(&template).unwrap();
+    let conditions = value["Conditions"].as_object().unwrap();
+    let mut without = value.clone();
+    without.as_object_mut().unwrap().remove("Conditions");
+    let text = without.to_string();
+    // Every condition named in Fn::If / Condition must exist.
+    for needle in ["\"Fn::If\":[\"", "\"Condition\":\""] {
+        for part in text.split(needle).skip(1) {
+            let name = part.split('"').next().unwrap();
+            assert!(conditions.contains_key(name), "undefined condition {name}");
+        }
+    }
+}
+
+#[test]
+fn aws_registry_without_a_regions_input_renders_no_replication_conditions() {
+    let template = render_template_json(&registry_stack(&[]));
+    let conditions = template["Conditions"].to_string();
+    assert!(!conditions.contains("ReplicaRegion"), "{conditions}");
+    assert!(!template.to_string().contains("ReplicationConfiguration"));
+}
+
+#[test]
+fn aws_registry_rejects_regions_and_input_together() {
+    let mut stack = input_registry_stack();
+    let _ = &mut stack;
+    let mut registry = ArtifactRegistry::new("images".to_string()).build();
+    registry.replication_regions_input = Some("deploymentRegions".to_string());
+    registry.replication_regions = vec!["us-east-2".to_string()];
+    let both = Stack::new("app".to_string())
+        .inputs(input_registry_stack().inputs().to_vec())
+        .add(registry, ResourceLifecycle::Frozen)
+        .build();
+    let err = try_render_registry(&both).unwrap_err();
+    assert!(err.contains("not both"), "{err}");
+}
+
+#[test]
+fn aws_registry_rejects_a_region_that_is_not_a_region_name() {
+    let err = try_render_registry(&registry_stack(&["us-east-2\"; Fn::Sub"])).unwrap_err();
+    assert!(err.contains("not an AWS region name"), "{err}");
 }
 
 #[test]
@@ -494,4 +685,213 @@ fn aws_custom_domain_selection_registers_exactly_one_public_resource() {
         .expect_err("custom domain must not be assigned to a different public resource");
         assert!(error.message.contains(invalid_id));
     }
+}
+
+#[test]
+fn aws_registry_replication_role_may_create_only_the_ecr_replication_service_linked_role() {
+    let template = render_template_json(&registry_stack(&["us-east-2"]));
+    let role = template["Resources"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|r| {
+            r["Type"] == "AWS::IAM::Role"
+                && r.to_string().contains("ecr:PutReplicationConfiguration")
+        })
+        .expect("replication role");
+    let statements = role["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        .as_array()
+        .unwrap();
+    let slr = statements
+        .iter()
+        .find(|s| s["Action"] == "iam:CreateServiceLinkedRole")
+        .expect("service-linked role grant, needed by the first replication write in an account");
+    assert_eq!(
+        slr["Condition"]["StringEquals"]["iam:AWSServiceName"],
+        "replication.ecr.amazonaws.com"
+    );
+    assert!(slr["Resource"].to_string().contains("AWSServiceRoleForECRReplication"));
+}
+
+#[test]
+fn aws_registry_replication_write_grant_is_on_the_custom_resource_role_only() {
+    let template = render_template_json(&registry_stack(&["us-east-2"]));
+    let resources = template["Resources"].as_object().unwrap();
+    let granted: Vec<&String> = resources
+        .iter()
+        .filter(|(_, r)| {
+            r.to_string().contains("\"ecr:PutReplicationConfiguration\"")
+                && r["Type"] != "AWS::IAM::ManagedPolicy"
+                && r["Type"] != "Custom::EcrReplicationRule"
+        })
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(granted.len(), 1, "write grant must be on one role: {granted:?}");
+    assert!(granted[0].ends_with("ReplicationRole"), "{granted:?}");
+    // The Lambda that uses it is the only function assuming that role.
+    let function = resources
+        .values()
+        .find(|r| r["Type"] == "AWS::Lambda::Function" && r.to_string().contains("ReplicationRole"))
+        .expect("replication function");
+    assert!(function["Properties"]["Role"].to_string().contains(granted[0].as_str()));
+}
+
+#[test]
+fn aws_registry_conditional_regions_input_is_split_from_a_string_and_honors_its_condition() {
+    let mut stack = input_registry_stack();
+    let mut gate = alien_core::StackInputDefinition::deployer_boolean(
+        "multiRegion",
+        "Multi-region",
+        "Replicate images to other regions",
+        Some(false),
+    );
+    gate.kind = alien_core::StackInputKind::Boolean;
+    let regions = stack.inputs.get_mut(0).unwrap();
+    regions.when = Some(alien_core::StackInputCondition {
+        input: "multiRegion".to_string(),
+        equals: true,
+    });
+    stack.inputs.insert(0, gate);
+    let template = render_template_json(&stack);
+    // A conditional list input is a String parameter; the slots must not Join it as a list.
+    assert_eq!(template["Parameters"]["InputDeploymentRegions"]["Type"], "String");
+    let slot0 = template["Conditions"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find(|(name, _)| name.ends_with("ReplicaRegion0Set"))
+        .map(|(_, v)| v.to_string())
+        .expect("slot 0 condition");
+    assert!(slot0.contains("InputDeploymentRegionsApplies"), "{slot0}");
+    assert!(
+        !slot0.contains("\"Fn::Join\":[\",\",{\"Ref\":\"InputDeploymentRegions\"}]"),
+        "{slot0}"
+    );
+}
+
+fn conditional_regions_stack_with_off_platform_controller(equals: bool) -> Stack {
+    let mut stack = input_registry_stack();
+    let mut gate = alien_core::StackInputDefinition::deployer_boolean(
+        "multiRegion",
+        "Multi-region",
+        "Replicate images to other regions",
+        Some(false),
+    );
+    gate.kind = alien_core::StackInputKind::Boolean;
+    // The controlling input exists only on GCP, so on AWS it is not a parameter.
+    gate.platforms = Some(vec![alien_core::Platform::Gcp]);
+    stack.inputs.get_mut(0).unwrap().when = Some(alien_core::StackInputCondition {
+        input: "multiRegion".to_string(),
+        equals,
+    });
+    stack.inputs.insert(0, gate);
+    stack
+}
+
+#[test]
+fn aws_registry_regions_input_whose_controller_is_off_platform_and_false_is_a_plain_list() {
+    // The parameter loses its condition on AWS; the slots must read it as a list and must not
+    // reference a `...Applies` condition that is never defined.
+    let template = render_template_json(&conditional_regions_stack_with_off_platform_controller(false));
+    assert_eq!(
+        template["Parameters"]["InputDeploymentRegions"]["Type"],
+        "CommaDelimitedList"
+    );
+    assert!(template["Conditions"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|name| !name.ends_with("RegionsApplies")));
+    let everything = template.to_string();
+    assert!(!everything.contains("InputDeploymentRegionsApplies"), "{everything}");
+}
+
+#[test]
+fn aws_registry_regions_input_that_is_not_a_parameter_fails_with_a_clear_error() {
+    let stack = conditional_regions_stack_with_off_platform_controller(true);
+    let error = super::helpers::try_render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        alien_cloudformation::CloudFormationTarget::Aws,
+        "aws",
+        "registry replication input",
+    )
+    .err()
+    .expect("a regions input that is dropped must not render a template that references it");
+    assert!(format!("{error:?}").contains("not a deployer-provided input"), "{error:?}");
+}
+
+fn eks_registry_stack(platforms: Vec<alien_core::Platform>) -> Stack {
+    use alien_core::{
+        KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+        KubernetesHeartbeatMode, RemoteStackManagement,
+    };
+    let mut input = alien_core::StackInputDefinition::deployer_boolean(
+        "deploymentRegions",
+        "Deployment regions",
+        "Regions deployments run in",
+        Some(false),
+    );
+    input.kind = alien_core::StackInputKind::StringList;
+    input.default = Some(alien_core::StackInputDefaultValue::StringList(vec![]));
+    input.platforms = Some(platforms);
+    let mut registry = ArtifactRegistry::new("images".to_string()).build();
+    registry.replication_regions_input = Some("deploymentRegions".to_string());
+    Stack::new("kubernetes".to_string())
+        .inputs(vec![input])
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("alien".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(registry, ResourceLifecycle::Frozen)
+        .build()
+}
+
+#[test]
+fn eks_registry_regions_input_scoped_to_kubernetes_renders_and_aws_scoped_one_is_refused() {
+    let render = |stack: &Stack| {
+        super::helpers::try_render_built_ins(
+            stack,
+            StackSettings::default(),
+            RegistrationMode::OutputsFallback,
+            alien_cloudformation::CloudFormationTarget::Eks,
+            "kubernetes",
+            "eks registry replication input",
+        )
+    };
+    // The parameter is scoped to the Kubernetes deployment; the lookup must find it there.
+    let template = render(&eks_registry_stack(vec![alien_core::Platform::Kubernetes]))
+        .expect("a Kubernetes-scoped regions input is valid on EKS");
+    let value = serde_json::to_value(&template).unwrap();
+    assert!(value["Resources"]
+        .as_object()
+        .unwrap()
+        .values()
+        .any(|r| r["Type"] == "Custom::EcrReplicationRule"));
+    // An input that is not a parameter of this template stays a clear generation error.
+    assert!(render(&eks_registry_stack(vec![alien_core::Platform::Aws])).is_err());
+}
+
+#[test]
+fn plain_aws_registry_regions_input_still_renders() {
+    render_template_json(&input_registry_stack());
+}
+
+#[test]
+fn aws_registry_regions_input_that_is_not_a_string_list_fails_with_a_clear_error() {
+    let mut stack = input_registry_stack();
+    stack.inputs[0].kind = alien_core::StackInputKind::String;
+    stack.inputs[0].default = None;
+    let error = try_render_registry(&stack).expect_err("a string input must not feed the slots");
+    assert!(error.contains("StringList"), "{error}");
 }

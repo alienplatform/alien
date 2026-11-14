@@ -33,6 +33,13 @@ pub struct ArtifactRegistry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[builder(default)]
     pub replication_regions: Vec<String>,
+
+    /// AWS-only: id of a deployer-provided string-list stack input that names the
+    /// regions to replicate to. CloudFormation reads the list at deploy time, so
+    /// the template reserves a fixed number of region slots. Empty answers write
+    /// no replication configuration, so existing installs render unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replication_regions_input: Option<String>,
 }
 
 impl ArtifactRegistry {
@@ -147,6 +154,33 @@ pub struct ArtifactRegistryOutputs {
     /// - Azure: Managed identity resource ID (e.g., "/subscriptions/.../resourceGroups/.../providers/Microsoft.ManagedIdentity/userAssignedIdentities/my-registry-push")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub push_role: Option<String>,
+}
+
+/// Whose rules the registry's replication configuration holds. The configuration is one
+/// per account and region, and writing it replaces every rule. The setup that writes ours
+/// reads the rules when it writes and keeps every rule that is not ours unchanged, so this
+/// report is informational: it tells the operator which other rules the account has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum RegistryReplicationOwner {
+    /// No rules.
+    None,
+    /// Exactly the one rule this registry's setup writes.
+    Ours,
+    /// At least one rule this registry did not write; setup keeps it unchanged.
+    Foreign,
+}
+
+/// The replication rules a registry reported, without anything beyond rule shapes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryReplicationReport {
+    pub owner: RegistryReplicationOwner,
+    /// One short line per rule that is not ours: destination regions and repository filters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub foreign_rules: Vec<String>,
 }
 
 impl ResourceOutputsDefinition for ArtifactRegistryOutputs {

@@ -223,6 +223,11 @@ impl AwsRuntimePermissionsGenerator {
                     let value_key =
                         VariableInterpolator::interpolate_variables(value_key, context)?;
                     let interpolated_value = match value_template {
+                        AwsConditionValue::String(value)
+                            if value == crate::AWS_SUBNET_IDS_VARIABLE =>
+                        {
+                            AwsConditionValue::List(context.aws_subnet_ids())
+                        }
                         AwsConditionValue::String(value) => {
                             AwsConditionValue::String(interpolate_aws_variables(value, context)?)
                         }

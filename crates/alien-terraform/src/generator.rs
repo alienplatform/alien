@@ -584,7 +584,7 @@ pub(crate) fn render_terraform_module(
     // EKS uses IAM roles for the cluster and IRSA, not Lambda execution.
     // Making its subnets depend on those roles creates a Terraform cycle.
     if target == TerraformTarget::Aws {
-        apply_aws_network_iam_dependency(stack, &mut per_resource);
+        apply_aws_network_iam_dependency(stack, &shared_locals, &mut per_resource);
     }
     if matches!(platform, alien_core::Platform::Azure) {
         emit_azure_setup_resource_role_definitions(&mut per_resource, stack, &stack_settings)?;
@@ -1638,6 +1638,15 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
             if dependency.id() == resource_id {
                 continue;
             }
+            // Management waits for the network only so direct setup renders its policy from
+            // the finished network. The module's policies reference the network's IDs, which
+            // already orders them; the edge would also take management's IAM out of the
+            // network's destroy-IAM-last ordering.
+            if entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE
+                && dependency.resource_type() == &Network::RESOURCE_TYPE
+            {
+                continue;
+            }
             // Remote Bindings is an executor-ordering dependency: direct setup must create the
             // identity before a resource controller can attach its exact grant. Generated setup
             // expresses that relationship on the grant resource itself, which depends on both
@@ -1689,6 +1698,7 @@ fn apply_resource_dependencies(stack: &Stack, per_resource: &mut IndexMap<String
 /// role trusting a cluster placed in it, are skipped to avoid a cycle.
 fn apply_aws_network_iam_dependency(
     stack: &Stack,
+    locals: &IndexMap<String, Expression>,
     per_resource: &mut IndexMap<String, TfFragment>,
 ) {
     const IAM_TYPES: [&str; 4] = [
@@ -1740,6 +1750,10 @@ fn apply_aws_network_iam_dependency(
             let body = hcl::format::to_string(&resource.body).ok()?;
             Some((address, body))
         })
+        // A grant can also reach the network through a local.
+        .chain(locals.iter().filter_map(|(name, value)| {
+            Some((format!("local.{name}"), hcl::format::to_string(value).ok()?))
+        }))
         .collect();
     let direct_dependencies: IndexMap<&str, Vec<&str>> = rendered
         .iter()

@@ -628,6 +628,27 @@ pub fn emit_iam_managed_policy_chunks(
     base_name: &str,
     statements: Vec<AwsIamStatement>,
 ) -> Result<()> {
+    emit_iam_managed_policy_chunks_with(
+        fragment,
+        role_label,
+        base_label,
+        base_name,
+        statements,
+        |_| {},
+    )
+}
+
+/// [`emit_iam_managed_policy_chunks`], with `fill` applied to each packed policy document.
+/// Packing measures the statements as rendered, so `fill` swaps placeholders that were rendered
+/// at the length of the values they stand for.
+pub fn emit_iam_managed_policy_chunks_with(
+    fragment: &mut TfFragment,
+    role_label: &str,
+    base_label: &str,
+    base_name: &str,
+    statements: Vec<AwsIamStatement>,
+    fill: impl Fn(&mut Expression),
+) -> Result<()> {
     let mut statements = statements;
     ensure_unique_statement_sids(&mut statements);
     // The signing Deny was added after installs existed, so it goes after packing and the
@@ -656,7 +677,8 @@ pub fn emit_iam_managed_policy_chunks(
         let policy_label = format!("{base_label}_{idx}");
         let attachment_label = format!("{policy_label}_attachment");
         let policy_name = format!("{base_name}-{idx}");
-        let policy_expr = policy_document_expr(chunk)?;
+        let mut policy_expr = policy_document_expr(chunk)?;
+        fill(&mut policy_expr);
 
         fragment.resource_blocks.push(resource_block(
             "aws_iam_policy",
@@ -817,7 +839,7 @@ pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> Expression {
 
 /// Whether setup creates a database that sits in the VPC (Postgres or Redis), which makes the
 /// network module also support the account's default VPC.
-fn stack_has_setup_postgres(ctx: &EmitContext<'_>) -> bool {
+pub(crate) fn stack_has_setup_postgres(ctx: &EmitContext<'_>) -> bool {
     ctx.stack.resources().any(|(_id, entry)| {
         entry.lifecycle == alien_core::ResourceLifecycle::Frozen
             && (entry

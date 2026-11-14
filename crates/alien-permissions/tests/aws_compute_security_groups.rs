@@ -119,6 +119,10 @@ fn management_can_launch_with_this_stacks_compute_security_group_only(
         ),
     ] {
         let mut request = Request::new("ec2:RunInstances", resource).resource_tags(resource_tags);
+        // AWS supplies the VPC of every subnet and network interface a launch uses.
+        if resource.contains(":subnet/") || resource.contains(":network-interface/") {
+            request = request.with("ec2:Vpc", "arn:aws:ec2:us-west-2:123456789012:vpc/vpc-0123");
+        }
         if !request_tags.is_empty() {
             request = request.request_tags(request_tags);
         }

@@ -517,6 +517,7 @@ pub fn generate_cloudformation_template_with_profile(
     if supports_custom_domain {
         add_custom_domain_certificate_rule(&mut template);
     }
+    add_replication_region_conditions(&mut template, stack, options.target.deployment_platform());
     if !access_only {
         add_standard_conditions(
             &mut template,
@@ -762,6 +763,7 @@ pub fn generate_cloudformation_template_with_profile(
     lower_json_strings(&mut template)?;
     validate_role_policy_limits(&template)?;
     validate_acyclic(&template)?;
+    prune_unused_replication_input_conditions(&mut template, stack);
     if stack_settings_value.signing.is_some() {
         add_setup_revision(&mut template)?;
     }
@@ -827,7 +829,16 @@ fn stack_inputs_for_cloudformation(
     stack: &Stack,
     target: CloudFormationTarget,
 ) -> Vec<StackInputDefinition> {
-    let platform = target.deployment_platform();
+    stack_inputs_for_platform(stack, target.deployment_platform())
+}
+
+/// The inputs that become template parameters on `platform`, with `when` cleared where the
+/// controlling input does not apply. Everything that reads an input's parameter (the parameter
+/// itself, its conditions, the replication region slots) must start from this one list.
+pub(crate) fn stack_inputs_for_platform(
+    stack: &Stack,
+    platform: alien_core::Platform,
+) -> Vec<StackInputDefinition> {
     stack
         .inputs()
         .iter()
@@ -2702,6 +2713,69 @@ fn add_custom_domain_certificate_rule(template: &mut CfTemplate) {
             }],
         },
     );
+}
+
+/// One condition per region slot of a registry whose replication regions come
+/// from a deployer input; the registry emitter references them by name.
+fn add_replication_region_conditions(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    platform: alien_core::Platform,
+) {
+    use crate::emitters::aws::artifact_registry::{
+        replication_input_is_conditional, replication_slot_condition,
+        replication_slot_condition_expression, MAX_REPLICATION_REGION_SLOTS,
+    };
+    for (_, entry) in stack.resources() {
+        let Some(registry) = entry.config.downcast_ref::<alien_core::ArtifactRegistry>() else {
+            continue;
+        };
+        let Some(input_id) = registry.replication_regions_input.as_deref() else {
+            continue;
+        };
+        // An input that is not a parameter has no slots; the registry emitter reports it.
+        let Some(conditional) = replication_input_is_conditional(stack, platform, input_id) else {
+            continue;
+        };
+        for slot in 0..=MAX_REPLICATION_REGION_SLOTS {
+            template.conditions.insert(
+                replication_slot_condition(input_id, slot),
+                replication_slot_condition_expression(input_id, conditional, slot),
+            );
+        }
+    }
+}
+
+/// The slots read the parameter directly, so the generic "has a value"
+/// condition for a replication input is defined and unused (W8001) unless
+/// registration uses it. Runs once the whole template is built.
+fn prune_unused_replication_input_conditions(template: &mut CfTemplate, stack: &Stack) {
+    for (_, entry) in stack.resources() {
+        let Some(registry) = entry.config.downcast_ref::<alien_core::ArtifactRegistry>() else {
+            continue;
+        };
+        let Some(input_id) = registry.replication_regions_input.as_deref() else {
+            continue;
+        };
+        let generic = format!(
+            "Has{}",
+            crate::generator::stack_input_parameter_name_for_id(input_id)
+        );
+        if !condition_is_referenced(template, &generic) {
+            template.conditions.shift_remove(&generic);
+        }
+    }
+}
+
+/// True when a resource, output or other section (not Conditions) names the
+/// condition, e.g. in `Condition` or `Fn::If`.
+fn condition_is_referenced(template: &CfTemplate, name: &str) -> bool {
+    let needle = format!("\"{name}\"");
+    let mut without_conditions = template.clone();
+    without_conditions.conditions.clear();
+    serde_json::to_string(&without_conditions)
+        .map(|text| text.contains(&needle))
+        .unwrap_or(true)
 }
 
 fn add_list_parameter_condition(template: &mut CfTemplate, parameter: &str) {

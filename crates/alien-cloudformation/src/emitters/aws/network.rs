@@ -541,7 +541,7 @@ fn cidr_blocks(vpc_id: &str, count: i64) -> CfExpression {
 
 // AWS::NoValue becomes JSON null inside Fn::ToJsonString. Select the complete
 // list so setup registration receives only the two or three real subnet values.
-fn created_sandbox_subnet_values(
+pub(crate) fn created_sandbox_subnet_values(
     prefix: &str,
     suffix: &str,
     attribute: Option<&str>,

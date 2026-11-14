@@ -4,6 +4,29 @@ use alien_core::{
 
 // Core types are re-exported by the generators that need them
 
+/// Where the management identity may place the network-facing resources it creates on AWS:
+/// instances, security groups and load balancers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AwsNetworkScope {
+    /// The stack's own VPC, known when setup renders the policy: setup created it or the
+    /// installer named it. Subnet IDs are the ones a load balancer or Auto Scaling group may use.
+    Vpc {
+        vpc_id: String,
+        subnet_ids: Vec<String>,
+    },
+    /// Management creates the network itself, after the policy is written. Its VPC and subnets
+    /// carry the stack's ownership tags from creation, so tags stand in for IDs.
+    StackTagged,
+}
+
+/// Label prefix of statements rendered when the stack's VPC is known or unknown, but not
+/// tag-scoped. Without a known VPC their `${awsVpcId}` and `${awsSubnetIds}` render as `*`.
+pub const VPC_PINNED_LABEL_PREFIX: &str = "vpc-pinned-";
+/// Label prefix of statements rendered only for a network management creates itself.
+pub const VPC_TAGGED_LABEL_PREFIX: &str = "vpc-tagged-";
+/// Condition value that renders as the list of the stack's subnet IDs.
+pub const AWS_SUBNET_IDS_VARIABLE: &str = "${awsSubnetIds}";
+
 /// Context for generating permissions with type-safe variables
 #[derive(Debug, Clone)]
 pub struct PermissionContext {
@@ -12,6 +35,9 @@ pub struct PermissionContext {
     pub aws_region: Option<String>,
     /// Setup-approved boundary ARN. Absent for deployments created without a boundary.
     pub aws_permissions_boundary_arn: Option<String>,
+    /// The stack's network, when setup knows it. Absent renders the network conditions with
+    /// wildcards (the account's default VPC, or a caller that has no network to name).
+    pub aws_network: Option<AwsNetworkScope>,
 
     // GCP variables
     pub project_name: Option<String>,
@@ -64,6 +90,7 @@ impl PermissionContext {
             aws_account_id: None,
             aws_region: None,
             aws_permissions_boundary_arn: None,
+            aws_network: None,
             project_name: None,
             project_number: None,
             region: None,
@@ -99,6 +126,33 @@ impl PermissionContext {
     pub fn with_aws_permissions_boundary_arn(mut self, arn: impl Into<String>) -> Self {
         self.aws_permissions_boundary_arn = Some(arn.into());
         self
+    }
+
+    /// Keep network-facing creates inside the stack's own network.
+    pub fn with_aws_network(mut self, network: AwsNetworkScope) -> Self {
+        self.aws_network = Some(network);
+        self
+    }
+
+    /// The stack's VPC ID, or `*` when it is unknown or tag-scoped.
+    pub fn aws_vpc_id(&self) -> &str {
+        match &self.aws_network {
+            Some(AwsNetworkScope::Vpc { vpc_id, .. }) => vpc_id,
+            _ => "*",
+        }
+    }
+
+    /// The stack's subnet IDs, or `*` when they are unknown or tag-scoped. A known VPC with
+    /// no subnets yields one empty ID, which matches no subnet, as CloudFormation and
+    /// Terraform render a blank subnet list.
+    pub fn aws_subnet_ids(&self) -> Vec<String> {
+        match &self.aws_network {
+            Some(AwsNetworkScope::Vpc { subnet_ids, .. }) if subnet_ids.is_empty() => {
+                vec![String::new()]
+            }
+            Some(AwsNetworkScope::Vpc { subnet_ids, .. }) => subnet_ids.clone(),
+            _ => vec!["*".to_string()],
+        }
     }
 
     /// Builder pattern for AWS region
@@ -261,6 +315,7 @@ impl PermissionContext {
             "awsAccountId" => self.aws_account_id.as_deref(),
             "awsRegion" => self.aws_region.as_deref(),
             "awsPermissionsBoundaryArn" => self.aws_permissions_boundary_arn.as_deref(),
+            "awsVpcId" => Some(self.aws_vpc_id()),
             "projectName" => self.project_name.as_deref(),
             "projectNumber" => self.project_number.as_deref(),
             "region" => self.region.as_deref(),
