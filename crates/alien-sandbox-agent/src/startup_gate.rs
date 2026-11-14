@@ -3,7 +3,8 @@
 //! A pod's NetworkPolicy can load a moment after its container starts (measured at about one
 //! second on EKS Auto Mode). Anything the workload connects to in that window is unrestricted.
 //! So on Kubernetes the agent, before it starts the ENTRYPOINT, tries to connect to destinations
-//! the policy refuses in every egress mode (the cluster API and a public address). The metadata address is not a target: some CNIs leave it
+//! the policy refuses: the cluster API in every egress mode, and a public address where the declared
+//! egress forbids direct public traffic (`none` and `internet`; an `allow` pod may reach it). The metadata address is not a target: some CNIs leave it
 //! reachable, so credential exposure there is a separate check.
 //! A drop looks like a timeout, and so does a pod network that is not ready yet, so a round only
 //! counts when it also proves the network works:
@@ -21,8 +22,6 @@ use std::time::{Duration, Instant};
 /// Set by the Kubernetes backend on every sandbox pod. Unset elsewhere: nothing to prove.
 pub const ENV_STARTUP_GATE: &str = "ALIEN_SANDBOX_STARTUP_EGRESS_GATE";
 
-/// A public address every egress mode must refuse to reach directly.
-const PUBLIC_ADDRESS: &str = "1.1.1.1:443";
 /// How often the check re-runs after launch.
 const RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 const ATTEMPT_TIMEOUT: Duration = Duration::from_millis(300);
@@ -46,7 +45,7 @@ pub enum Attempt {
 /// What a round checks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Probe {
-    /// Must be refused in every egress mode.
+    /// Must be refused: the cluster API always, a public address only where the policy forbids it.
     pub blocked: Vec<String>,
     /// `internet`: the gateway, which must connect in the same round.
     pub control: Option<String>,
@@ -164,12 +163,12 @@ fn network_up() -> bool {
 /// server is does not start: skipping it would be a silent fail-open.
 fn probe_from(
     kube_api: Option<&str>,
+    public: Option<&str>,
     service_host: Option<&str>,
     service_port: Option<&str>,
     control: Option<String>,
 ) -> Result<Probe, String> {
-    let mut blocked = vec![PUBLIC_ADDRESS.to_string()];
-    let before = blocked.len();
+    let mut blocked = Vec::new();
     for target in kube_api
         .unwrap_or_default()
         .split(',')
@@ -191,7 +190,7 @@ fn probe_from(
             blocked.push(target);
         }
     }
-    if blocked.len() == before {
+    if blocked.is_empty() {
         return Err(format!(
             "{} is not set: the Kubernetes API server address is a required target of the egress \
              check, and without it the check would silently skip the destination that matters \
@@ -199,12 +198,26 @@ fn probe_from(
             alien_core::sandbox_image::ENV_MUST_DROP_KUBE_API
         ));
     }
+    // Only where the declared egress forbids direct public traffic; the Operator says so.
+    for target in public
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+    {
+        if !blocked.iter().any(|known| known == target) {
+            blocked.push(target.to_string());
+        }
+    }
     Ok(Probe { blocked, control })
 }
 
 fn probe_from_env() -> Result<Probe, String> {
     probe_from(
         std::env::var(alien_core::sandbox_image::ENV_MUST_DROP_KUBE_API)
+            .ok()
+            .as_deref(),
+        std::env::var(alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC)
             .ok()
             .as_deref(),
         std::env::var("KUBERNETES_SERVICE_HOST").ok().as_deref(),
@@ -309,24 +322,108 @@ mod tests {
 
     #[test]
     fn a_gated_pod_without_a_kube_api_target_is_refused() {
-        let error = probe_from(None, None, None, None).unwrap_err();
+        let error = probe_from(None, None, None, None, None).unwrap_err();
         assert!(
             error.contains("ALIEN_SANDBOX_MUST_DROP_KUBE_API"),
             "{error}"
         );
-        assert!(probe_from(Some(" , "), None, None, Some("gw".into())).is_err());
+        assert!(probe_from(
+            Some(" , "),
+            Some("1.1.1.1:443"),
+            None,
+            None,
+            Some("gw".into())
+        )
+        .is_err());
     }
 
     #[test]
     fn the_operator_targets_are_probed_with_the_public_address() {
-        let probe = probe_from(Some("10.0.0.1:443,10.1.2.3:6443"), None, None, None).unwrap();
+        let probe = probe_from(
+            Some("10.0.0.1:443,10.1.2.3:6443"),
+            Some("1.1.1.1:443"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             probe.blocked,
-            vec!["1.1.1.1:443", "10.0.0.1:443", "10.1.2.3:6443"]
+            vec!["10.0.0.1:443", "10.1.2.3:6443", "1.1.1.1:443"]
         );
         // Service-link variables, when present, are probed too and never duplicated.
-        let probe = probe_from(Some("10.0.0.1:443"), Some("10.0.0.1"), Some("443"), None).unwrap();
+        let probe = probe_from(
+            Some("10.0.0.1:443"),
+            Some("1.1.1.1:443"),
+            Some("10.0.0.1"),
+            Some("443"),
+            None,
+        )
+        .unwrap();
         assert_eq!(probe.blocked.len(), 2);
+    }
+
+    #[test]
+    fn allow_does_not_probe_the_public_address_so_a_reachable_one_starts() {
+        // `allow`: the Operator sets no public target, only the API server.
+        let probe = probe_from(Some("10.0.0.1:443"), None, None, None, None).unwrap();
+        assert_eq!(probe.blocked, vec!["10.0.0.1:443"]);
+        let result = run(
+            &probe,
+            5000,
+            |target| {
+                if target == "10.0.0.1:443" {
+                    Attempt::Dropped
+                } else {
+                    Attempt::Connected // 1.1.1.1 reachable, never asked
+                }
+            },
+            true,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn none_and_internet_refuse_a_reachable_public_address() {
+        let none_probe =
+            probe_from(Some("10.0.0.1:443"), Some("1.1.1.1:443"), None, None, None).unwrap();
+        let reachable = |target: &str| {
+            if target == "1.1.1.1:443" {
+                Attempt::Connected
+            } else {
+                Attempt::Dropped
+            }
+        };
+        assert_eq!(
+            run(&none_probe, 20, reachable, true),
+            Err(vec!["1.1.1.1:443 is reachable".to_string()])
+        );
+        let internet_probe = probe_from(
+            Some("10.0.0.1:443"),
+            Some("1.1.1.1:443"),
+            None,
+            None,
+            Some("gw".into()),
+        )
+        .unwrap();
+        let result = run(
+            &internet_probe,
+            20,
+            |target| {
+                if target == "gw" {
+                    Attempt::Connected
+                } else {
+                    reachable(target)
+                }
+            },
+            true,
+        );
+        assert_eq!(result, Err(vec!["1.1.1.1:443 is reachable".to_string()]));
+        // And the re-check ends such a sandbox.
+        assert_eq!(
+            breaches(&none_probe, reachable),
+            vec!["1.1.1.1:443".to_string()]
+        );
     }
 
     #[test]

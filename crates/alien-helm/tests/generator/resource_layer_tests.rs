@@ -539,7 +539,9 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
             .contains("mirror.site.internal:5000/alien/library/python@sha256:aaaa"),
         "the probe runs the bundled digest from the mirror"
     );
-    assert!(!bundled.stdout.contains("70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"));
+    assert!(!bundled
+        .stdout
+        .contains("70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"));
     // A pinned Operator digest is the install's choice; self-update to the manager's tag would undo it.
     let self_update_env = |values: &str| -> bool {
         let rendered = super::test_utils::helm_template(&chart.files, Some(values));
@@ -1633,7 +1635,11 @@ fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
         Some("sandbox:\n  cniProbeImage: docker.io/library/python:3.13-slim@sha256:aaaa\n"),
     );
     bundled.assert_ok("probe image on a chart without a sandbox");
-    assert!(bundled.stdout.contains("python:3.13-slim@sha256:aaaa"), "{}", bundled.stdout);
+    assert!(
+        bundled.stdout.contains("python:3.13-slim@sha256:aaaa"),
+        "{}",
+        bundled.stdout
+    );
     assert_helm_valid(&chart, "container_egress_no_sandbox");
 }
 
@@ -1829,4 +1835,73 @@ fn a_root_boot_sandbox_checks_its_namespace_at_install_and_a_non_root_one_does_n
         .find(|document| document["kind"] == "Role" && is_check(document))
         .expect("the check Role");
     assert_eq!(unset_role["metadata"]["namespace"], "default");
+}
+
+/// A private sandbox image needs the pull secrets on the install-time check's pod, or the hook
+/// Job cannot pull its probe image and installation blocks.
+#[test]
+fn the_root_boot_check_pod_uses_the_runtime_pull_secrets() {
+    let values = "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\nruntime:\n  imagePullSecrets:\n    - name: registry-credentials\n";
+    let documents = root_boot_check_documents(Some(0), values);
+    let job = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "Job"
+                && document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-root-boot-check"))
+        })
+        .expect("the check Job");
+    assert_eq!(
+        job["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"],
+        "registry-credentials"
+    );
+}
+
+/// The Operator's discovery Role and RoleBinding live in `default`, shared by every install on
+/// the cluster. Two installs whose namespaces share their first ten characters must not share
+/// a name, and each binding must reference its own Role.
+#[test]
+fn the_kube_api_discovery_role_is_named_per_install() {
+    let chart = render(
+        &sandbox_with_linked_app_as(Some(0)),
+        StackSettings::default(),
+    );
+    let values = "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n";
+    let names = |namespace: &str| {
+        let rendered = super::test_utils::helm_template_in_namespace(
+            &chart.files,
+            Some(values),
+            "acme",
+            namespace,
+        );
+        rendered.assert_ok("discovery RBAC render");
+        let documents = rendered_documents(&rendered);
+        let find = |kind: &str| {
+            documents
+                .iter()
+                .find(|document| {
+                    document["kind"] == kind
+                        && document["metadata"]["namespace"] == "default"
+                        && document["metadata"]["name"]
+                            .as_str()
+                            .is_some_and(|name| name.contains("kube-api"))
+                })
+                .unwrap_or_else(|| panic!("the discovery {kind} in default"))
+                .clone()
+        };
+        let role = find("Role");
+        let binding = find("RoleBinding");
+        let role_name = role["metadata"]["name"].as_str().unwrap().to_string();
+        assert_eq!(binding["metadata"]["name"], role["metadata"]["name"]);
+        assert_eq!(
+            binding["roleRef"]["name"].as_str(),
+            Some(role_name.as_str())
+        );
+        assert!(role_name.len() <= 63, "{role_name}");
+        role_name
+    };
+    let first = names("customer-aa-one");
+    let second = names("customer-aa-two");
+    assert_ne!(first, second);
 }

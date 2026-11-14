@@ -54,6 +54,13 @@ pub const ENV_PROTECTED_MOUNTS: &str = "ALIEN_SANDBOX_PROTECTED_MOUNTS";
 /// Kubernetes sandbox pod, because service links are off and the pod has no
 /// `KUBERNETES_SERVICE_HOST` to learn the address from.
 pub const ENV_MUST_DROP_KUBE_API: &str = "ALIEN_SANDBOX_MUST_DROP_KUBE_API";
+/// A public `host:port` the startup gate must also see dropped. The Operator sets it only where
+/// the declared egress forbids direct public traffic (`none`, and `internet`, which goes through
+/// the gateway). It is unset when the policy allows that address, so an `allow` pod is not
+/// refused for reaching it.
+pub const ENV_MUST_DROP_PUBLIC: &str = "ALIEN_SANDBOX_MUST_DROP_PUBLIC";
+/// The public address the Operator asks the gate to probe.
+pub const MUST_DROP_PUBLIC_PROBE: &str = "1.1.1.1:443";
 /// The agent's first argument that stages the protected files (the Kubernetes init container).
 pub const STAGE_PROTECTED_FILES_ARGUMENT: &str = "--stage-protected-files";
 /// Names inside the staging directory the pod mounts over the agent binary and `/opt/alien`.

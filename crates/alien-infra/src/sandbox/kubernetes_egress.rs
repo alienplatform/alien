@@ -222,8 +222,12 @@ pub(super) async fn bootstrap_environment(
 ) -> Result<Option<Vec<k8s_openapi::api::core::v1::EnvVar>>> {
     // Every mode: where the API server is, so the agent's startup gate can prove it is dropped.
     let kube_api = kube_api_environment(ctx, sandbox).await?;
+    let mut common = vec![kube_api];
+    if let Some(public) = public_probe_environment(&sandbox.egress) {
+        common.push(public);
+    }
     if sandbox.egress != SandboxEgress::Internet {
-        return Ok(Some(vec![kube_api]));
+        return Ok(Some(common));
     }
     let name = kubernetes_resource_name(&ctx.resource_prefix, SANDBOX_EGRESS_GATEWAY_ID);
     let client = ctx
@@ -295,7 +299,7 @@ pub(super) async fn bootstrap_environment(
             value_from: None,
         })
         .collect();
-    environment.push(kube_api);
+    environment.extend(common);
     Ok(Some(environment))
 }
 
@@ -365,6 +369,16 @@ pub(super) fn kube_api_targets(
     targets.sort();
     targets.dedup();
     Ok(targets)
+}
+
+/// The public probe target, only where direct public egress must be dropped: `none`, and
+/// `internet` (whose traffic goes through the gateway). Any other policy may allow it.
+fn public_probe_environment(egress: &SandboxEgress) -> Option<EnvVar> {
+    matches!(egress, SandboxEgress::None | SandboxEgress::Internet).then(|| EnvVar {
+        name: alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC.into(),
+        value: Some(alien_core::sandbox_image::MUST_DROP_PUBLIC_PROBE.into()),
+        value_from: None,
+    })
 }
 
 /// `ALIEN_SANDBOX_MUST_DROP_KUBE_API`, read from the cluster. Failing to read it fails the
@@ -676,7 +690,19 @@ mod tests {
             .collect();
         assert_eq!(enforcers.len(), 1);
         assert_eq!(enforcers[0].value.as_deref(), Some("networkpolicy"));
+        // The gateway lane probes the public address too.
+        assert!(environment
+            .iter()
+            .any(|env| env.name == "ALIEN_SANDBOX_MUST_DROP_PUBLIC"
+                && env.value.as_deref() == Some("1.1.1.1:443")));
         service.assert_hits_async(2).await;
+    }
+
+    #[test]
+    fn the_public_probe_is_set_only_where_direct_public_egress_is_dropped() {
+        assert!(public_probe_environment(&SandboxEgress::None).is_some());
+        assert!(public_probe_environment(&SandboxEgress::Internet).is_some());
+        assert!(public_probe_environment(&SandboxEgress::Allow).is_none());
     }
 
     /// A gateway image that mounts its configuration and replica secret.

@@ -183,6 +183,22 @@ pub fn helm_template_for_release(
     helm_template_with_options(files, values_yaml, release_name, &[], None)
 }
 
+/// Render a chart for a release installed in `namespace` (`helm template --namespace`).
+pub fn helm_template_in_namespace(
+    files: &LinterFiles,
+    values_yaml: Option<&str>,
+    release_name: &str,
+    namespace: &str,
+) -> LinterRun {
+    helm_template_with_options(
+        files,
+        values_yaml,
+        release_name,
+        &["--namespace", namespace],
+        None,
+    )
+}
+
 /// Render a chart as a cluster of the given version string, such as `v1.36.0-eks-abc123`, would.
 pub fn helm_template_for_kube_version(
     files: &LinterFiles,

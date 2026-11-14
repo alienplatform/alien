@@ -109,10 +109,13 @@ roleRef:
 /// EndpointSlice of the same name) and tells each sandbox pod, so the pod's startup check can
 /// prove those addresses are dropped. Two named objects, read only, in `default`.
 const KUBE_API_DISCOVERY_RBAC_TEMPLATE: &str = "sandbox-kube-api-discovery-rbac.yaml";
-const KUBE_API_DISCOVERY_RBAC: &str = r#"apiVersion: rbac.authorization.k8s.io/v1
+const KUBE_API_DISCOVERY_RBAC: &str = r#"{{- /* Both objects live in `default`, shared by every install on the cluster, so the name carries a hash of the full release namespace and name (the prefixes alone can collide once truncated). */ -}}
+{{- $suffix := printf "kube-api-%s" (printf "%s/%s/%s" .Release.Namespace .Release.Name (include "deployment.fullname" .) | sha256sum | trunc 8) -}}
+{{- $name := printf "%s-%s" (include "deployment.fullname" . | trunc (int (sub 62 (len $suffix))) | trimSuffix "-") $suffix -}}
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "deployment.fullname" . | trunc 40 | trimSuffix "-" }}-{{ .Release.Namespace | trunc 10 | trimSuffix "-" }}-kube-api
+  name: {{ $name }}
   namespace: default
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
@@ -129,7 +132,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "deployment.fullname" . | trunc 40 | trimSuffix "-" }}-{{ .Release.Namespace | trunc 10 | trimSuffix "-" }}-kube-api
+  name: {{ $name }}
   namespace: default
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
@@ -140,7 +143,7 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "deployment.fullname" . | trunc 40 | trimSuffix "-" }}-{{ .Release.Namespace | trunc 10 | trimSuffix "-" }}-kube-api
+  name: {{ $name }}
 "#;
 
 #[derive(Debug, Default)]

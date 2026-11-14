@@ -111,6 +111,10 @@ spec:
     spec:
       serviceAccountName: {{{{ $name }}}}
       restartPolicy: Never
+      {{{{- with .Values.runtime.imagePullSecrets }}}}
+      imagePullSecrets:
+        {{{{- toYaml . | nindent 8 }}}}
+      {{{{- end }}}}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
