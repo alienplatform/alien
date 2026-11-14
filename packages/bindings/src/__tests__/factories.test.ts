@@ -165,6 +165,8 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
       headers: { authorization: "Bearer preview-token" },
       allowedPorts: [port],
       expiresInSeconds: 300,
+      callerAuthorizationHeader: "Authorization",
+      subprotocols: [],
     }),
     pause: async () => {},
     resume: async () => {},

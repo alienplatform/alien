@@ -327,6 +327,10 @@ fn preview_label(label: &str) -> String {
 /// binds a service account, which the generator can only express for the executing identity.
 const SIGN_JWT_PERMISSION: &str = "iam.serviceAccounts.signJwt";
 
+/// Terraform label of the custom role that carries [`SIGN_JWT_PERMISSION`]. Not derived from the
+/// sandbox: the role is project-wide and its id is fixed.
+const PREVIEW_SIGN_ROLE_LABEL: &str = "gcp_role_sandbox_preview_sign";
+
 /// Whether setup creates the edge-signing identity: only where the deployment declares preview
 /// ports and owns the engine, so a sandbox without preview adds nothing to an existing plan.
 fn has_preview_signer(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> bool {
@@ -381,7 +385,10 @@ fn emit_preview_signer(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Resu
     if owners.is_empty() {
         return Ok(());
     }
-    let role_label = format!("{signer_label}_sign");
+    // One role for the whole stack: its id is fixed, so a second sandbox emitting its own address
+    // would create the same role twice and fail at apply. Every sandbox emits this identical
+    // block, which the generator keeps once, and every signer binding points to it.
+    let role_label = PREVIEW_SIGN_ROLE_LABEL;
     fragment.push_shared_resource(resource_block(
         "google_project_iam_custom_role",
         &role_label,
@@ -413,7 +420,7 @@ fn emit_preview_signer(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Resu
     for owner in owners {
         fragment.resource_blocks.push(resource_block(
             "google_service_account_iam_member",
-            &format!("{role_label}_{owner}"),
+            &format!("{signer_label}_sign_{owner}"),
             [
                 attr(
                     "service_account_id",
