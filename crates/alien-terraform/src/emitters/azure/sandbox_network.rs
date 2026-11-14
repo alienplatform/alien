@@ -57,7 +57,7 @@ pub(super) fn emit(
                     .into(),
         }));
     }
-    emit_gateway_subnet(network, fragment);
+    emit_gateway_subnet(ctx, network, fragment)?;
     let slots = subnet_slots(sandboxes.iter().map(|(id, _)| id.as_str()))?;
     for (id, _sandbox) in sandboxes {
         let name = ctx.name_for(id).ok_or_else(|| {
@@ -360,7 +360,11 @@ fn gateway_enabled(ctx: &EmitContext<'_>) -> bool {
         })
 }
 
-fn emit_gateway_subnet(network: &str, fragment: &mut TfFragment) {
+fn emit_gateway_subnet(
+    ctx: &EmitContext<'_>,
+    network: &str,
+    fragment: &mut TfFragment,
+) -> Result<()> {
     // Existing infrastructure uses /24 indices 0..5; sandbox groups start at /23 index 8.
     // Nothing else is placed here, so sandbox NSGs can allow the frontend range before the
     // provider allocates the ILB address. Gateway replicas run on the NAT-backed workload subnet.
@@ -390,6 +394,8 @@ fn emit_gateway_subnet(network: &str, fragment: &mut TfFragment) {
             ),
         ],
     ));
+    emit_gateway_subnet_nsg(ctx, network, fragment)?;
+    Ok(())
 }
 
 pub(super) fn gateway_handoff(ctx: &EmitContext<'_>, network: &str) -> Result<Option<Expression>> {
@@ -449,6 +455,124 @@ pub(super) fn gateway_handoff(ctx: &EmitContext<'_>, network: &str) -> Result<Op
             expr::traversal(["azurerm_virtual_network", network, "address_space"]),
         ),
     ])))
+}
+
+/// Inbound rules for the gateway subnet: the proxy port from sandbox subnets only, the
+/// admin port from workload subnets only, and nothing else (not even VNet traffic).
+/// The subnet reaches the Internet through the deployment's existing NAT gateway.
+fn emit_gateway_subnet_nsg(
+    ctx: &EmitContext<'_>,
+    network: &str,
+    fragment: &mut TfFragment,
+) -> Result<()> {
+    let label = format!("{network}_sandbox_gateway");
+    let nat = format!("{network}_nat");
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_network_security_group",
+        &label,
+        [
+            attr(
+                "name",
+                expr::template(format!("${{local.resource_prefix}}-{network}-sandbox-gateway")),
+            ),
+            attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+            attr("location", expr::raw("var.azure_location")),
+            attr("tags", tags(ctx, "sandbox-gateway-network")),
+        ],
+    ));
+    let mut priority = 100;
+    for (id, entry) in ctx.stack.resources() {
+        let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
+            continue;
+        };
+        if sandbox.egress != SandboxEgress::Internet {
+            continue;
+        }
+        let name = ctx.name_for(id).ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: "Azure sandbox network setup".into(),
+                reason: format!("sandbox {id} has no Terraform resource name"),
+            })
+        })?;
+        let sandbox_label = subnet_label(network, name);
+        let source = expr::raw(format!("azurerm_subnet.{sandbox_label}.address_prefixes[0]"));
+        inbound_rule(
+            fragment,
+            &label,
+            &format!("proxy_from_{sandbox_label}"),
+            priority,
+            "Allow",
+            source,
+            "3128",
+        );
+        priority += 1;
+    }
+    for (index, suffix) in ["public", "private", "container_apps"].into_iter().enumerate() {
+        inbound_rule(
+            fragment,
+            &label,
+            &format!("admin_from_{suffix}"),
+            200 + index as i64,
+            "Allow",
+            expr::raw(format!("azurerm_subnet.{network}_{suffix}.address_prefixes[0]")),
+            "3129",
+        );
+    }
+    inbound_rule(fragment, &label, "deny_all", 4000, "Deny", Expression::String("*".into()), "*");
+    for (resource, field, target) in [
+        (
+            "azurerm_subnet_network_security_group_association",
+            "network_security_group_id",
+            expr::traversal(["azurerm_network_security_group", &label, "id"]),
+        ),
+        (
+            "azurerm_subnet_nat_gateway_association",
+            "nat_gateway_id",
+            expr::traversal(["azurerm_nat_gateway", &nat, "id"]),
+        ),
+    ] {
+        fragment.resource_blocks.push(resource_block(
+            resource,
+            &label,
+            [
+                attr("subnet_id", expr::traversal(["azurerm_subnet", &label, "id"])),
+                attr(field, target),
+            ],
+        ));
+    }
+    Ok(())
+}
+
+fn inbound_rule(
+    fragment: &mut TfFragment,
+    label: &str,
+    name: &str,
+    priority: i64,
+    access: &str,
+    source: Expression,
+    port: &str,
+) {
+    let protocol = if access == "Allow" { "Tcp" } else { "*" };
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_network_security_rule",
+        &format!("{label}_{name}"),
+        [
+            attr("name", Expression::String(name.to_string())),
+            attr("resource_group_name", expr::raw("var.azure_resource_group_name")),
+            attr(
+                "network_security_group_name",
+                expr::traversal(["azurerm_network_security_group", label, "name"]),
+            ),
+            attr("priority", Expression::Number(priority.into())),
+            attr("direction", Expression::String("Inbound".to_string())),
+            attr("access", Expression::String(access.to_string())),
+            attr("protocol", Expression::String(protocol.to_string())),
+            attr("source_port_range", Expression::String("*".to_string())),
+            attr("source_address_prefix", source),
+            attr("destination_address_prefix", Expression::String("*".to_string())),
+            attr("destination_port_range", Expression::String(port.to_string())),
+        ],
+    ));
 }
 
 #[cfg(test)]
@@ -560,5 +684,33 @@ mod proxy_rule_tests {
                 "{block}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod gateway_inbound_tests {
+    use super::*;
+
+    fn render(access: &str, port: &str) -> String {
+        let mut fragment = TfFragment::default();
+        inbound_rule(
+            &mut fragment,
+            "gw",
+            "r",
+            100,
+            access,
+            Expression::String("10.0.0.0/24".into()),
+            port,
+        );
+        hcl::to_string(&hcl::Body::builder().add_blocks(fragment.resource_blocks).build()).unwrap()
+    }
+
+    #[test]
+    fn allow_is_tcp_on_one_port_and_deny_covers_every_protocol() {
+        let allow = render("Allow", "3128");
+        assert!(allow.contains("direction = \"Inbound\"") && allow.contains("protocol = \"Tcp\""));
+        assert!(allow.contains("destination_port_range = \"3128\""));
+        let deny = render("Deny", "*");
+        assert!(deny.contains("access = \"Deny\"") && deny.contains("protocol = \"*\""));
     }
 }
