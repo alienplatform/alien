@@ -3062,6 +3062,7 @@ fn write_terraform_lifecycle_module(
                 setup_target: "kubernetes".to_string(),
                 setup_fingerprint: "lifecycle".to_string(),
                 setup_fingerprint_version: 1,
+                destroy_guard: false,
             }),
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: path_str(chart).to_string(),
