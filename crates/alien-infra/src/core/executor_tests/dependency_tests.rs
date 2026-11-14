@@ -995,4 +995,110 @@ mod rollout_order {
         assert_eq!(get_status(&state, "func"), Some(ResourceStatus::Running));
         Ok(())
     }
+
+    /// An adopted external binding that owed an update to a dependency takes the controller-less
+    /// update path. That path must clear the marker, or the binding is planned again and its
+    /// own dependents wait for it forever.
+    #[tokio::test]
+    async fn an_external_binding_clears_its_owed_update_once_it_runs() -> Result<()> {
+        use alien_core::{
+            DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBinding, ExternalBindings,
+            StackSettings, StorageBinding,
+        };
+        let mut bindings = ExternalBindings::new();
+        bindings.insert(
+            "uploads",
+            ExternalBinding::Storage(StorageBinding::s3("external-test-bucket")),
+        );
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(bindings)
+            .allow_frozen_changes(false)
+            .build();
+        let stack = |image: &str| {
+            Stack::new("owed-external".to_owned())
+                .add(
+                    test_function_with_image("func", image),
+                    ResourceLifecycle::Live,
+                )
+                .add_with_dependencies(
+                    test_storage("uploads"),
+                    ResourceLifecycle::Live,
+                    vec![ResourceRef::new(Worker::RESOURCE_TYPE, "func")],
+                )
+                .build()
+        };
+        let build = |image: &str| {
+            crate::core::StackExecutor::builder(&stack(image), alien_core::ClientConfig::Test)
+                .deployment_config(&config)
+                .build()
+        };
+        let mut state = run_to_synced(&build("v1")?, new_test_state()).await?;
+        let executor = build("v2")?;
+
+        state = executor.step(state).await?.next_state;
+        assert!(state.resources["uploads"].dependency_update_pending);
+
+        for _ in 0..40 {
+            state = executor.step(state).await?.next_state;
+        }
+
+        assert_all_running(&state, &["func", "uploads"]);
+        assert_eq!(image(&state, "func"), "v2");
+        assert!(
+            !state.resources["uploads"].dependency_update_pending,
+            "the external binding ran its owed update and must forget it"
+        );
+        assert!(executor.is_synced(&state));
+        Ok(())
+    }
+
+    /// Every resource depends on the two before it, so the number of paths to the first one
+    /// grows like the Fibonacci numbers. Planning an update of a resource at the end must not
+    /// walk each path.
+    #[tokio::test]
+    async fn rollout_check_stays_fast_on_a_dense_dependency_graph() -> Result<()> {
+        const LAYERS: usize = 36;
+        let stack = |leaf_image: &str| {
+            let mut builder = Stack::new("dense".to_owned());
+            for i in 0..LAYERS {
+                let dependencies = (1..=2)
+                    .filter(|back| i >= *back)
+                    .map(|back| ResourceRef::new(Worker::RESOURCE_TYPE, format!("w{}", i - back)))
+                    .collect::<Vec<_>>();
+                builder = builder.add_with_dependencies(
+                    test_function_with_image(&format!("w{i}"), "base"),
+                    ResourceLifecycle::Live,
+                    dependencies,
+                );
+            }
+            builder
+                .add_with_dependencies(
+                    test_function_with_image("leaf", leaf_image),
+                    ResourceLifecycle::Live,
+                    vec![
+                        ResourceRef::new(Worker::RESOURCE_TYPE, format!("w{}", LAYERS - 1)),
+                        ResourceRef::new(Worker::RESOURCE_TYPE, format!("w{}", LAYERS - 2)),
+                    ],
+                )
+                .build()
+        };
+        let state = run_to_synced(&new_executor(&stack("v1"))?, new_test_state()).await?;
+
+        let executor = new_executor(&stack("v2"))?;
+        let started = std::time::Instant::now();
+        let plan = executor.plan(&state)?;
+        assert!(plan.updates.contains_key("leaf"));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "planning took {:?}",
+            started.elapsed()
+        );
+        Ok(())
+    }
 }

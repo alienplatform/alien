@@ -1138,6 +1138,31 @@ impl StackExecutor {
     /// or a setup-owned resource only setup changes) counts as rolled, so nothing waits
     /// for a change that never comes.
     fn dependency_rolled(&self, dependency_id: &str, state: &StackState) -> bool {
+        self.dependency_rolled_memo(dependency_id, state, &mut HashMap::new())
+    }
+
+    /// `dependency_rolled` with each resource evaluated once per call, so a dense graph with
+    /// many paths to the same dependency stays linear in its edges.
+    fn dependency_rolled_memo(
+        &self,
+        dependency_id: &str,
+        state: &StackState,
+        memo: &mut HashMap<String, bool>,
+    ) -> bool {
+        if let Some(rolled) = memo.get(dependency_id) {
+            return *rolled;
+        }
+        let rolled = self.dependency_rolled_uncached(dependency_id, state, memo);
+        memo.insert(dependency_id.to_string(), rolled);
+        rolled
+    }
+
+    fn dependency_rolled_uncached(
+        &self,
+        dependency_id: &str,
+        state: &StackState,
+        memo: &mut HashMap<String, bool>,
+    ) -> bool {
         if !self.dependency_settled(dependency_id, state) {
             return false;
         }
@@ -1167,7 +1192,7 @@ impl StackExecutor {
         desired
             .dependencies
             .iter()
-            .all(|dependency| self.dependency_rolled(dependency.id(), state))
+            .all(|dependency| self.dependency_rolled_memo(dependency.id(), state, memo))
     }
 
     /// Whether a dependent may update now against this dependency: the dependency has rolled
@@ -2671,6 +2696,7 @@ impl StackExecutor {
                             let (remote_binding_params, binding_outputs) =
                                 self.external_binding_state(resource_id)?;
                             let updated_state = update_state.with_updates(|state| {
+                                state.dependency_update_pending = false;
                                 state.config = new_config.clone();
                                 state.previous_config = Some(current_state.config.clone());
                                 state.dependencies = desired_config.dependencies.clone();
@@ -3650,7 +3676,10 @@ impl StackExecutor {
                                 })
                         };
 
-                        is_running && config_matches && dependencies_match
+                        is_running
+                            && config_matches
+                            && dependencies_match
+                            && !current_view.dependency_update_pending
                     }
                     None => {
                         false // Desired resource not even in state yet -> not terminal

@@ -178,6 +178,8 @@ fn stack_has_converged(
                 .is_some_and(|deployed| {
                     deployed.config == desired.config
                         && deployed.dependencies == desired.combined_dependencies()
+                        // An update still owed to a dependency that rolled is outstanding work.
+                        && !deployed.dependency_update_pending
                 })
         })
 }
@@ -363,8 +365,8 @@ pub async fn handle_update_pending(
         .and_then(|metadata| metadata.setup_update_authorization.as_ref());
     info!(
         authorization_present = setup_update_authorization.is_some(),
-        authorization_release_id = setup_update_authorization
-            .map(|authorization| authorization.release_id.as_str()),
+        authorization_release_id =
+            setup_update_authorization.map(|authorization| authorization.release_id.as_str()),
         target_release_id,
         "setup update authorization recorded for the update"
     );
@@ -1794,6 +1796,48 @@ mod tests {
             .get_mut("objects")
             .expect("objects is deployed")
             .dependencies = target_stack.resources["objects"].combined_dependencies();
+        assert_eq!(status(&stack_state), StackStatus::Running);
+    }
+
+    /// A dependent that owes an update to a dependency that just rolled reads Running with
+    /// its config already equal to the release, so only the recorded marker shows the work.
+    #[test]
+    fn an_update_is_not_complete_while_a_dependent_still_owes_its_update() {
+        let cache = Kv::new("cache".to_string()).build();
+        let objects = Storage::new("objects".to_string()).build();
+        let mut target_stack = Stack::new("s".to_string())
+            .add(cache.clone(), ResourceLifecycle::Frozen)
+            .add(objects.clone(), ResourceLifecycle::Frozen)
+            .build();
+        target_stack
+            .resources
+            .get_mut("objects")
+            .expect("objects is in the stack")
+            .dependencies = vec![ResourceRef::new(Kv::RESOURCE_TYPE, "cache")];
+
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "cache".to_string(),
+            state_entry(Resource::new(cache), ResourceStatus::Running),
+        );
+        let mut objects_state = state_entry(Resource::new(objects), ResourceStatus::Running);
+        objects_state.dependencies = target_stack.resources["objects"].combined_dependencies();
+        objects_state.dependency_update_pending = true;
+        stack_state
+            .resources
+            .insert("objects".to_string(), objects_state);
+        let reconciled = HashSet::from(["cache", "objects"]);
+        let status = |state: &StackState| {
+            compute_update_status(state, &target_stack, &reconciled, &[], &HashSet::new())
+                .expect("status should compute")
+        };
+
+        assert_eq!(status(&stack_state), StackStatus::InProgress);
+        stack_state
+            .resources
+            .get_mut("objects")
+            .expect("objects is deployed")
+            .dependency_update_pending = false;
         assert_eq!(status(&stack_state), StackStatus::Running);
     }
 
