@@ -117,7 +117,8 @@ IMAGE="$REGISTRY/fixture-agent:root"
 # A throwaway plain-HTTP registry holds the base and the agent image the assembler reads.
 docker rm -f "$P-localreg" >/dev/null 2>&1 || true
 docker run -d --name "$P-localreg" -p 5000:5000 registry:2 >/dev/null
-docker build -q -t localhost:5000/fixture:base "$REPO/crates/alien-sandbox-conformance/contract" >/dev/null
+docker build -q --build-arg METADATA_BACKEND=azure -f "$REPO/crates/alien-sandbox-conformance/contract/Dockerfile" \
+  -t localhost:5000/fixture:base "$REPO/crates/alien-sandbox-conformance" >/dev/null
 docker push -q localhost:5000/fixture:base >/dev/null
 agentimg="$WORK/agent-image"; rm -rf "$agentimg"; mkdir -p "$agentimg"
 cp "$AGENT_BINARY" "$agentimg/alien-sandbox-agent"
