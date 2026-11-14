@@ -777,6 +777,102 @@ pub(super) mod tests {
         assert!(target.resources.contains_key("enable-cloud-quotas"));
     }
 
+    /// A Helm install keeps the chart's namespace in the Operator's own stack
+    /// settings, so the prepared baseline holds the cluster in that namespace.
+    /// The manager's stored settings carry no namespace. A release that only
+    /// adds a permission grant must not read as a change to that cluster.
+    #[tokio::test]
+    async fn a_permission_only_release_on_a_chart_installed_in_its_own_namespace_mints() {
+        use alien_core::{PermissionProfile, PermissionsConfig};
+
+        let stack = |extra_grant: bool| {
+            let mut execution = PermissionProfile::new().global(["storage/data-read"]);
+            if extra_grant {
+                execution = execution.global(["storage/data-write"]);
+            }
+            Stack::new("app".to_string())
+                .add(
+                    alien_core::Container::new("api".to_string())
+                        .code(alien_core::ContainerCode::Image {
+                            image: "app:latest".to_string(),
+                        })
+                        .cpu(alien_core::ResourceSpec {
+                            min: "0.5".to_string(),
+                            desired: "1".to_string(),
+                        })
+                        .memory(alien_core::ResourceSpec {
+                            min: "512Mi".to_string(),
+                            desired: "1Gi".to_string(),
+                        })
+                        .port(8080)
+                        .permissions("execution".to_string())
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .permissions(PermissionsConfig::new().with_profile("execution", execution))
+                .build()
+        };
+        let release = |id: &str, stack: Stack| crate::traits::ReleaseRecord {
+            id: id.to_string(),
+            workspace_id: "workspace".to_string(),
+            project_id: "project".to_string(),
+            stacks: std::collections::HashMap::from([(Platform::Kubernetes, stack)]),
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
+            git_commit_sha: None,
+            git_commit_ref: None,
+            git_commit_message: None,
+            created_at: Utc::now(),
+        };
+        let installed = release("rel_1", stack(false));
+        let waiting = release("rel_2", stack(true));
+
+        let mut record = deployment(baseline());
+        let stack_state = StackState::new(Platform::Kubernetes);
+        // What the Operator prepared at install: its settings carry the
+        // namespace the chart runs in.
+        let operator_settings = alien_core::StackSettings {
+            kubernetes: Some(alien_core::KubernetesSettings {
+                cluster: Some(alien_core::KubernetesClusterSettings {
+                    ownership: alien_core::KubernetesClusterOwnership::External,
+                    namespace: Some("product".to_string()),
+                    cloud: None,
+                }),
+                exposure: None,
+            }),
+            ..Default::default()
+        };
+        let prepared = prepare_target(&installed, &record, &operator_settings, &stack_state)
+            .await
+            .unwrap();
+        record.runtime_metadata.as_mut().unwrap().prepared_stack = Some(prepared.clone());
+
+        // What the manager rebuilds from the settings it stores.
+        let stored_settings = record.stack_settings.clone().unwrap();
+        assert!(stored_settings.kubernetes.is_none());
+        let target = prepare_target(&waiting, &record, &stored_settings, &stack_state)
+            .await
+            .unwrap();
+
+        let cluster = |stack: &Stack| {
+            serde_json::to_value(&stack.resources["kubernetes"].config).unwrap()
+        };
+        assert_eq!(
+            cluster(&prepared),
+            cluster(&target),
+            "the cluster resource differs between the baseline and the rebuilt target"
+        );
+        assert_eq!(
+            changes_needing_cloud_setup(&prepared, &target, record.base_platform),
+            None
+        );
+        let decision = decide(&record, &report("rel_2"), &target, None);
+        assert!(
+            matches!(decision, ReportDecision::Mint(_)),
+            "expected a mint, got {decision:?}"
+        );
+    }
+
     #[test]
     fn the_reported_release_is_recorded_only_when_helm_would_accept_it() {
         let named = |name: &str, namespace: &str| InstalledSetup {
