@@ -5,6 +5,7 @@ mod log_text;
 pub mod otlp;
 pub mod runtime;
 pub mod secrets;
+pub mod telemetry_relay;
 pub mod tracing_init;
 pub mod traits;
 pub mod transports;
