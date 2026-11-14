@@ -159,23 +159,58 @@ fn network_up() -> bool {
         .is_ok_and(|address| !address.ip().is_unspecified())
 }
 
-fn probe_from_env() -> Probe {
+/// The blocked targets, or why there are none to prove anything with. The Kubernetes API server
+/// is the destination that matters most, so a pod told to gate without being told where the API
+/// server is does not start: skipping it would be a silent fail-open.
+fn probe_from(
+    kube_api: Option<&str>,
+    service_host: Option<&str>,
+    service_port: Option<&str>,
+    control: Option<String>,
+) -> Result<Probe, String> {
     let mut blocked = vec![PUBLIC_ADDRESS.to_string()];
-    if let (Ok(host), Ok(port)) = (
-        std::env::var("KUBERNETES_SERVICE_HOST"),
-        std::env::var("KUBERNETES_SERVICE_PORT"),
-    ) {
+    let before = blocked.len();
+    for target in kube_api
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+    {
+        if !blocked.iter().any(|known| known == target) {
+            blocked.push(target.to_string());
+        }
+    }
+    if let (Some(host), Some(port)) = (service_host, service_port) {
         let host = if host.contains(':') {
             format!("[{host}]")
         } else {
-            host
+            host.to_string()
         };
-        blocked.push(format!("{host}:{port}"));
+        let target = format!("{host}:{port}");
+        if !blocked.contains(&target) {
+            blocked.push(target);
+        }
     }
-    Probe {
-        blocked,
-        control: std::env::var("ALIEN_SANDBOX_EGRESS_GATEWAY").ok(),
+    if blocked.len() == before {
+        return Err(format!(
+            "{} is not set: the Kubernetes API server address is a required target of the egress \
+             check, and without it the check would silently skip the destination that matters \
+             most. The Operator sets it from the default/kubernetes Service and EndpointSlice",
+            alien_core::sandbox_image::ENV_MUST_DROP_KUBE_API
+        ));
     }
+    Ok(Probe { blocked, control })
+}
+
+fn probe_from_env() -> Result<Probe, String> {
+    probe_from(
+        std::env::var(alien_core::sandbox_image::ENV_MUST_DROP_KUBE_API)
+            .ok()
+            .as_deref(),
+        std::env::var("KUBERNETES_SERVICE_HOST").ok().as_deref(),
+        std::env::var("KUBERNETES_SERVICE_PORT").ok().as_deref(),
+        std::env::var("ALIEN_SANDBOX_EGRESS_GATEWAY").ok(),
+    )
 }
 
 /// The gate for a pod that asked for it. Returns an error message when the restriction is not
@@ -184,7 +219,7 @@ pub fn enforce_from_env() -> Result<(), String> {
     if std::env::var_os(ENV_STARTUP_GATE).is_none() {
         return Ok(());
     }
-    let probe = probe_from_env();
+    let probe = probe_from_env()?;
     wait_until_blocked(
         &probe,
         BOUND,
@@ -212,7 +247,16 @@ pub fn spawn_recheck() {
     if std::env::var_os(ENV_STARTUP_GATE).is_none() {
         return;
     }
-    let probe = probe_from_env();
+    // `enforce_from_env` has already refused a pod without a kube-api target; the pod did not
+    // start. Fail closed here too rather than run unchecked.
+    let probe = match probe_from_env() {
+        Ok(probe) => probe,
+        Err(message) => {
+            eprintln!("{message}");
+            let _ = std::fs::write("/dev/termination-log", &message);
+            std::process::exit(1);
+        }
+    };
     std::thread::spawn(move || loop {
         std::thread::sleep(RECHECK_INTERVAL);
         let open = breaches(&probe, connect);
@@ -261,6 +305,28 @@ mod tests {
             || up,
             |_| {},
         )
+    }
+
+    #[test]
+    fn a_gated_pod_without_a_kube_api_target_is_refused() {
+        let error = probe_from(None, None, None, None).unwrap_err();
+        assert!(
+            error.contains("ALIEN_SANDBOX_MUST_DROP_KUBE_API"),
+            "{error}"
+        );
+        assert!(probe_from(Some(" , "), None, None, Some("gw".into())).is_err());
+    }
+
+    #[test]
+    fn the_operator_targets_are_probed_with_the_public_address() {
+        let probe = probe_from(Some("10.0.0.1:443,10.1.2.3:6443"), None, None, None).unwrap();
+        assert_eq!(
+            probe.blocked,
+            vec!["1.1.1.1:443", "10.0.0.1:443", "10.1.2.3:6443"]
+        );
+        // Service-link variables, when present, are probed too and never duplicated.
+        let probe = probe_from(Some("10.0.0.1:443"), Some("10.0.0.1"), Some("443"), None).unwrap();
+        assert_eq!(probe.blocked.len(), 2);
     }
 
     #[test]

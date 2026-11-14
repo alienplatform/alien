@@ -48,6 +48,12 @@ pub const PREVIEW_CAPABILITY_MAX_SECONDS: i64 = 15 * 60;
 /// (a pod's default seccomp profile blocks `unshare`). The agent refuses to start if the mounts
 /// are not there, so setting it elsewhere cannot turn protection off.
 pub const ENV_PROTECTED_MOUNTS: &str = "ALIEN_SANDBOX_PROTECTED_MOUNTS";
+
+/// Comma-separated `host:port` addresses of the Kubernetes API server (its Service ClusterIP and
+/// the real endpoint IPs) that the startup gate must see dropped. The Operator sets it on every
+/// Kubernetes sandbox pod, because service links are off and the pod has no
+/// `KUBERNETES_SERVICE_HOST` to learn the address from.
+pub const ENV_MUST_DROP_KUBE_API: &str = "ALIEN_SANDBOX_MUST_DROP_KUBE_API";
 /// The agent's first argument that stages the protected files (the Kubernetes init container).
 pub const STAGE_PROTECTED_FILES_ARGUMENT: &str = "--stage-protected-files";
 /// Names inside the staging directory the pod mounts over the agent binary and `/opt/alien`.

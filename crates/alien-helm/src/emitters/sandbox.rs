@@ -105,6 +105,44 @@ roleRef:
 {{- end }}
 "#;
 
+/// The Operator reads where the API server is (the `default/kubernetes` Service and the
+/// EndpointSlice of the same name) and tells each sandbox pod, so the pod's startup check can
+/// prove those addresses are dropped. Two named objects, read only, in `default`.
+const KUBE_API_DISCOVERY_RBAC_TEMPLATE: &str = "sandbox-kube-api-discovery-rbac.yaml";
+const KUBE_API_DISCOVERY_RBAC: &str = r#"apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.fullname" . | trunc 40 | trimSuffix "-" }}-{{ .Release.Namespace | trunc 10 | trimSuffix "-" }}-kube-api
+  namespace: default
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["kubernetes"]
+    verbs: ["get"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    resourceNames: ["kubernetes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.fullname" . | trunc 40 | trimSuffix "-" }}-{{ .Release.Namespace | trunc 10 | trimSuffix "-" }}-kube-api
+  namespace: default
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.managerServiceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.fullname" . | trunc 40 | trimSuffix "-" }}-{{ .Release.Namespace | trunc 10 | trimSuffix "-" }}-kube-api
+"#;
+
 #[derive(Debug, Default)]
 pub struct SandboxEmitter;
 
@@ -139,6 +177,10 @@ impl HelmEmitter for SandboxEmitter {
         fragment.extra_templates.insert(
             SANDBOX_NAMESPACE_RBAC_TEMPLATE.to_string(),
             SANDBOX_NAMESPACE_RBAC.to_string(),
+        );
+        fragment.extra_templates.insert(
+            KUBE_API_DISCOVERY_RBAC_TEMPLATE.to_string(),
+            KUBE_API_DISCOVERY_RBAC.to_string(),
         );
         if network_policy_is_the_only_bound(&sandbox.egress) {
             fragment.extra_templates.insert(
