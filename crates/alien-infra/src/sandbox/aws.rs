@@ -6779,6 +6779,91 @@ mod tests {
         assert_eq!(left.len(), 1, "only the serving version remains");
     }
 
+    /// Real AWS: with a role that lacks `lambda:UpdateMicrovmImageVersion`, steady-state
+    /// passes over an image with replaced versions end in Ready, no error, and no version
+    /// changes. Needs `PROBE_IMAGE_ARN` and `AWS_TARGET_*` credentials of such a role.
+    #[tokio::test]
+    #[ignore]
+    async fn live_role_without_the_retire_grant_is_a_quiet_no_op() {
+        use alien_aws_clients::lambda_microvms::{LambdaMicrovmsApi, LambdaMicrovmsClient};
+        let credentials = alien_aws_clients::AwsCredentialProvider::from_config_sync(
+            alien_aws_clients::AwsClientConfig {
+                account_id: std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap(),
+                region: std::env::var("AWS_TARGET_REGION").unwrap(),
+                credentials: alien_aws_clients::AwsCredentials::AccessKeys {
+                    access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                    secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                    session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+                },
+                service_overrides: None,
+            },
+        );
+        let image = std::env::var("PROBE_IMAGE_ARN").expect("PROBE_IMAGE_ARN");
+        let real = Arc::new(LambdaMicrovmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        ));
+        let before = real.list_microvm_image_versions(&image).await.unwrap();
+        let mut versions: Vec<String> = before
+            .iter()
+            .filter_map(|v| v.image_version.clone())
+            .collect();
+        versions.sort_by_key(|v| v.split('.').next().unwrap().parse::<u64>().unwrap());
+        let active = versions.pop().expect("a version");
+        assert!(
+            versions.len() >= 2,
+            "the probe image needs replaced versions"
+        );
+
+        let mut controller = ready_controller();
+        controller.image_identifier = Some(image.clone());
+        controller.image_arn = Some(image.clone());
+        controller.active_version = Some(active);
+        controller.retired_versions = versions.iter().map(|v| retired(v, None)).collect();
+        let mut provider = MockPlatformServiceProvider::new();
+        let client: Arc<dyn LambdaMicrovmsApi> = real.clone();
+        provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(client.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor should build");
+        for step in 0..4 {
+            executor
+                .step()
+                .await
+                .expect("a refused retire is not an error");
+            let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+            println!(
+                "step {step}: status {:?}, denied_at {:?}, inactive {}",
+                controller.state,
+                controller.retire_denied_at,
+                controller
+                    .retired_versions
+                    .iter()
+                    .filter(|v| v.inactive_at.is_some())
+                    .count()
+            );
+        }
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert!(controller.retire_denied_at.is_some());
+        assert!(controller
+            .retired_versions
+            .iter()
+            .all(|v| v.inactive_at.is_none()));
+        let after = real.list_microvm_image_versions(&image).await.unwrap();
+        assert_eq!(
+            after.len(),
+            before.len(),
+            "no version was changed or deleted"
+        );
+    }
+
     /// The version cap is not retried; the error says how full the image is and when room opens.
     #[tokio::test]
     async fn a_roll_refused_for_the_version_cap_says_when_room_opens() {
