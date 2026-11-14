@@ -4804,7 +4804,10 @@ async fn verified_template_network_with_two_zones_imports() {
     )
     .unwrap();
     let resources = body["resources"].as_array_mut().unwrap();
-    let network = resources.iter_mut().find(|r| r["id"] == "default-network").unwrap();
+    let network = resources
+        .iter_mut()
+        .find(|r| r["id"] == "default-network")
+        .unwrap();
     network["importData"] = delivered;
     let (status, json) = post_import_json(&fixture, Some(&fixture.dg_token), body).await;
     assert_eq!(status, StatusCode::CREATED, "body = {json:#}");

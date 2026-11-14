@@ -95,6 +95,15 @@ pub(crate) const AI_MODELS: Feature = feature(
     Action::Strip,
     "an availability check that management runs at setup; the Operator does not read it",
 );
+/// Not a setting of its own: pod security settings an Operator from before
+/// pod security profiles (unreleased) cannot read, which delivery removes. Used only to refuse a signed
+/// release, whose stack is never altered.
+pub(crate) const UNREADABLE_SECURITY: Feature = feature(
+    "pod security settings",
+    NEXT_RELEASE,
+    Action::Strip,
+    "older Operators apply no pod security context; delivery removes the settings",
+);
 pub(crate) const PRIORITY: Feature = feature(
     "container priority",
     "3.3.61",
@@ -181,6 +190,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &RESOURCE_CHOICES,
     &REPLICATION_REGIONS_INPUT,
     &AI_MODELS,
+    &UNREADABLE_SECURITY,
     &PRIORITY,
     &EGRESS,
     &WRITABLE_PATHS,
@@ -234,10 +244,21 @@ impl OperatorVersion {
 /// Removes what older Operators do without and returns what they cannot: the
 /// features `operator` does not read that the release uses and that must be
 /// refused. The stack is changed only by strips.
+///
+/// A `signed` release is never altered: where a strip would change it, the
+/// feature is refused instead, so a signature the Operator verifies always
+/// covers the stack it receives. (No released Operator verifies signatures;
+/// the ones that do read everything listed here, so nothing is stripped for
+/// them either way.)
+///
+/// A container's resource choices are first resolved against the deployment's
+/// selection into the fixed cpu and memory an older Operator reads; a
+/// selection that cannot be expressed that way is refused.
 pub(crate) fn apply(
     stack: &mut Stack,
     settings: Option<&alien_core::StackSettings>,
     operator: &OperatorVersion,
+    signed: bool,
 ) -> Vec<&'static Feature> {
     let mut refused: Vec<&'static Feature> = Vec::new();
     let mut refuse = |feature: &'static Feature| {
@@ -245,13 +266,37 @@ pub(crate) fn apply(
             refused.push(feature);
         }
     };
+    let has_choices = stack.resources().any(|(_, entry)| {
+        entry
+            .config
+            .downcast_ref::<Container>()
+            .is_some_and(|container| container.resource_choices.is_some())
+    });
+    if has_choices && !operator.reads(&RESOURCE_CHOICES) {
+        if signed {
+            refuse(&RESOURCE_CHOICES);
+        } else {
+            let mut resolved = stack.clone();
+            match alien_core::container_resources::resolve_container_resources(
+                &mut resolved,
+                settings.and_then(|settings| settings.compute.as_ref()),
+            ) {
+                Ok(()) => *stack = resolved,
+                Err(_) => refuse(&RESOURCE_CHOICES),
+            }
+        }
+    }
     for (_, entry) in stack.resources_mut() {
         let config = &mut entry.config;
         if let Some(container) = config.downcast_mut::<Container>() {
-            if !operator.reads(&COMMANDS_CAPABILITY_FILE) {
-                container.commands_capability_file = false;
+            if !operator.reads(&COMMANDS_CAPABILITY_FILE) && container.commands_capability_file {
+                if signed {
+                    refuse(&COMMANDS_CAPABILITY_FILE);
+                } else {
+                    container.commands_capability_file = false;
+                }
             }
-            if !operator.reads(&RESOURCE_CHOICES) {
+            if !operator.reads(&RESOURCE_CHOICES) && !signed {
                 container.resource_choices = None;
             }
             if container.priority.is_some() {
@@ -268,8 +313,12 @@ pub(crate) fn apply(
                 refuse(&WRITABLE_PATHS);
             }
         } else if let Some(daemon) = config.downcast_mut::<Daemon>() {
-            if !operator.reads(&COMMANDS_CAPABILITY_FILE) {
-                daemon.commands_capability_file = false;
+            if !operator.reads(&COMMANDS_CAPABILITY_FILE) && daemon.commands_capability_file {
+                if signed {
+                    refuse(&COMMANDS_CAPABILITY_FILE);
+                } else {
+                    daemon.commands_capability_file = false;
+                }
             }
             if daemon.priority.is_some() {
                 refuse(&PRIORITY);
@@ -278,19 +327,33 @@ pub(crate) fn apply(
                 refuse(&DAEMON_SECURITY);
             }
         } else if let Some(worker) = config.downcast_mut::<Worker>() {
-            if !operator.reads(&RUNTIME_IDENTITY_EXCHANGE) {
-                worker.runtime_identity_exchange = false;
+            if !operator.reads(&RUNTIME_IDENTITY_EXCHANGE) && worker.runtime_identity_exchange {
+                if signed {
+                    refuse(&RUNTIME_IDENTITY_EXCHANGE);
+                } else {
+                    worker.runtime_identity_exchange = false;
+                }
             }
             if restricted(worker.security.as_ref()) {
                 refuse(&WORKER_SECURITY);
             }
         } else if let Some(registry) = config.downcast_mut::<ArtifactRegistry>() {
-            if !operator.reads(&REPLICATION_REGIONS_INPUT) {
-                registry.replication_regions_input = None;
+            if !operator.reads(&REPLICATION_REGIONS_INPUT)
+                && registry.replication_regions_input.is_some()
+            {
+                if signed {
+                    refuse(&REPLICATION_REGIONS_INPUT);
+                } else {
+                    registry.replication_regions_input = None;
+                }
             }
         } else if let Some(ai) = config.downcast_mut::<Ai>() {
-            if !operator.reads(&AI_MODELS) {
-                ai.models.clear();
+            if !operator.reads(&AI_MODELS) && !ai.models.is_empty() {
+                if signed {
+                    refuse(&AI_MODELS);
+                } else {
+                    ai.models.clear();
+                }
             }
         } else if let Some(postgres) = config.downcast_ref::<Postgres>() {
             if postgres.encryption_key.is_some() {
@@ -404,6 +467,7 @@ mod tests {
             &mut stack.clone(),
             None,
             &OperatorVersion::from_report(version),
+            false,
         )
         .into_iter()
         .map(|feature| feature.name)
@@ -516,7 +580,7 @@ mod tests {
             .add(registry, ResourceLifecycle::Frozen)
             .build();
         let operator = OperatorVersion::from_report(Some("3.3.31"));
-        assert!(apply(&mut stack, None, &operator).is_empty());
+        assert!(apply(&mut stack, None, &operator, false).is_empty());
         let text = serde_json::to_string(&stack).unwrap();
         for gone in [
             "resourceChoices",
@@ -525,6 +589,140 @@ mod tests {
         ] {
             assert!(!text.contains(gone), "{gone} still sent");
         }
+    }
+
+    fn choices_stack() -> Stack {
+        let mut c = container();
+        c.resource_choices = Some(alien_core::ContainerResourceChoices {
+            cpu: Some(alien_core::ResourceChoiceRange {
+                min: "0.5".into(),
+                max: "4".into(),
+                default: "1".into(),
+            }),
+            memory: Some(alien_core::ResourceChoiceRange {
+                min: "512Mi".into(),
+                max: "8Gi".into(),
+                default: "1Gi".into(),
+            }),
+        });
+        Stack::new("app".to_string())
+            .add(c, ResourceLifecycle::Live)
+            .build()
+    }
+
+    fn selecting(cpu: serde_json::Number, memory: &str) -> alien_core::StackSettings {
+        alien_core::StackSettings {
+            compute: Some(alien_core::ComputeSettings {
+                containers: [(
+                    "c".to_string(),
+                    alien_core::ContainerResourceSelection {
+                        cpu: Some(cpu),
+                        memory: Some(memory.to_string()),
+                        ..Default::default()
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn sizes(stack: &Stack) -> (String, String) {
+        let c = stack
+            .resources()
+            .next()
+            .unwrap()
+            .1
+            .config
+            .downcast_ref::<Container>()
+            .unwrap();
+        (c.cpu.desired.clone(), c.memory.desired.clone())
+    }
+
+    #[test]
+    fn a_selected_size_reaches_the_cpu_and_memory_an_older_operator_reads() {
+        let mut stack = choices_stack();
+        let settings = selecting(serde_json::Number::from(2), "4Gi");
+        let operator = OperatorVersion::from_report(Some("3.3.31"));
+        assert!(apply(&mut stack, Some(&settings), &operator, false).is_empty());
+        assert_eq!(sizes(&stack), ("2".to_string(), "4Gi".to_string()));
+        assert!(!serde_json::to_string(&stack)
+            .unwrap()
+            .contains("resourceChoices"));
+
+        // No selection: the choices' defaults, as the setup would resolve.
+        let mut stack = choices_stack();
+        assert!(apply(&mut stack, None, &operator, false).is_empty());
+        assert_eq!(sizes(&stack), ("1".to_string(), "1Gi".to_string()));
+
+        // An Operator that reads the choices gets them untouched.
+        let mut stack = choices_stack();
+        let reads = OperatorVersion::from_report(Some("3.3.64"));
+        assert!(apply(&mut stack, Some(&settings), &reads, false).is_empty());
+        assert!(serde_json::to_string(&stack)
+            .unwrap()
+            .contains("resourceChoices"));
+        assert_eq!(sizes(&stack), ("1".to_string(), "1Gi".to_string()));
+    }
+
+    #[test]
+    fn a_selection_that_cannot_be_fixed_sizes_is_refused() {
+        let mut stack = choices_stack();
+        // Outside the allowed range.
+        let settings = selecting(serde_json::Number::from(64), "4Gi");
+        let operator = OperatorVersion::from_report(Some("3.3.31"));
+        let refused = apply(&mut stack, Some(&settings), &operator, false);
+        assert_eq!(
+            refused.iter().map(|f| f.name).collect::<Vec<_>>(),
+            ["container resource choices"]
+        );
+    }
+
+    #[test]
+    fn a_signed_release_is_never_altered() {
+        let operator = OperatorVersion::from_report(Some("3.3.31"));
+        let mut stack = choices_stack();
+        let before = serde_json::to_string(&stack).unwrap();
+        let refused = apply(&mut stack, None, &operator, true);
+        assert_eq!(
+            refused.iter().map(|f| f.name).collect::<Vec<_>>(),
+            ["container resource choices"]
+        );
+        assert_eq!(serde_json::to_string(&stack).unwrap(), before);
+
+        let mut registry = ArtifactRegistry::new("r".to_string()).build();
+        registry.replication_regions_input = Some("regions".to_string());
+        let stack = Stack::new("app".to_string())
+            .add(registry, ResourceLifecycle::Frozen)
+            .build();
+        for version in ["3.3.31", "3.3.64"] {
+            let mut copy = stack.clone();
+            let refused = apply(
+                &mut copy,
+                None,
+                &OperatorVersion::from_report(Some(version)),
+                true,
+            );
+            assert_eq!(refused.len(), 1, "{version}");
+            assert_eq!(
+                serde_json::to_string(&copy).unwrap(),
+                serde_json::to_string(&stack).unwrap()
+            );
+        }
+        // Operators that read everything (the ones that verify signatures) strip nothing.
+        let mut copy = stack.clone();
+        let refused = apply(
+            &mut copy,
+            None,
+            &OperatorVersion::from_report(Some(NEXT_RELEASE)),
+            true,
+        );
+        assert!(refused.is_empty());
+        assert_eq!(
+            serde_json::to_string(&copy).unwrap(),
+            serde_json::to_string(&stack).unwrap()
+        );
     }
 
     #[test]

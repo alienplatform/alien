@@ -968,7 +968,9 @@ async fn export_sends_the_values_to_the_named_manager_and_returns_only_its_metad
     assert_eq!(status, 200, "{listed}");
     let slots = listed["slots"].as_array().unwrap();
     assert_eq!(slots.len(), 2, "{listed}");
-    assert!(slots.iter().any(|s| s["slot"] == "env:REGION" && s["value"] == "eu"));
+    assert!(slots
+        .iter()
+        .any(|s| s["slot"] == "env:REGION" && s["value"] == "eu"));
     let pin = slots.iter().find(|s| s["slot"] == "env:PIN").unwrap();
     assert_eq!(pin["digest"], body["slots"][0]["digest"], "{listed} {body}");
 }
@@ -977,7 +979,12 @@ async fn export_sends_the_values_to_the_named_manager_and_returns_only_its_metad
 async fn export_refuses_a_target_the_token_does_not_name() {
     let (source, target) = export_pair().await;
     let scope = target.scope();
-    seed(&source, &scope, json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }])).await;
+    seed(
+        &source,
+        &scope,
+        json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }]),
+    )
+    .await;
 
     let (status, body) = export(
         &source,
@@ -1003,7 +1010,12 @@ async fn export_refuses_a_target_the_token_does_not_name() {
 async fn export_with_a_missing_slot_sends_nothing() {
     let (source, target) = export_pair().await;
     let scope = target.scope();
-    seed(&source, &scope, json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }])).await;
+    seed(
+        &source,
+        &scope,
+        json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }]),
+    )
+    .await;
 
     let (status, body) = export(
         &source,
@@ -1029,7 +1041,12 @@ async fn export_with_a_missing_slot_sends_nothing() {
 async fn export_reports_a_refusing_target_as_a_bad_gateway() {
     let (source, target) = export_pair().await;
     let scope = target.scope();
-    seed(&source, &scope, json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }])).await;
+    seed(
+        &source,
+        &scope,
+        json!([{ "slot": "env:PIN", "value": CANARY, "kind": "secret" }]),
+    )
+    .await;
 
     let (status, body) = export(
         &source,

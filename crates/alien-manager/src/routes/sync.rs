@@ -1649,6 +1649,15 @@ pub(in crate::routes) mod tests {
         operator_version: Option<&'static str>,
         /// Whether the Operator and the store use execution claims.
         claims: bool,
+        /// Store the release's stack with a signed statement.
+        signed: bool,
+        /// The deployment's settings, when the test needs some.
+        settings: Option<StackSettings>,
+        /// A second release that is the desired one, while `stack` stays the
+        /// installed (current) one.
+        desired_stack: Option<Stack>,
+        /// Charts that update older Operators: the manager has an image to send.
+        update_older_operators: bool,
     }
 
     impl Default for SyncOptions {
@@ -1657,6 +1666,10 @@ pub(in crate::routes) mod tests {
                 stack: Stack::new("app".to_string()).build(),
                 operator_version: None,
                 claims: true,
+                signed: false,
+                settings: None,
+                desired_stack: None,
+                update_older_operators: false,
             }
         }
     }
@@ -1683,17 +1696,50 @@ pub(in crate::routes) mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
-                    signed_stacks: Default::default(),
+                    signed_stacks: if options.signed {
+                        HashMap::from([(
+                            Platform::Kubernetes,
+                            alien_core::SignedStatement {
+                                payload: "eyJ0eXBlIjoicmVsZWFzZS92MiJ9".to_string(),
+                                signatures: Vec::new(),
+                            },
+                        )])
+                    } else {
+                        Default::default()
+                    },
                     setup_templates: Default::default(),
                 },
             )
             .await
             .expect("release");
         record.base_platform = Some(Platform::Azure);
+        if let Some(settings) = options.settings.clone() {
+            record.stack_settings = Some(settings);
+        }
         if record.status == "delete-pending" {
+            record.current_release_id = Some(release.id.clone());
+        } else if options.desired_stack.is_some() {
             record.current_release_id = Some(release.id.clone());
         } else {
             record.desired_release_id = Some(release.id.clone());
+        }
+        if let Some(desired) = options.desired_stack.clone() {
+            let desired = release_store
+                .create_release(
+                    &crate::auth::Subject::system(),
+                    CreateReleaseParams {
+                        project_id: record.project_id.clone(),
+                        stacks: HashMap::from([(Platform::Kubernetes, desired)]),
+                        git_commit_sha: None,
+                        git_commit_ref: None,
+                        git_commit_message: None,
+                        signed_stacks: Default::default(),
+                        setup_templates: Default::default(),
+                    },
+                )
+                .await
+                .expect("desired release");
+            record.desired_release_id = Some(desired.id.clone());
         }
 
         let claim = ExecutionClaim {
@@ -1753,6 +1799,14 @@ pub(in crate::routes) mod tests {
         )
         .await;
         state.values = values;
+        if options.update_older_operators {
+            state.charts = Some(Arc::new(crate::routes::charts::ChartSettings {
+                operator_image: "registry.example.com/operator:3.3.64".to_string(),
+                operator_upstream: None,
+                enrollment_codes: None,
+                update_older_operators: true,
+            }));
+        }
 
         let mut body = json!({
             "deploymentId": record.id,
@@ -1871,6 +1925,7 @@ pub(in crate::routes) mod tests {
                 stack: stack_with_egress(),
                 operator_version,
                 claims,
+                ..Default::default()
             },
         )
         .await
@@ -1934,6 +1989,7 @@ pub(in crate::routes) mod tests {
                 stack: stack_with_egress(),
                 operator_version: Some("3.3.31"),
                 claims: false,
+                ..Default::default()
             },
         )
         .await;
@@ -1949,6 +2005,220 @@ pub(in crate::routes) mod tests {
             assert_eq!(sync.status, StatusCode::OK, "{version:?} {}", sync.response);
             assert!(sync.response.get("target").is_some(), "{}", sync.response);
             assert!(sync.reconciled.is_empty(), "{version:?}");
+        }
+    }
+
+    fn stack_with_capability_file() -> Stack {
+        let mut container = alien_core::Container::new("c".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "img".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("p".to_string())
+            .build();
+        container.commands_capability_file = true;
+        Stack::new("app".to_string())
+            .add(container, alien_core::ResourceLifecycle::Live)
+            .build()
+    }
+
+    /// A refusal does not keep the Operator from the image that gets it out of
+    /// the refusal: the sync succeeds with the image and no target (an
+    /// Operator keeps its release), and the refusal is still saved.
+    #[tokio::test]
+    async fn a_refusal_still_sends_the_operator_image() {
+        let sync = sync_with_options(
+            deployment_record_with_state("update-pending", None),
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                stack: stack_with_egress(),
+                operator_version: Some("3.3.31"),
+                update_older_operators: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        assert!(sync.response.get("target").is_none(), "{}", sync.response);
+        assert!(
+            sync.response.get("executionClaim").is_none(),
+            "the claim was given back: {}",
+            sync.response
+        );
+        assert_eq!(
+            sync.response["targetOperatorImage"], "registry.example.com/operator:3.3.64",
+            "{}",
+            sync.response
+        );
+        assert_eq!(sync.reconciled.len(), 1, "the refusal is saved");
+        assert_eq!(
+            sync.reconciled[0].state.status,
+            DeploymentStatus::UpdateFailed
+        );
+        assert_eq!(sync.released.len(), 1);
+    }
+
+    /// With an image to send, an already saved refusal is also answered with
+    /// the image and no write.
+    #[tokio::test]
+    async fn a_saved_refusal_still_sends_the_operator_image() {
+        let message =
+            crate::routes::pull_compat::refusal_message(&[&crate::routes::pull_compat::EGRESS]);
+        let mut record = deployment_record_with_state("update-failed", None);
+        record.error = Some(json!({ "message": message }));
+        let sync = sync_with_options(
+            record,
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                stack: stack_with_egress(),
+                operator_version: Some("3.3.31"),
+                claims: false,
+                update_older_operators: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        assert!(sync.response.get("target").is_none(), "{}", sync.response);
+        assert!(sync.response.get("targetOperatorImage").is_some());
+        // Only the heartbeat the sync records, never the refusal again.
+        assert!(
+            sync.reconciled
+                .iter()
+                .all(|data| data.update_heartbeat && data.execution_claim.is_none()),
+            "written again"
+        );
+    }
+
+    /// A deployment being deleted gets a target from its installed release,
+    /// even when the desired release is one its Operator refuses.
+    #[tokio::test]
+    async fn a_deletion_target_comes_from_the_installed_release_not_a_refused_one() {
+        let sync = sync_with_options(
+            deployment_record_with_state("delete-pending", None),
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                stack: Stack::new("app".to_string()).build(),
+                desired_stack: Some(stack_with_egress()),
+                operator_version: Some("3.3.31"),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+        let target = sync.response.get("target").expect("delete target");
+        assert!(
+            !target.to_string().contains("\"egress\""),
+            "built from the refused release: {target}"
+        );
+        assert!(
+            sync.reconciled
+                .iter()
+                .all(|data| data.state.status != DeploymentStatus::DeleteFailed
+                    && data.state.status != DeploymentStatus::UpdateFailed),
+            "no failure saved"
+        );
+    }
+
+    /// A signed release is never altered for an Operator: where delivery would
+    /// have to remove a setting, the release is refused. An Operator that reads
+    /// the setting gets the stack as signed.
+    #[tokio::test]
+    async fn a_signed_release_is_refused_instead_of_altered() {
+        for (version, signed, refused) in [
+            (Some("3.3.62"), true, true),
+            (Some("3.3.62"), false, false),
+            (Some("3.3.63"), true, false),
+            (Some("dev"), true, false),
+        ] {
+            let sync = sync_with_options(
+                deployment_record_with_state("update-pending", None),
+                Arc::new(ResolvedManagementIdentity),
+                None,
+                SyncOptions {
+                    stack: stack_with_capability_file(),
+                    operator_version: version,
+                    signed,
+                    ..Default::default()
+                },
+            )
+            .await;
+            let label = format!("{version:?} signed={signed}");
+            if refused {
+                assert_eq!(sync.status, StatusCode::BAD_REQUEST, "{label}");
+                assert!(sync.response.get("target").is_none(), "{label}");
+                let message = &sync.reconciled[0]
+                    .state
+                    .error
+                    .as_ref()
+                    .expect("saved cause")
+                    .message;
+                assert!(message.contains("command capability files"), "{message}");
+                assert!(message.contains("3.3.63 or newer"), "{message}");
+            } else {
+                assert_eq!(sync.status, StatusCode::OK, "{label}: {}", sync.response);
+                let target = sync.response.get("target").expect("target").to_string();
+                assert_eq!(
+                    target.contains("commandsCapabilityFile"),
+                    !(version == Some("3.3.62")),
+                    "{label}: stripped only for an unsigned release and an older Operator"
+                );
+            }
+        }
+    }
+
+    /// A signed release is also refused where delivery would drop pod security
+    /// settings an Operator without pod security support cannot read, or a
+    /// setting only an unreleased strip handles.
+    #[tokio::test]
+    async fn a_signed_release_with_unreadable_security_is_refused() {
+        let mut daemon = alien_core::Daemon::new("d".to_string())
+            .permissions("p".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "img".to_string(),
+            })
+            .build();
+        daemon.security = Some(alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        });
+        let stack = Stack::new("app".to_string())
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+        for (signed, refused) in [(true, true), (false, false)] {
+            let sync = sync_with_options(
+                deployment_record_with_state("update-pending", None),
+                Arc::new(ResolvedManagementIdentity),
+                None,
+                SyncOptions {
+                    stack: stack.clone(),
+                    operator_version: Some("3.3.64"),
+                    signed,
+                    ..Default::default()
+                },
+            )
+            .await;
+            if refused {
+                assert_eq!(sync.status, StatusCode::BAD_REQUEST, "{}", sync.response);
+                assert!(sync.response.get("target").is_none());
+            } else {
+                assert_eq!(sync.status, StatusCode::OK, "{}", sync.response);
+                assert!(sync.response.get("target").is_some());
+            }
         }
     }
 
@@ -2512,6 +2782,25 @@ pub(in crate::routes) mod tests {
             pull_secret_refreshed: bool,
             running_release_id: Option<&str>,
         ) -> StatusCode {
+            self.sync_as_operator_version(bearer, pull_secret_refreshed, running_release_id, None)
+                .await
+        }
+
+        /// A sync from a current Operator. One that reports no version is
+        /// taken for the oldest supported.
+        async fn sync_current(&self, bearer: &str) -> StatusCode {
+            self.sync_as_operator_version(bearer, false, None, Some("3.3.64"))
+                .await
+        }
+
+        /// The same, with the Operator reporting its version.
+        async fn sync_as_operator_version(
+            &self,
+            bearer: &str,
+            pull_secret_refreshed: bool,
+            running_release_id: Option<&str>,
+            operator_version: Option<&str>,
+        ) -> StatusCode {
             let mut body = json!({
                 "deploymentId": "dep_test",
                 "maxSupportedDeploymentProtocolVersion":
@@ -2524,6 +2813,9 @@ pub(in crate::routes) mod tests {
             });
             if pull_secret_refreshed {
                 body["pullSecretRefreshed"] = json!(true);
+            }
+            if let Some(version) = operator_version {
+                body["operatorVersion"] = json!(version);
             }
             if let Some(release_id) = running_release_id {
                 body["currentState"]["currentRelease"] = json!({
@@ -3064,9 +3356,42 @@ pub(in crate::routes) mod tests {
         manager
             .run_release_with_receivers(&[("old-api", true)])
             .await;
-        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync_current(&operator).await, StatusCode::OK);
         assert!(!manager.commands_key_is_accepted().await);
         assert_eq!(manager.sync(&key).await, StatusCode::UNAUTHORIZED);
+    }
+
+    /// An Operator that does not read capability files is handed every command
+    /// receiver without one, so the commands-only key it uses must outlive the
+    /// releases even when both of them mark their receivers.
+    #[tokio::test]
+    async fn the_commands_key_is_kept_for_an_operator_that_strips_capability_files() {
+        let manager = TokenEnrollment::new().await;
+        let operator = manager.operator_capability();
+        manager.run_release_with_receivers(&[("api", true)]).await;
+        let desired = manager
+            .create_release_with_receivers(&[("api", true)])
+            .await;
+        manager.stored.lock().unwrap().desired_release_id = Some(desired);
+        manager.issue_commands_key().await;
+
+        for _ in 0..2 {
+            assert_eq!(
+                manager
+                    .sync_as_operator_version(&operator, true, None, Some("3.3.62"))
+                    .await,
+                StatusCode::OK
+            );
+            assert!(manager.commands_key_is_accepted().await);
+        }
+        // One that reads them does not need it.
+        assert_eq!(
+            manager
+                .sync_as_operator_version(&operator, true, None, Some("3.3.63"))
+                .await,
+            StatusCode::OK
+        );
+        assert!(!manager.commands_key_is_accepted().await);
     }
 
     /// A revoked commands key never comes back: a later release with an
@@ -3083,7 +3408,7 @@ pub(in crate::routes) mod tests {
         manager
             .run_release_with_receivers(&[("old-api", true)])
             .await;
-        assert_eq!(manager.sync(&operator).await, StatusCode::OK);
+        assert_eq!(manager.sync_current(&operator).await, StatusCode::OK);
         assert!(!manager.commands_key_is_accepted().await);
 
         manager
@@ -4708,7 +5033,7 @@ pub(in crate::routes) mod tests {
         super::downgrade_container_security(&mut stack);
         let operator = crate::routes::pull_compat::OperatorVersion::from_report(Some("3.3.62"));
         assert!(
-            crate::routes::pull_compat::apply(&mut stack, None, &operator).is_empty(),
+            crate::routes::pull_compat::apply(&mut stack, None, &operator, false).is_empty(),
             "stripping must not refuse"
         );
         let json = serde_json::to_value(&stack).unwrap();
@@ -4732,7 +5057,7 @@ pub(in crate::routes) mod tests {
     fn operators_from_3_3_63_keep_the_capability_settings() {
         let mut stack = credential_capability_stack();
         let operator = crate::routes::pull_compat::OperatorVersion::from_report(Some("3.3.63"));
-        assert!(crate::routes::pull_compat::apply(&mut stack, None, &operator).is_empty());
+        assert!(crate::routes::pull_compat::apply(&mut stack, None, &operator, false).is_empty());
         let text = serde_json::to_string(&stack).unwrap();
         assert!(text.contains("commandsCapabilityFile"));
         assert!(text.contains("runtimeIdentityExchange"));
@@ -5553,6 +5878,10 @@ async fn agent_sync(
     let mut target_operations_bundle_set = None;
     let mut target_dynamic_containers = None;
     let mut reconciled_operator_image = None;
+    let operator_version =
+        super::pull_compat::OperatorVersion::from_report(req.operator_version.as_deref());
+    // Set when a refused release was answered without a target (see below).
+    let mut claim_released = false;
     // A target-bearing row without an echoed claim belongs to work the agent
     // has not accepted yet. Do not let its idle state acknowledge that target.
     let reported_state_owns_target =
@@ -5678,7 +6007,7 @@ async fn agent_sync(
                                 deployment_token_revocable,
                             )
                             .await;
-                            settle_commands_key(&state, &deployment).await;
+                            settle_commands_key(&state, &deployment, &operator_version).await;
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
                             target_dynamic_containers = outcome.target_dynamic_containers;
                             reconciled_operator_image = outcome.target_operator_image;
@@ -5854,63 +6183,81 @@ async fn agent_sync(
                         .await
                     }
                 };
-                let operator = super::pull_compat::OperatorVersion::from_report(
-                    req.operator_version.as_deref(),
-                );
-                if let Some(stack) = r.stacks.get(&release_stack_platform(deployment.platform)) {
-                    let refused = super::pull_compat::apply(
-                        &mut stack.clone(),
-                        deployment.stack_settings.as_ref(),
-                        &operator,
+                let operator = operator_version.clone();
+                // Deleting needs no compatibility check: the target comes from
+                // the installed release, and strips alone make it readable.
+                let refused = if deployment_is_deleting(&deployment) {
+                    Vec::new()
+                } else {
+                    compat_refusals(&r, &deployment, &operator, req.supports_pod_security)
+                };
+                if !refused.is_empty() {
+                    tracing::info!(
+                        deployment_id = %deployment.id,
+                        release_id = %r.id,
+                        operator_version = ?req.operator_version,
+                        "Refusing a release the deployment's Operator cannot read"
                     );
-                    if !refused.is_empty() {
-                        tracing::info!(
-                            deployment_id = %deployment.id,
-                            release_id = %r.id,
-                            operator_version = ?req.operator_version,
-                            "Refusing a release the deployment's Operator cannot read"
-                        );
-                        let refusal =
-                            ErrorData::bad_request(super::pull_compat::refusal_message(&refused))
-                                .into_generic();
-                        // The refusal is already the deployment's update error:
-                        // answer the Operator without writing it again.
-                        if deployment.status.ends_with("-failed")
-                            && deployment
-                                .error
-                                .as_ref()
-                                .and_then(|error| error.get("message"))
-                                .and_then(|message| message.as_str())
-                                == Some(refusal.message.as_str())
-                        {
-                            return refusal.into_response();
-                        }
-                        return save_pull_render_failure(
+                    let refusal =
+                        ErrorData::bad_request(super::pull_compat::refusal_message(&refused))
+                            .into_generic();
+                    // The refusal is already the deployment's update error:
+                    // there is nothing to write again.
+                    let already_saved = deployment.status.ends_with("-failed")
+                        && deployment
+                            .error
+                            .as_ref()
+                            .and_then(|error| error.get("message"))
+                            .and_then(|message| message.as_str())
+                            == Some(refusal.message.as_str());
+                    // A refusal must not keep the Operator from updating
+                    // itself to a newer image, the way out of the refusal.
+                    // With an image to send the sync succeeds with no target:
+                    // an Operator takes that as nothing to do and keeps its
+                    // current release.
+                    let image = crate::routes::charts::ChartSettings::sync_target_image(
+                        state.charts.as_deref(),
+                        &state.config.base_url(),
+                        reconciled_operator_image.clone(),
+                    );
+                    if !already_saved {
+                        let saved = save_pull_render_failure(
                             &state,
                             &subject,
                             &deployment,
                             &r,
                             &req.session,
-                            execution_claim,
+                            execution_claim.clone(),
                             true,
-                            refusal,
+                            refusal.clone(),
                         )
                         .await;
+                        if image.is_none() {
+                            return saved;
+                        }
+                        if saved.status().is_server_error() {
+                            return saved;
+                        }
+                    } else if image.is_none() {
+                        return refusal.into_response();
                     }
-                }
-                match build_pull_target(
-                    &state,
-                    &deployment,
-                    r,
-                    management_config,
-                    agent_token,
-                    req.supports_pod_security,
-                    &operator,
-                )
-                .await
-                {
-                    Ok(target) => Some(target),
-                    Err(response) => return response,
+                    claim_released = true;
+                    None
+                } else {
+                    match build_pull_target(
+                        &state,
+                        &deployment,
+                        r,
+                        management_config,
+                        agent_token,
+                        req.supports_pod_security,
+                        &operator,
+                    )
+                    .await
+                    {
+                        Ok(target) => Some(target),
+                        Err(response) => return response,
+                    }
                 }
             }
             None => None,
@@ -6092,7 +6439,11 @@ async fn agent_sync(
     }
 
     Json(AgentSyncResponse {
-        execution_claim,
+        execution_claim: if claim_released {
+            None
+        } else {
+            execution_claim
+        },
         current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
             Ok(mut value) => {
@@ -6203,6 +6554,34 @@ async fn save_pull_render_failure(
         }
     }
     error.into_response()
+}
+
+/// What an Operator cannot read in `release` for this deployment, to refuse
+/// it with: what [`super::pull_compat::apply`] refuses, and for a signed
+/// release also what delivering it would have to remove, so a signed stack is
+/// never altered.
+fn compat_refusals(
+    release: &crate::traits::ReleaseRecord,
+    deployment: &DeploymentRecord,
+    operator: &super::pull_compat::OperatorVersion,
+    supports_pod_security: bool,
+) -> Vec<&'static super::pull_compat::Feature> {
+    let platform = release_stack_platform(deployment.platform);
+    let Some(stack) = release.stacks.get(&platform) else {
+        return Vec::new();
+    };
+    let signed = release.signed_stacks.contains_key(&platform);
+    let mut stack = stack.clone();
+    let mut refused = super::pull_compat::apply(
+        &mut stack,
+        deployment.stack_settings.as_ref(),
+        operator,
+        signed,
+    );
+    if signed && !supports_pod_security && downgrade_container_security(&mut stack) {
+        refused.push(&super::pull_compat::UNREADABLE_SECURITY);
+    }
+    refused
 }
 
 /// The target a pull deployment converges to for `release`: the release's
@@ -6316,7 +6695,12 @@ pub(crate) async fn build_pull_target(
         );
     }
 
-    super::pull_compat::apply(&mut stack, deployment.stack_settings.as_ref(), operator);
+    super::pull_compat::apply(
+        &mut stack,
+        deployment.stack_settings.as_ref(),
+        operator,
+        false,
+    );
 
     let held = if protected {
         held
@@ -6809,10 +7193,12 @@ fn agent_report_completes_claim(_deployment: &DeploymentRecord, state: &Deployme
 
 fn deployment_target_release_id(deployment: &DeploymentRecord) -> Option<&str> {
     if deployment_is_deleting(deployment) {
+        // The installed release is what is deleted: a desired release that was
+        // never applied (or was refused) is not.
         deployment
-            .desired_release_id
+            .current_release_id
             .as_deref()
-            .or(deployment.current_release_id.as_deref())
+            .or(deployment.desired_release_id.as_deref())
     } else {
         deployment.desired_release_id.as_deref()
     }
@@ -6874,6 +7260,7 @@ fn token_hold_key(deployment_id: &str) -> String {
 async fn command_receivers_need_commands_key(
     state: &AppState,
     deployment: &DeploymentRecord,
+    operator: &super::pull_compat::OperatorVersion,
 ) -> bool {
     let system = crate::auth::Subject::system();
     let current = deployment.current_release_id.as_deref();
@@ -6904,7 +7291,20 @@ async fn command_receivers_need_commands_key(
             tracing::warn!(deployment_id = %deployment.id, %release_id, "Release has no stack for the deployment's platform; keeping the commands key");
             return true;
         };
-        let unmarked = stack.command_receivers_without_capability_file();
+        // What this Operator receives: one that does not read capability files
+        // gets every command receiver without one, whatever the release marks.
+        let unmarked = if operator.reads(&super::pull_compat::COMMANDS_CAPABILITY_FILE) {
+            stack.command_receivers_without_capability_file()
+        } else {
+            let mut delivered = stack.clone();
+            super::pull_compat::apply(
+                &mut delivered,
+                deployment.stack_settings.as_ref(),
+                operator,
+                false,
+            );
+            delivered.command_receivers_without_capability_file()
+        };
         if !unmarked.is_empty() {
             tracing::debug!(
                 deployment_id = %deployment.id,
@@ -6923,7 +7323,11 @@ async fn command_receivers_need_commands_key(
 /// stop a receiver that is running: a running receiver is in one of those
 /// releases, and none of them needs the key. A deployment that never
 /// issued the key costs one store lookup per sync.
-async fn settle_commands_key(state: &AppState, deployment: &DeploymentRecord) {
+async fn settle_commands_key(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+    operator: &super::pull_compat::OperatorVersion,
+) {
     match crate::auth::commands_key::exists(state, &deployment.id).await {
         Ok(false) => return,
         Ok(true) => {}
@@ -6932,7 +7336,7 @@ async fn settle_commands_key(state: &AppState, deployment: &DeploymentRecord) {
             return;
         }
     }
-    if !command_receivers_need_commands_key(state, deployment).await {
+    if !command_receivers_need_commands_key(state, deployment, operator).await {
         crate::auth::commands_key::revoke(state, &deployment.id).await;
     }
 }
