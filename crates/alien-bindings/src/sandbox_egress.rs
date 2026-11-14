@@ -289,7 +289,22 @@ impl SandboxEgressManager {
         let resolved = self.replica_addresses.clone();
         #[cfg(not(test))]
         let resolved: Option<Vec<std::net::SocketAddr>> = None;
-        let mut addresses: Vec<_> = match resolved {
+        let fixed: Option<Vec<std::net::SocketAddr>> = if replicas.addresses.is_empty() {
+            None
+        } else {
+            Some(
+                replicas
+                    .addresses
+                    .iter()
+                    .map(|ip| {
+                        ip.parse::<std::net::Ipv4Addr>()
+                            .map(|ip| std::net::SocketAddr::from((ip, replicas.port)))
+                            .map_err(|_| unavailable("invalid gateway replica address"))
+                    })
+                    .collect::<Result<_>>()?,
+            )
+        };
+        let mut addresses: Vec<_> = match fixed.or(resolved) {
             Some(addresses) => addresses,
             None => tokio::net::lookup_host((replicas.dns.as_str(), replicas.port))
                 .await
