@@ -263,7 +263,10 @@ fn emit_disk_encryption_set(ctx: &EmitContext<'_>, label: &str, fragment: &mut T
             attr("auto_key_rotation_enabled", Expression::Bool(true)),
             nested(crate::block::block(
                 "identity",
-                [attr("type", Expression::String("SystemAssigned".to_string()))],
+                [attr(
+                    "type",
+                    Expression::String("SystemAssigned".to_string()),
+                )],
             )),
         ],
     ));
@@ -387,7 +390,11 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
             message: "failed to generate Azure remote Key permissions".to_string(),
         })?;
 
-    emit_remote_bindings_role_definitions(fragment, permission_set)?;
+    emit_remote_bindings_role_definitions(
+        fragment,
+        permission_set,
+        ctx.stack_settings.signing.is_some(),
+    )?;
     for (principal_label, owner) in principals {
         for (index, binding) in plan.bindings.iter().enumerate() {
             let role_definition_id = match &binding.role_definition {

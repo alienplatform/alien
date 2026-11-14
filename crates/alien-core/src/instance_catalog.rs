@@ -340,6 +340,61 @@ pub fn select_instance_type(
     platform: Platform,
     requirements: &WorkloadRequirements,
 ) -> Result<InstanceSelection, String> {
+    select_instance_type_where(platform, requirements, &|_| true)
+}
+
+/// A machine that automatic selection may pick, restricted by a caller's filter.
+type MachineFilter<'a> = &'a dyn Fn(&InstanceTypeSpec) -> bool;
+
+/// Like [`select_instance_type`], but only from the series that have room for `machines`
+/// machines. `has_room` answers for one machine type of a series. The ordinary selection runs
+/// first; a pick whose series has no room removes that series and selection runs again, so
+/// every preference of the ordinary selection (local disk before a configurable one, the
+/// smallest machine that fits, catalog order between equal machines) still applies to the
+/// series that remain. When no series has room, the result is the plain selection, so the
+/// caller's quota check reports the refusal. Pass the machines the pool launches with.
+pub fn select_instance_type_with_room(
+    platform: Platform,
+    requirements: &WorkloadRequirements,
+    machines: u32,
+    has_room: &dyn Fn(&InstanceTypeSpec, u32) -> bool,
+) -> Result<InstanceSelection, String> {
+    let mut without_room: Vec<&'static str> = Vec::new();
+    loop {
+        let remaining = |spec: &InstanceTypeSpec| !without_room.contains(&spec.series);
+        let Ok(selection) = select_instance_type_where(platform, requirements, &remaining) else {
+            break;
+        };
+        let Some(spec) = find_instance_type(platform, selection.instance_type) else {
+            break;
+        };
+        if has_room(spec, machines) {
+            return Ok(selection);
+        }
+        without_room.push(spec.series);
+    }
+    select_instance_type(platform, requirements)
+}
+
+/// The series automatic selection may pick from, in catalog (preference) order.
+pub fn auto_select_series(platform: Platform) -> Vec<&'static str> {
+    let mut series: Vec<&'static str> = Vec::new();
+    for spec in CATALOG
+        .iter()
+        .filter(|spec| spec.auto_select && spec.platform == platform)
+    {
+        if !series.contains(&spec.series) {
+            series.push(spec.series);
+        }
+    }
+    series
+}
+
+fn select_instance_type_where(
+    platform: Platform,
+    requirements: &WorkloadRequirements,
+    allowed: MachineFilter,
+) -> Result<InstanceSelection, String> {
     // An unset architecture accepts either one. Nested virtualization and GPU
     // models can exist on only one architecture of a platform (AWS nested
     // virtualization is x86_64 only), so try the platform default first and
@@ -356,26 +411,34 @@ pub fn select_instance_type(
                 architecture: Some(architecture),
                 ..requirements.clone()
             };
-            let selection =
-                select_instance_type_for_architecture(platform, &with_architecture(default));
+            let selection = select_instance_type_for_architecture(
+                platform,
+                &with_architecture(default),
+                allowed,
+            );
             if selection.is_ok() {
                 return selection;
             }
             // Report both reasons: the default architecture often lacks the
             // feature entirely, while the other one says what to change.
-            return select_instance_type_for_architecture(platform, &with_architecture(other))
-                .map_err(|other_error| {
-                    let default_error = selection.err().unwrap_or_default();
-                    format!("{default:?}: {default_error}; {other:?}: {other_error}")
-                });
+            return select_instance_type_for_architecture(
+                platform,
+                &with_architecture(other),
+                allowed,
+            )
+            .map_err(|other_error| {
+                let default_error = selection.err().unwrap_or_default();
+                format!("{default:?}: {default_error}; {other:?}: {other_error}")
+            });
         }
     }
-    select_instance_type_for_architecture(platform, requirements)
+    select_instance_type_for_architecture(platform, requirements, allowed)
 }
 
 fn select_instance_type_for_architecture(
     platform: Platform,
     requirements: &WorkloadRequirements,
+    allowed: MachineFilter,
 ) -> Result<InstanceSelection, String> {
     let family = select_family(requirements);
     let family = if requirements.nested_virt && family == InstanceFamily::Burstable {
@@ -383,12 +446,13 @@ fn select_instance_type_for_architecture(
     } else {
         family
     };
-    let selection = select_instance_type_in_family(platform, requirements, family);
+    let selection = select_instance_type_in_family(platform, requirements, family, allowed);
     if selection.is_err() && family == InstanceFamily::Burstable {
         return select_instance_type_in_family(
             platform,
             requirements,
             InstanceFamily::GeneralPurpose,
+            allowed,
         );
     }
     selection
@@ -398,6 +462,7 @@ fn select_instance_type_in_family(
     platform: Platform,
     requirements: &WorkloadRequirements,
     family: InstanceFamily,
+    allowed: MachineFilter,
 ) -> Result<InstanceSelection, String> {
     let architecture = requirements
         .architecture
@@ -407,6 +472,7 @@ fn select_instance_type_in_family(
     let candidates: Vec<&InstanceTypeSpec> = CATALOG
         .iter()
         .filter(|spec| spec.auto_select && spec.platform == platform && spec.family == family)
+        .filter(|spec| allowed(spec))
         .filter(|spec| {
             if requirements.nested_virt {
                 spec.is_nested_virt_capable()
@@ -483,6 +549,7 @@ fn select_instance_type_in_family(
                     spec.auto_select
                         && spec.platform == platform
                         && spec.family == InstanceFamily::GeneralPurpose
+                        && allowed(spec)
                         && spec.has_configurable_ephemeral_storage()
                         && max_configurable_ephemeral_storage_bytes(platform)
                             .is_some_and(|max| requirements.max_ephemeral_storage_bytes <= max)
@@ -558,8 +625,10 @@ fn select_instance_type_in_family(
         .min_by_key(|spec| spec.vcpu)
         .or_else(|| {
             // If nothing fits within the cap, pick the largest instance under the cap
+            // `max_by_key` keeps the last of equal machines; the earlier series wins ties.
             candidates
                 .iter()
+                .rev()
                 .filter(|spec| spec.vcpu <= vcpu_cap)
                 .max_by_key(|spec| spec.vcpu)
         })
@@ -1657,6 +1726,10 @@ mod tests {
         (Platform::Azure, "Standard_D4s_v5", 4, 16 * GI, 20 * GI, None, true),
         (Platform::Azure, "Standard_D8s_v5", 8, 32 * GI, 20 * GI, None, true),
         (Platform::Azure, "Standard_D16s_v5", 16, 64 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_D2s_v6", 2, 8 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_D4s_v6", 4, 16 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_D8s_v6", 8, 32 * GI, 20 * GI, None, true),
+        (Platform::Azure, "Standard_D16s_v6", 16, 64 * GI, 20 * GI, None, true),
         (Platform::Azure, "Standard_F2s_v2", 2, 4 * GI, 20 * GI, None, true),
         (Platform::Azure, "Standard_F4s_v2", 4, 8 * GI, 20 * GI, None, true),
         (Platform::Azure, "Standard_F8s_v2", 8, 16 * GI, 20 * GI, None, true),
@@ -1717,6 +1790,107 @@ mod tests {
             .map(|spec| (spec.platform, spec.name))
             .collect();
         assert_eq!(auto_select, pinned);
+    }
+
+    fn general_requirements() -> WorkloadRequirements {
+        WorkloadRequirements {
+            total_cpu_at_desired: 3.0,
+            total_memory_bytes_at_desired: 12 * GI,
+            total_cpu_at_max: 3.0,
+            total_memory_bytes_at_max: 12 * GI,
+            max_cpu_per_container: 1.0,
+            max_memory_per_container: 4 * GI,
+            max_ephemeral_storage_bytes: 10 * GI,
+            gpu: None,
+            architecture: None,
+            nested_virt: true,
+        }
+    }
+
+    #[test]
+    fn azure_auto_selection_prefers_dsv5_then_dsv6_in_catalog_order() {
+        let series = auto_select_series(Platform::Azure);
+        let position = |name| series.iter().position(|series| *series == name);
+        assert!(
+            position("Dsv5").unwrap() < position("Dsv6").unwrap(),
+            "{series:?}"
+        );
+    }
+
+    #[test]
+    fn with_room_everywhere_the_pick_is_the_plain_pick() {
+        let requirements = general_requirements();
+        let plain = select_instance_type(Platform::Azure, &requirements).unwrap();
+        let with_room =
+            select_instance_type_with_room(Platform::Azure, &requirements, 2, &|_, _| true)
+                .unwrap();
+        assert_eq!(plain.instance_type, with_room.instance_type);
+        assert!(
+            with_room.instance_type.ends_with("_v5"),
+            "{}",
+            with_room.instance_type
+        );
+    }
+
+    #[test]
+    fn a_series_without_room_is_skipped_for_the_next_one() {
+        let requirements = general_requirements();
+        let selection =
+            select_instance_type_with_room(Platform::Azure, &requirements, 2, &|spec, _| {
+                spec.series != "Dsv5"
+            })
+            .unwrap();
+        assert_eq!(selection.instance_type, "Standard_D4s_v6");
+    }
+
+    #[test]
+    fn room_is_asked_for_the_requested_machines() {
+        let requirements = general_requirements();
+        let asked = std::cell::RefCell::new(Vec::new());
+        select_instance_type_with_room(Platform::Azure, &requirements, 3, &|spec, machines| {
+            asked.borrow_mut().push((spec.series, machines));
+            true
+        })
+        .unwrap();
+        assert!(asked.borrow().iter().all(|(_, machines)| *machines == 3));
+    }
+
+    /// A local disk is preferred to a configurable one whatever the series that has room:
+    /// the machines of series without room are skipped, not the storage preference.
+    #[test]
+    fn local_storage_is_preferred_among_the_series_with_room() {
+        let requirements = WorkloadRequirements {
+            max_ephemeral_storage_bytes: 500 * GI,
+            nested_virt: false,
+            ..general_requirements()
+        };
+        let plain = select_instance_type(Platform::Azure, &requirements).unwrap();
+        let plain_spec = find_instance_type(Platform::Azure, plain.instance_type).unwrap();
+        assert!(
+            !plain_spec.has_configurable_ephemeral_storage(),
+            "the plain pick has a local disk: {}",
+            plain.instance_type
+        );
+        let with_room =
+            select_instance_type_with_room(Platform::Azure, &requirements, 1, &|_, _| true)
+                .unwrap();
+        assert_eq!(with_room.instance_type, plain.instance_type);
+        // Series that cannot give a local disk have room too, and still lose to it.
+        let local_only =
+            select_instance_type_with_room(Platform::Azure, &requirements, 1, &|spec, _| {
+                spec.series == plain_spec.series || spec.series.starts_with("Dsv")
+            })
+            .unwrap();
+        assert_eq!(local_only.instance_type, plain.instance_type);
+    }
+
+    #[test]
+    fn with_no_room_anywhere_the_plain_pick_is_kept_for_the_quota_refusal() {
+        let requirements = general_requirements();
+        let plain = select_instance_type(Platform::Azure, &requirements).unwrap();
+        let none = select_instance_type_with_room(Platform::Azure, &requirements, 2, &|_, _| false)
+            .unwrap();
+        assert_eq!(plain.instance_type, none.instance_type);
     }
 
     #[test]

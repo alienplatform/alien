@@ -938,6 +938,8 @@ async fn prepare_for_render(stack: Stack) -> Stack {
 
 fn options(registry: &TfRegistry) -> TerraformOptions<'_> {
     TerraformOptions {
+        setup_identity: None,
+        pins: alien_core::SetupPins::compiled_in(),
         registry,
         display_name: None,
         stack_settings: StackSettings::default(),
@@ -986,11 +988,12 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
         let case = format!("{prefix}-character prefix, {region}-character region");
         assert_eq!(
             usage.roles["execution_sa"],
-            // Two managed policies, each attached once more while an update replaces it.
+            // Three managed policies (two installed ones and the machine workload secrets
+            // grant), each attached once more while an update replaces it.
             RoleUsage {
-                inline_policies: 19,
-                inline_chars: 19 * stub,
-                attachments: 4,
+                inline_policies: 23,
+                inline_chars: 23 * stub,
+                attachments: 6,
             },
             "{case}"
         );
@@ -1002,6 +1005,17 @@ async fn sizes_the_e2e_execution_role_as_iam_counts_it() {
                 .map(|(_, chars)| *chars)
                 .collect::<Vec<_>>(),
             chunks,
+            "{case}"
+        );
+        // The machine workload secrets grant is a policy of its own, so the installed ones
+        // keep their documents.
+        assert_eq!(
+            usage
+                .managed_policies
+                .iter()
+                .filter(|(label, _)| label.starts_with("execution_sa_late_setup_"))
+                .count(),
+            1,
             "{case}"
         );
     }
@@ -1027,6 +1041,7 @@ async fn a_vault_writes_no_copy_of_the_stack_level_policy() {
             targets_kubernetes: false,
             stack_settings: &settings,
             names: &names,
+            pins: &alien_core::SetupPins::default(),
         };
         let profile = &stack.permissions.profiles["execution"];
         // As the vault emitter selects them: sets named for the vault, then `"*"` ones.

@@ -36,6 +36,19 @@ pub(super) fn allowed_sources(config: &Container, stack: &Stack) -> BTreeSet<Str
     linked.chain(cluster_members).collect()
 }
 
+/// The namespace a linking Sandbox's pods run in, when the chart sets one.
+pub(super) fn sandbox_source_namespace(
+    stack: &Stack,
+    id: &str,
+    configured: Option<String>,
+) -> Option<String> {
+    let is_sandbox = stack
+        .resources()
+        .find(|(resource_id, _)| resource_id.as_str() == id)
+        .is_some_and(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>().is_some());
+    configured.filter(|_| is_sandbox)
+}
+
 fn port(number: u16, protocol: &str) -> NetworkPolicyPort {
     NetworkPolicyPort {
         port: Some(IntOrString::Int(number.into())),
@@ -74,6 +87,19 @@ fn build_policy(
                     sources
                         .iter()
                         .map(|id| NetworkPolicyPeer {
+                            // A Sandbox's pods run in the sandbox namespace when the chart sets
+                            // one, so a bare pod selector (this namespace only) never matches them.
+                            namespace_selector: sandbox_source_namespace(
+                                ctx.desired_stack,
+                                id,
+                                crate::sandbox::configured_sandbox_namespace(),
+                            )
+                            .map(|namespace| {
+                                selector(BTreeMap::from([(
+                                    "kubernetes.io/metadata.name".into(),
+                                    namespace,
+                                )]))
+                            }),
                             pod_selector: Some(selector(kubernetes_branded_resource_labels(
                                 ctx, id,
                             ))),

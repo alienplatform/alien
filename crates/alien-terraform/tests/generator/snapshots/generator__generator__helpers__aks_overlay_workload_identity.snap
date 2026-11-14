@@ -216,7 +216,7 @@ locals {
   kubernetes_exposure = {
     mode = "disabled"
   }
-  deployment_kubernetes_settings = merge(try(local.advanced_settings.kubernetes, {}), { exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure)) })
+  deployment_kubernetes_settings = merge(try(local.advanced_settings.kubernetes, {}), { cluster = merge(try(local.advanced_settings.kubernetes.cluster, {}), { ownership = var.kubernetes_cluster_mode == "create" ? "managed" : "existing" }), exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure)) })
   deployment_settings            = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, endpointAccess = var.endpoint_access, kubernetes = local.deployment_kubernetes_settings })
   deployment_resources = [
     {
@@ -685,6 +685,11 @@ output "kubernetes_kubeconfig" {
 output "kubernetes_kube_context" {
   value       = local.kubernetes_kube_context
   description = "Kube context for managed Kubernetes clusters created by this module."
+}
+
+output "chart_service_accounts_json" {
+  value       = jsonencode({ serviceAccountPrefix = local.resource_prefix, serviceAccounts = local.helm_service_accounts, managerServiceAccount = local.helm_manager_service_account })
+  description = "The Helm chart's `serviceAccountPrefix`, `serviceAccounts` and `managerServiceAccount` values (the cloud identity annotations for the roles this module created, and the prefix their trust policies expect in service account names), as JSON. Merge it into the chart's values. Install into the namespace set in `kubernetes_namespace`."
 }
 
 === README.md ===

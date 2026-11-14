@@ -61,6 +61,8 @@ pub struct AlienManagerBuilder {
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     /// Release channels; `None` sends every release to every deployment.
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    /// Signer lists, pending changes and signed config.
+    signing: Option<Arc<dyn crate::traits::SigningStore>>,
     /// Signs air-gapped bundles.
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     /// Where bundles' charts and Operator images come from.
@@ -99,6 +101,7 @@ impl AlienManagerBuilder {
             import_registry: None,
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
             value_store: None,
@@ -153,6 +156,12 @@ impl AlienManagerBuilder {
         resolver: Arc<dyn crate::traits::BundleSourceResolver>,
     ) -> Self {
         self.bundle_sources = Some(resolver);
+        self
+    }
+
+    /// Store signer lists and signed config (see [`crate::traits::SigningStore`]).
+    pub fn signing(mut self, store: Arc<dyn crate::traits::SigningStore>) -> Self {
+        self.signing = Some(store);
         self
     }
 
@@ -360,6 +369,11 @@ impl AlienManagerBuilder {
             self.release_channels = Some(Arc::new(
                 crate::stores::sqlite::SqliteReleaseChannelStore::new(db.clone()),
             ));
+        }
+        if self.signing.is_none() {
+            self.signing = Some(Arc::new(crate::stores::sqlite::SqliteSigningStore::new(
+                db.clone(),
+            )));
         }
         if self.deployment_store.is_none() {
             let store = crate::stores::sqlite::SqliteDeploymentStore::new(db.clone());
@@ -969,6 +983,7 @@ impl AlienManagerBuilder {
             self.import_registry,
             charts,
             self.release_channels,
+            self.signing,
             self.bundle_signing_key,
             self.bundle_sources,
             self.value_store,
@@ -1188,6 +1203,7 @@ async fn finalize(
     import_registry_override: Option<Arc<alien_infra::ImporterRegistry>>,
     charts: Option<Arc<crate::routes::charts::ChartSettings>>,
     release_channels: Option<Arc<dyn crate::traits::ReleaseChannelStore>>,
+    signing: Option<Arc<dyn crate::traits::SigningStore>>,
     bundle_signing_key: Option<Arc<alien_core::bundle_signature::BundleSigningKey>>,
     bundle_sources: Option<Arc<dyn crate::traits::BundleSourceResolver>>,
     values: Option<Arc<crate::values::ValueStore>>,
@@ -1234,6 +1250,7 @@ async fn finalize(
             .unwrap_or_else(|| Arc::new(alien_infra::ImporterRegistry::built_in())),
         charts,
         release_channels: release_channels.clone(),
+        signing: signing.clone(),
         bundle_signing_key,
         bundle_sources,
         log_buffer: log_buffer.clone(),
@@ -1279,6 +1296,7 @@ async fn finalize(
         log_buffer,
         token_store,
         command_server,
+        signing,
         values,
         release_channels,
     })

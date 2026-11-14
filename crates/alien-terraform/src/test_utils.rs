@@ -2,8 +2,9 @@ use indexmap::IndexMap;
 use std::{
     ffi::{OsStr, OsString},
     fs,
+    io::Write,
     path::Path,
-    process::Command,
+    process::{Command, Stdio},
 };
 
 /// Files written for linters that operate on a directory.
@@ -141,6 +142,26 @@ pub fn terraform_test(files: &LinterFiles) -> LinterRun {
     })
 }
 
+/// [`terraform_test`] with the `terraform` found in `bin_dir` ahead of the one on `PATH`, for
+/// checking that a module still evaluates on the oldest Terraform it declares support for.
+pub fn terraform_test_with_binary_in(files: &LinterFiles, bin_dir: &Path) -> LinterRun {
+    run_when_enabled("terraform test", || {
+        let dir = write_files_to_temp_dir(files)?;
+        let path = std::env::join_paths(std::iter::once(bin_dir.to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        ))
+        .map_err(|error| error.to_string())?;
+        let run = |args: &[&str]| -> Result<LinterRun, String> {
+            run_command_with_path("terraform", args.iter().map(OsStr::new), dir.path(), &path)
+        };
+        let init = run(&["init", "-backend=false", "-no-color"])?;
+        if !matches!(init.status, LinterStatus::Passed) {
+            return Ok(init);
+        }
+        run(&["test", "-no-color"])
+    })
+}
+
 /// Run `terraform init -backend=false` and `terraform graph`. On success, stdout holds
 /// Terraform's resource dependency graph in DOT form.
 pub fn terraform_graph(files: &LinterFiles) -> LinterRun {
@@ -223,10 +244,36 @@ fn write_file(path: &Path, contents: &str) -> Result<(), String> {
     fs::write(path, contents).map_err(|error| error.to_string())
 }
 
+fn run_command_with_path<I, S>(
+    program: &str,
+    args: I,
+    current_dir: &Path,
+    path: &OsStr,
+) -> Result<LinterRun, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_command_in(program, args, Some(current_dir), Some(path))
+}
+
 fn run_command<I, S>(
     program: &str,
     args: I,
     current_dir: Option<&Path>,
+) -> Result<LinterRun, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    run_command_in(program, args, current_dir, None)
+}
+
+fn run_command_in<I, S>(
+    program: &str,
+    args: I,
+    current_dir: Option<&Path>,
+    path: Option<&OsStr>,
 ) -> Result<LinterRun, String>
 where
     I: IntoIterator<Item = S>,
@@ -246,6 +293,9 @@ where
     if let Some(current_dir) = current_dir {
         process.current_dir(current_dir);
     }
+    if let Some(path) = path {
+        process.env("PATH", path);
+    }
 
     let output = process.output().map_err(|error| error.to_string())?;
     let status = if output.status.success() {
@@ -261,4 +311,40 @@ where
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
+}
+
+/// What `terraform console` evaluates `expression` to, with
+/// `local.resource_prefix` set to `resource_prefix`. Ties a name setup
+/// computes in HCL to the Rust function that derives the same name.
+pub fn evaluate_with_prefix(resource_prefix: &str, expression: &hcl::Expression) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let expression = hcl::format::to_string(expression).unwrap();
+    fs::write(
+        dir.path().join("main.tf"),
+        format!(
+            "locals {{\n  resource_prefix = \"{resource_prefix}\"\n  value = {expression}\n}}\n"
+        ),
+    )
+    .unwrap();
+    let mut console = Command::new("terraform")
+        .arg("console")
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("terraform should be on PATH");
+    console
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"local.value\n")
+        .unwrap();
+    let output = console.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).unwrap()
 }

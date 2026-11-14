@@ -678,3 +678,75 @@ mod update_during_dependency_change {
         Ok(())
     }
 }
+
+/// Setup renders the AWS management policy after the network it names. The edge only orders
+/// setup: management provisions once its dependency is Running, and when the dependency fails,
+/// management stays Pending and the failure is the dependency's own.
+#[tokio::test]
+async fn setup_management_waits_for_the_network_and_never_hangs_on_its_failure() -> Result<()> {
+    use alien_core::RemoteStackManagement;
+    let stack = |network: Worker| {
+        Stack::new("setup-order".to_owned())
+            .add(network, ResourceLifecycle::Frozen)
+            .add_with_dependencies(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "network")],
+            )
+            .build()
+    };
+
+    // The network comes up: management follows it.
+    let executor = new_executor_with_filter(
+        &stack(test_function("network")),
+        vec![ResourceLifecycle::Frozen],
+    )?;
+    let state = run_to_synced(&executor, new_test_state()).await?;
+    assert_all_running(&state, &["network", "management"]);
+
+    // An install from before the edge reruns setup with it: both stay Running.
+    let before_edge = Stack::new("setup-order".to_owned())
+        .add(test_function("network"), ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let installed = run_to_synced(
+        &new_executor_with_filter(&before_edge, vec![ResourceLifecycle::Frozen])?,
+        new_test_state(),
+    )
+    .await?;
+    let rerun = run_to_synced(&executor, installed).await?;
+    assert_all_running(&rerun, &["network", "management"]);
+
+    // The network fails: management never starts, and the run ends on the network's error.
+    let failing = Worker::new("network".to_string())
+        .code(alien_core::WorkerCode::Image {
+            image: "image-network".to_string(),
+        })
+        .memory_mb(5120) // the test controller rejects more than 4 GiB
+        .permissions("execution".to_string())
+        .build();
+    let executor = new_executor_with_filter(&stack(failing), vec![ResourceLifecycle::Frozen])?;
+    let state = run_steps(&executor, new_test_state(), 50).await?;
+    assert_eq!(
+        get_status(&state, "network"),
+        Some(ResourceStatus::ProvisionFailed)
+    );
+    assert!(state.resources["network"].error.is_some());
+    assert_eq!(
+        get_status(&state, "management"),
+        Some(ResourceStatus::Pending)
+    );
+    assert!(state.resources["management"].error.is_none());
+    assert!(
+        executor
+            .run_until_synced(state)
+            .await
+            .into_result()
+            .is_err(),
+        "the run ends on the failed network instead of waiting"
+    );
+    Ok(())
+}

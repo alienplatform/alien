@@ -118,7 +118,7 @@ impl AwsRuntimePermissionsGenerator {
                 permission_set,
                 platform_permission.label.as_deref(),
                 context,
-            ) {
+            )? {
                 continue;
             }
             let actions = platform_permission.grant.actions.as_ref().ok_or_else(|| {
@@ -153,6 +153,16 @@ impl AwsRuntimePermissionsGenerator {
 
             let (binding_spec, actions) =
                 super::aws_boundary::role_write_binding(binding_spec, actions, context);
+            let actions = super::aws_boundary::protected_management_actions(
+                permission_set,
+                platform_permission.effect.is_allow(),
+                &binding_spec,
+                actions,
+                context,
+            )?;
+            if actions.is_empty() {
+                continue;
+            }
 
             let resources = binding_spec
                 .resources
@@ -213,6 +223,11 @@ impl AwsRuntimePermissionsGenerator {
                     let value_key =
                         VariableInterpolator::interpolate_variables(value_key, context)?;
                     let interpolated_value = match value_template {
+                        AwsConditionValue::String(value)
+                            if value == crate::AWS_SUBNET_IDS_VARIABLE =>
+                        {
+                            AwsConditionValue::List(context.aws_subnet_ids())
+                        }
                         AwsConditionValue::String(value) => {
                             AwsConditionValue::String(interpolate_aws_variables(value, context)?)
                         }

@@ -214,8 +214,8 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
-    use crate::traits::token_store::CreateTokenParams;
     use crate::stores::sqlite::{SqliteDatabase, SqliteTokenStore};
+    use crate::traits::token_store::CreateTokenParams;
     use crate::traits::token_store::{TokenRecord, TokenStore};
 
     /// A token store that revokes the deployment's commands keys right after the
@@ -246,8 +246,10 @@ mod tests {
                 .await
         }
         async fn delete_token(&self, _id: &str) -> Result<(), AlienError> {
-            Err(crate::error::ErrorData::internal("injected: the token cannot be deleted")
-                .into_generic())
+            Err(
+                crate::error::ErrorData::internal("injected: the token cannot be deleted")
+                    .into_generic(),
+            )
         }
         async fn list_tokens(&self) -> Result<Vec<TokenRecord>, AlienError> {
             self.inner.list_tokens().await

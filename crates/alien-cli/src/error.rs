@@ -60,6 +60,18 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A statement could not be signed or a signing key could not be used.
+    #[error(
+        code = "SIGNING_FAILED",
+        message = "Signing failed: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    SigningFailed {
+        /// What went wrong
+        message: String,
+    },
+
     /// API request failed.
     #[error(
         code = "API_REQUEST_FAILED",

@@ -1,0 +1,78 @@
+{
+  "minimal": {
+    "id": "minimal",
+    "resources": {
+      "assets": {
+        "config": {
+          "corsAllowedOrigins": [],
+          "id": "assets",
+          "lifecycleRules": [],
+          "publicRead": false,
+          "type": "storage",
+          "versioning": false
+        },
+        "lifecycle": "frozen",
+        "dependencies": [],
+        "remoteAccess": false
+      }
+    },
+    "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+  },
+  "live-workloads": {
+    "id": "app",
+    "supportedPlatforms": ["aws", "gcp", "azure"],
+    "resources": {
+      "api": {
+        "lifecycle": "live",
+        "dependencies": [{ "id": "assets", "type": "storage" }],
+        "config": {
+          "id": "api",
+          "type": "container",
+          "code": { "image": "example.com/api:v1" },
+          "cpu": { "min": "1", "desired": "1" },
+          "memory": { "min": "512Mi", "desired": "512Mi" },
+          "ports": [{ "port": 8080, "expose": "http" }],
+          "permissions": "runtime",
+          "links": [],
+          "environment": { "LOG": "debug" },
+          "command": ["serve"],
+          "weight": 1.5
+        }
+      },
+      "agent": {
+        "lifecycle": "live",
+        "dependencies": [],
+        "config": {
+          "id": "agent",
+          "type": "sandbox",
+          "lifecycle": "ephemeral",
+          "privateBaseImage": "123456789012.dkr.ecr.us-east-1.amazonaws.com/sandbox-cache/artifacts-base:v3"
+        }
+      },
+      "frozen-box": {
+        "lifecycle": "frozen",
+        "dependencies": [],
+        "config": {
+          "id": "frozen-box",
+          "type": "sandbox",
+          "code": { "image": "registry.example.com/box:1" },
+          "size": "small"
+        }
+      },
+      "assets": {
+        "lifecycle": "frozen",
+        "dependencies": [],
+        "config": {
+          "id": "assets",
+          "type": "storage",
+          "publicRead": false,
+          "note": "naïve   \"q\" \\ \u0001"
+        }
+      }
+    },
+    "permissions": {
+      "profiles": { "runtime": { "*": ["storage/data-read"] } },
+      "management": "auto"
+    }
+  }
+}

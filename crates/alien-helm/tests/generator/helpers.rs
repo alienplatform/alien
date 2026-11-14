@@ -51,7 +51,12 @@ pub fn assert_helm_valid(chart: &HelmChart, context: &str) {
 
     for (path, values) in files
         .iter()
-        .filter(|(path, _)| path.starts_with("examples/") && path.ends_with(".yaml"))
+        // `examples/gitops/` holds Flux and Argo CD manifests, not values files.
+        .filter(|(path, _)| {
+            path.starts_with("examples/")
+                && path.ends_with(".yaml")
+                && !path.starts_with("examples/gitops/")
+        })
     {
         test_utils::helm_template_and_validate(&files, Some(values))
             .assert_ok(format!("{context} helm template {path}"));

@@ -26,6 +26,7 @@ mod generator {
     pub mod gating_matrix_tests;
     pub mod kubernetes_cluster_tests;
     pub mod management_external_id_tests;
+    pub mod management_network_tests;
     pub mod management_policy_tests;
     pub mod management_trust_tests;
     pub mod network_inputs_tests;

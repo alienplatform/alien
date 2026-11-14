@@ -171,6 +171,37 @@ pub fn plan_compute_with_state(
     selected_settings: Option<&crate::ComputeSettings>,
     previous_state: Option<&StackState>,
 ) -> Result<ComputePlan, ErrorData> {
+    plan_compute_with_room(stack, platform, selected_settings, previous_state, None)
+}
+
+/// What the cloud account can still launch, asked while pools choose their machines. The
+/// planner visits pools in order, so an implementation can hold back what earlier pools
+/// need before it answers for the next one.
+pub trait MachineRoom {
+    /// Whether `machines` of `spec` fit for the pool when it chooses automatically. An
+    /// installed pool answers for the series it already runs and ignores quota.
+    fn has_room(
+        &self,
+        pool_id: &str,
+        spec: &instance_catalog::InstanceTypeSpec,
+        machines: u32,
+    ) -> bool;
+
+    /// The machine a pool ends up with and the machines it launches with, whether it chose
+    /// automatically or its machine was explicit. Called again with the same pool replaces
+    /// the earlier answer.
+    fn commit(&self, pool_id: &str, spec: &instance_catalog::InstanceTypeSpec, machines: u32);
+}
+
+/// [`plan_compute_with_state`] where automatic selection takes the first series that has
+/// room for the pool's machines, per `room`.
+pub fn plan_compute_with_room(
+    stack: &Stack,
+    platform: Platform,
+    selected_settings: Option<&crate::ComputeSettings>,
+    previous_state: Option<&StackState>,
+    room: Option<&dyn MachineRoom>,
+) -> Result<ComputePlan, ErrorData> {
     let mut resolved_stack = stack.clone();
     crate::container_resources::resolve_container_resources(
         &mut resolved_stack,
@@ -256,6 +287,33 @@ pub fn plan_compute_with_state(
     let mut pool_ids: Vec<String> = groups.keys().cloned().collect();
     pool_ids.sort();
 
+    // Pools whose machine is explicit hold their quota before any pool chooses, whatever
+    // their order.
+    if let Some(room) = room {
+        for pool_id in &pool_ids {
+            let selected = selected_settings.and_then(|settings| settings.pools.get(pool_id));
+            let declared = stack
+                .resources
+                .values()
+                .filter_map(|entry| entry.config.downcast_ref::<crate::ComputeCluster>())
+                .flat_map(|cluster| &cluster.capacity_groups)
+                .find(|group| &group.group_id == pool_id)
+                .and_then(|group| group.instance_type.as_deref());
+            let machine = match selected {
+                Some(selection) => selection.machine(),
+                None => declared,
+            };
+            if let Some(spec) =
+                machine.and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+            {
+                let machines = selected
+                    .map(ComputePoolSelection::min_size)
+                    .unwrap_or_else(|| groups[pool_id].scale.default_min_size());
+                room.commit(pool_id, spec, machines);
+            }
+        }
+    }
+
     let mut pools = Vec::new();
     for pool_id in pool_ids {
         let mut group = groups.remove(&pool_id).expect("pool id came from map keys");
@@ -332,6 +390,13 @@ pub fn plan_compute_with_state(
             group.requires_failure_domain,
             group.generated,
             machine_override,
+            // Only a pool that chooses its machine asks for room.
+            room.filter(|_| machine_override.is_none())
+                .map(|room| PoolRoom {
+                    room,
+                    pool_id: &pool_id,
+                    machines: selected.map(ComputePoolSelection::min_size),
+                }),
         )?;
         let mut selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
         if selected.is_none() {
@@ -365,6 +430,14 @@ pub fn plan_compute_with_state(
                         failure_domains, ..
                     } => *failure_domains = Some(default_failure_domains),
                 }
+            }
+        }
+        if let Some(room) = room {
+            if let Some(spec) = selected_choice
+                .machine()
+                .and_then(|machine| instance_catalog::find_instance_type(platform, machine))
+            {
+                room.commit(&pool_id, spec, selected_choice.min_size());
             }
         }
         let mut errors = validate_compute_pool_selection(
@@ -677,6 +750,14 @@ fn merge_explicit_compute_groups(
     Ok(())
 }
 
+/// The room a pool that chooses its machine asks, with the machines it launches with when
+/// the installer chose a count.
+struct PoolRoom<'a> {
+    room: &'a dyn MachineRoom,
+    pool_id: &'a str,
+    machines: Option<u32>,
+}
+
 fn recommended_selection(
     platform: Platform,
     requirements: &WorkloadRequirements,
@@ -684,10 +765,32 @@ fn recommended_selection(
     requires_failure_domain: bool,
     generated: bool,
     machine_override: Option<&str>,
+    room: Option<PoolRoom>,
 ) -> Result<ComputePoolSelection, ErrorData> {
     let machine = match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Some(
-            match instance_catalog::select_instance_type(platform, requirements) {
+            match match room {
+                Some(pool_room) => {
+                    // The machines the pool launches with: the installer's choice when it
+                    // made one, the release's default otherwise.
+                    let launch_machines = pool_room
+                        .machines
+                        .unwrap_or(match scale {
+                            CapacityGroupScalePolicy::Fixed { machines } => machines.default,
+                            CapacityGroupScalePolicy::Autoscale { min, .. } => min.default,
+                        })
+                        .max(1);
+                    instance_catalog::select_instance_type_with_room(
+                        platform,
+                        requirements,
+                        launch_machines,
+                        &|spec, machines| {
+                            pool_room.room.has_room(pool_room.pool_id, spec, machines)
+                        },
+                    )
+                }
+                None => instance_catalog::select_instance_type(platform, requirements),
+            } {
                 Ok(selection) => selection.instance_type.to_string(),
                 Err(message) => {
                     // Automatic recommendations add headroom. A valid explicit

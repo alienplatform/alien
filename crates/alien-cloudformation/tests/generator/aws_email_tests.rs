@@ -303,6 +303,7 @@ fn aws_email_import_ref_carries_dkim_tokens_and_rule_set() {
         targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
+        pins: &alien_core::SetupPins::default(),
     };
 
     let registry = CfRegistry::built_in();
@@ -378,6 +379,7 @@ fn aws_email_rejects_live_linked_queue() {
         targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
+        pins: &alien_core::SetupPins::default(),
     };
 
     let registry = CfRegistry::built_in();
@@ -425,6 +427,7 @@ fn aws_email_rejects_multiple_inbound_rule_sets() {
         targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
+        pins: &alien_core::SetupPins::default(),
     };
     let registry = CfRegistry::built_in();
     let emitter = registry
@@ -469,6 +472,7 @@ fn aws_email_import_ref_matches_import_data_contract() {
         targets_kubernetes: false,
         stack_settings: &StackSettings::default(),
         names: &names,
+        pins: &alien_core::SetupPins::default(),
     };
 
     let registry = CfRegistry::built_in();

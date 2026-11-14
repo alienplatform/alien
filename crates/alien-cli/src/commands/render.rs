@@ -39,7 +39,7 @@ pub fn register_terraform_registry_extension(extension: TerraformRegistryExtensi
         .expect("Terraform registry extension already registered");
 }
 
-fn cloudformation_registry() -> alien_cloudformation::CfRegistry {
+pub(crate) fn cloudformation_registry() -> alien_cloudformation::CfRegistry {
     let mut registry = alien_cloudformation::CfRegistry::built_in();
     if let Some(extension) = CLOUDFORMATION_REGISTRY_EXTENSION.get() {
         extension(&mut registry);
@@ -47,7 +47,7 @@ fn cloudformation_registry() -> alien_cloudformation::CfRegistry {
     registry
 }
 
-fn terraform_registry() -> alien_terraform::TfRegistry {
+pub(crate) fn terraform_registry() -> alien_terraform::TfRegistry {
     let mut registry = alien_terraform::TfRegistry::built_in();
     if let Some(extension) = TERRAFORM_REGISTRY_EXTENSION.get() {
         extension(&mut registry);
@@ -204,6 +204,8 @@ async fn prepare_stack_for_render(
         allow_frozen_changes: false,
         setup_run: false,
         setup_run_id: None,
+        release_statements: None,
+        signed_config: None,
         compute_backend: None,
         external_bindings: ExternalBindings::default(),
         base_platform,
@@ -355,6 +357,7 @@ fn render_cloudformation(
     let template = alien_cloudformation::generate_cloudformation_template(
         stack,
         alien_cloudformation::CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
             registry: &registry,
             source_stack,
             target: alien_cloudformation::CloudFormationTarget::Aws,
@@ -428,6 +431,8 @@ fn render_terraform(
         stack,
         terraform_target(target),
         alien_terraform::TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: stack_settings.clone(),
@@ -733,6 +738,8 @@ mod tests {
             &stack,
             alien_terraform::TerraformTarget::Gcp,
             alien_terraform::TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -820,6 +827,8 @@ mod tests {
                     volume_restores: Vec::new(),
                     value_slots: Vec::new(),
                     deletion_policy: Default::default(),
+                    release_statements: None,
+                    signed_config: None,
                 };
                 let runner = alien_preflights::runner::PreflightRunner::new();
                 let on_gcp = runner

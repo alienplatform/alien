@@ -15,13 +15,20 @@ name = "alien-deploy"
 path = "src/main.rs"
 
 [dependencies]
+jsonschema = { workspace = true }
 # Alien crates
 alien-core = { workspace = true }
+alien-aws-clients = { workspace = true }
+alien-gcp-clients = { workspace = true }
+alien-azure-clients = { workspace = true }
+alien-client-core = { workspace = true }
 alien-preflights = { workspace = true }
 alien-cli-common = { workspace = true }
 alien-error = { workspace = true }
+alien-signing = { workspace = true }
 alien-deployment = { workspace = true }
 alien-helm = { workspace = true }
+alien-k8s-clients = { workspace = true }
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-local = { workspace = true }
 alien-operator = { path = "../alien-operator" }
@@ -36,7 +43,10 @@ reqwest = { workspace = true, default-features = false, features = ["json", "rus
 # selects the legacy hyper 0.14 client, which pulls rustls 0.21 and
 # rustls-webpki 0.101, and is also part of aws-sdk-* default features.
 aws-config = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio", "behavior-version-latest"] }
+aws-credential-types = { workspace = true }
 aws-sdk-cloudformation = { version = "1", default-features = false, features = ["default-https-client"] }
+# `verify --terraform` finds the account of an AWS install.
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client"] }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
@@ -67,6 +77,7 @@ hex = { workspace = true }
 oci-client = { workspace = true }
 sha2 = { workspace = true }
 tar = { workspace = true }
+walkdir = { workspace = true }
 base64 = { workspace = true }
 fs2 = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
@@ -76,3 +87,6 @@ libc = "0.2"
 
 [dev-dependencies]
 httpmock = { workspace = true }
+alien-cloudformation = { workspace = true }
+alien-terraform = { workspace = true }
+hcl-rs = { workspace = true }

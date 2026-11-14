@@ -662,6 +662,9 @@ enum ResolvedRemoteBinding {
         client_config: Box<alien_core::AzureClientConfig>,
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
+        /// The install's manager creates this sandbox's sandboxes: this caller's role cannot.
+        #[serde(default, rename = "createViaManager")]
+        create_via_manager: bool,
     },
     #[serde(rename = "sandbox-gcp-agent-platform")]
     SandboxGcpAgentPlatform {
@@ -754,6 +757,17 @@ impl ResolvedRemoteBinding {
             client_config,
             expires_at,
         })
+    }
+
+    /// Whether the manager asked this caller to create its sandboxes through it.
+    fn creates_sandboxes_through_manager(&self) -> bool {
+        matches!(
+            self,
+            Self::SandboxAzure {
+                create_via_manager: true,
+                ..
+            }
+        )
     }
 
     fn into_provider_parts(
@@ -920,6 +934,7 @@ impl ResolvedRemoteBinding {
                 binding,
                 client_config,
                 expires_at,
+                ..
             } => {
                 validate_azure_remote_client_config(&client_config)?;
                 (
@@ -1271,6 +1286,7 @@ impl RemoteStorageResolver {
         now: DateTime<Utc>,
         requested_kind: RequestedBindingKind,
     ) -> Result<CachedRemoteBinding> {
+        let create_via_manager = resolved.creates_sandboxes_through_manager();
         let (client_config, binding, expires_at) = resolved.into_provider_parts()?;
         if expires_at <= now {
             return Err(AlienError::new(ErrorData::RemoteAccessFailed {
@@ -1281,10 +1297,21 @@ impl RemoteStorageResolver {
             }));
         }
 
-        let provider = Arc::new(BindingsProvider::new(
+        #[allow(unused_mut)]
+        let mut provider = BindingsProvider::new(
             client_config,
             HashMap::from([(self.resource_id.clone(), binding)]),
-        )?);
+        )?;
+        #[cfg(feature = "azure")]
+        if create_via_manager {
+            provider = provider.with_sandbox_create_route(Arc::new(access::ManagerSandboxCreate {
+                source: self.source.clone(),
+                resource_id: self.resource_id.clone(),
+            }));
+        }
+        #[cfg(not(feature = "azure"))]
+        let _ = create_via_manager;
+        let provider = Arc::new(provider);
         // Validate the typed binding and provider feature before committing the
         // lease. An invalid response must not poison the cache until expiry.
         match requested_kind {

@@ -152,6 +152,7 @@ async fn test_rust_workspace_build(
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -239,6 +240,7 @@ async fn test_rust_toolchain_invalid_project() {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;
@@ -318,6 +320,7 @@ async fn test_real_cargo_init_project() {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
 
     let result = build_stack(stack, &settings).await;

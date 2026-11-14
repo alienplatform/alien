@@ -37,6 +37,9 @@ mod gcp_federation;
 mod remote_stack_management;
 pub use remote_stack_management::*;
 
+mod signing_verifier;
+pub use signing_verifier::*;
+
 mod vault;
 pub use vault::*;
 

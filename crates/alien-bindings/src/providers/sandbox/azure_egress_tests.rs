@@ -38,7 +38,7 @@ fn provider(manager: SandboxEgressManager, corrupt: bool) -> (AzureSandbox, Reco
                 labels.remove(IDENTITY_LABEL);
             }
             let sandbox = Sandbox {
-                id: "vendor-id".into(),
+                id: "571fa784-7be7-5d9e-9cff-8e9a11414684".into(),
                 labels,
                 vnet_connection_name: Some("default".into()),
                 egress_policy: req.egress.as_ref().map(readback_policy),
@@ -50,7 +50,7 @@ fn provider(manager: SandboxEgressManager, corrupt: bool) -> (AzureSandbox, Reco
         });
     let saved = record.clone();
     client.expect_get_sandbox().returning(move |_, id| {
-        assert_eq!(id, "vendor-id");
+        assert_eq!(id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
         saved.lock().unwrap().clone().ok_or_else(|| {
             AlienError::new(ClientError::HttpResponseError {
                 message: "not found".into(),
@@ -66,7 +66,7 @@ fn provider(manager: SandboxEgressManager, corrupt: bool) -> (AzureSandbox, Reco
         .expect_delete_sandbox()
         .times(1)
         .returning(move |_, id| {
-            assert_eq!(id, "vendor-id");
+            assert_eq!(id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
             saved.lock().unwrap().take();
             Ok(())
         });
@@ -103,10 +103,10 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
         })
         .await
         .unwrap();
-    assert_eq!(created.sandbox_id, "vendor-id");
+    assert_eq!(created.sandbox_id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
     let req = request.lock().unwrap().clone().unwrap();
     let id = req.labels[IDENTITY_LABEL].clone();
-    assert_ne!(id, "vendor-id");
+    assert_ne!(id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
     let proxy = req.environment["HTTPS_PROXY"]
         .strip_prefix("http://alien:")
         .unwrap();
@@ -137,7 +137,7 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
             allow: vec!["api.example.com".into()]
         })
     );
-    assert_eq!(h.policy("vendor-id"), None);
+    assert_eq!(h.policy("571fa784-7be7-5d9e-9cff-8e9a11414684"), None);
     let floor = req.egress.unwrap();
     assert_eq!(floor.default_action, "Allow");
     assert_eq!(floor.traffic_inspection.as_deref(), Some("Partial"));
@@ -158,37 +158,37 @@ async fn durable_identity_drives_create_reconnect_update_and_termination() {
     };
     let empty = RuntimePolicy::Allow { allow: vec![] };
     reopened
-        .update_egress("vendor-id", empty.clone())
+        .update_egress("571fa784-7be7-5d9e-9cff-8e9a11414684", empty.clone())
         .await
         .unwrap();
     assert_eq!(h.policy(&id), Some(empty.clone()));
     // An omitted policy on reconnect must preserve narrowing, even with a resource default.
     let preserved = reopened
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("vendor-id".into()),
+            sandbox_id: Some("571fa784-7be7-5d9e-9cff-8e9a11414684".into()),
             ..Default::default()
         })
         .await
         .unwrap();
-    assert_eq!(preserved.sandbox.sandbox_id, "vendor-id");
+    assert_eq!(preserved.sandbox.sandbox_id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
     assert_eq!(h.policy(&id), Some(empty));
     let resolved = reopened
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("vendor-id".into()),
+            sandbox_id: Some("571fa784-7be7-5d9e-9cff-8e9a11414684".into()),
             egress: Some(RuntimePolicy::Internet),
             ..Default::default()
         })
         .await
         .unwrap();
-    assert_eq!(resolved.sandbox.sandbox_id, "vendor-id");
+    assert_eq!(resolved.sandbox.sandbox_id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
     assert_eq!(h.policy(&id), Some(RuntimePolicy::Internet));
     record.lock().unwrap().as_mut().unwrap().state = Some("Suspended".into());
     reopened
-        .update_egress("vendor-id", RuntimePolicy::Allow { allow: vec![] })
+        .update_egress("571fa784-7be7-5d9e-9cff-8e9a11414684", RuntimePolicy::Allow { allow: vec![] })
         .await
         .unwrap();
     assert_eq!(h.policy(&id), Some(RuntimePolicy::Allow { allow: vec![] }));
-    reopened.terminate("vendor-id").await.unwrap();
+    reopened.terminate("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap();
     assert!(record.lock().unwrap().is_none());
     assert_eq!(h.policy(&id), None);
 }
@@ -204,41 +204,41 @@ async fn total_gateway_state_loss_requires_an_explicit_policy() {
     let id = request.lock().unwrap().as_ref().unwrap().labels[IDENTITY_LABEL].clone();
     let empty = RuntimePolicy::Allow { allow: vec![] };
     sandbox
-        .update_egress("vendor-id", empty.clone())
+        .update_egress("571fa784-7be7-5d9e-9cff-8e9a11414684", empty.clone())
         .await
         .unwrap();
     h.lose_policy_state();
 
     // Reconnect must not replay the resource default or the earlier create-time policy.
     h.refuse_writes(true);
-    assert!(sandbox.get("vendor-id").await.unwrap().is_some());
+    assert!(sandbox.get("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap().is_some());
     let found = sandbox
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("vendor-id".into()),
+            sandbox_id: Some("571fa784-7be7-5d9e-9cff-8e9a11414684".into()),
             ..Default::default()
         })
         .await
         .unwrap();
-    assert_eq!(found.sandbox.sandbox_id, "vendor-id");
+    assert_eq!(found.sandbox.sandbox_id, "571fa784-7be7-5d9e-9cff-8e9a11414684");
     assert_eq!(h.policy(&id), None);
     h.refuse_writes(false);
 
     sandbox
-        .update_egress("vendor-id", empty.clone())
+        .update_egress("571fa784-7be7-5d9e-9cff-8e9a11414684", empty.clone())
         .await
         .unwrap();
     assert_eq!(h.policy(&id), Some(empty.clone()));
     h.lose_policy_state();
     sandbox
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("vendor-id".into()),
+            sandbox_id: Some("571fa784-7be7-5d9e-9cff-8e9a11414684".into()),
             egress: Some(empty.clone()),
             ..Default::default()
         })
         .await
         .unwrap();
     assert_eq!(h.policy(&id), Some(empty));
-    sandbox.terminate("vendor-id").await.unwrap();
+    sandbox.terminate("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap();
 }
 
 #[tokio::test]
@@ -275,7 +275,7 @@ async fn a_changed_native_floor_is_refused_before_policy_updates() {
         .host_rules
         .reverse();
     let error = sandbox
-        .update_egress("vendor-id", RuntimePolicy::Internet)
+        .update_egress("571fa784-7be7-5d9e-9cff-8e9a11414684", RuntimePolicy::Internet)
         .await
         .unwrap_err();
     assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED");
@@ -286,7 +286,7 @@ async fn a_changed_native_floor_is_refused_before_policy_updates() {
         })
     );
     // Teardown still revokes and deletes a sandbox whose floor no longer matches.
-    sandbox.terminate("vendor-id").await.unwrap();
+    sandbox.terminate("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap();
     assert_eq!(h.policy(&id), None);
 }
 
@@ -312,7 +312,7 @@ async fn admin_failure_discards_create_and_does_not_prevent_termination() {
     let id = request.lock().unwrap().as_ref().unwrap().labels[IDENTITY_LABEL].clone();
     h.refuse_writes(true);
     sandbox
-        .terminate("vendor-id")
+        .terminate("571fa784-7be7-5d9e-9cff-8e9a11414684")
         .await
         .expect_err("revocation failure reported");
     assert!(
@@ -354,7 +354,7 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         *altered.pointer_mut(path).unwrap() = value;
         record.lock().unwrap().as_mut().unwrap().egress_policy =
             Some(serde_json::from_value(altered).unwrap());
-        let error = sandbox.get("vendor-id").await.unwrap_err();
+        let error = sandbox.get("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap_err();
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{path}");
     }
     for path in ["", "/http"] {
@@ -362,10 +362,10 @@ async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
         altered.pointer_mut(path).unwrap()["bypass"] = serde_json::json!(true);
         record.lock().unwrap().as_mut().unwrap().egress_policy =
             Some(serde_json::from_value(altered).unwrap());
-        let error = sandbox.get("vendor-id").await.unwrap_err();
+        let error = sandbox.get("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap_err();
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{path}/bypass");
     }
     record.lock().unwrap().as_mut().unwrap().egress_policy = Some(expected);
-    assert!(sandbox.get("vendor-id").await.unwrap().is_some());
-    sandbox.terminate("vendor-id").await.unwrap();
+    assert!(sandbox.get("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap().is_some());
+    sandbox.terminate("571fa784-7be7-5d9e-9cff-8e9a11414684").await.unwrap();
 }

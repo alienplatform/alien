@@ -495,6 +495,8 @@ fn notification_package(notifications: bool) -> alien_terraform::ModuleFiles {
         &stack,
         alien_terraform::TerraformTarget::Aws,
         alien_terraform::TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &alien_terraform::TfRegistry::built_in(),
             stack_settings: StackSettings::default(),

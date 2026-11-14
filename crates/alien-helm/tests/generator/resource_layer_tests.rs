@@ -789,8 +789,12 @@ fn rendered_documents(rendered: &super::test_utils::LinterRun) -> Vec<serde_yaml
 }
 
 fn sandbox_with_linked_app() -> Stack {
+    sandbox_with_linked_app_as(None)
+}
+
+fn sandbox_with_linked_app_as(image_user: Option<u32>) -> Stack {
     use alien_core::{Container, ContainerCode, ResourceSpec};
-    let sandbox = Sandbox::new("agent".to_string())
+    let mut sandbox = Sandbox::new("agent".to_string())
         .code(SandboxCode::Image {
             image: "ubuntu:24.04".to_string(),
             bundled_from: None,
@@ -801,6 +805,7 @@ fn sandbox_with_linked_app() -> Stack {
             idle_pause_seconds: None,
         })
         .build();
+    sandbox.image_user = image_user;
     let container = |id: &str| {
         Container::new(id.to_string())
             .code(ContainerCode::Image {
@@ -1382,6 +1387,17 @@ fn the_cni_probe_runs_its_clients_on_the_nodes_sessions_use() {
     };
     assert_eq!(env("PROBE_NODE_SELECTOR"), r#"{"pool":"sandboxes"}"#);
     assert!(env("PROBE_TOLERATIONS").contains("\"key\":\"sandbox\""));
+    // Node consolidation must not evict the probe's pods mid-run (EKS Auto Mode did).
+    assert_eq!(
+        probe["spec"]["template"]["metadata"]["annotations"]["karpenter.sh/do-not-disrupt"],
+        "true"
+    );
+    assert!(
+        serde_yaml::to_string(&probe)
+            .unwrap()
+            .contains("\"annotations\": {\"karpenter.sh/do-not-disrupt\": \"true\"}"),
+        "the probe's own pods carry the annotation"
+    );
 }
 
 fn sandbox_runtime_class_env(rendered: &super::test_utils::LinterRun) -> Option<String> {
@@ -1407,7 +1423,7 @@ fn the_operator_gets_its_own_service_for_the_policy_proof() {
     let chart = render(&sandbox_with_linked_app(), StackSettings::default());
     let rendered = super::test_utils::helm_template_for_kube_version(
         &chart.files,
-        Some("management:\n  name: customer-1\nsandbox:\n  runtimeClassName: gvisor\n"),
+        Some("management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n"),
         "acme",
         None,
     );
@@ -1635,4 +1651,267 @@ fn a_container_with_egress_and_no_sandbox_renders_its_probe() {
         bundled.stdout
     );
     assert_helm_valid(&chart, "container_egress_no_sandbox");
+}
+
+fn sandbox_namespace_documents(values: &str) -> Vec<serde_yaml::Value> {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered =
+        super::test_utils::helm_template_for_kube_version(&chart.files, Some(values), "acme", None);
+    rendered.assert_ok("sandbox namespace render");
+    rendered_documents(&rendered)
+}
+
+fn operator_env(documents: &[serde_yaml::Value], name: &str) -> Option<String> {
+    documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "acme")
+        .and_then(|operator| {
+            operator["spec"]["template"]["spec"]["containers"][0]["env"].as_sequence()
+        })
+        .and_then(|env| env.iter().find(|variable| variable["name"] == name))
+        .and_then(|variable| variable["value"].as_str().map(str::to_string))
+}
+
+fn session_policy(documents: &[serde_yaml::Value]) -> &serde_yaml::Value {
+    documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "NetworkPolicy" && document["metadata"]["name"] == "alien-sbx-agent"
+        })
+        .expect("the session NetworkPolicy")
+}
+
+/// Unset, `sandbox.namespace` changes nothing: the policy stays in the release namespace, selects
+/// the operator and linkers by pod alone, and no sandbox-namespace Role or variable appears.
+#[test]
+fn an_unset_sandbox_namespace_keeps_every_sandbox_object_in_the_release_namespace() {
+    let documents = sandbox_namespace_documents(
+        "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n",
+    );
+    assert_eq!(
+        operator_env(&documents, alien_core::ENV_ALIEN_SANDBOX_NAMESPACE),
+        None
+    );
+    let policy = session_policy(&documents);
+    assert_eq!(policy["metadata"]["namespace"], "default");
+    for peer in policy["spec"]["ingress"][0]["from"].as_sequence().unwrap() {
+        assert!(peer.get("namespaceSelector").is_none(), "{peer:?}");
+        assert!(peer.get("podSelector").is_some());
+    }
+    assert!(
+        !documents.iter().any(|document| document["kind"] == "Role"
+            && document["metadata"]["name"]
+                .as_str()
+                .is_some_and(|name| name.ends_with("-sandbox"))),
+        "no Role for a separate namespace"
+    );
+}
+
+/// Set, sandbox pods, their policy and the operator's rights to them live in the administrator's
+/// namespace; callers are still selected in the release namespace; the chart creates no
+/// Namespace and no ClusterRole for it.
+#[test]
+fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
+    let documents = sandbox_namespace_documents(
+        "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: acme-sandboxes\n",
+    );
+    assert_eq!(
+        operator_env(&documents, alien_core::ENV_ALIEN_SANDBOX_NAMESPACE).as_deref(),
+        Some("acme-sandboxes")
+    );
+    let policy = session_policy(&documents);
+    assert_eq!(policy["metadata"]["namespace"], "acme-sandboxes");
+    let peers = policy["spec"]["ingress"][0]["from"].as_sequence().unwrap();
+    assert!(peers.len() >= 2);
+    for peer in peers {
+        assert_eq!(
+            peer["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"], "default",
+            "{peer:?}"
+        );
+        assert!(peer.get("podSelector").is_some());
+    }
+    let role = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "Role" && document["metadata"]["namespace"] == "acme-sandboxes"
+        })
+        .expect("a Role in the sandbox namespace");
+    for rule in role["rules"].as_sequence().unwrap() {
+        for resource in rule["resources"].as_sequence().unwrap() {
+            assert!(matches!(
+                resource.as_str(),
+                Some("pods" | "secrets" | "events")
+            ));
+        }
+    }
+    let binding = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "RoleBinding"
+                && document["metadata"]["namespace"] == "acme-sandboxes"
+        })
+        .expect("a RoleBinding in the sandbox namespace");
+    assert_eq!(binding["subjects"][0]["namespace"], "default");
+    assert!(!documents
+        .iter()
+        .any(|document| document["kind"] == "Namespace"));
+    assert!(!documents.iter().any(|document| {
+        document["kind"] == "ClusterRole"
+            && document["rules"].as_sequence().is_some_and(|rules| {
+                rules.iter().any(|rule| {
+                    rule["resources"]
+                        .as_sequence()
+                        .is_some_and(|resources| resources.iter().any(|x| x == "pods"))
+                })
+            })
+    }));
+}
+
+fn root_boot_check_documents(image_user: Option<u32>, values: &str) -> Vec<serde_yaml::Value> {
+    let chart = render(
+        &sandbox_with_linked_app_as(image_user),
+        StackSettings::default(),
+    );
+    let rendered =
+        super::test_utils::helm_template_for_kube_version(&chart.files, Some(values), "acme", None);
+    rendered.assert_ok("root-boot check render");
+    rendered_documents(&rendered)
+}
+
+/// A root-boot sandbox gets an install-time dry-run of a root-boot pod in the sandbox namespace,
+/// with the right to create pods there and nothing else; a non-root sandbox renders none of it.
+#[test]
+fn a_root_boot_sandbox_checks_its_namespace_at_install_and_a_non_root_one_does_not() {
+    let values = "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: acme-sandboxes\n";
+    let is_check = |document: &serde_yaml::Value| {
+        document["metadata"]["name"]
+            .as_str()
+            .is_some_and(|name| name.ends_with("-root-boot-check"))
+    };
+    assert!(
+        !root_boot_check_documents(Some(1001), values)
+            .iter()
+            .any(is_check),
+        "a non-root sandbox carries no check"
+    );
+    let documents = root_boot_check_documents(Some(0), values);
+    let job = documents
+        .iter()
+        .find(|document| document["kind"] == "Job" && is_check(document))
+        .expect("the check Job");
+    let hook = |document: &serde_yaml::Value| {
+        document["metadata"]["annotations"]["helm.sh/hook"]
+            .as_str()
+            .map(str::to_string)
+    };
+    assert_eq!(hook(job).as_deref(), Some("pre-install,pre-upgrade"));
+    let env = job["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap();
+    let value = |name: &str| {
+        env.iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert_eq!(value("SANDBOX_NAMESPACE"), "acme-sandboxes");
+    assert_eq!(value("SANDBOX_RUNTIME_CLASS"), "gvisor");
+    let capabilities = value("BOOT_CAPABILITIES");
+    for forbidden in ["NET_ADMIN", "SYS_ADMIN", "NET_RAW"] {
+        assert!(!capabilities.split(',').any(|name| name == forbidden));
+    }
+    assert!(!capabilities.is_empty());
+    let role = documents
+        .iter()
+        .find(|document| document["kind"] == "Role" && is_check(document))
+        .expect("the check Role");
+    assert_eq!(role["metadata"]["namespace"], "acme-sandboxes");
+    let rules = role["rules"].as_sequence().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["resources"][0], "pods");
+    assert_eq!(rules[0]["verbs"].as_sequence().unwrap().len(), 1);
+    assert_eq!(rules[0]["verbs"][0], "create");
+    assert!(!documents
+        .iter()
+        .any(|document| document["kind"] == "ClusterRole" && is_check(document)));
+    // Unset, the check runs in the release namespace the sandboxes would use.
+    let unset = root_boot_check_documents(
+        Some(0),
+        "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n",
+    );
+    let unset_role = unset
+        .iter()
+        .find(|document| document["kind"] == "Role" && is_check(document))
+        .expect("the check Role");
+    assert_eq!(unset_role["metadata"]["namespace"], "default");
+}
+
+/// A private sandbox image needs the pull secrets on the install-time check's pod, or the hook
+/// Job cannot pull its probe image and installation blocks.
+#[test]
+fn the_root_boot_check_pod_uses_the_runtime_pull_secrets() {
+    let values = "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\nruntime:\n  imagePullSecrets:\n    - name: registry-credentials\n";
+    let documents = root_boot_check_documents(Some(0), values);
+    let job = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "Job"
+                && document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-root-boot-check"))
+        })
+        .expect("the check Job");
+    assert_eq!(
+        job["spec"]["template"]["spec"]["imagePullSecrets"][0]["name"],
+        "registry-credentials"
+    );
+}
+
+/// The Operator's discovery Role and RoleBinding live in `default`, shared by every install on
+/// the cluster. Two installs whose namespaces share their first ten characters must not share
+/// a name, and each binding must reference its own Role.
+#[test]
+fn the_kube_api_discovery_role_is_named_per_install() {
+    let chart = render(
+        &sandbox_with_linked_app_as(Some(0)),
+        StackSettings::default(),
+    );
+    let values = "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n";
+    let names = |namespace: &str| {
+        let rendered = super::test_utils::helm_template_in_namespace(
+            &chart.files,
+            Some(values),
+            "acme",
+            namespace,
+        );
+        rendered.assert_ok("discovery RBAC render");
+        let documents = rendered_documents(&rendered);
+        let find = |kind: &str| {
+            documents
+                .iter()
+                .find(|document| {
+                    document["kind"] == kind
+                        && document["metadata"]["namespace"] == "default"
+                        && document["metadata"]["name"]
+                            .as_str()
+                            .is_some_and(|name| name.contains("kube-api"))
+                })
+                .unwrap_or_else(|| panic!("the discovery {kind} in default"))
+                .clone()
+        };
+        let role = find("Role");
+        let binding = find("RoleBinding");
+        let role_name = role["metadata"]["name"].as_str().unwrap().to_string();
+        assert_eq!(binding["metadata"]["name"], role["metadata"]["name"]);
+        assert_eq!(
+            binding["roleRef"]["name"].as_str(),
+            Some(role_name.as_str())
+        );
+        assert!(role_name.len() <= 63, "{role_name}");
+        role_name
+    };
+    let first = names("customer-aa-one");
+    let second = names("customer-aa-two");
+    assert_ne!(first, second);
 }

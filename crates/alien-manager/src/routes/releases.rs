@@ -11,11 +11,15 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use alien_core::{Platform, Stack};
+use base64::Engine as _;
+use sha2::{Digest, Sha256};
+
+use alien_core::{Platform, SignedStatement, Stack};
 use alien_preflights::compile_time::endpoint_host_label_conflicts;
+use alien_signing::{Kind, ReleaseBody};
 
 use crate::error::ErrorData;
-use crate::traits::{CreateReleaseParams, ReleaseRecord};
+use crate::traits::{CreateReleaseParams, ReleaseRecord, SetupTemplateBytes};
 
 use super::{auth, AppState};
 
@@ -65,6 +69,17 @@ pub struct CreateReleaseRequest {
     /// following the channel roll out to it.
     #[serde(default)]
     pub channel: Option<String>,
+    /// Signed statements keyed by platform, from `alien release` with a
+    /// signing key. Stored and returned exactly as received; deployments in
+    /// protected mode verify them and deploy only the stack they contain.
+    #[serde(default)]
+    pub signed_stacks: HashMap<Platform, SignedStatement>,
+    /// Setup template bytes (base64) keyed by platform and template name, as
+    /// the release signed them. Required for every template a signed
+    /// statement names, and refused unless each hashes to its signed digest.
+    #[cfg_attr(feature = "openapi", schema(value_type = HashMap<Platform, HashMap<String, String>>))]
+    #[serde(default)]
+    pub setup_templates: HashMap<Platform, SetupTemplateBytes>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,6 +99,17 @@ pub struct ReleaseResponse {
     pub workspace_id: String,
     pub project_id: String,
     pub stack: StackByPlatform,
+    /// Signed statements keyed by platform, exactly as they were created.
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub signed_stacks: HashMap<Platform, SignedStatement>,
+    /// Setup template bytes (base64) keyed by platform and template name,
+    /// exactly as the release uploaded them; each hashes to its signed digest.
+    #[cfg_attr(feature = "openapi", schema(value_type = HashMap<Platform, HashMap<String, String>>))]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub setup_templates: HashMap<Platform, SetupTemplateBytes>,
+    /// Who signed the release and for which channel, decoded from the stored
+    /// statements for display. `null` when the release is unsigned.
+    pub signing: Option<ReleaseSigning>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git_metadata: Option<GitMetadataResponse>,
     pub created_at: String,
@@ -94,6 +120,30 @@ pub struct ReleaseResponse {
     /// fingerprints, so we return an empty map.
     #[serde(default)]
     pub setup_fingerprints: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A signed release's channel and signers, for the release badge. Display
+/// only: decoded, never verified, because the manager isn't trusted to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseSigning {
+    /// Channel the statements sign, such as `production`.
+    pub channel: String,
+    /// Signers of the statements, with their label and kind from the signer
+    /// list version they name.
+    pub signers: Vec<ReleaseSigner>,
+}
+
+/// One signer of a release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseSigner {
+    pub id: String,
+    pub label: Option<String>,
+    /// `device`, `ci` or `recovery`; absent when the signer list doesn't name it.
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -126,6 +176,68 @@ pub fn router() -> Router<AppState> {
 }
 
 // --- Helpers ---
+
+/// The badge fields of a release, decoded from its statements and the
+/// project's signer lists. Statements that don't decode give no badge.
+fn release_signing(r: &ReleaseRecord, lists: &[SignedStatement]) -> Option<ReleaseSigning> {
+    let mut platforms: Vec<&Platform> = r.signed_stacks.keys().collect();
+    platforms.sort_by_key(|platform| platform.as_str());
+    let opened = r.signed_stacks.get(*platforms.first()?)?.open().ok()?;
+    let body: ReleaseBody = opened.body().ok()?;
+    let list = lists
+        .iter()
+        .filter_map(|list| list.open().ok())
+        .find(|list| list.sequence == opened.signer_list_version)
+        .and_then(|list| list.body::<alien_signing::SignerListBody>().ok());
+    let signers = opened
+        .signatures
+        .iter()
+        .map(|signature| {
+            let signer = list.as_ref().and_then(|list| {
+                list.signers
+                    .iter()
+                    .find(|signer| signer.id == signature.signer)
+            });
+            ReleaseSigner {
+                id: signature.signer.clone(),
+                label: signer.and_then(|signer| signer.label.clone()),
+                kind: signer.map(|signer| signer_kind(signer.kind).to_string()),
+            }
+        })
+        .collect();
+    Some(ReleaseSigning {
+        channel: body.channel,
+        signers,
+    })
+}
+
+fn signer_kind(kind: alien_signing::SignerKind) -> &'static str {
+    match kind {
+        alien_signing::SignerKind::Device => "device",
+        alien_signing::SignerKind::Ci => "ci",
+        alien_signing::SignerKind::Recovery => "recovery",
+    }
+}
+
+/// The response for `r`, with its badge decoded against the project's
+/// stored signer lists.
+async fn release_response(
+    state: &AppState,
+    r: &ReleaseRecord,
+) -> std::result::Result<ReleaseResponse, alien_error::AlienError> {
+    let lists = match (&state.signing, r.signed_stacks.is_empty()) {
+        (Some(signing), false) => signing
+            .signer_lists(&r.project_id)
+            .await?
+            .into_iter()
+            .map(|record| record.statement)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut response = record_to_response(r).map_err(alien_error::AlienError::into_generic)?;
+    response.signing = release_signing(r, &lists);
+    Ok(response)
+}
 
 fn record_to_response(
     r: &ReleaseRecord,
@@ -176,10 +288,69 @@ fn record_to_response(
         workspace_id: r.workspace_id.clone(),
         project_id: r.project_id.clone(),
         stack: sbp,
+        signed_stacks: r.signed_stacks.clone(),
+        setup_templates: r.setup_templates.clone(),
+        signing: None,
         git_metadata,
         created_at: r.created_at.to_rfc3339(),
         setup_fingerprints: serde_json::Map::new(),
     })
+}
+
+/// Refuse a signed statement that doesn't describe the stack sent beside it,
+/// so the stack this manager shows is the one a protected deployment runs.
+/// This doesn't verify signatures: the manager is not trusted to, and every
+/// deployment verifies the statement against its own anchor.
+fn check_signed_stacks_match(
+    project_id: &str,
+    channel: &str,
+    stacks: &HashMap<Platform, Stack>,
+    signed_stacks: &HashMap<Platform, SignedStatement>,
+) -> std::result::Result<(), alien_error::AlienError<ErrorData>> {
+    for (platform, signed) in signed_stacks {
+        let opened = signed.open().map_err(|error| {
+            ErrorData::bad_request(format!(
+                "The signed statement for {platform} can't be read: {}",
+                error.message
+            ))
+        })?;
+        if opened.kind != Kind::Release {
+            return Err(ErrorData::bad_request(format!(
+                "The signed statement for {platform} is not a release statement"
+            )));
+        }
+        if opened.project != project_id {
+            return Err(ErrorData::bad_request(format!(
+                "The signed statement for {platform} is for project '{}'",
+                opened.project
+            )));
+        }
+        let body: ReleaseBody = opened.body().map_err(|error| {
+            ErrorData::bad_request(format!(
+                "The signed statement for {platform} has an invalid body: {}",
+                error.message
+            ))
+        })?;
+        if body.channel != channel {
+            return Err(ErrorData::bad_request(format!(
+                "The signed statement for {platform} is for channel '{}', but the release goes to '{channel}'",
+                body.channel
+            )));
+        }
+        let signed_stack =
+            alien_core::release_statement::signed_stack(&body, *platform).map_err(|error| {
+                ErrorData::bad_request(format!(
+                    "The signed statement for {platform} is refused: {}",
+                    error.message
+                ))
+            })?;
+        if stacks.get(platform) != Some(&signed_stack) {
+            return Err(ErrorData::bad_request(format!(
+                "The signed statement for {platform} doesn't match the {platform} stack in the request"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Parse all non-null platform stacks from the request.
@@ -229,6 +400,66 @@ fn refuse_endpoint_host_label_conflicts(
                 "Invalid stack for {platform}: {}",
                 conflicts.join(" ")
             )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse setup template bytes that aren't exactly the ones the signed
+/// statements digest: every template a statement names must be sent, each
+/// must hash to its signed digest, and nothing else may be sent. Installs of
+/// protected releases are then given these bytes and no others.
+fn check_setup_templates_match(
+    signed_stacks: &HashMap<Platform, SignedStatement>,
+    setup_templates: &HashMap<Platform, SetupTemplateBytes>,
+) -> std::result::Result<(), alien_error::AlienError<ErrorData>> {
+    if let Some(platform) = setup_templates
+        .keys()
+        .find(|platform| !signed_stacks.contains_key(platform))
+    {
+        return Err(ErrorData::bad_request(format!(
+            "Setup templates for {platform} were sent without a signed statement for {platform}"
+        )));
+    }
+    let empty = SetupTemplateBytes::new();
+    for (platform, signed) in signed_stacks {
+        // `check_signed_stacks_match` already refused statements that don't read.
+        let body: ReleaseBody =
+            signed
+                .open()
+                .and_then(|opened| opened.body())
+                .map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "The signed statement for {platform} can't be read: {}",
+                        error.message
+                    ))
+                })?;
+        let sent = setup_templates.get(platform).unwrap_or(&empty);
+        if let Some(name) = sent.keys().find(|name| !body.setup.contains_key(*name)) {
+            return Err(ErrorData::bad_request(format!(
+                "The {platform} setup template '{name}' isn't in the signed statement"
+            )));
+        }
+        for (name, template) in &body.setup {
+            let encoded = sent.get(name).ok_or_else(|| {
+                ErrorData::bad_request(format!(
+                    "The signed statement for {platform} names the setup template '{name}', but its bytes weren't sent"
+                ))
+            })?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|error| {
+                    ErrorData::bad_request(format!(
+                        "The {platform} setup template '{name}' isn't base64: {error}"
+                    ))
+                })?;
+            let digest = format!("sha256:{}", hex::encode(Sha256::digest(&bytes)));
+            if digest != template.sha256 {
+                return Err(ErrorData::bad_request(format!(
+                    "The {platform} setup template '{name}' hashes to {digest}, but the release signed {}",
+                    template.sha256
+                )));
+            }
         }
     }
     Ok(())
@@ -298,6 +529,14 @@ async fn create_release(
     if let Err(e) = refuse_endpoint_host_label_conflicts(&stacks) {
         return e.into_response();
     }
+    if let Err(e) =
+        check_signed_stacks_match(&req.project_id, &channel, &stacks, &req.signed_stacks)
+    {
+        return e.into_response();
+    }
+    if let Err(e) = check_setup_templates_match(&req.signed_stacks, &req.setup_templates) {
+        return e.into_response();
+    }
 
     let (git_sha, git_ref, git_msg) = match &req.git_metadata {
         Some(gm) => (
@@ -318,6 +557,8 @@ async fn create_release(
                 git_commit_sha: git_sha,
                 git_commit_ref: git_ref,
                 git_commit_message: git_msg,
+                signed_stacks: req.signed_stacks,
+                setup_templates: req.setup_templates,
             },
         )
         .await
@@ -337,7 +578,7 @@ async fn create_release(
         return e.into_response();
     }
 
-    let response = match record_to_response(&release) {
+    let response = match release_response(&state, &release).await {
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
@@ -380,7 +621,7 @@ async fn get_release(
         return ErrorData::forbidden("Cannot read release").into_response();
     }
 
-    match record_to_response(&release) {
+    match release_response(&state, &release).await {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => e.into_response(),
     }
@@ -418,7 +659,7 @@ async fn list_releases(State(state): State<AppState>, headers: HeaderMap) -> Res
         if !state.authz.can_read_release(&subject, release) {
             continue;
         }
-        match record_to_response(release) {
+        match release_response(&state, release).await {
             Ok(resp) => items.push(resp),
             Err(e) => return e.into_response(),
         }
@@ -455,7 +696,7 @@ async fn get_latest_release(State(state): State<AppState>, headers: HeaderMap) -
         return ErrorData::forbidden("Cannot read release").into_response();
     }
 
-    match record_to_response(&release) {
+    match release_response(&state, &release).await {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => e.into_response(),
     }
@@ -464,6 +705,7 @@ async fn get_latest_release(State(state): State<AppState>, headers: HeaderMap) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     fn stack_by_platform(aws: serde_json::Value) -> StackByPlatform {
         serde_json::from_value(serde_json::json!({ "aws": aws })).expect("stack by platform")
@@ -502,6 +744,187 @@ mod tests {
         aws["permissions"] = serde_json::json!({ "profiles": { "app": {} }, "management": "auto" });
         let stacks = parse_stacks_from_request(&stack_by_platform(aws)).map_err(|e| e.message)?;
         refuse_endpoint_host_label_conflicts(&stacks).map_err(|e| e.message)
+    }
+
+    fn signed_kubernetes_release(
+        project: &str,
+        stack: &Stack,
+    ) -> HashMap<Platform, SignedStatement> {
+        signed_kubernetes_release_with_setup(project, stack, BTreeMap::new())
+    }
+
+    fn signed_kubernetes_release_with_setup(
+        project: &str,
+        stack: &Stack,
+        setup: BTreeMap<String, alien_signing::SetupTemplate>,
+    ) -> HashMap<Platform, SignedStatement> {
+        let key = alien_signing::SecretKey::from_secret_bytes(&[5; 32]).unwrap();
+        let body = alien_core::release_statement::release_body(
+            Platform::Kubernetes,
+            stack,
+            &alien_core::release_statement::ReleaseOptions {
+                channel: "production".to_string(),
+                setup,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let envelope = alien_signing::Envelope {
+            kind: Kind::Release.as_str().to_string(),
+            project: project.to_string(),
+            install: None,
+            sequence: 1,
+            not_after: None,
+            signer_list_version: 1,
+            body,
+        };
+        let signed = SignedStatement::new(&envelope.to_payload().unwrap())
+            .sign_with("ci", &key)
+            .unwrap();
+        HashMap::from([(Platform::Kubernetes, signed)])
+    }
+
+    #[test]
+    fn setup_template_bytes_must_hash_to_the_signed_digests() {
+        let stack = Stack::new("app".to_string()).build();
+        let chart = b"chart bytes".to_vec();
+        let signed = signed_kubernetes_release_with_setup(
+            "default",
+            &stack,
+            BTreeMap::from([(
+                "helm".to_string(),
+                alien_signing::SetupTemplate {
+                    sha256: format!("sha256:{}", hex::encode(Sha256::digest(&chart))),
+                    allowed: Vec::new(),
+                },
+            )]),
+        );
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let sent = |templates: &[(&str, String)]| {
+            HashMap::from([(
+                Platform::Kubernetes,
+                templates
+                    .iter()
+                    .map(|(name, bytes)| (name.to_string(), bytes.clone()))
+                    .collect::<SetupTemplateBytes>(),
+            )])
+        };
+
+        check_setup_templates_match(&signed, &sent(&[("helm", encode(&chart))]))
+            .expect("the signed bytes are accepted");
+        check_setup_templates_match(&HashMap::new(), &HashMap::new())
+            .expect("an unsigned release carries no setup templates");
+
+        let error = check_setup_templates_match(&signed, &sent(&[("helm", encode(b"other"))]))
+            .expect_err("other bytes are refused");
+        assert!(
+            error.message.contains("'helm' hashes to sha256:")
+                && error.message.contains("but the release signed sha256:"),
+            "{}",
+            error.message
+        );
+        let error = check_setup_templates_match(&signed, &HashMap::new())
+            .expect_err("a signed template without its bytes is refused");
+        assert!(
+            error.message.contains("bytes weren't sent"),
+            "{}",
+            error.message
+        );
+        let error = check_setup_templates_match(
+            &signed,
+            &sent(&[("helm", encode(&chart)), ("cloudformation", encode(&chart))]),
+        )
+        .expect_err("a template the statement doesn't name is refused");
+        assert!(
+            error
+                .message
+                .contains("'cloudformation' isn't in the signed statement"),
+            "{}",
+            error.message
+        );
+        let error =
+            check_setup_templates_match(&signed, &sent(&[("helm", "not base64!".to_string())]))
+                .expect_err("bytes that aren't base64 are refused");
+        assert!(error.message.contains("isn't base64"), "{}", error.message);
+        let error =
+            check_setup_templates_match(&HashMap::new(), &sent(&[("helm", encode(&chart))]))
+                .expect_err("templates for an unsigned platform are refused");
+        assert!(
+            error.message.contains("without a signed statement"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_signed_statement_must_describe_the_stack_beside_it() {
+        let stack = Stack::new("app".to_string()).build();
+        let stacks = HashMap::from([(Platform::Kubernetes, stack.clone())]);
+
+        check_signed_stacks_match(
+            "default",
+            "production",
+            &stacks,
+            &signed_kubernetes_release("default", &stack),
+        )
+        .expect("a matching statement is accepted");
+        check_signed_stacks_match("default", "production", &stacks, &HashMap::new())
+            .expect("an unsigned release is accepted as before");
+
+        let other = Stack::new("other".to_string()).build();
+        let error = check_signed_stacks_match(
+            "default",
+            "production",
+            &stacks,
+            &signed_kubernetes_release("default", &other),
+        )
+        .expect_err("a statement for another stack is refused");
+        assert!(error.message.contains("doesn't match"), "{}", error.message);
+
+        let error = check_signed_stacks_match(
+            "default",
+            "production",
+            &stacks,
+            &signed_kubernetes_release("billing", &stack),
+        )
+        .expect_err("a statement for another project is refused");
+        assert!(
+            error.message.contains("project 'billing'"),
+            "{}",
+            error.message
+        );
+
+        let error = check_signed_stacks_match(
+            "default",
+            "dev",
+            &stacks,
+            &signed_kubernetes_release("default", &stack),
+        )
+        .expect_err("a statement for another channel is refused");
+        assert!(
+            error
+                .message
+                .contains("channel 'production', but the release goes to 'dev'"),
+            "{}",
+            error.message
+        );
+
+        let garbage = HashMap::from([(
+            Platform::Kubernetes,
+            SignedStatement {
+                payload: "not base64".to_string(),
+                signatures: Vec::new(),
+            },
+        )]);
+        check_signed_stacks_match("default", "production", &stacks, &garbage)
+            .expect_err("a payload that isn't a statement is refused");
+        check_signed_stacks_match(
+            "default",
+            "production",
+            &HashMap::new(),
+            &signed_kubernetes_release("default", &stack),
+        )
+        .expect_err("a statement for a platform the release doesn't carry is refused");
     }
 
     #[test]

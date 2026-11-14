@@ -1231,3 +1231,89 @@ mod permission_update_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::{MockPlatformServiceProvider, ResourceController};
+    use alien_azure_clients::authorization::MockAuthorizationApi;
+    use alien_azure_clients::keyvault::MockKeyVaultManagementApi;
+    use alien_core::{Platform, ResourceStatus};
+    use std::sync::Arc;
+
+    /// A Key Vault as Azure answers for `name`.
+    fn vault(name: &str) -> alien_azure_clients::models::keyvault::Vault {
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "location": "eastus",
+            "properties": {
+                "tenantId": "12345678-1234-1234-1234-123456789012",
+                "sku": {"family": "A", "name": "standard"},
+                "vaultUri": format!("https://{name}.vault.azure.net/"),
+            },
+        }))
+        .expect("a vault Azure could answer")
+    }
+
+    #[tokio::test]
+    async fn the_binding_is_what_the_enforcers_derive() {
+        let mut vaults = MockKeyVaultManagementApi::new();
+        vaults
+            .expect_create_or_update_vault()
+            .times(1)
+            .returning(|_, name, _| Ok(vault(&name)));
+        vaults
+            .expect_get_vault()
+            .returning(|_, name| Ok(vault(&name)));
+        let vaults = Arc::new(vaults);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_key_vault_management_client()
+            .returning(move |_| Ok(vaults.clone()));
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(|_| {
+                let mut authorization = MockAuthorizationApi::new();
+                authorization
+                    .expect_create_or_update_role_definition()
+                    .returning(|_, _, definition| Ok(definition.clone()));
+                authorization
+                    .expect_build_role_assignment_id()
+                    .returning(|_, name| format!("/test/roleAssignments/{name}"));
+                authorization
+                    .expect_create_or_update_role_assignment_by_id()
+                    .returning(|_, assignment| Ok(assignment.clone()));
+                Ok(Arc::new(authorization))
+            });
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(Vault::new("secrets".to_string()).build())
+            .controller(AzureVaultController::default())
+            .platform(Platform::Azure)
+            .service_provider(Arc::new(provider))
+            .with_dependency(
+                alien_core::AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                crate::infra_requirements::AzureResourceGroupController::mock_ready(
+                    "default-resource-group",
+                ),
+            )
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let engine = executor
+            .internal_state::<AzureVaultController>()
+            .unwrap()
+            .get_binding_params()
+            .unwrap()
+            .expect("a running vault has a binding");
+        crate::core::binding_equivalence::assert_enforcers_derive(
+            Platform::Azure,
+            "vault",
+            "secrets",
+            engine,
+        );
+    }
+}

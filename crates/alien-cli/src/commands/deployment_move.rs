@@ -37,7 +37,7 @@ mod tests {
                     "deploymentGroupId": "dg_aaaaaaaaaaaaaaaaaaaaaaaaaaaa", "purpose": "application",
                     "stackSettings": { "deploymentModel": "push", "heartbeats": "on", "telemetry": "off",
                         "updates": "auto", "network": null, "domains": null },
-                    "releaseChannel": "production", "retryRequested": false,
+                    "releaseChannel": "production", "retryRequested": false, "protected": false,
                     "createdAt": "2026-10-08T00:00:00Z", "updatedAt": "2026-10-08T00:00:00Z",
                     "managerId": "mgr_aaaaaaaaaaaaaaaaaaaaaaaaaaaa", "workspaceId": "ws_aaaaaaaaaaaaaaaaaaaaaaaa"
                 }));

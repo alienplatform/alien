@@ -580,7 +580,10 @@ pub async fn check_redis(deployment: &TestDeployment) -> anyhow::Result<()> {
         bail!("Redis test returned {}: {}", status, body);
     }
 
-    let data: BindingTestResponse = resp.json().await.context("Failed to parse redis response")?;
+    let data: BindingTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse redis response")?;
     if !data.success {
         bail!("Redis test reported failure");
     }

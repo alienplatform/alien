@@ -305,24 +305,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_and_kubernetes_refuse_root_boot_until_exec_is_separated() {
-        for platform in [Platform::Local, Platform::Kubernetes] {
+    async fn local_refuses_root_boot_until_exec_is_separated() {
+        for user in [None, Some(0), Some(2001)] {
+            let mut value = sandbox("boot", None, SandboxEgress::Allow);
+            value.image_user = user;
+            let result = SandboxPlatformSupportCheck
+                .check(&stack_with(value), Platform::Local)
+                .await
+                .unwrap();
+            assert_eq!(result.success, user != Some(0), "{:?}", result.errors);
+            if user == Some(0) {
+                assert!(result.errors.join(" ").contains("root image USER"));
+            }
+        }
+    }
+
+    /// Kubernetes boots a root image only with an egress boundary outside the pod; the refusal
+    /// names the declaration, and non-root images are unaffected by egress mode.
+    #[tokio::test]
+    async fn kubernetes_root_boot_needs_internet_or_none_egress() {
+        for (egress, root_ok) in [
+            (SandboxEgress::Internet, true),
+            (SandboxEgress::None, true),
+            (SandboxEgress::Allow, false),
+        ] {
             for user in [None, Some(0), Some(2001)] {
-                let mut value = sandbox("boot", None, SandboxEgress::Allow);
+                let mut value = sandbox("boot", None, egress.clone());
                 value.image_user = user;
                 let result = SandboxPlatformSupportCheck
-                    .check(&stack_with(value), platform)
+                    .check(&stack_with(value), Platform::Kubernetes)
                     .await
                     .unwrap();
                 assert_eq!(
                     result.success,
-                    user != Some(0),
-                    "{platform}: {:?}",
+                    user != Some(0) || root_ok,
+                    "{egress:?} {user:?}: {:?}",
                     result.errors
                 );
-                if user == Some(0) {
-                    assert!(result.errors.join(" ").contains("root image USER"));
-                }
             }
         }
     }

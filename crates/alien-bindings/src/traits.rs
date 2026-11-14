@@ -1540,8 +1540,8 @@ pub struct JobError {
 
 /// An authenticated, port-scoped capability to reach a service inside a sandbox.
 ///
-/// Not a URL string: AWS needs a JWE and a port header, Azure an Entra token, and a bare
-/// string cannot carry either. Returning one would push callers into building the request
+/// Not a URL string: AWS needs a JWE and a port header, Azure and GCP the agent's capability and
+/// port headers, and a bare string cannot carry any of them. Returning one would push callers into building the request
 /// themselves and getting the auth wrong.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -1555,6 +1555,19 @@ pub struct PreviewCapability {
     pub allowed_ports: Vec<u16>,
     /// Seconds until the capability expires
     pub expires_in_seconds: u64,
+    /// Header the caller puts its own bearer under so it reaches the daemon unchanged.
+    /// `Authorization` on every backend whose edge leaves it alone; a backend whose edge
+    /// consumes `Authorization` names another header and the agent re-emits it.
+    #[serde(default = "default_caller_authorization_header")]
+    pub caller_authorization_header: String,
+    /// WebSocket subprotocols a client must offer, in order, when it cannot set headers
+    /// on the upgrade. Empty when headers are enough.
+    #[serde(default)]
+    pub subprotocols: Vec<String>,
+}
+
+fn default_caller_authorization_header() -> String {
+    "Authorization".to_string()
 }
 
 /// A sandbox binding: create sandboxes, run untrusted code in them, and tear them down.
@@ -1792,7 +1805,16 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateSandboxRequest, RedisConnectionParams, RedisTlsPolicy};
+    use super::{CreateSandboxRequest, PreviewCapability, RedisConnectionParams, RedisTlsPolicy};
+
+    #[test]
+    fn a_preview_without_caller_header_fields_keeps_authorization() {
+        let old =
+            r#"{"endpoint":"https://e","headers":{},"allowedPorts":[8080],"expiresInSeconds":5}"#;
+        let preview: PreviewCapability = serde_json::from_str(old).unwrap();
+        assert_eq!(preview.caller_authorization_header, "Authorization");
+        assert!(preview.subprotocols.is_empty());
+    }
 
     #[test]
     fn a_redis_url_brackets_an_ipv6_host() {
@@ -1803,9 +1825,18 @@ mod tests {
             password: "pw".to_string(),
             tls: RedisTlsPolicy::Disabled,
         };
-        assert_eq!(params("::1").connection_url(), "redis://default:pw@[::1]:6379/0");
-        assert_eq!(params("[::1]").connection_url(), "redis://default:pw@[::1]:6379/0");
-        assert_eq!(params("10.0.0.5").connection_url(), "redis://default:pw@10.0.0.5:6379/0");
+        assert_eq!(
+            params("::1").connection_url(),
+            "redis://default:pw@[::1]:6379/0"
+        );
+        assert_eq!(
+            params("[::1]").connection_url(),
+            "redis://default:pw@[::1]:6379/0"
+        );
+        assert_eq!(
+            params("10.0.0.5").connection_url(),
+            "redis://default:pw@10.0.0.5:6379/0"
+        );
         assert_eq!(params("host.example").host, "host.example");
     }
 

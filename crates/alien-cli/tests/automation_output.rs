@@ -24,7 +24,7 @@ fn machine_inventory_and_token_are_json_without_a_linked_project() {
         then.json_body(json!({"id":ID,"name":"docproc","platform":"machines","status":"running",
             "deploymentGroupId":"dg_0000000000000000000000000000","projectId":"prj_0000000000000000000000000000",
             "workspaceId":"ws_000000000000000000000000","managerId":"mgr_0000000000000000000000000000","purpose":"application",
-            "releaseChannel":"production","stackSettings":{},"deploymentProtocolVersion":1,"retryRequested":false,"updateBlocked":false,
+            "releaseChannel":"production","stackSettings":{},"deploymentProtocolVersion":1,"retryRequested":false,"updateBlocked":false,"protected":false,"signingChannel":null,
             "createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}));
     });
     let machines = server.mock(|when, then| {

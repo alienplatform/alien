@@ -25,10 +25,16 @@ pub const ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS: &str = "ALIEN_SANDBOX_OPERATOR_ADD
 /// the Service exists, where the Operator's pod address changes whenever the pod is rescheduled.
 pub const ENV_ALIEN_SANDBOX_OPERATOR_SERVICE: &str = "ALIEN_SANDBOX_OPERATOR_SERVICE";
 pub const ENV_ALIEN_SANDBOX_RUNTIME_CLASS: &str = "ALIEN_SANDBOX_RUNTIME_CLASS";
+/// Namespace the administrator made for sandbox pods (`sandbox.namespace`). Unset means the
+/// release namespace, where sandbox pods have always run. The chart never creates it.
+pub const ENV_ALIEN_SANDBOX_NAMESPACE: &str = "ALIEN_SANDBOX_NAMESPACE";
 /// Idle sandbox pods the Operator keeps ready (`sandbox.warmPoolSize`).
 pub const ENV_ALIEN_SANDBOX_WARM_POOL_SIZE: &str = "ALIEN_SANDBOX_WARM_POOL_SIZE";
 /// JSON object of node labels sandbox pods must match (`sandbox.nodeSelector`).
 pub const ENV_ALIEN_SANDBOX_NODE_SELECTOR: &str = "ALIEN_SANDBOX_NODE_SELECTOR";
+/// Set by the Kubernetes operator on root-boot pods: the egress limit is enforced outside the pod
+/// (NetworkPolicy and the gateway), so the agent skips in-pod firewall setup. Agent-read only.
+pub const ENV_ALIEN_SANDBOX_NETWORK_ENFORCER: &str = "ALIEN_SANDBOX_NETWORK_ENFORCER";
 /// JSON array of tolerations for sandbox pods (`sandbox.tolerations`).
 pub const ENV_ALIEN_SANDBOX_TOLERATIONS: &str = "ALIEN_SANDBOX_TOLERATIONS";
 /// JSON object mapping workload priority levels (`critical`, `high`, `normal`, `low`) to

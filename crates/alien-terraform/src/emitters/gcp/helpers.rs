@@ -503,3 +503,29 @@ pub(crate) fn push_iam_member(
 fn escape_template_string_body(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::evaluate_with_prefix as evaluate;
+    use alien_core::gcp_naming::gcp_service_account_id;
+
+    /// The verifier derives a function's account from `gcp_service_account_id`, so it must
+    /// name the account setup creates, short prefix or long.
+    #[test]
+    fn setup_names_a_service_account_as_gcp_service_account_id_does() {
+        for (resource_prefix, label) in [
+            ("acme-prod", "execution_sa"),
+            ("acme-production-eu", "execution_sa"),
+            ("ab", "reader_sa"),
+            ("acme-prod-x", "verifier"),
+            ("Acme_Prod", "artifact_registry_pull"),
+        ] {
+            assert_eq!(
+                evaluate(resource_prefix, &service_account_id_template(label)),
+                gcp_service_account_id(resource_prefix, label),
+                "{resource_prefix} {label}"
+            );
+        }
+    }
+}

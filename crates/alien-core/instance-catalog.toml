@@ -411,6 +411,7 @@ category = "GeneralPurpose"
 label = "General purpose · Intel · Dsv6"
 pattern = "Standard_D{n}s_v6"
 from = "Standard_D2s_v6"
+auto_select_to = "Standard_D16s_v6"
 nested_virt = true
 
 # https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/dasv6-series

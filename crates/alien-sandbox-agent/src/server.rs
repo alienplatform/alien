@@ -99,6 +99,8 @@ pub struct AgentState {
     /// Gateway forwarding and readiness; absent only for legacy images.
     #[cfg(target_os = "linux")]
     pub gateway_egress: Option<Arc<crate::gateway_egress::GatewayEgress>>,
+    /// Issues and verifies preview capabilities where the agent is the issuer (transport mode).
+    pub preview: crate::preview_capability::PreviewAuthority,
     /// The agent's own executable, which the validate hook runs as the exec identity
     pub agent_binary: PathBuf,
 }
@@ -114,6 +116,22 @@ impl AgentAuthorization {
     }
 }
 
+/// Variables the platform sets in the agent's own environment that name a credential endpoint.
+/// Azure's sandbox runtime sets the managed identity pair even when no identity is attached, and
+/// the endpoint answers 401; the guest must still never be handed the means to ask.
+const PLATFORM_CREDENTIAL_VARIABLES: [&str; 5] = [
+    "IDENTITY_ENDPOINT",
+    "IDENTITY_HEADER",
+    "IDENTITY_SERVER_THUMBPRINT",
+    "MSI_ENDPOINT",
+    "MSI_SECRET",
+];
+
+/// Whether a variable of the agent's own environment may reach the boot process and commands.
+fn is_inherited_native_variable(name: &str) -> bool {
+    !name.starts_with("ALIEN_SANDBOX_") && !PLATFORM_CREDENTIAL_VARIABLES.contains(&name)
+}
+
 impl AgentState {
     /// Azure's create-time environment includes user variables and gateway proxy settings.
     /// Preserve those defaults without letting agent configuration become a child contract.
@@ -121,7 +139,7 @@ impl AgentState {
         #[cfg(unix)]
         if matches!(self.authorization, AgentAuthorization::NativeFile(_)) {
             for (name, value) in std::env::vars() {
-                if !name.starts_with("ALIEN_SANDBOX_") {
+                if is_inherited_native_variable(&name) {
                     env.entry(name).or_insert(value);
                 }
             }
@@ -1012,6 +1030,13 @@ async fn agent_platform(
             .await?
             .into_response())
         }
+        "previewGrant" => Ok(preview_grant(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?),
         "health" => Ok(health(State(state), Query(HealthQuery { version: None }))
             .await?
             .into_response()),
@@ -1030,22 +1055,11 @@ fn reparse<T: serde::de::DeserializeOwned>(body: &Bytes) -> std::result::Result<
     })
 }
 
-/// Verifies the request may reach this session, or refuses it.
 /// Forwards a request to a port of the sandbox's own server.
 async fn preview(
     State(state): State<Arc<AgentState>>,
     request: axum::extract::Request,
 ) -> std::result::Result<Response, ApiError> {
-    let AgentAuthorization::Capability {
-        public_key,
-        identity,
-    } = &state.authorization
-    else {
-        return Err(ApiError {
-            status: StatusCode::NOT_FOUND,
-            message: "this sandbox does not serve preview".to_string(),
-        });
-    };
     let path = request.uri().path().to_string();
     let after = path.strip_prefix("/v1/preview/").unwrap_or_default();
     let (port_text, rest) = after.split_once('/').unwrap_or((after, ""));
@@ -1053,15 +1067,66 @@ async fn preview(
         status: StatusCode::BAD_REQUEST,
         message: "the preview port is not a port number".to_string(),
     })?;
+    let (public_key, identity) = match &state.authorization {
+        AgentAuthorization::Capability {
+            public_key,
+            identity,
+        } => (public_key, identity),
+        AgentAuthorization::Transport => {
+            return preview_by_header(&state, request, port, rest).await
+        }
+        #[cfg(unix)]
+        AgentAuthorization::NativeFile(boot_token) => {
+            // The boot token is the control credential. A caller that sends it here would hand it
+            // to the daemon, and the daemon is not the agent's peer: refuse before any connection.
+            let presented = request
+                .headers()
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "));
+            if presented.is_some_and(|value| boot_token.accepts(value)) {
+                return Err(ApiError {
+                    status: StatusCode::FORBIDDEN,
+                    message: "the agent's control credential is not a preview credential"
+                        .to_string(),
+                });
+            }
+            return preview_by_header(&state, request, port, rest).await;
+        }
+        _ => {
+            return Err(ApiError {
+                status: StatusCode::NOT_FOUND,
+                message: "this sandbox does not serve preview".to_string(),
+            })
+        }
+    };
+    // The capability has its own header. `Authorization` belongs to the code inside the sandbox
+    // and is forwarded untouched, so it is never read here.
     let token = request
         .headers()
-        .get(axum::http::header::AUTHORIZATION)
+        .get(alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
         .ok_or_else(|| ApiError {
             status: StatusCode::UNAUTHORIZED,
             message: "a valid preview capability is required".to_string(),
         })?;
+    // The port header is optional where the path already names the port, but it may not disagree.
+    if let Some(named) = request
+        .headers()
+        .get(alien_core::sandbox_image::PREVIEW_PORT_HEADER)
+    {
+        if named
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<u16>().ok())
+            != Some(port)
+        {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                message: "this capability does not admit that port".to_string(),
+            });
+        }
+    }
     let claims = sandbox_capability_token::verify(
         token,
         public_key,
@@ -1073,7 +1138,11 @@ async fn preview(
     // The capability names the port it admits, and the sandbox names the ports it declared; the
     // path is neither, so it is checked against both.
     if !claims.admits_port(port)
-        || !crate::preview::port_is_declared(port, &crate::preview::declared_ports())
+        || !crate::preview::port_is_declared(
+            port,
+            &crate::preview::declared_ports(),
+            &state.preview.own_ports(),
+        )
     {
         return Err(ApiError {
             status: StatusCode::FORBIDDEN,
@@ -1084,7 +1153,143 @@ async fn preview(
         Some(query) => format!("/{rest}?{query}"),
         None => format!("/{rest}"),
     };
-    Ok(crate::preview::forward(request, port, target, claims.expires_at).await)
+    Ok(crate::preview::forward(
+        request,
+        port,
+        target,
+        claims.expires_at,
+        crate::preview::CallerAuth::Authorization,
+        &state.preview.own_ports(),
+    )
+    .await)
+}
+
+/// The preview route where the capability has its own header (`x-alien-preview-capability`), so
+/// the caller's `Authorization` reaches the code inside untouched. The agent is its own issuer.
+fn preview_by_header(
+    state: &AgentState,
+    request: axum::extract::Request,
+    port: u16,
+    rest: &str,
+) -> impl std::future::Future<Output = std::result::Result<Response, ApiError>> {
+    let verdict = (|| {
+        let header = |name: &str| {
+            request
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+        let capability =
+            header(alien_core::sandbox_image::PREVIEW_CAPABILITY_HEADER).ok_or(ApiError {
+                status: StatusCode::UNAUTHORIZED,
+                message: "a valid preview capability is required".to_string(),
+            })?;
+        // The header names the port the capability is for; it must be the port in the path.
+        let named: Option<u16> = header(alien_core::sandbox_image::PREVIEW_PORT_HEADER)
+            .and_then(|value| value.parse().ok());
+        if named != Some(port)
+            || !crate::preview::port_is_declared(
+                port,
+                &crate::preview::declared_ports(),
+                &state.preview.own_ports(),
+            )
+        {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                message: "this capability does not admit that port".to_string(),
+            });
+        }
+        state
+            .preview
+            .verify(&capability, port, chrono::Utc::now().timestamp())
+            .map_err(|refusal| {
+                tracing::info!(port, outcome = ?refusal, "preview verification refused");
+                ApiError {
+                    status: StatusCode::FORBIDDEN,
+                    message: refusal.message().to_string(),
+                }
+            })
+    })();
+    let own_ports = state.preview.own_ports();
+    let target = match request.uri().query() {
+        Some(query) => format!("/{rest}?{query}"),
+        None => format!("/{rest}"),
+    };
+    async move {
+        let expires_at = verdict?;
+        Ok(crate::preview::forward(
+            request,
+            port,
+            target,
+            expires_at,
+            crate::preview::CallerAuth::from_env(),
+            &own_ports,
+        )
+        .await)
+    }
+}
+
+/// Body of the `previewGrant` operation.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewGrantRequest {
+    /// The sandbox the caller addressed. Bound into the capability.
+    sandbox: String,
+    port: u16,
+    /// Unix time the session ends at; the grant never outlives it.
+    deadline: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PreviewGrantResponse {
+    capability: String,
+    expires_at: i64,
+}
+
+/// Grants a preview capability. Reached over the cloud-authenticated control path only; the
+/// capability value is returned to the caller and never logged.
+async fn preview_grant(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<PreviewGrantRequest>,
+) -> std::result::Result<Response, ApiError> {
+    if !matches!(
+        state.authorization,
+        AgentAuthorization::Transport | AgentAuthorization::NativeFile(_)
+    ) {
+        return Err(ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "this sandbox does not issue preview capabilities".to_string(),
+        });
+    }
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let outcome = state.preview.grant(
+        &request.sandbox,
+        request.port,
+        &crate::preview::declared_ports(),
+        request.deadline,
+        chrono::Utc::now().timestamp(),
+    );
+    match outcome {
+        Ok(grant) => {
+            tracing::info!(sandbox = %request.sandbox, port = request.port, "preview granted");
+            Ok(Json(PreviewGrantResponse {
+                capability: grant.capability,
+                expires_at: grant.expires_at,
+            })
+            .into_response())
+        }
+        Err(refusal) => {
+            tracing::info!(sandbox = %request.sandbox, port = request.port, outcome = ?refusal, "preview grant refused");
+            Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                message: refusal.message().to_string(),
+            })
+        }
+    }
 }
 
 async fn authorize(
@@ -1279,4 +1484,38 @@ async fn run_egress_hook(
         .set_gateway(&bootstrap.gateway, &bootstrap.audience, &hook.microvm_id)
         .await?;
     Ok(StatusCode::OK)
+}
+
+#[cfg(test)]
+mod native_environment_tests {
+    use super::is_inherited_native_variable;
+
+    #[test]
+    fn platform_credential_variables_never_reach_the_guest() {
+        for name in [
+            "IDENTITY_ENDPOINT",
+            "IDENTITY_HEADER",
+            "IDENTITY_SERVER_THUMBPRINT",
+            "MSI_ENDPOINT",
+            "MSI_SECRET",
+            "ALIEN_SANDBOX_PORT",
+        ] {
+            assert!(
+                !is_inherited_native_variable(name),
+                "{name} must be stripped"
+            );
+        }
+    }
+
+    #[test]
+    fn user_and_proxy_variables_are_still_inherited() {
+        for name in [
+            "HTTPS_PROXY",
+            "APP_TOKEN",
+            "IDENTITY",
+            "MY_IDENTITY_ENDPOINT",
+        ] {
+            assert!(is_inherited_native_variable(name), "{name} must pass");
+        }
+    }
 }

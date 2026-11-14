@@ -618,6 +618,9 @@ pub fn emit_iam_role_policy_stub(
     ));
 }
 
+/// Sid of the statement that refuses the management role writes under `/signed/`.
+const SIGNING_SETTINGS_DENY_SID: &str = "OnlySetupChangesSigningSettings";
+
 pub fn emit_iam_managed_policy_chunks(
     fragment: &mut TfFragment,
     role_label: &str,
@@ -625,17 +628,57 @@ pub fn emit_iam_managed_policy_chunks(
     base_name: &str,
     statements: Vec<AwsIamStatement>,
 ) -> Result<()> {
+    emit_iam_managed_policy_chunks_with(
+        fragment,
+        role_label,
+        base_label,
+        base_name,
+        statements,
+        |_| {},
+    )
+}
+
+/// [`emit_iam_managed_policy_chunks`], with `fill` applied to each packed policy document.
+/// Packing measures the statements as rendered, so `fill` swaps placeholders that were rendered
+/// at the length of the values they stand for.
+pub fn emit_iam_managed_policy_chunks_with(
+    fragment: &mut TfFragment,
+    role_label: &str,
+    base_label: &str,
+    base_name: &str,
+    statements: Vec<AwsIamStatement>,
+    fill: impl Fn(&mut Expression),
+) -> Result<()> {
     let mut statements = statements;
     ensure_unique_statement_sids(&mut statements);
-    let chunks = chunk_iam_statements(
-        statements,
-        alien_permissions::generators::MAX_MANAGED_POLICY_BYTES,
-    )?;
+    // The signing Deny was added after installs existed, so it goes after packing and the
+    // statements an install already has stay in the policies they are in.
+    let (appended, statements): (Vec<_>, Vec<_>) = statements
+        .into_iter()
+        .partition(|statement| statement.sid == SIGNING_SETTINGS_DENY_SID);
+    let max_policy_bytes = alien_permissions::generators::MAX_MANAGED_POLICY_BYTES;
+    let mut chunks = chunk_iam_statements(statements, max_policy_bytes)?;
+    if !appended.is_empty() {
+        let fits_last = match chunks.last() {
+            Some(last) => {
+                let mut combined = last.clone();
+                combined.extend(appended.iter().cloned());
+                policy_document_size(&combined)? <= max_policy_bytes
+            }
+            None => false,
+        };
+        if fits_last {
+            chunks.last_mut().expect("checked").extend(appended);
+        } else {
+            chunks.extend(chunk_iam_statements(appended, max_policy_bytes)?);
+        }
+    }
     for (idx, chunk) in chunks.into_iter().enumerate() {
         let policy_label = format!("{base_label}_{idx}");
         let attachment_label = format!("{policy_label}_attachment");
         let policy_name = format!("{base_name}-{idx}");
-        let policy_expr = policy_document_expr(chunk)?;
+        let mut policy_expr = policy_document_expr(chunk)?;
+        fill(&mut policy_expr);
 
         fragment.resource_blocks.push(resource_block(
             "aws_iam_policy",
@@ -796,7 +839,7 @@ pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> Expression {
 
 /// Whether setup creates a database that sits in the VPC (Postgres or Redis), which makes the
 /// network module also support the account's default VPC.
-fn stack_has_setup_postgres(ctx: &EmitContext<'_>) -> bool {
+pub(crate) fn stack_has_setup_postgres(ctx: &EmitContext<'_>) -> bool {
     ctx.stack.resources().any(|(_id, entry)| {
         entry.lifecycle == alien_core::ResourceLifecycle::Frozen
             && (entry
@@ -875,3 +918,32 @@ pub fn nested_block(name: &str, body: Vec<Structure>) -> Structure {
 #[cfg(test)]
 #[path = "helpers_policy_tests.rs"]
 mod policy_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::evaluate_with_prefix;
+    use alien_core::aws_naming::aws_iam_role_name;
+
+    /// The verifier derives a function's role from `aws_iam_role_name`, so it
+    /// must name the role setup creates, at IAM's 64-character limit and over it.
+    #[test]
+    fn setup_names_a_role_as_aws_iam_role_name_does() {
+        for (resource_prefix, suffix) in [
+            ("acme-prod", "execution-sa"),
+            (
+                "acme-production-eu-west-1-tenant-customer42",
+                "background-processor-sa",
+            ),
+            (&"p".repeat(51)[..], "execution-sa"),
+            (&"p".repeat(52)[..], "execution-sa"),
+            ("acme-prod", "management"),
+        ] {
+            assert_eq!(
+                evaluate_with_prefix(resource_prefix, &iam_role_name_template(suffix)),
+                aws_iam_role_name(resource_prefix, suffix),
+                "{resource_prefix} {suffix}"
+            );
+        }
+    }
+}

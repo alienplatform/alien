@@ -16,6 +16,9 @@ pub enum ValueAccess {
     Read,
     /// Write and delete slots.
     Write,
+    /// Send the slots' values to one named manager. Not a read: the values go to the target and
+    /// only the target's metadata comes back.
+    Export,
     /// Everything, including `verify`. For moving values between control planes.
     Migrate,
 }
@@ -25,6 +28,7 @@ impl ValueAccess {
         match self {
             ValueAccess::Read => "read",
             ValueAccess::Write => "write",
+            ValueAccess::Export => "export",
             ValueAccess::Migrate => "migrate",
         }
     }
@@ -42,6 +46,9 @@ pub struct ValueGrant {
     /// `None` allows every slot in the scope. An authorizer that checks
     /// slot-limited tokens gives that only to a migrate grant.
     pub slots: Option<Vec<ValueSlot>>,
+    /// For an export grant: the one manager URL the values may be sent to. An export names it
+    /// here, in the signed token, so the request cannot choose another.
+    pub export_target: Option<String>,
 }
 
 impl ValueGrant {
@@ -49,6 +56,7 @@ impl ValueGrant {
         Self {
             access,
             slots: None,
+            export_target: None,
         }
     }
 
@@ -119,6 +127,7 @@ mod tests {
         let grant = ValueGrant {
             access: ValueAccess::Write,
             slots: Some(vec![slot("env:A")]),
+            export_target: None,
         };
         let a = SlotSelection::Slots(vec![slot("env:A")]);
         let b = SlotSelection::Slots(vec![slot("env:A"), slot("env:B")]);
@@ -142,6 +151,7 @@ mod tests {
         let grant = ValueGrant {
             access: ValueAccess::Read,
             slots: Some(vec![slot("cenv.a.b.X")]),
+            export_target: None,
         };
         let select = |s: &str| SlotSelection::Slots(vec![slot(s)]);
         assert!(grant

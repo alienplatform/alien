@@ -119,6 +119,7 @@ pub async fn verify_rule_update(ctx: &mut TestContext) -> anyhow::Result<()> {
             let template = alien_cloudformation::generate_cloudformation_template_with_profile(
                 &prepared.rendered_stack,
                 alien_cloudformation::CloudFormationOptions {
+                    pins: alien_core::SetupPins::compiled_in(),
                     registry: &registry,
                     source_stack: &prepared.built_stack,
                     target: alien_cloudformation::CloudFormationTarget::Aws,
@@ -209,6 +210,8 @@ pub async fn verify_rule_update(ctx: &mut TestContext) -> anyhow::Result<()> {
                 &prepared.rendered_stack,
                 target,
                 alien_terraform::TerraformOptions {
+                    setup_identity: None,
+                    pins: alien_core::SetupPins::compiled_in(),
                     display_name: None,
                     registry: &registry,
                     stack_settings: stack_settings_for_terraform(&prepared, target)?,

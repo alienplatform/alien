@@ -39,6 +39,25 @@ pub fn notification_rule_key(rule: &StorageNotification) -> String {
     ])
 }
 
+/// Every Event Grid subscription name of this container's rules starts with this. Azure
+/// container names are ASCII; the hash keeps long names distinct after truncation.
+pub fn azure_subscription_prefix(container: &str) -> String {
+    let head: String = container.chars().take(28).collect();
+    let hash = format!("{:x}", Sha256::digest(container.as_bytes()));
+    format!("{head}-sn-{}-", &hash[..10])
+}
+
+/// The name of the Event Grid subscription that delivers one rule of the storage in
+/// `container`. It carries the hash of what the rule delivers, not its position. At most 59
+/// characters.
+pub fn azure_subscription_name(container: &str, rule: &StorageNotification) -> String {
+    format!(
+        "{}{}",
+        azure_subscription_prefix(container),
+        notification_rule_key(rule)
+    )
+}
+
 /// One GCS notification config: every rule of a Storage with the same queue and prefix.
 /// GCS filters by prefix only, so one config per rule would publish each object under a
 /// shared prefix once per rule. The consumer checks the suffixes instead.
@@ -216,6 +235,24 @@ pub fn notifications_overlap(a: &StorageNotification, b: &StorageNotification) -
 /// identity let the owning controller recognise its own entries among everyone else's.
 pub fn aws_notification_id(prefix: &str, storage_id: &str, index: usize) -> String {
     format!("{}{index}", aws_notification_id_prefix(prefix, storage_id))
+}
+
+/// The S3 event names a worker's storage trigger subscribes to.
+pub fn aws_trigger_events(events: &[String]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| match event.as_str() {
+            "created" => "s3:ObjectCreated:*".to_string(),
+            "deleted" => "s3:ObjectRemoved:*".to_string(),
+            other => format!("s3:{other}"),
+        })
+        .collect()
+}
+
+/// Id of the S3 function configuration (and of the Lambda permission statement) a worker's
+/// storage trigger installs.
+pub fn aws_trigger_notification_id(function_name: &str, storage_id: &str) -> String {
+    format!("{function_name}-s3-{storage_id}")
 }
 
 /// Every [`aws_notification_id`] of one Storage starts with this.

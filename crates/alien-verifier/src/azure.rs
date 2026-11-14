@@ -1,0 +1,895 @@
+//! The verifier's Azure calls: the signing settings tag on the install's
+//! resource group, the ledger and deployer inputs in the install's Key
+//! Vault, Container Apps and scale sets, with the token of the managed
+//! identity the verifier runs as.
+
+use std::collections::BTreeMap;
+
+use alien_azure_clients::azure::container_apps::CONTAINER_APPS_API_VERSION;
+use alien_error::{AlienError, Context, IntoAlienError};
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+use alien_signing::settings::names;
+use alien_signing::{Ledger, Lookup, Workload};
+
+use crate::cloud_write::{CloudWrite, Facts};
+use crate::container_apps::AppStore;
+use crate::error::{ErrorData, Result};
+use crate::plan::{OwnResource, Place};
+use crate::trust::InstallStore;
+use crate::verifier::Backend;
+
+const ARM: &str = "https://management.azure.com";
+const KEY_VAULT_API: &str = "7.4";
+const KEY_VAULT_ARM_API: &str = "2023-07-01";
+
+fn failed(operation: impl Into<String>) -> ErrorData {
+    ErrorData::CloudCallFailed {
+        operation: operation.into(),
+    }
+}
+
+/// Azure REST calls for one resource group and Key Vault.
+#[derive(Debug, Clone)]
+pub struct Azure {
+    http: reqwest::Client,
+    /// `/subscriptions/<id>/resourceGroups/<name>`, where the apps live.
+    pub resource_group: String,
+    /// `https://<vault>.vault.azure.net`.
+    pub vault: String,
+    /// Client id of the verifier's user-assigned identity, if it has several.
+    pub client_id: Option<String>,
+    /// Resource id of the Container Apps environment the install's workloads run in, as setup
+    /// names it. None when the install has none.
+    pub environment: Option<String>,
+    /// The install's region, which names the sandbox data plane's host. None when the install
+    /// has no sandbox.
+    pub region: Option<String>,
+}
+
+impl Azure {
+    /// A client for the apps in `resource_group` and secrets in `vault`.
+    pub fn new(resource_group: String, vault: String, client_id: Option<String>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            resource_group,
+            vault: vault.trim_end_matches('/').to_string(),
+            client_id,
+            environment: None,
+            region: None,
+        }
+    }
+
+    /// The same client, reaching the sandbox data plane of `region`.
+    pub fn with_region(self, region: Option<String>) -> Self {
+        Self { region, ..self }
+    }
+
+    /// The same client, creating workloads in Container Apps environment `environment`.
+    pub fn with_environment(self, environment: Option<String>) -> Self {
+        Self {
+            environment,
+            ..self
+        }
+    }
+
+    /// The same client, sending its calls through `http` (a workstation
+    /// run behind a TLS proxy passes one that trusts the proxy's CA).
+    pub fn with_http(self, http: reqwest::Client) -> Self {
+        Self { http, ..self }
+    }
+
+    /// A token for `resource` from the Container Apps identity endpoint.
+    async fn token(&self, resource: &str) -> Result<String> {
+        let endpoint = std::env::var("IDENTITY_ENDPOINT")
+            .map_err(|_| AlienError::new(failed("IDENTITY_ENDPOINT is not set")))?;
+        let header = std::env::var("IDENTITY_HEADER")
+            .map_err(|_| AlienError::new(failed("IDENTITY_HEADER is not set")))?;
+        let mut query = vec![("resource", resource), ("api-version", "2019-08-01")];
+        if let Some(client_id) = &self.client_id {
+            query.push(("client_id", client_id));
+        }
+        let response: Value = self
+            .http
+            .get(&endpoint)
+            .query(&query)
+            .header("X-IDENTITY-HEADER", header)
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed("managed identity token"))?
+            .json()
+            .await
+            .into_alien_error()
+            .context(failed("managed identity token"))?;
+        response["access_token"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| AlienError::new(failed("the identity endpoint returned no token")))
+    }
+
+    /// Send a request; `Ok(None)` for 404.
+    async fn call(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        resource: &str,
+        body: Option<&Value>,
+        operation: &str,
+    ) -> Result<Option<Value>> {
+        Ok(self
+            .call_with_status(method, url, resource, body, operation)
+            .await?
+            .1)
+    }
+
+    /// [`Self::call`] with the status ARM answered.
+    async fn call_with_status(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        resource: &str,
+        body: Option<&Value>,
+        operation: &str,
+    ) -> Result<(reqwest::StatusCode, Option<Value>)> {
+        let mut request = self
+            .http
+            .request(method, url)
+            .bearer_auth(self.token(resource).await?);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed(operation))?;
+        let status = response.status();
+        let text = response
+            .text()
+            .await
+            .into_alien_error()
+            .context(failed(operation))?;
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok((status, None));
+        }
+        if !status.is_success() {
+            return Err(AlienError::new(failed(format!(
+                "{operation}: HTTP {status}: {}",
+                text.chars().take(2000).collect::<String>()
+            ))));
+        }
+        if text.trim().is_empty() {
+            return Ok((status, Some(Value::Null)));
+        }
+        serde_json::from_str(&text)
+            .map(|body| (status, Some(body)))
+            .into_alien_error()
+            .context(failed(format!("{operation}: the response is not JSON")))
+    }
+
+    fn app_url(&self, name: &str) -> String {
+        format!(
+            "{ARM}{}/providers/Microsoft.App/containerApps/{name}?api-version={CONTAINER_APPS_API_VERSION}",
+            self.resource_group
+        )
+    }
+
+    /// The install's deployer secrets vault: the one Key Vault in the group named the way setup
+    /// names it. Its name ends in a random suffix, so it is read from the group, which only the
+    /// customer's own principals write to. `None` unless exactly one vault matches.
+    async fn deployer_vault(&self, prefix: &str) -> Result<Option<String>> {
+        let what = "keyVault vaults list";
+        let url = format!(
+            "{ARM}{}/providers/Microsoft.KeyVault/vaults?api-version={KEY_VAULT_ARM_API}",
+            self.resource_group
+        );
+        let list = self
+            .call(reqwest::Method::GET, &url, ARM, None, what)
+            .await?;
+        let mut names = list
+            .iter()
+            .flat_map(|list| list["value"].as_array().into_iter().flatten())
+            .filter_map(|vault| vault["name"].as_str())
+            .filter(|name| alien_core::vault_naming::is_azure_deployer_vault_name(prefix, name));
+        Ok(match (names.next(), names.next()) {
+            (Some(name), None) => Some(name.to_string()),
+            _ => None,
+        })
+    }
+
+    /// The value of a Key Vault secret, or `None` if it doesn't exist.
+    pub async fn secret(&self, name: &str) -> Result<Option<String>> {
+        let url = format!("{}/secrets/{name}?api-version={KEY_VAULT_API}", self.vault);
+        Ok(self
+            .call(
+                reqwest::Method::GET,
+                &url,
+                "https://vault.azure.net",
+                None,
+                &format!("keyvault get {name}"),
+            )
+            .await?
+            .and_then(|secret| secret["value"].as_str().map(str::to_string)))
+    }
+
+    /// Set a Key Vault secret.
+    pub async fn set_secret(&self, name: &str, value: &str) -> Result<()> {
+        let url = format!("{}/secrets/{name}?api-version={KEY_VAULT_API}", self.vault);
+        self.call(
+            reqwest::Method::PUT,
+            &url,
+            "https://vault.azure.net",
+            Some(&json!({"value": value})),
+            &format!("keyvault set {name}"),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// The value of tag `name` on the install's resource group: absent when
+    /// the group has no such tag, denied when the verifier may not read it.
+    pub async fn resource_group_tag(&self, name: &str) -> Result<Lookup> {
+        let url = format!("{ARM}{}?api-version=2021-04-01", self.resource_group);
+        let response = self
+            .http
+            .get(&url)
+            .bearer_auth(self.token(ARM).await?)
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed("resourceGroups get"))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::FORBIDDEN {
+            return Ok(Lookup::Denied);
+        }
+        if !status.is_success() {
+            return Err(AlienError::new(failed(format!(
+                "resourceGroups get: HTTP {status}"
+            ))));
+        }
+        let group: Value = response
+            .json()
+            .await
+            .into_alien_error()
+            .context(failed("resourceGroups get"))?;
+        Ok(match group["tags"][name].as_str() {
+            Some(value) => Lookup::Found(value.as_bytes().to_vec()),
+            None => Lookup::Absent,
+        })
+    }
+
+    /// Set the capacity of scale set `name` and wait until it is
+    /// provisioned, so a resize Azure fails is an error.
+    pub async fn resize_scale_set(&self, name: &str, size: u32) -> Result<()> {
+        let url = scale_set_url(&self.resource_group, name)?;
+        let what = format!("virtualMachineScaleSets update {name}");
+        self.call(
+            reqwest::Method::PATCH,
+            url.as_str(),
+            ARM,
+            Some(&json!({"sku": {"capacity": size}})),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::Refused {
+                reason: format!("scale set {name} does not exist"),
+            })
+        })?;
+        self.provisioned(url.as_str(), &what).await.map(|_| ())
+    }
+
+    /// Send a blob container of the install's storage account `account`, in this install's
+    /// resource group, with `method` (PUT creates, PATCH updates).
+    pub async fn write_blob_container(
+        &self,
+        method: reqwest::Method,
+        account: &str,
+        container: &str,
+        body: &Value,
+    ) -> Result<()> {
+        let mut url = crate::machines::segments_url(
+            &format!("{ARM}{}", self.resource_group),
+            &[
+                "providers",
+                "Microsoft.Storage",
+                "storageAccounts",
+                account,
+                "blobServices",
+                "default",
+                "containers",
+                container,
+            ],
+        )?;
+        url.query_pairs_mut()
+            .append_pair("api-version", "2024-01-01");
+        let what = format!("storage.blobContainers.write {account}/{container}");
+        self.call(method, url.as_str(), ARM, Some(body), &what)
+            .await?
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        Ok(())
+    }
+
+    /// Send an Event Grid subscription of the install's storage account `account`, in this
+    /// install's resource group, with PUT.
+    pub async fn write_event_subscription(
+        &self,
+        account: &str,
+        name: &str,
+        body: &Value,
+    ) -> Result<()> {
+        let mut url = crate::machines::segments_url(
+            &format!("{ARM}{}", self.resource_group),
+            &[
+                "providers",
+                "Microsoft.Storage",
+                "storageAccounts",
+                account,
+                "providers",
+                "Microsoft.EventGrid",
+                "eventSubscriptions",
+                name,
+            ],
+        )?;
+        url.query_pairs_mut()
+            .append_pair("api-version", "2025-02-15");
+        let what = format!("eventGrid.eventSubscriptions.write {account}/{name}");
+        self.call(reqwest::Method::PUT, url.as_str(), ARM, Some(body), &what)
+            .await?
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        Ok(())
+    }
+
+    /// Start a disk image build in sandbox group `group` of this install's resource group, on the
+    /// region's sandbox data plane, with PUT.
+    pub async fn create_disk_image(&self, group: &str, body: &Value) -> Result<Value> {
+        use alien_azure_clients::azure::sandbox_data_plane::{ADC_SCOPE, API_VERSION};
+        let region = self
+            .region
+            .as_deref()
+            .ok_or_else(|| AlienError::new(failed("VERIFIER_AZURE_REGION is not set")))?;
+        let mut url = reqwest::Url::parse(&format!(
+            "https://management.{region}.azuredevcompute.io{}/sandboxGroups/{group}/diskimages",
+            self.resource_group
+        ))
+        .into_alien_error()
+        .context(failed("the sandbox data plane address"))?;
+        url.query_pairs_mut()
+            .append_pair("api-version", API_VERSION);
+        let what = format!("sandboxGroups.diskimages.write {group}");
+        self.call(
+            reqwest::Method::PUT,
+            url.as_str(),
+            ADC_SCOPE.trim_end_matches("/.default"),
+            Some(body),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))
+    }
+
+    /// The address of `path` under sandbox group `group` of this install's resource group, on the
+    /// region's sandbox data plane.
+    fn sandbox_url(&self, group: &str, path: &str) -> Result<reqwest::Url> {
+        use alien_azure_clients::azure::sandbox_data_plane::API_VERSION;
+        let region = self
+            .region
+            .as_deref()
+            .ok_or_else(|| AlienError::new(failed("VERIFIER_AZURE_REGION is not set")))?;
+        let mut url = reqwest::Url::parse(&format!(
+            "https://management.{region}.azuredevcompute.io{}/sandboxGroups/{group}/{path}",
+            self.resource_group
+        ))
+        .into_alien_error()
+        .context(failed("the sandbox data plane address"))?;
+        url.query_pairs_mut()
+            .append_pair("api-version", API_VERSION);
+        Ok(url)
+    }
+
+    /// The ids of the disk images in sandbox group `group` carrying `label`, the one the build
+    /// puts on an image made from a registry image.
+    pub async fn disk_image_ids(&self, group: &str, label: &str) -> Result<Vec<String>> {
+        use alien_azure_clients::azure::sandbox_data_plane::ADC_SCOPE;
+        let url = self.sandbox_url(group, "diskimages")?;
+        let what = format!("sandboxGroups.diskimages.read {group}");
+        let images = self
+            .call(
+                reqwest::Method::GET,
+                url.as_str(),
+                ADC_SCOPE.trim_end_matches("/.default"),
+                None,
+                &what,
+            )
+            .await?
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        let images = images
+            .as_array()
+            .ok_or_else(|| AlienError::new(failed(format!("{what}: not a list"))))?;
+        Ok(images
+            .iter()
+            .filter(|image| {
+                image["labels"][alien_core::AZURE_DISK_IMAGE_LABEL].as_str() == Some(label)
+            })
+            .filter_map(|image| image["id"].as_str().map(str::to_string))
+            .collect())
+    }
+
+    /// Create a sandbox in sandbox group `group` with the body the controller built, with PUT.
+    pub async fn create_sandbox(&self, group: &str, body: &Value) -> Result<Value> {
+        use alien_azure_clients::azure::sandbox_data_plane::ADC_SCOPE;
+        let url = self.sandbox_url(group, "sandboxes")?;
+        let what = format!("sandboxGroups.sandboxes.write {group}");
+        self.call(
+            reqwest::Method::PUT,
+            url.as_str(),
+            ADC_SCOPE.trim_end_matches("/.default"),
+            Some(body),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))
+    }
+
+    /// Read `url` until its provisioning state is Succeeded; Failed,
+    /// Canceled or ten minutes without it are errors.
+    async fn provisioned(&self, url: &str, what: &str) -> Result<Value> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(600);
+        loop {
+            let current = self
+                .call(reqwest::Method::GET, url, ARM, None, what)
+                .await?
+                .ok_or_else(|| AlienError::new(failed(format!("{what}: gone after the write"))))?;
+            match current["properties"]["provisioningState"].as_str() {
+                Some("Succeeded") => return Ok(current),
+                Some("Failed") | Some("Canceled") => {
+                    return Err(AlienError::new(failed(format!(
+                        "{what}: provisioning {}",
+                        current["properties"]["provisioningState"]
+                    ))))
+                }
+                _ if tokio::time::Instant::now() > deadline => {
+                    return Err(AlienError::new(failed(format!(
+                        "{what}: not provisioned after 600 s"
+                    ))))
+                }
+                _ => tokio::time::sleep(std::time::Duration::from_secs(5)).await,
+            }
+        }
+    }
+}
+
+/// The ARM URL of scale set `name` in `resource_group`.
+fn scale_set_url(resource_group: &str, name: &str) -> Result<reqwest::Url> {
+    let mut url = crate::machines::segments_url(
+        &format!("{ARM}{resource_group}"),
+        &[
+            "providers",
+            "Microsoft.Compute",
+            "virtualMachineScaleSets",
+            name,
+        ],
+    )?;
+    url.query_pairs_mut()
+        .append_pair("api-version", "2024-07-01");
+    Ok(url)
+}
+
+/// The install's resource-group tag and Key Vault secrets.
+pub struct AzureInstall(pub Azure);
+
+#[async_trait]
+impl InstallStore for AzureInstall {
+    /// The resource group holds one settings tag. It belongs to `prefix`
+    /// only if it names `prefix`; otherwise this place is empty.
+    async fn settings(&self, prefix: &str) -> Result<Lookup> {
+        let lookup = self.0.resource_group_tag(names::AZURE_SETTINGS_TAG).await?;
+        if let Lookup::Found(bytes) = &lookup {
+            let named: Value =
+                serde_json::from_slice(bytes)
+                    .into_alien_error()
+                    .context(ErrorData::Refused {
+                        reason: format!(
+                            "the {} tag does not hold signing settings",
+                            names::AZURE_SETTINGS_TAG
+                        ),
+                    })?;
+            if named["prefix"].as_str() != Some(prefix) {
+                return Ok(Lookup::Absent);
+            }
+        }
+        Ok(lookup)
+    }
+
+    async fn ledger(&self, _prefix: &str) -> Result<Lookup> {
+        Ok(match self.0.secret(names::AZURE_LEDGER_SECRET).await? {
+            Some(value) => Lookup::Found(value.into_bytes()),
+            None => Lookup::Absent,
+        })
+    }
+
+    async fn store_ledger(&self, _prefix: &str, ledger: &Ledger) -> Result<()> {
+        self.0
+            .set_secret(names::AZURE_LEDGER_SECRET, &ledger.to_json())
+            .await
+    }
+
+    async fn input(&self, _prefix: &str, name: &str) -> Result<Option<String>> {
+        self.0.secret(&format!("input-{name}")).await
+    }
+
+    fn settings_name(&self, _prefix: &str) -> String {
+        format!("resource group tag {}", names::AZURE_SETTINGS_TAG)
+    }
+
+    fn ledger_name(&self, _prefix: &str) -> String {
+        format!("Key Vault secret {}", names::AZURE_LEDGER_SECRET)
+    }
+}
+
+#[async_trait]
+impl crate::azure_machines::AzureMachineApi for Azure {
+    async fn get(&self, path: &str) -> Result<Option<Value>> {
+        self.call(
+            reqwest::Method::GET,
+            &format!("{ARM}{path}"),
+            ARM,
+            None,
+            &format!("ARM get {path}"),
+        )
+        .await
+    }
+
+    async fn post(&self, path: &str, body: &Value) -> Result<()> {
+        let what = format!("ARM post {path}");
+        self.call(
+            reqwest::Method::POST,
+            &format!("{ARM}{path}"),
+            ARM,
+            Some(body),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        Ok(())
+    }
+
+    async fn put(&self, path: &str, body: &Value) -> Result<Value> {
+        let what = format!("ARM put {path}");
+        self.call(
+            reqwest::Method::PUT,
+            &format!("{ARM}{path}"),
+            ARM,
+            Some(body),
+            &what,
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("{what}: not found"))))?;
+        self.provisioned(&format!("{ARM}{path}"), &what).await
+    }
+}
+
+/// Container Apps and scale sets, and the machine images this build boots.
+pub struct AzureBackend(pub Azure, pub crate::machines::ImagePins);
+
+#[async_trait]
+impl Backend for AzureBackend {
+    async fn binding_reads(
+        &self,
+        place: &Place,
+        _workload: &Workload,
+    ) -> Result<BTreeMap<String, String>> {
+        // A group without the vault, or a verifier that may not list vaults yet, only leaves
+        // the binding unread: a workload that loads deployer secrets is refused for it.
+        let vault = self
+            .0
+            .deployer_vault(&place.prefix)
+            .await
+            .map_err(
+                |error| tracing::warn!(error = %error, "the deployer secrets vault was not read"),
+            )
+            .ok()
+            .flatten();
+        Ok(vault
+            .map(|name| {
+                (
+                    alien_signing::binding::DEPLOYER_SECRETS_VAULT.to_string(),
+                    json!({ "service": "key-vault", "vaultName": name }).to_string(),
+                )
+            })
+            .into_iter()
+            .collect())
+    }
+
+    async fn own_resource(&self, _place: &Place, own_name: &str) -> Result<OwnResource> {
+        let app = self
+            .0
+            .call(
+                reqwest::Method::GET,
+                &self.0.app_url(own_name),
+                ARM,
+                None,
+                &format!("containerApps get {own_name}"),
+            )
+            .await?;
+        // An app without ingress has no address; its controller names it by its bare name.
+        let urls = app
+            .iter()
+            .map(
+                |app| match app["properties"]["configuration"]["ingress"]["fqdn"].as_str() {
+                    Some(fqdn) if fqdn.starts_with("https://") || fqdn.starts_with("http://") => {
+                        fqdn.to_string()
+                    }
+                    Some(fqdn) => format!("https://{fqdn}"),
+                    None => format!("https://{own_name}"),
+                },
+            )
+            .collect();
+        Ok(OwnResource {
+            urls,
+            location: None,
+        })
+    }
+
+    fn check_write(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<()> {
+        crate::cloud_write::container_apps::check_write(facts, write, self.0.environment.as_deref())
+    }
+
+    fn check_resource_write(
+        &self,
+        facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+    ) -> Result<()> {
+        crate::cloud_write::resource::check_azure_write(facts, write)
+    }
+
+    async fn check_resource_state(
+        &self,
+        facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+    ) -> Result<()> {
+        use crate::cloud_write::resource::{check_sandbox_create, ResourceWrite};
+        let ResourceWrite::CreateSandbox { group, base, body } = write else {
+            return Ok(());
+        };
+        // The sandbox starts from an image built in the group from the signed image, found by the
+        // label the build puts on it.
+        let sandbox = facts.sandbox()?;
+        let label = alien_core::azure_disk_image_label(base);
+        let ids = self.0.disk_image_ids(group, &label).await?;
+        let wanted = body["sourcesRef"]["diskImage"]["id"].as_str().unwrap_or("");
+        let image = ids.iter().find(|id| id.as_str() == wanted).ok_or_else(|| {
+            AlienError::new(ErrorData::Refused {
+                reason: "the sandbox does not start from a disk image built from the signed image"
+                    .to_string(),
+            })
+        })?;
+        check_sandbox_create(sandbox, &facts.place.prefix, group, base, body, Some(image))
+    }
+
+    async fn forward_resource_write(
+        &self,
+        _facts: &crate::cloud_write::resource::ResourceFacts<'_>,
+        write: &crate::cloud_write::resource::ResourceWrite,
+    ) -> Result<Value> {
+        crate::cloud_write::resource::forward_azure_write(&self.0, write).await
+    }
+
+    async fn forward(&self, facts: &Facts<'_>, write: &CloudWrite) -> Result<Value> {
+        crate::cloud_write::container_apps::forward(&self.0, facts, write).await
+    }
+
+    async fn resize(&self, target: &str, zone: Option<&str>, size: u32) -> Result<()> {
+        if let Some(zone) = zone {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: format!("a scale set is resized as a whole, not in zone '{zone}'"),
+            }));
+        }
+        self.0.resize_scale_set(target, size).await
+    }
+
+    async fn remove(
+        &self,
+        place: &Place,
+        target: &str,
+        zone: Option<&str>,
+        machines: &[String],
+        minimum: u32,
+    ) -> Result<(Vec<String>, u32)> {
+        if zone.is_some() {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: "a scale set takes no zone".to_string(),
+            }));
+        }
+        let alien_signing::InstallId::Azure {
+            subscription,
+            resource_group,
+        } = &place.install
+        else {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: "this is the Azure removal".to_string(),
+            }));
+        };
+        crate::azure_machines::remove(
+            &self.0,
+            subscription,
+            resource_group,
+            target,
+            machines,
+            minimum,
+        )
+        .await
+    }
+
+    /// Azure finishes the delete in the background; the controller waits for the app to be
+    /// gone.
+    async fn delete_workload(&self, name: &str) -> Result<bool> {
+        let (status, _) = self
+            .0
+            .call_with_status(
+                reqwest::Method::DELETE,
+                &self.0.app_url(name),
+                ARM,
+                None,
+                &format!("containerApps delete {name}"),
+            )
+            .await?;
+        Ok(delete_found_resource(status))
+    }
+
+    /// Deleting a scale set takes its machines with it; Azure finishes it in the background, so
+    /// the caller asks again until the scale set is gone.
+    async fn delete_machines(&self, target: &str, zone: Option<&str>) -> Result<bool> {
+        if let Some(zone) = zone {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: format!("a scale set takes no zone here ({zone})"),
+            }));
+        }
+        let url = scale_set_url(&self.0.resource_group, target)?;
+        let Some(scale_set) = self
+            .0
+            .call(
+                reqwest::Method::GET,
+                url.as_str(),
+                ARM,
+                None,
+                &format!("virtualMachineScaleSets get {target}"),
+            )
+            .await?
+        else {
+            return Ok(true);
+        };
+        if scale_set["properties"]["provisioningState"].as_str() != Some("Deleting") {
+            self.0
+                .call(
+                    reqwest::Method::DELETE,
+                    url.as_str(),
+                    ARM,
+                    None,
+                    &format!("virtualMachineScaleSets delete {target}"),
+                )
+                .await?;
+        }
+        Ok(false)
+    }
+
+    async fn roll(
+        &self,
+        place: &Place,
+        release: &alien_signing::ReleaseBody,
+        request: &crate::machines::RollMachines,
+        acceptance: &dyn crate::function::Accepting,
+    ) -> Result<Value> {
+        let alien_signing::InstallId::Azure {
+            subscription,
+            resource_group,
+        } = &place.install
+        else {
+            return Err(AlienError::new(ErrorData::Refused {
+                reason: "this is the Azure roll".to_string(),
+            }));
+        };
+        crate::azure_machines::roll(
+            &self.0,
+            place,
+            subscription,
+            resource_group,
+            release,
+            request,
+            &self.1,
+            acceptance,
+        )
+        .await
+    }
+}
+
+#[async_trait]
+impl AppStore for Azure {
+    async fn get(&self, name: &str) -> Result<Value> {
+        self.call(
+            reqwest::Method::GET,
+            &self.app_url(name),
+            ARM,
+            None,
+            &format!("containerApps get {name}"),
+        )
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::Refused {
+                reason: format!("container app {name} does not exist; setup creates it"),
+            })
+        })
+    }
+
+    async fn create(&self, name: &str, app: &Value) -> Result<()> {
+        self.call(
+            reqwest::Method::PUT,
+            &self.app_url(name),
+            ARM,
+            Some(app),
+            &format!("containerApps create {name}"),
+        )
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::CloudCallFailed {
+                operation: format!("containerApps create {name}: the resource group is gone"),
+            })
+        })?;
+        Ok(())
+    }
+
+    async fn patch(&self, name: &str, app: &Value) -> Result<()> {
+        self.call(
+            reqwest::Method::PATCH,
+            &self.app_url(name),
+            ARM,
+            Some(app),
+            &format!("containerApps patch {name}"),
+        )
+        .await?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::Refused {
+                reason: format!("container app {name} does not exist; setup creates it"),
+            })
+        })?;
+        Ok(())
+    }
+}
+
+/// Whether an ARM DELETE found the resource. Container Apps answers 204, not 404, for one that
+/// isn't there; 200 and 202 mean it was, and Azure removes it in the background.
+fn delete_found_resource(status: reqwest::StatusCode) -> bool {
+    status != reqwest::StatusCode::NOT_FOUND && status != reqwest::StatusCode::NO_CONTENT
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_delete_that_answers_204_or_404_found_nothing() {
+        use reqwest::StatusCode;
+        // 204 is what real Azure answered a DELETE of a Container App that was not there.
+        assert!(!delete_found_resource(StatusCode::NO_CONTENT));
+        assert!(!delete_found_resource(StatusCode::NOT_FOUND));
+        assert!(delete_found_resource(StatusCode::OK));
+        assert!(delete_found_resource(StatusCode::ACCEPTED));
+    }
+
+    #[test]
+    fn a_scale_set_url_keeps_the_name_in_one_path_segment() {
+        let group = "/subscriptions/0000/resourceGroups/acme-prod";
+        assert_eq!(
+            scale_set_url(group, "acme-prod-compute-general").unwrap().as_str(),
+            "https://management.azure.com/subscriptions/0000/resourceGroups/acme-prod/providers/Microsoft.Compute/virtualMachineScaleSets/acme-prod-compute-general?api-version=2024-07-01"
+        );
+        // A name the verifier never builds still can't climb out of the
+        // scale set collection or add a query.
+        assert_eq!(
+            scale_set_url(group, "x/../../../other?api-version=1").unwrap().as_str(),
+            "https://management.azure.com/subscriptions/0000/resourceGroups/acme-prod/providers/Microsoft.Compute/virtualMachineScaleSets/x%2F..%2F..%2F..%2Fother%3Fapi-version=1?api-version=2024-07-01"
+        );
+    }
+}

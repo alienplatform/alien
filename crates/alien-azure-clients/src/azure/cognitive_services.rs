@@ -143,6 +143,32 @@ pub struct CognitiveServicesDeploymentCreateParameters {
 /// Deployment create may complete synchronously or return a long-running operation.
 pub type CognitiveServicesDeploymentOperationResult = OperationResult<CognitiveServicesDeployment>;
 
+/// Name of a regional quota counter, such as `OpenAI.GlobalStandard.gpt-4.1`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CognitiveServicesUsageName {
+    pub value: Option<String>,
+}
+
+/// One regional quota counter of the subscription. For model deployments the
+/// unit is deployment capacity: one unit is 1,000 tokens per minute.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CognitiveServicesUsage {
+    pub name: CognitiveServicesUsageName,
+    /// Capacity already used by existing deployments in the region.
+    pub current_value: f64,
+    /// Capacity the subscription may use in the region.
+    pub limit: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CognitiveServicesUsagePage {
+    value: Vec<CognitiveServicesUsage>,
+    next_link: Option<String>,
+}
+
 // -------------------------------------------------------------------------
 // CognitiveServices Accounts API trait
 // -------------------------------------------------------------------------
@@ -194,6 +220,10 @@ pub trait CognitiveServicesAccountsApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         account_name: &str,
     ) -> Result<Vec<CognitiveServicesDeployment>>;
+
+    /// List the subscription's quota counters for an Azure region, including the
+    /// remaining model deployment capacity. Read-only.
+    async fn list_usages(&self, location: &str) -> Result<Vec<CognitiveServicesUsage>>;
 }
 
 // -------------------------------------------------------------------------
@@ -226,6 +256,35 @@ impl AzureCognitiveServicesClient {
             resource_group_name,
             account_name
         )
+    }
+
+    /// Follows a `nextLink` only on the management endpoint, so the bearer token is never
+    /// sent to another host.
+    fn same_origin_next_link(&self, link: String, location: &str) -> Result<String> {
+        let endpoint = url::Url::parse(&self.base.build_url("", None))
+            .into_alien_error()
+            .context(ErrorData::InvalidClientConfig {
+                message: "Azure management endpoint is not a valid URL".to_string(),
+                errors: None,
+            })?;
+        let next = url::Url::parse(&link)
+            .into_alien_error()
+            .context(ErrorData::InvalidInput {
+                message: format!(
+                    "Azure ListCognitiveServicesUsages for {location} returned an invalid nextLink"
+                ),
+                field_name: Some("nextLink".to_string()),
+            })?;
+        if next.origin() != endpoint.origin() {
+            return Err(alien_error::AlienError::new(ErrorData::InvalidInput {
+                message: format!(
+                    "Azure ListCognitiveServicesUsages for {location} returned a nextLink on another host: {}",
+                    next.origin().ascii_serialization()
+                ),
+                field_name: Some("nextLink".to_string()),
+            }));
+        }
+        Ok(link)
     }
 
     fn deployment_url(
@@ -520,6 +579,65 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
             })?;
         Ok(list.value)
     }
+
+    async fn list_usages(&self, location: &str) -> Result<Vec<CognitiveServicesUsage>> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let mut next_url = Some(self.base.build_url(
+            &format!(
+                "/subscriptions/{}/providers/Microsoft.CognitiveServices/locations/{location}/usages",
+                self.token_cache.config().subscription_id
+            ),
+            Some(vec![("api-version", COGNITIVE_SERVICES_API_VERSION.into())]),
+        ));
+        let mut usages = Vec::new();
+
+        while let Some(url) = next_url {
+            let request = AzureRequestBuilder::new(Method::GET, url.clone())
+                .content_length("")
+                .build()?;
+            let signed = self.base.sign_request(request, &bearer_token).await?;
+            let response = self
+                .base
+                .execute_request(signed, "ListCognitiveServicesUsages", location)
+                .await?;
+            let status = response.status().as_u16();
+            let body =
+                response
+                    .text()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::HttpResponseError {
+                        message: format!(
+                        "Azure ListCognitiveServicesUsages: failed to read response for {location}"
+                    ),
+                        url: url.clone(),
+                        http_status: status,
+                        http_request_text: None,
+                        http_response_text: None,
+                    })?;
+            let page: CognitiveServicesUsagePage = serde_json::from_str(&body)
+                .into_alien_error()
+                .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Azure ListCognitiveServicesUsages: JSON parse error for {location}"
+                ),
+                url,
+                http_status: status,
+                http_request_text: None,
+                http_response_text: Some(body),
+            })?;
+            usages.extend(page.value);
+            next_url = page
+                .next_link
+                .map(|link| self.same_origin_next_link(link, location))
+                .transpose()?;
+        }
+
+        Ok(usages)
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -529,6 +647,87 @@ impl CognitiveServicesAccountsApi for AzureCognitiveServicesClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn lists_usage_pages_for_a_location() {
+        use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+        use httpmock::{Method::GET, MockServer};
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let server = MockServer::start_async().await;
+        let first = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/subscriptions/12345678-1234-1234-1234-123456789012/providers/Microsoft.CognitiveServices/locations/eastus/usages")
+                    .query_param("api-version", COGNITIVE_SERVICES_API_VERSION)
+                    .header_exists("authorization");
+                then.status(200).json_body(json!({
+                    "value": [{"name": {"value": "OpenAI.GlobalStandard.gpt-4.1", "localizedValue": "x"}, "currentValue": 0.0, "limit": 50.0, "unit": "Count"}],
+                    "nextLink": format!("{}/second", server.base_url())
+                }));
+            })
+            .await;
+        let second = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/second").header_exists("authorization");
+                then.status(200).json_body(json!({
+                    "value": [{"name": {"value": "OpenAI.GlobalStandard.model-router"}, "currentValue": 3, "limit": 10, "unit": "Count"}]
+                }));
+            })
+            .await;
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".into(), server.base_url())]),
+        });
+        let usages = AzureCognitiveServicesClient::new(Client::new(), AzureTokenCache::new(config))
+            .list_usages("eastus")
+            .await
+            .unwrap();
+        first.assert_async().await;
+        second.assert_async().await;
+        assert_eq!(usages.len(), 2);
+        assert_eq!(
+            usages[0].name.value.as_deref(),
+            Some("OpenAI.GlobalStandard.gpt-4.1")
+        );
+        assert_eq!(usages[0].limit, 50.0);
+        assert_eq!(usages[1].current_value, 3.0);
+    }
+
+    #[tokio::test]
+    async fn refuses_a_usage_next_link_on_another_host() {
+        use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+        use httpmock::{Method::GET, MockServer};
+        use serde_json::json;
+        use std::collections::HashMap;
+
+        let server = MockServer::start_async().await;
+        let other_host = MockServer::start_async().await;
+        let leaked = other_host
+            .mock_async(|when, then| {
+                when.method(GET).path("/second");
+                then.status(200).json_body(json!({"value": []}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).header_exists("authorization");
+                then.status(200).json_body(json!({
+                    "value": [],
+                    "nextLink": format!("{}/second", other_host.base_url())
+                }));
+            })
+            .await;
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".into(), server.base_url())]),
+        });
+        let error = AzureCognitiveServicesClient::new(Client::new(), AzureTokenCache::new(config))
+            .list_usages("eastus")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("another host"), "{error}");
+        assert_eq!(leaked.hits_async().await, 0);
+    }
 
     #[test]
     fn uses_current_cognitive_services_api_version() {

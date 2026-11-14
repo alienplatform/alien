@@ -1,0 +1,13 @@
+{
+  "description": "a release signed for another project",
+  "expect": "SIGNING_WRONG_PROJECT",
+  "statement": {
+    "payload": "eyJ0eXBlIjoicmVsZWFzZS92MiIsInByb2plY3QiOiJwcmpfb3RoZXIiLCJzZXF1ZW5jZSI6MjAsIm5vdEFmdGVyIjpudWxsLCJzaWduZXJMaXN0VmVyc2lvbiI6MSwiYm9keSI6eyJwbGF0Zm9ybSI6ImF3cyIsImNoYW5uZWwiOiJwcm9kdWN0aW9uIiwid29ya2xvYWRzIjpbeyJuYW1lIjoid2ViIiwia2luZCI6ImNvbnRhaW5lciIsImltYWdlIjoicmVnaXN0cnkuZXhhbXBsZS5jb20vYXBwQHNoYTI1NjoxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExIiwiY29tbWFuZCI6WyIvYXBwL3NlcnZlciIsIi0tcG9ydCIsIjgwODAiXSwiZW52Ijp7IkxPR19MRVZFTCI6ImluZm8ifSwicHJvdmlkZWRFbnYiOlsiUE9SVCJdLCJiaW5kaW5ncyI6eyJ1cGxvYWRzIjoic3RvcmFnZSJ9LCJjb25maWd1cmFibGVFbnYiOlsiRkVBVFVSRV9GTEFHUyJdLCJkZXBsb3llckVudiI6eyJEQVRBQkFTRV9VUkwiOiJkYXRhYmFzZVVybCJ9LCJzZWNyZXRzIjpbeyJuYW1lIjoiZGItcGFzc3dvcmQiLCJlbnZOYW1lIjoiREJfUEFTU1dPUkQifV0sInJ1bnRpbWUiOnt9LCJpZGVudGl0eSI6ImV4ZWN1dGlvbiIsImJvdW5kcyI6eyJtYXhDcHUiOiIyIiwibWF4TWVtb3J5IjoiMUdpIiwibWF4UmVwbGljYXMiOjR9fV0sImNvbmZpZ3VyYWJsZSI6eyJlbnYiOlsiRkVBVFVSRV9GTEFHUyJdLCJpbnB1dHMiOlsicmVnaW9uLWxhYmVsIl19fX0=",
+    "signatures": [
+      {
+        "signer": "ci",
+        "sig": "MEUCIF78lEzVwHAlsPzWuvQk2JOlRa38a8r7V9Eee3nu2sIEAiEAu5eXYgVyi2nT38xrLqZ2TwzCBdX9khUsnHCFcyVQtLg="
+      }
+    ]
+  }
+}

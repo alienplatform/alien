@@ -648,6 +648,7 @@ pub async fn build_and_post_release_simple(
             debug_mode: true,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         };
 
         alien_build::build_stack(stack, &settings)
@@ -704,6 +705,8 @@ pub async fn build_and_post_release_simple(
             // sentinel and is required by the wire schema.
             project_id: "default".to_string(),
             channel: None,
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
         })
         .send()
         .await
@@ -1513,7 +1516,7 @@ mod tests {
 
     async fn destroy_manager_groups() -> Json<serde_json::Value> {
         Json(serde_json::json!({ "items": [{
-            "id":"dg_1", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+            "id":"dg_1", "name":"local-dev", "deploymentCount":1, "accessApprover":"customer", "externalId":null, "maxDeployments":100,
             "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"
         }] }))
     }
@@ -1656,7 +1659,7 @@ mod tests {
         type Data = Arc<Mutex<(String, String, usize, bool)>>;
         async fn groups() -> Json<serde_json::Value> {
             Json(
-                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1,
+                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1, "accessApprover":"customer", "externalId":null,
                 "maxDeployments":100, "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"}]}),
             )
         }
@@ -1730,7 +1733,7 @@ mod tests {
         type StateData = Arc<Mutex<(String, bool, Vec<String>)>>;
         async fn groups() -> Json<serde_json::Value> {
             Json(
-                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1, "maxDeployments":100,
+                serde_json::json!({"items":[{"id":"dg_local", "name":"local-dev", "deploymentCount":1, "accessApprover":"customer", "externalId":null, "maxDeployments":100,
                 "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z"}]}),
             )
         }
@@ -1851,9 +1854,9 @@ mod tests {
 
         async fn groups() -> Json<serde_json::Value> {
             Json(serde_json::json!({ "items": [
-                { "id":"dg_other", "name":"other", "deploymentCount":1, "maxDeployments":100,
+                { "id":"dg_other", "name":"other", "deploymentCount":1, "accessApprover":"customer", "externalId":null, "maxDeployments":100,
                   "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z" },
-                { "id":"dg_1", "name":"local-dev", "deploymentCount":0, "maxDeployments":100,
+                { "id":"dg_1", "name":"local-dev", "deploymentCount":0, "accessApprover":"customer", "externalId":null, "maxDeployments":100,
                   "projectId":"default", "workspaceId":"default", "createdAt":"2026-01-01T00:00:00Z" }
             ] }))
         }

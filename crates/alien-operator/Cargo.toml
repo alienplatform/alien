@@ -18,6 +18,7 @@ path = "src/main.rs"
 lognorm = { workspace = true }
 # Alien crates
 alien-core = { workspace = true }
+alien-signing = { workspace = true }
 alien-client-core = { workspace = true }
 alien-aws-clients = { workspace = true }
 getrandom = { workspace = true }
@@ -46,6 +47,7 @@ aegis = { workspace = true }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }
 serde_json = { workspace = true }
 
 # CLI & Logging

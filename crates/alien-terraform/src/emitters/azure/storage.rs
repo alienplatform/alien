@@ -344,7 +344,11 @@ fn emit_storage_permissions(
                 ),
             })?;
 
-        emit_remote_bindings_role_definitions(fragment, &permission_set)?;
+        emit_remote_bindings_role_definitions(
+            fragment,
+            &permission_set,
+            ctx.stack_settings.signing.is_some(),
+        )?;
 
         for (binding_index, binding) in grant_plan.bindings.iter().enumerate() {
             let role_definition_id = match &binding.role_definition {
@@ -558,6 +562,8 @@ mod tests {
             &stack,
             TerraformTarget::Azure,
             TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),
@@ -609,6 +615,8 @@ mod tests {
             &stack,
             TerraformTarget::Azure,
             TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings::default(),

@@ -428,6 +428,8 @@ impl CloudProxyTest {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -448,6 +450,8 @@ impl CloudProxyTest {
                 version: None,
                 description: None,
                 stack,
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             target_release: None,
             stack_state: None,

@@ -9,7 +9,7 @@ import * as z from "zod";
  * @description Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.
  */
 export const AzureSandboxNetworkSchema = z.object({
-    "gatewayCidrs": z.array(z.string()).describe("Gateway ranges allowed by the sandbox subnet NSGs on TCP3128 and TCP3129."),
+    "gatewayCidrs": z.array(z.string()).describe("Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before\nthe admin port was removed from that rule also allow TCP 3129; both are accepted."),
 "gatewaySubnetIds": z.array(z.string()).describe("Undelegated subnet reserved for the gateway load balancer's frontend."),
 "sandboxCidrs": z.array(z.string()).describe("Sandbox source ranges allowed on the proxy listener."),
 "sandboxCidrsByResource": z.optional(z.object({

@@ -30,7 +30,9 @@ use sha2::{Digest, Sha256};
 
 /// A revision of the management permissions the stack asks for: a digest of
 /// the management profile with every permission set it names resolved to its
-/// body. A release that changes a permission set changes the revision.
+/// body and, on AWS, the network the policy is scoped to. A release that
+/// changes a permission set, or a network that gains or changes subnets,
+/// changes the revision.
 pub(crate) fn management_permissions_revision(
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<Option<String>> {
@@ -48,13 +50,26 @@ pub(crate) fn management_permissions_revision(
             (scope, sets)
         })
         .collect::<Vec<_>>();
-    let serialized = serde_json::to_vec(&resolved).into_alien_error().context(
-        ErrorData::InfrastructureError {
-            message: "Failed to serialize the management permissions".to_string(),
-            operation: Some("management_permissions_revision".to_string()),
-            resource_id: None,
-        },
-    )?;
+    let network = (ctx.platform == alien_core::Platform::Aws)
+        .then(|| aws_network_scope(ctx))
+        .flatten()
+        .map(|scope| match scope {
+            alien_permissions::AwsNetworkScope::Vpc { vpc_id, subnet_ids } => {
+                serde_json::json!({ "vpc": vpc_id, "subnets": subnet_ids })
+            }
+            alien_permissions::AwsNetworkScope::StackTagged => serde_json::json!("stack-tagged"),
+        });
+    // Without a network scope the digest covers the profile alone, as before.
+    let serialized = match network {
+        Some(network) => serde_json::to_vec(&(&resolved, network)),
+        None => serde_json::to_vec(&resolved),
+    }
+    .into_alien_error()
+    .context(ErrorData::InfrastructureError {
+        message: "Failed to serialize the management permissions".to_string(),
+        operation: Some("management_permissions_revision".to_string()),
+        resource_id: None,
+    })?;
     Ok(Some(format!("{:x}", Sha256::digest(&serialized))))
 }
 

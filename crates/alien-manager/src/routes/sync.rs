@@ -251,6 +251,10 @@ pub struct AgentSyncResponse {
     /// charts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_operator_image: Option<String>,
+    /// The deployment's newest signed config, on every sync, so a protected
+    /// Operator applies new developer values without a new release.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_config: Option<alien_core::SignedStatement>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -853,6 +857,7 @@ async fn reconcile(
         .state(&mut final_state)
         .proxy_url(&state.config.base_url())
         .supported_aws_regions(&state.config.supported_aws_regions)
+        .protected(is_protected(&deployment))
         .call()
         .await
         .err();
@@ -1376,6 +1381,8 @@ pub(in crate::routes) mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -1544,6 +1551,7 @@ pub(in crate::routes) mod tests {
             import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
             charts: None,
             release_channels: None,
+            signing: None,
             bundle_signing_key: None,
             bundle_sources: None,
             log_buffer: Arc::new(crate::dev::LogBuffer::new()),
@@ -1649,6 +1657,8 @@ pub(in crate::routes) mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -2288,6 +2298,8 @@ pub(in crate::routes) mod tests {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        setup_templates: Default::default(),
+                        signed_stacks: Default::default(),
                     },
                 )
                 .await
@@ -2320,6 +2332,8 @@ pub(in crate::routes) mod tests {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
+                        setup_templates: Default::default(),
+                        signed_stacks: Default::default(),
                     },
                 )
                 .await
@@ -3010,6 +3024,8 @@ pub(in crate::routes) mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    setup_templates: Default::default(),
+                    signed_stacks: Default::default(),
                 },
             )
             .await
@@ -4168,6 +4184,8 @@ pub(in crate::routes) mod tests {
             version: None,
             description: None,
             stack: Stack::new("test".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         });
         assert!(!agent_report_completes_claim(&deployment, &state));
 
@@ -4458,6 +4476,8 @@ pub(in crate::routes) mod tests {
             volume_restores: Vec::new(),
             value_slots: Vec::new(),
             deletion_policy: Default::default(),
+            release_statements: None,
+            signed_config: None,
         }
     }
 
@@ -4830,6 +4850,8 @@ pub(in crate::routes) mod tests {
             version: None,
             description: None,
             stack: alien_core::Stack::new("s".to_string()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
 
         let mut waiting = uninitialized_state();
@@ -5038,7 +5060,16 @@ async fn acknowledge_completed_claim(
         target_operations_bundle_set: None,
         target_dynamic_containers: None,
         target_operator_image: None,
+        signed_config: None,
     }))
+}
+
+/// Whether the deployment's setup pinned a signing fingerprint.
+pub(super) fn is_protected(deployment: &DeploymentRecord) -> bool {
+    deployment
+        .stack_settings
+        .as_ref()
+        .is_some_and(|settings| settings.signing.is_some())
 }
 
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
@@ -5056,7 +5087,6 @@ async fn acknowledge_completed_claim(
         ("bearer" = [])
     )
 ))]
-
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5261,6 +5291,7 @@ async fn agent_sync(
                             .state(&mut agent_state)
                             .proxy_url(&state.config.base_url())
                             .supported_aws_regions(&state.config.supported_aws_regions)
+                            .protected(is_protected(&deployment))
                             .call()
                             .await
                     {
@@ -5667,7 +5698,24 @@ async fn agent_sync(
         None
     };
 
-    if let Some(targets) = &mut target_dynamic_containers {
+    // A protected deployment's newest signed config travels with every
+    // sync. Unprotected deployments don't touch the signing store at all.
+    let signed_config = match &state.signing {
+        Some(signing) if is_protected(&deployment) => {
+            match signing.latest_config_statement(&deployment.id).await {
+                Ok(config) => config,
+                Err(error) => return error.into_response(),
+            }
+        }
+        _ => None,
+    };
+    // A protected install runs no dynamic containers, so their environment is
+    // not loaded for it; the field naming the values never reaches the Operator.
+    if let (Some(targets), true) = (&mut target_dynamic_containers, is_protected(&deployment)) {
+        for target in targets.iter_mut() {
+            target.value_slots = None;
+        }
+    } else if let Some(targets) = &mut target_dynamic_containers {
         match state.values.as_deref() {
             Some(values) => {
                 if let Err(error) =
@@ -5726,6 +5774,7 @@ async fn agent_sync(
             .as_ref()
             .map(|charts| charts.deployed_operator_image(&state.config.base_url()))
             .or(reconciled_operator_image),
+        signed_config,
     })
     .into_response()
 }
@@ -5865,10 +5914,19 @@ pub(crate) async fn build_pull_target(
 
     let manager_url = state.config.base_url();
 
+    // A protected install takes its variables and inputs from its signed
+    // config and its own inputs, so nothing from the value store is loaded
+    // for it.
+    let protected = is_protected(deployment);
     let stored_record = deployment;
-    let held = crate::values::hydrate_held_values(state.values.as_deref(), deployment)
-        .await
-        .map_err(|e| e.into_response())?;
+    let held = if protected {
+        std::borrow::Cow::Borrowed(deployment)
+    } else {
+        crate::values::hydrate_held_values(state.values.as_deref(), deployment)
+            .await
+            .map_err(|e| e.into_response())?
+    };
+    let deployment: &DeploymentRecord = &held;
 
     // Derive native image host for Lambda/Cloud Run so controllers
     // can resolve proxy URIs to native ECR/GAR URIs.
@@ -5898,21 +5956,27 @@ pub(crate) async fn build_pull_target(
         );
     }
 
-    let (held, _) =
+    let held = if protected {
+        held
+    } else {
         crate::values::with_generated_inputs(state.values.as_deref(), Some(&stack), held)
             .await
-            .map_err(|e| e.into_response())?;
+            .map_err(|e| e.into_response())?
+            .0
+    };
     let deployment: &DeploymentRecord = &held;
 
-    crate::values::HeldValues::of_step(
-        state.values.as_deref(),
-        &state.config,
-        stored_record,
-        deployment,
-        Some(&stack),
-    )
-    .await
-    .map_err(|e| e.into_response())?;
+    if !protected {
+        crate::values::HeldValues::of_step(
+            state.values.as_deref(),
+            &state.config,
+            stored_record,
+            deployment,
+            Some(&stack),
+        )
+        .await
+        .map_err(|e| e.into_response())?;
+    }
 
     let mut env_vars = match crate::loops::deployment::resolve_input_environment(&stack, deployment)
     {
@@ -5975,8 +6039,34 @@ pub(crate) async fn build_pull_target(
         config.monitoring = default_monitoring(&state.config, &deployment);
     }
 
+    // A signed release travels with the project's signer list chain, which
+    // the deployment verifies from the fingerprint its setup pinned.
+    let signed = r.signed_stacks.get(&release_stack_platform).cloned();
+    let signer_lists = match (&signed, &state.signing) {
+        (Some(_), Some(signing)) => signing
+            .signer_lists(&r.project_id)
+            .await
+            .map_err(|error| error.into_response())?
+            .into_iter()
+            .map(|record| record.statement)
+            .collect(),
+        _ => Vec::new(),
+    };
+    // The deployment's newest signed config: a protected deployment takes
+    // developer inputs and configurable env only from it. Unprotected
+    // deployments don't touch the signing store.
+    let signed_config = match (&signed, &state.signing) {
+        (Some(_), Some(signing)) if is_protected(deployment) => signing
+            .latest_config_statement(&deployment.id)
+            .await
+            .map_err(|error| error.into_response())?,
+        _ => None,
+    };
     Ok(TargetDeployment {
+        signed_config,
         release_info: ReleaseInfo {
+            signed,
+            signer_lists,
             release_id: Some(r.id),
             version: None,
             description: None,
@@ -6650,7 +6740,37 @@ fn release_info_from_record(
         version: None,
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),
+        signed: release.signed_stacks.get(&release_stack_platform).cloned(),
+        signer_lists: Vec::new(),
     })
+}
+
+/// The signing settings an install reports when it registers. A protected Operator reports
+/// the ones it pinned, so the manager sends it the signed config and signer lists. The manager
+/// only ever learns protection this way, never gives it up, and the install enforces its own
+/// pinned settings whatever is recorded here.
+fn reported_signing(
+    state: &AppState,
+    stack_settings: Option<&alien_core::StackSettings>,
+    helm_release: Option<&HelmRelease>,
+) -> Result<Option<alien_core::StackSigning>, AlienError<ErrorData>> {
+    let Some(signing) = stack_settings.and_then(|settings| settings.signing.as_ref()) else {
+        return Ok(None);
+    };
+    if state.signing.is_none() {
+        return Err(ErrorData::bad_request(
+            "This manager stores no signer lists, so it can't serve a protected install",
+        ));
+    }
+    let Some(release) = helm_release else {
+        return Err(ErrorData::bad_request(
+            "An install that reports signing settings names the Helm release they were found for",
+        ));
+    };
+    signing
+        .settings(&release.name)
+        .map_err(|error| ErrorData::bad_request(error.message))?;
+    Ok(Some(signing.clone()))
 }
 
 /// `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
@@ -6731,6 +6851,14 @@ async fn initialize(
                 Ok(base_platform) => base_platform,
                 Err(e) => return e.into_response(),
             };
+            let reported_signing = match reported_signing(
+                &state,
+                req.stack_settings.as_ref(),
+                req.helm_release.as_ref(),
+            ) {
+                Ok(signing) => signing,
+                Err(e) => return e.into_response(),
+            };
 
             // Idempotency: if a deployment with this name already exists in the
             // group, issue a fresh deployment token and return the existing ID.
@@ -6739,6 +6867,19 @@ async fn initialize(
                 .get_deployment_by_name(&subject, &dg_id, &name)
                 .await
             {
+                // Protection is learned once, when the deployment is created. A later
+                // registration that reports other signing settings, or none, doesn't change it.
+                if existing
+                    .stack_settings
+                    .as_ref()
+                    .and_then(|settings| settings.signing.as_ref())
+                    != reported_signing.as_ref()
+                {
+                    return ErrorData::bad_request(
+                        "Deployment already uses different signing settings",
+                    )
+                    .into_response();
+                }
                 if let Some(requested) = &stack_state {
                     if existing
                         .stack_state

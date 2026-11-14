@@ -1829,6 +1829,9 @@ struct HelmInstall {
     release: String,
     customer: String,
     infrastructure: Vec<(String, String)>,
+    /// A container of the stack has a public endpoint, so the install needs an
+    /// exposure choice.
+    public_endpoints: bool,
     /// The stack has a sandbox, so the install names the cluster's sandboxed RuntimeClass.
     sandbox: bool,
 }
@@ -1840,7 +1843,14 @@ impl HelmInstall {
             .filter(|(_, entry)| {
                 matches!(
                     entry.config.resource_type().as_ref(),
-                    "storage" | "kv" | "queue" | "vault"
+                    "storage"
+                        | "kv"
+                        | "queue"
+                        | "vault"
+                        | "postgres"
+                        | "redis"
+                        | "artifact-registry"
+                        | "ai"
                 )
             })
             .map(|(id, entry)| {
@@ -1856,6 +1866,12 @@ impl HelmInstall {
             release: stack.id().to_string(),
             customer: customer.to_string(),
             infrastructure,
+            public_endpoints: stack.resources().any(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<alien_core::Container>()
+                    .is_some_and(|container| !container.public_endpoints.is_empty())
+            }),
             sandbox: stack
                 .resources()
                 .any(|(_, entry)| entry.config.resource_type().as_ref() == "sandbox"),
@@ -1889,7 +1905,7 @@ impl HelmInstall {
         } else {
             ("", "")
         };
-        let values = if self.infrastructure.is_empty() && !self.sandbox {
+        let values = if self.values_example().is_empty() {
             ""
         } else {
             " \\\n  --values values.yaml"
@@ -1920,6 +1936,16 @@ impl HelmInstall {
                  runtimeClassName: <runtime-class>\n",
             );
         }
+        if self.public_endpoints {
+            yaml.push_str(
+                "stackSettings:\n  kubernetes:\n    exposure:\n      \
+                 # disabled: no public routes. custom: your hostname and certificate.\n      \
+                 # generated: an Alien hostname (needs a managed certificate mode).\n      \
+                 mode: custom\n      domain: <app.example.com>\n      route:\n        \
+                 routeApi: ingress\n        ingressClassName: <ingress-class>\n      \
+                 certificate:\n        mode: tlsSecretRef\n        secretName: <tls-secret>\n",
+            );
+        }
         if self.infrastructure.is_empty() {
             return yaml;
         }
@@ -1932,8 +1958,13 @@ impl HelmInstall {
                 "kv" => yaml.push_str(&format!(
                     "  {id}:\n    type: kv\n    service: redis\n    connectionUrl: redis://<host>:6379\n"
                 )),
+                "postgres" => yaml.push_str(&format!(
+                    "  # Your own database. To have the chart run one instead, remove this entry and set\n  # postgres.{id}.enabled: true (see the chart README).\n  {id}:\n    type: postgres\n    service: external\n    host: <host>\n    port: 5432\n    database: <database>\n    username: <user>\n    password:\n      secretRef:\n        name: <existing-secret>\n        key: password\n    sslMode: verify-full\n"
+                )),
                 other => yaml.push_str(&format!(
-                    "  {id}:\n    type: {other}\n    # See `helm show values` for this resource's fields.\n"
+                    // The binding type is snake_case: `artifact-registry` is `artifact_registry`.
+                    "  {id}:\n    type: {}\n    # See `helm show values` for this resource's fields.\n",
+                    other.replace('-', "_")
                 )),
             }
         }
@@ -2153,6 +2184,82 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             "management:\n  token: ax_dg_secret\n"
         );
+    }
+
+    #[test]
+    fn helm_values_example_covers_exposure_and_every_binding() {
+        use alien_core::{
+            Container, ContainerCode, ExposeProtocol, Postgres, PublicEndpoint, Redis,
+            ResourceLifecycle, ResourceSpec, Storage,
+        };
+        let stack = Stack::new("coding-agent".to_string())
+            .add(
+                Container::new("api".to_string())
+                    .cluster("compute".to_string())
+                    .code(ContainerCode::Image {
+                        image: "api:latest".to_string(),
+                    })
+                    .cpu(ResourceSpec {
+                        min: "1".to_string(),
+                        desired: "1".to_string(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "1Gi".to_string(),
+                        desired: "1Gi".to_string(),
+                    })
+                    .port(8080)
+                    .public_endpoint(PublicEndpoint {
+                        name: "public".to_string(),
+                        port: 8080,
+                        protocol: ExposeProtocol::Http,
+                        host_label: None,
+                        wildcard_subdomains: false,
+                    })
+                    .permissions("default".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Storage::new("data".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Postgres::new("metadata".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Redis::new("cache".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                alien_core::ArtifactRegistry::new("registry".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let install = HelmInstall::new(&stack, "https://m.example.com", "m.example.com", "c1");
+        let values: serde_yaml::Value =
+            serde_yaml::from_str(&install.values_example()).expect("the example is valid YAML");
+
+        assert_eq!(
+            values["stackSettings"]["kubernetes"]["exposure"]["mode"],
+            "custom"
+        );
+        assert_eq!(values["infrastructure"]["data"]["type"], "storage");
+        assert_eq!(values["infrastructure"]["metadata"]["type"], "postgres");
+        assert_eq!(values["infrastructure"]["metadata"]["service"], "external");
+        assert_eq!(values["infrastructure"]["cache"]["type"], "redis");
+        // The binding type is snake_case.
+        assert_eq!(
+            values["infrastructure"]["registry"]["type"],
+            "artifact_registry"
+        );
+        assert!(install.command().contains("--values values.yaml"));
+
+        // A stack with no public endpoint and no bindings has nothing to fill in.
+        let plain: Stack = serde_json::from_value(minimal_stack()).unwrap();
+        let plain = HelmInstall::new(&plain, "https://m.example.com", "m.example.com", "c1");
+        assert!(plain.values_example().is_empty());
+        assert!(!plain.command().contains("--values values.yaml"));
     }
 
     fn minimal_stack() -> serde_json::Value {

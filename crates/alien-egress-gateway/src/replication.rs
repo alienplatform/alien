@@ -89,11 +89,13 @@ impl Replication {
         }
         let mut signatures = Vec::with_capacity(self.secrets.len());
         for secret in &self.secrets {
-            signatures.push(STANDARD.encode(
-                Self::mac(secret, method, path, time, body)?
-                    .finalize()
-                    .into_bytes(),
-            ));
+            signatures.push(
+                STANDARD.encode(
+                    Self::mac(secret, method, path, time, body)?
+                        .finalize()
+                        .into_bytes(),
+                ),
+            );
         }
         Ok(signatures.join(","))
     }

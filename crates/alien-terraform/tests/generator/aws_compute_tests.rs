@@ -172,6 +172,8 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
         &stack,
         TerraformTarget::Aws,
         TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
             display_name: None,
             registry: &registry,
             stack_settings: StackSettings::default(),
@@ -267,6 +269,8 @@ fn aws_compute_cluster_network_references_resolve_for_every_network_mode() {
             &stack,
             TerraformTarget::Aws,
             TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
                 display_name: None,
                 registry: &registry,
                 stack_settings: StackSettings {

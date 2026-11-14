@@ -56,6 +56,8 @@ fn module(target: TerraformTarget) -> ModuleFiles {
                 setup_fingerprint_version: 1,
             }),
             helm_install: None,
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
             supported_aws_regions: Vec::new(),
         },
     )

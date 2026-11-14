@@ -63,6 +63,11 @@ pub enum AzureRuntimeRoleHolder {
 }
 
 impl AzureRuntimeRoleHolder {
+    /// Whether this is the remote-bindings identity, which the vendor's control plane can use.
+    pub fn is_remote_bindings(&self) -> bool {
+        matches!(self, Self::Profile(profile) if profile == AZURE_REMOTE_BINDINGS_PROFILE)
+    }
+
     /// The name tag the runtime gives the holder's custom roles: `[mgmt]` or `[<profile>]`.
     pub fn role_name_tag(&self) -> &str {
         match self {
@@ -129,6 +134,26 @@ pub fn azure_role_key_segment(key: &str) -> String {
         .unwrap_or_else(|| "custom".to_string())
 }
 
+/// Who may hold a role: the roles of one group are assignable to that group's principals only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HolderGroup {
+    Management,
+    Workload,
+    RemoteBindings,
+}
+
+impl HolderGroup {
+    fn of(holder: &AzureRuntimeRoleHolder) -> Self {
+        if *holder == AzureRuntimeRoleHolder::Management {
+            Self::Management
+        } else if holder.is_remote_bindings() {
+            Self::RemoteBindings
+        } else {
+            Self::Workload
+        }
+    }
+}
+
 /// A custom role the runtime assigns after setup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AzureRuntimeCustomRole {
@@ -170,30 +195,46 @@ pub struct AzureRuntimeRoles {
     pub custom_roles: Vec<AzureRuntimeCustomRole>,
     /// Built-in role ids the runtime assigns to the management identity.
     pub management_predefined_role_ids: BTreeSet<String>,
-    /// Built-in role ids the runtime assigns to the application's identities.
+    /// Built-in role ids the runtime assigns to the install's service identities.
     pub workload_predefined_role_ids: BTreeSet<String>,
+    /// Built-in role ids the runtime assigns to the remote-bindings identity.
+    pub remote_bindings_predefined_role_ids: BTreeSet<String>,
+}
+
+/// The principals the runtime assigns roles to, by what they may hold.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AzureWorkloadPrincipals {
+    /// The install's service identities: they hold the permission profiles' roles.
+    pub service: BTreeSet<String>,
+    /// The remote-bindings identity: it holds only the remote-bindings roles.
+    pub remote_bindings: BTreeSet<String>,
 }
 
 impl AzureRuntimeRoles {
     /// The role ids the runtime may assign to the management identity.
     pub fn management_role_ids(&self, resource_prefix: &str) -> BTreeSet<String> {
-        self.role_ids(resource_prefix, true)
+        self.role_ids(resource_prefix, HolderGroup::Management)
     }
 
-    /// The role ids the runtime may assign to the application's identities.
+    /// The role ids the runtime may assign to the install's service identities.
     pub fn workload_role_ids(&self, resource_prefix: &str) -> BTreeSet<String> {
-        self.role_ids(resource_prefix, false)
+        self.role_ids(resource_prefix, HolderGroup::Workload)
     }
 
-    fn role_ids(&self, resource_prefix: &str, management: bool) -> BTreeSet<String> {
-        let predefined = if management {
-            &self.management_predefined_role_ids
-        } else {
-            &self.workload_predefined_role_ids
+    /// The role ids the runtime may assign to the remote-bindings identity.
+    pub fn remote_bindings_role_ids(&self, resource_prefix: &str) -> BTreeSet<String> {
+        self.role_ids(resource_prefix, HolderGroup::RemoteBindings)
+    }
+
+    fn role_ids(&self, resource_prefix: &str, group: HolderGroup) -> BTreeSet<String> {
+        let predefined = match group {
+            HolderGroup::Management => &self.management_predefined_role_ids,
+            HolderGroup::Workload => &self.workload_predefined_role_ids,
+            HolderGroup::RemoteBindings => &self.remote_bindings_predefined_role_ids,
         };
         self.custom_roles
             .iter()
-            .filter(|role| (role.holder == AzureRuntimeRoleHolder::Management) == management)
+            .filter(|role| HolderGroup::of(&role.holder) == group)
             .map(|role| role.uuid(resource_prefix))
             .chain(predefined.iter().cloned())
             .collect()
@@ -204,6 +245,7 @@ impl AzureRuntimeRoles {
         self.custom_roles.is_empty()
             && self.management_predefined_role_ids.is_empty()
             && self.workload_predefined_role_ids.is_empty()
+            && self.remote_bindings_predefined_role_ids.is_empty()
     }
 }
 
@@ -214,10 +256,21 @@ impl AzureRuntimeRoles {
 /// This lists more than a given deployment uses (a Frozen resource's grants are assigned by setup
 /// itself), so the runtime always finds its role already made.
 pub fn azure_runtime_roles(stack: &Stack) -> Result<AzureRuntimeRoles> {
+    azure_runtime_roles_for(stack, false)
+}
+
+/// [`azure_runtime_roles`] for an install that is `signing_protected` or not. On a protected
+/// install the remote-bindings identity's roles are rendered with the protected filter: the
+/// vendor can use that identity, so its roles never carry a family action.
+pub fn azure_runtime_roles_for(
+    stack: &Stack,
+    signing_protected: bool,
+) -> Result<AzureRuntimeRoles> {
     let mut roles = AzureRuntimeRoles::default();
     let mut seen = BTreeSet::new();
     let generator = AzureRuntimePermissionsGenerator::new();
     let context = enumeration_context();
+    let remote_bindings_context = enumeration_context().with_signing_protected(signing_protected);
 
     let mut add = |holder: AzureRuntimeRoleHolder,
                    permission_set: &PermissionSet,
@@ -229,7 +282,15 @@ pub fn azure_runtime_roles(stack: &Stack) -> Result<AzureRuntimeRoles> {
             return Ok(());
         }
         let plan = generator
-            .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+            .generate_grant_plan(
+                permission_set,
+                BindingTarget::Resource,
+                if holder.is_remote_bindings() {
+                    &remote_bindings_context
+                } else {
+                    &context
+                },
+            )
             .context(crate::error::ErrorData::GeneratorError {
                 platform: "azure".to_string(),
                 message: format!(
@@ -242,11 +303,13 @@ pub fn azure_runtime_roles(stack: &Stack) -> Result<AzureRuntimeRoles> {
                 &binding.role_definition
             {
                 let id = role_definition_guid(role_definition_id);
-                if holder == AzureRuntimeRoleHolder::Management {
-                    roles.management_predefined_role_ids.insert(id);
-                } else {
-                    roles.workload_predefined_role_ids.insert(id);
-                }
+                match HolderGroup::of(&holder) {
+                    HolderGroup::Management => roles.management_predefined_role_ids.insert(id),
+                    HolderGroup::Workload => roles.workload_predefined_role_ids.insert(id),
+                    HolderGroup::RemoteBindings => {
+                        roles.remote_bindings_predefined_role_ids.insert(id)
+                    }
+                };
             }
         }
         roles
@@ -405,9 +468,11 @@ fn enumeration_context() -> PermissionContext {
 
 /// The conditions to assign management's role-assignment role with, one per role assignment.
 ///
-/// Each admits a write only when it assigns a listed management role to `management_principal_id`,
-/// or a listed application role to one of `workload_principal_ids`: the application's identities,
-/// which setup creates. Azure grants a write when any assignment of the action admits it, so lists
+/// Each admits a write only when it assigns a management role to `management_principal_id`, a
+/// profile role to one of the install's service identities, or a remote-bindings role to the
+/// remote-bindings identity. The three holders never share a clause, so no role can land on an
+/// identity the vendor can use unless it is that identity's own role. Setup creates every
+/// principal. Azure grants a write when any assignment of the action admits it, so lists
 /// longer than one condition holds ([`AZURE_CONDITION_SHARD_LIMIT`]) are split across several
 /// assignments, each with its own role definition. Both the role lists and the principal list are
 /// split: every (role chunk, principal chunk) pair becomes its own clause.
@@ -416,9 +481,10 @@ fn enumeration_context() -> PermissionContext {
 /// expressions that resolve to GUIDs.
 pub fn azure_role_assignment_allowlist_conditions(
     management_principal_id: &str,
-    workload_principal_ids: &BTreeSet<String>,
+    principals: &AzureWorkloadPrincipals,
     management_role_ids: &BTreeSet<String>,
     workload_role_ids: &BTreeSet<String>,
+    remote_bindings_role_ids: &BTreeSet<String>,
 ) -> Vec<String> {
     let deny_writes = format!("(!(ActionMatches{{'{ROLE_ASSIGNMENT_WRITE}'}}))");
     let clause = |roles: &[&str], principals: &[&str]| {
@@ -442,8 +508,16 @@ pub fn azure_role_assignment_allowlist_conditions(
 
     let management_roles: Vec<&str> = management_role_ids.iter().map(String::as_str).collect();
     let workload_roles: Vec<&str> = workload_role_ids.iter().map(String::as_str).collect();
-    let workload_principals: Vec<&str> =
-        workload_principal_ids.iter().map(String::as_str).collect();
+    let workload_principals: Vec<&str> = principals.service.iter().map(String::as_str).collect();
+    let remote_bindings_roles: Vec<&str> = remote_bindings_role_ids
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let remote_bindings_principals: Vec<&str> = principals
+        .remote_bindings
+        .iter()
+        .map(String::as_str)
+        .collect();
 
     let mut clauses = Vec::new();
     let management_principal = [management_principal_id];
@@ -457,6 +531,14 @@ pub fn azure_role_assignment_allowlist_conditions(
     if !workload_principals.is_empty() {
         for roles in chunks(&workload_roles, budget / 2) {
             for principals in chunks(&workload_principals, budget / 2) {
+                clauses.push(clause(&roles, &principals));
+            }
+        }
+    }
+
+    if !remote_bindings_principals.is_empty() {
+        for roles in chunks(&remote_bindings_roles, budget / 2) {
+            for principals in chunks(&remote_bindings_principals, budget / 2) {
                 clauses.push(clause(&roles, &principals));
             }
         }
@@ -653,9 +735,17 @@ mod tests {
     fn the_condition_pairs_each_role_list_with_its_holders_only() {
         let management = BTreeSet::from(["m1".to_string()]);
         let workload = BTreeSet::from(["w1".to_string(), "w2".to_string()]);
-        let principals = BTreeSet::from(["e1".to_string(), "e2".to_string()]);
-        let conditions =
-            azure_role_assignment_allowlist_conditions("mp", &principals, &management, &workload);
+        let principals = AzureWorkloadPrincipals {
+            service: BTreeSet::from(["e1".to_string(), "e2".to_string()]),
+            remote_bindings: BTreeSet::new(),
+        };
+        let conditions = azure_role_assignment_allowlist_conditions(
+            "mp",
+            &principals,
+            &management,
+            &workload,
+            &BTreeSet::new(),
+        );
         assert_eq!(
             conditions,
             vec![
@@ -676,13 +766,14 @@ mod tests {
             "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})))".to_string(),
         ];
         let none = BTreeSet::new();
+        let nobody = AzureWorkloadPrincipals::default();
         assert_eq!(
-            azure_role_assignment_allowlist_conditions("mp", &none, &none, &none),
+            azure_role_assignment_allowlist_conditions("mp", &nobody, &none, &none, &none),
             deny
         );
         let workload = BTreeSet::from(["w1".to_string()]);
         assert_eq!(
-            azure_role_assignment_allowlist_conditions("mp", &none, &none, &workload),
+            azure_role_assignment_allowlist_conditions("mp", &nobody, &none, &workload, &workload),
             deny
         );
     }
@@ -697,9 +788,13 @@ mod tests {
         let principals = ids("e", 5);
         let conditions = azure_role_assignment_allowlist_conditions(
             principal,
-            &principals,
+            &AzureWorkloadPrincipals {
+                service: principals.clone(),
+                remote_bindings: BTreeSet::new(),
+            },
             &management,
             &workload,
+            &BTreeSet::new(),
         );
         assert!(conditions.len() >= 2, "{} shards", conditions.len());
         for condition in &conditions {
@@ -751,9 +846,13 @@ mod tests {
         let principals = ids("e", 400);
         let conditions = azure_role_assignment_allowlist_conditions(
             "ead6f253-2dec-4841-b608-f2b9fc67dc86",
-            &principals,
+            &AzureWorkloadPrincipals {
+                service: principals.clone(),
+                remote_bindings: BTreeSet::new(),
+            },
             &management,
             &workload,
+            &BTreeSet::new(),
         );
         assert!(conditions.len() >= 2, "{} shards", conditions.len());
         for condition in &conditions {
@@ -784,5 +883,50 @@ mod tests {
             let clause = &shard[clause_end..shard[clause_end..].find(')').unwrap() + clause_end];
             assert!(principals.iter().all(|p| !clause.contains(p.as_str())));
         }
+    }
+
+    /// The remote-bindings identity is one the vendor can use: it is paired with its own roles
+    /// only, and no profile or management role is ever paired with it.
+    #[test]
+    fn the_remote_bindings_identity_holds_only_its_own_roles() {
+        let management = BTreeSet::from(["m1".to_string()]);
+        let workload = BTreeSet::from(["w1".to_string()]);
+        let remote_bindings_roles = BTreeSet::from(["r1".to_string()]);
+        let principals = AzureWorkloadPrincipals {
+            service: BTreeSet::from(["svc".to_string()]),
+            remote_bindings: BTreeSet::from(["rb".to_string()]),
+        };
+        let conditions = azure_role_assignment_allowlist_conditions(
+            "mp",
+            &principals,
+            &management,
+            &workload,
+            &remote_bindings_roles,
+        );
+        assert_eq!(conditions.len(), 1);
+        let clauses: Vec<&str> = conditions[0].split(" OR ").skip(1).collect();
+        assert_eq!(clauses.len(), 3, "one clause per holder: {clauses:?}");
+        let pairs: Vec<(bool, bool, bool, bool)> = clauses
+            .iter()
+            .map(|c| {
+                (
+                    c.contains("{m1}"),
+                    c.contains("{w1}"),
+                    c.contains("{r1}"),
+                    c.contains("{mp}") || c.contains("{svc}") || c.contains("{rb}"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (true, false, false, true),
+                (false, true, false, true),
+                (false, false, true, true)
+            ]
+        );
+        assert!(clauses[0].ends_with("{mp})"), "{}", clauses[0]);
+        assert!(clauses[1].contains("PrincipalId] ForAnyOfAnyValues:GuidEquals {svc}"));
+        assert!(clauses[2].contains("PrincipalId] ForAnyOfAnyValues:GuidEquals {rb}"));
     }
 }

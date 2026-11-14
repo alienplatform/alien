@@ -1,0 +1,14 @@
+# The verifier (crates/alien-verifier): a Lambda function on AWS, a Cloud Run
+# service on GCP and a Container App on Azure, chosen by VERIFIER_CLOUD.
+# x86_64 only.
+
+FROM docker.io/chainguard/wolfi-base:latest
+
+WORKDIR /app
+
+COPY target/x86_64-unknown-linux-musl/release/alien-verifier /app/alien-verifier
+RUN chmod +x /app/alien-verifier && chown -R nonroot:nonroot /app
+
+USER nonroot
+
+ENTRYPOINT ["/app/alien-verifier"]

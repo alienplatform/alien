@@ -305,6 +305,17 @@ async fn automatic_setup(account: Arc<Mutex<Account>>) -> SingleControllerExecut
     provider
         .expect_get_aws_iam_client()
         .returning(move |_| Ok(iam.clone()));
+    let mut ssm = alien_aws_clients::ssm::MockSsmApi::new();
+    ssm.expect_get_parameter().returning(|request| {
+        Err(AlienError::new(ClientError::RemoteResourceNotFound {
+            resource_type: "parameter".to_string(),
+            resource_name: request.name.clone(),
+        }))
+    });
+    let ssm = Arc::new(ssm);
+    provider
+        .expect_get_aws_ssm_client()
+        .returning(move |_| Ok(ssm.clone()));
     SingleControllerExecutor::builder()
         .resource(RemoteStackManagement::new("management".to_string()).build())
         .resource_lifecycle(ResourceLifecycle::Frozen)

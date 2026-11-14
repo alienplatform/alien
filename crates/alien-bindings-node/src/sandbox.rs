@@ -66,6 +66,10 @@ pub struct SandboxPreviewJs {
     pub allowed_ports: Vec<u32>,
     /// Seconds until the preview expires. `0` means it does not expire (the local backend).
     pub expires_in_seconds: i64,
+    /// Header to carry the caller's own bearer so it reaches the daemon unchanged.
+    pub caller_authorization_header: String,
+    /// WebSocket subprotocols to offer, in order, by a client that cannot set headers.
+    pub subprotocols: Vec<String>,
 }
 
 fn preview_to_js(preview: PreviewCapability) -> SandboxPreviewJs {
@@ -74,6 +78,8 @@ fn preview_to_js(preview: PreviewCapability) -> SandboxPreviewJs {
         headers: preview.headers.into_iter().collect(),
         allowed_ports: preview.allowed_ports.into_iter().map(u32::from).collect(),
         expires_in_seconds: preview.expires_in_seconds as i64,
+        caller_authorization_header: preview.caller_authorization_header,
+        subprotocols: preview.subprotocols,
     }
 }
 

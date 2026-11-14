@@ -312,6 +312,7 @@ mod tests {
             debug_mode: false,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         }
     }
 

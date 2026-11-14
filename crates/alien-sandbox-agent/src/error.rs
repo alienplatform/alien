@@ -83,6 +83,18 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A non-root agent cannot read the saved image command.
+    #[error(
+        code = "IMAGE_COMMAND_UNREADABLE",
+        message = "The agent cannot read {path}: the sandbox image was built by an older release that left this file readable only by root, and this agent runs as a non-root user. Rebuild the sandbox image with this release.",
+        retryable = "false",
+        internal = "false"
+    )]
+    ImageCommandUnreadable {
+        /// The saved command file
+        path: String,
+    },
+
     /// A poll or cancel named a job the session is not holding.
     #[error(
         code = "JOB_NOT_FOUND",

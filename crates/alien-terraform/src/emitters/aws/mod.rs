@@ -11,6 +11,7 @@ pub(crate) mod flow_logs;
 pub mod helpers;
 pub mod key;
 pub mod kv;
+mod management_network;
 pub mod network;
 pub mod queue;
 pub mod remote_bindings;

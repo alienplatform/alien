@@ -288,3 +288,27 @@ fn platform_scoped_storage_matches_aws_template_target() {
         }
     }
 }
+
+/// Object ACLs are never in play on a bucket setup creates: ownership is `BucketOwnerEnforced`,
+/// so `PutObjectAcl` can't grant anyone access to an object, even on a storage declared public
+/// (whose public access block is open). Pins that for a private and a public storage.
+#[test]
+fn buckets_refuse_object_acls_whether_or_not_they_are_public() {
+    for public_read in [false, true] {
+        let files = Storage::new("files".to_string())
+            .public_read(public_read)
+            .build();
+        let stack = stack_base().add(files, ResourceLifecycle::Frozen).build();
+        let template = render(&stack, "public storage stack");
+        let bucket = template
+            .resources
+            .get(BUCKET_ID)
+            .unwrap_or_else(|| panic!("a bucket named {BUCKET_ID}"));
+        let ownership = serde_json::to_value(&bucket.properties["OwnershipControls"]).unwrap();
+        assert_eq!(
+            ownership,
+            serde_json::json!({"Rules": [{"ObjectOwnership": "BucketOwnerEnforced"}]}),
+            "public_read={public_read}"
+        );
+    }
+}

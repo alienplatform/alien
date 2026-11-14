@@ -1,4 +1,4 @@
-use super::{backend_name, failed, labels, missing, owned};
+use super::{backend_name, failed, has_runtime_scope, labels, missing, object_labels, owned};
 use crate::error::{ErrorData, Result};
 use alien_core::sync::TargetDynamicContainer;
 use alien_error::{Context, ContextError};
@@ -32,7 +32,7 @@ fn desired_service(
         metadata: ObjectMeta {
             name: Some(name),
             namespace: Some(namespace.to_string()),
-            labels: Some(scope.clone()),
+            labels: Some(object_labels(deployment_id, &target.name)),
             ..Default::default()
         },
         spec: Some(ServiceSpec {
@@ -88,7 +88,8 @@ pub(super) async fn put_service(
             )));
         }
         if existing.spec.as_ref().is_some_and(|spec| {
-            spec.type_.as_deref() == Some("ClusterIP")
+            has_runtime_scope(&existing.metadata)
+                && spec.type_.as_deref() == Some("ClusterIP")
                 && spec.selector.as_ref() == Some(&labels(deployment_id, &target.name))
                 && spec.ports.as_ref().is_some_and(|ports| {
                     ports.len() == target.ports.len()

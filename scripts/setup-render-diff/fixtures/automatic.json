@@ -1,0 +1,25 @@
+{
+  "id": "automatic",
+  "resources": {
+    "assets": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "assets",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": true
+      },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    },
+    "app-vault": {
+      "config": { "id": "app-vault", "type": "vault" },
+      "lifecycle": "frozen",
+      "dependencies": [],
+      "remoteAccess": false
+    }
+  },
+  "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+}
