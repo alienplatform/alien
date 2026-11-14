@@ -6131,7 +6131,7 @@ fn readme_kubernetes_inputs(
         }
         _ => "",
     };
-    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow: run `alien deployments delete --erase-data` for the deployment, wait until it finishes, then run `terraform destroy` again. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, contact us.";
+    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow: delete the deployment with its data erased, wait until that finishes, then run `terraform destroy` again. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, contact your vendor.";
     let helm = if has_registration && helm_install.is_some() {
         if product_remote_operator {
             let collector_token_requirement = if requires_remote_operator_collector_token {
