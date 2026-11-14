@@ -114,7 +114,12 @@ fn validate_grant(grant: &KubernetesGrant, tier: &str) -> Result<()> {
                 || (grant.api_group == "apps"
                     && matches!(
                         grant.resource.as_str(),
-                        "deployments/scale" | "statefulsets/scale" | "replicasets/scale"
+                        "deployments/scale"
+                            | "statefulsets/scale"
+                            | "replicasets/scale"
+                            | "deployments"
+                            | "statefulsets"
+                            | "daemonsets"
                     )
                     && verb == "patch");
         if !read && (!remediation || tier == "read-only") {
