@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
@@ -422,6 +422,23 @@ impl AwsSandboxController {
         executor.insert_saved_resource("consumer", saved);
         executor.step().await.expect("ready tick");
         let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert_eq!(controller.retired_versions[0].inactive_at, None);
+    }
+
+    /// An install whose role predates the grant keeps its versions and keeps rolling.
+    #[tokio::test]
+    async fn a_missing_retire_grant_keeps_the_version_instead_of_failing_the_step() {
+        let mut client = ready_client(&[("2.0", "SUCCESSFUL"), ("3.0", "SUCCESSFUL")]);
+        client
+            .expect_update_microvm_image_version()
+            .times(1)
+            .returning(|_, _, _| {
+                Err(AlienError::new(CloudClientErrorData::RemoteAccessDenied {
+                    resource_type: "microvm-image-version".to_string(),
+                    resource_name: "2.0".to_string(),
+                }))
+            });
+        let controller = tick_ready_over(client, vec![retired("2.0", None)]).await;
         assert_eq!(controller.retired_versions[0].inactive_at, None);
     }
 
@@ -1772,6 +1789,23 @@ impl AwsSandboxController {
                     }
                     // Gone since the listing; the next pass drops it.
                     Err(error) if is_remote_resource_absent(&error) => {}
+                    // An install whose management role predates this grant cannot retire
+                    // versions. It keeps them, as before, and rolls still work until the
+                    // image reaches the version cap; setup adds the grant on its next update.
+                    Err(error)
+                        if matches!(
+                            &error.error,
+                            Some(CloudClientErrorData::RemoteAccessDenied { .. })
+                        ) =>
+                    {
+                        warn!(
+                            sandbox_id = %resource_id,
+                            image = %identifier,
+                            "Cannot mark replaced MicroVM image versions inactive: \
+                             lambda:UpdateMicrovmImageVersion is not granted"
+                        );
+                        break;
+                    }
                     Err(error) => {
                         return Err(error).context(ErrorData::CloudPlatformError {
                             message: format!(
