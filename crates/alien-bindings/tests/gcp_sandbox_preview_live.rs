@@ -154,6 +154,84 @@ async fn live_preview_http_websocket_and_refusals() {
             previews.push(preview);
         }
 
+        // The preview headers carry the edge credential and the routing token, which reach the
+        // agent's own port. They must open no control route: not through the edge, and not
+        // through Google's `:execute` either, where the same JWT is accepted.
+        {
+            use futures::StreamExt as _;
+            let origin = previews[0]
+                .endpoint
+                .split("/v1/preview/")
+                .next()
+                .expect("an endpoint")
+                .to_string();
+            let mut exec = reqwest::Client::new()
+                .post(format!("{origin}/v1/exec"))
+                .json(&serde_json::json!({"command": ["id"], "timeoutMs": 5000}));
+            for (name, value) in &previews[0].headers {
+                exec = exec.header(name, value);
+            }
+            let response = exec.send().await.expect("the edge answers");
+            let status = response.status().as_u16();
+            assert!(
+                [401, 403].contains(&status),
+                "a preview holder's POST /v1/exec through the edge must be refused: {status}"
+            );
+            eprintln!("PASS preview headers: POST /v1/exec through the edge refused: {status}");
+
+            let engine = env("GCP_ENGINE");
+            let jwt = previews[0].headers["Authorization"].clone();
+            let envelope = serde_json::json!({"v": 1, "op": "exec", "command": ["id"], "timeoutMs": 5000});
+            let encoded = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                envelope.to_string(),
+            );
+            let direct = reqwest::Client::new()
+                .post(format!(
+                    "https://{}-aiplatform.googleapis.com/v1/{engine}/sandboxEnvironments/{}:execute",
+                    env("GCP_REGION"),
+                    first.sandbox_id
+                ))
+                .header("Authorization", jwt)
+                .json(&serde_json::json!({"inputs": [{"data": encoded, "mimeType": "application/json"}]}))
+                .send()
+                .await
+                .expect("the API answers");
+            let status = direct.status().as_u16();
+            let body = direct.text().await.unwrap_or_default();
+            assert!(
+                [401, 403].contains(&status),
+                "the edge JWT's :execute exec must be refused by the agent: {status} {body}"
+            );
+            eprintln!("PASS edge JWT against :execute with exec and no control key: agent refused: {status}");
+
+            // The binding's own exec still works.
+            let mut frames = provider
+                .run_command(
+                    &first.sandbox_id,
+                    alien_bindings::traits::RunCommandRequest {
+                        command: "id".to_string(),
+                        args: vec![],
+                        cwd: None,
+                        env: Default::default(),
+                        timeout: std::time::Duration::from_secs(10),
+                    },
+                )
+                .await
+                .expect("the binding's exec starts");
+            let mut out = Vec::new();
+            let mut exited = None;
+            while let Some(frame) = frames.next().await {
+                match frame.expect("a frame") {
+                    alien_bindings::traits::CommandOutput::Stdout { data, .. } => out.extend(data),
+                    alien_bindings::traits::CommandOutput::Exit { code, .. } => exited = Some(code),
+                    _ => {}
+                }
+            }
+            assert_eq!(exited, Some(0), "the binding's own exec works");
+            eprintln!("PASS binding's own exec: {}", String::from_utf8_lossy(&out).trim());
+        }
+
         // A port the template does not declare is refused by the binding without a call.
         let error = provider.preview(&first.sandbox_id, undeclared).await.expect_err("undeclared");
         assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
@@ -222,11 +300,22 @@ async fn live_preview_http_websocket_and_refusals() {
         let engine = env("GCP_ENGINE");
         let engine = engine.rsplit('/').next().unwrap().to_string();
         let soon = chrono::Utc::now().timestamp() + 4;
+        // A keyed agent refuses a raw grant, so the key is derived the way the binding does.
+        let signer = IamEdgeTokenSigner::new(
+            Arc::new(alien_gcp_clients::iam::IamClient::new(reqwest::Client::new(), config())),
+            env("GCP_PREVIEW_SA"),
+        );
+        let control_key = alien_bindings::providers::sandbox::gcp_agent_platform::EdgeTokenSigner::control_key(
+            &signer,
+            &first.sandbox_id,
+        )
+        .await
+        .expect("the control key derives");
         let granted = client
             .execute(
                 &engine,
                 &first.sandbox_id,
-                serde_json::json!({"v": 1, "op": "previewGrant", "sandbox": first.sandbox_id, "port": ports[0], "deadline": soon, "declaredPorts": ports})
+                serde_json::json!({"v": 1, "op": "previewGrant", "sandbox": first.sandbox_id, "port": ports[0], "deadline": soon, "declaredPorts": ports, "controlKey": control_key})
                     .to_string()
                     .as_bytes(),
             )
