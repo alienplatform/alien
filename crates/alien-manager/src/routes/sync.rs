@@ -1918,6 +1918,29 @@ pub(in crate::routes) mod tests {
         assert!(sync.released.is_empty());
     }
 
+    /// The Operator asks again every sync; a refusal that is already the
+    /// deployment's update error is answered without writing it again.
+    #[tokio::test]
+    async fn a_recorded_refusal_is_not_written_again() {
+        let message =
+            crate::routes::pull_compat::refusal_message(&[&crate::routes::pull_compat::EGRESS]);
+        let mut record = deployment_record_with_state("update-failed", None);
+        record.error = Some(json!({ "message": message }));
+        let sync = sync_with_options(
+            record,
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                stack: stack_with_egress(),
+                operator_version: Some("3.3.31"),
+                claims: false,
+            },
+        )
+        .await;
+        assert_eq!(sync.status, StatusCode::BAD_REQUEST, "{}", sync.response);
+        assert!(sync.reconciled.is_empty(), "written again");
+    }
+
     /// Operators that read the setting, and development builds, get the target.
     #[tokio::test]
     async fn operators_that_read_the_settings_are_not_refused() {
@@ -5847,6 +5870,21 @@ async fn agent_sync(
                             operator_version = ?req.operator_version,
                             "Refusing a release the deployment's Operator cannot read"
                         );
+                        let refusal =
+                            ErrorData::bad_request(super::pull_compat::refusal_message(&refused))
+                                .into_generic();
+                        // The refusal is already the deployment's update error:
+                        // answer the Operator without writing it again.
+                        if deployment.status.ends_with("-failed")
+                            && deployment
+                                .error
+                                .as_ref()
+                                .and_then(|error| error.get("message"))
+                                .and_then(|message| message.as_str())
+                                == Some(refusal.message.as_str())
+                        {
+                            return refusal.into_response();
+                        }
                         return save_pull_render_failure(
                             &state,
                             &subject,
@@ -5855,8 +5893,7 @@ async fn agent_sync(
                             &req.session,
                             execution_claim,
                             true,
-                            ErrorData::bad_request(super::pull_compat::refusal_message(&refused))
-                                .into_generic(),
+                            refusal,
                         )
                         .await;
                     }
