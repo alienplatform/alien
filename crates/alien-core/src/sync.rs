@@ -289,12 +289,6 @@ pub struct SyncRequest {
     /// Operators, which reject a target that uses them.
     #[serde(default)]
     pub supports_pod_security: bool,
-    /// Signals that this Operator reads the `commandsCapabilityFile` setting
-    /// on containers and daemons and the `runtimeIdentityExchange` setting on
-    /// workers. Absent for older Operators, which reject a target that uses
-    /// them.
-    #[serde(default)]
-    pub supports_credential_capabilities: bool,
     /// Exact update claim returned by the previous sync response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_claim: Option<SyncExecutionClaim>,
@@ -599,7 +593,6 @@ mod tests {
             session: "operator-test".to_string(),
             supports_execution_claims: true,
             supports_pod_security: true,
-            supports_credential_capabilities: true,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -814,7 +807,6 @@ mod tests {
             session: String::new(),
             supports_execution_claims: false,
             supports_pod_security: false,
-            supports_credential_capabilities: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -853,7 +845,6 @@ mod tests {
             session: String::new(),
             supports_execution_claims: false,
             supports_pod_security: false,
-            supports_credential_capabilities: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
@@ -933,7 +924,6 @@ mod tests {
             session: String::new(),
             supports_execution_claims: false,
             supports_pod_security: false,
-            supports_credential_capabilities: false,
             execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),

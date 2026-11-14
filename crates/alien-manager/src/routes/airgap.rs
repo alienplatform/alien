@@ -190,7 +190,7 @@ async fn target(
         management_config,
         None,
         true,
-        true,
+        &super::pull_compat::OperatorVersion::Current,
     )
     .await
     {

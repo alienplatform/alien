@@ -154,10 +154,6 @@ pub struct AgentSyncRequest {
     /// Absent for Operators that predate the pod security profile settings.
     #[serde(default)]
     pub supports_pod_security: bool,
-    /// Absent for Operators that predate the `commandsCapabilityFile` and
-    /// `runtimeIdentityExchange` settings.
-    #[serde(default)]
-    pub supports_credential_capabilities: bool,
     #[serde(default)]
     pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Current deployment state as reported by the agent.
@@ -1638,9 +1634,38 @@ pub(in crate::routes) mod tests {
     }
 
     async fn sync_with_values(
+        record: DeploymentRecord,
+        credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
+        values: Option<Arc<crate::values::ValueStore>>,
+    ) -> UnresolvableManagementSync {
+        sync_with_options(record, credential_resolver, values, SyncOptions::default()).await
+    }
+
+    /// What differs between the pull syncs these tests run.
+    struct SyncOptions {
+        /// The release's stack for the deployment's platform.
+        stack: Stack,
+        /// The version the Operator reports, if any.
+        operator_version: Option<&'static str>,
+        /// Whether the Operator and the store use execution claims.
+        claims: bool,
+    }
+
+    impl Default for SyncOptions {
+        fn default() -> Self {
+            Self {
+                stack: Stack::new("app".to_string()).build(),
+                operator_version: None,
+                claims: true,
+            }
+        }
+    }
+
+    async fn sync_with_options(
         mut record: DeploymentRecord,
         credential_resolver: Arc<dyn crate::traits::CredentialResolver>,
         values: Option<Arc<crate::values::ValueStore>>,
+        options: SyncOptions,
     ) -> UnresolvableManagementSync {
         let temp = tempfile::tempdir().expect("test directory");
         let db = Arc::new(
@@ -1654,10 +1679,7 @@ pub(in crate::routes) mod tests {
                 &crate::auth::Subject::system(),
                 CreateReleaseParams {
                     project_id: record.project_id.clone(),
-                    stacks: HashMap::from([(
-                        Platform::Kubernetes,
-                        Stack::new("app".to_string()).build(),
-                    )]),
+                    stacks: HashMap::from([(Platform::Kubernetes, options.stack.clone())]),
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
@@ -1681,22 +1703,26 @@ pub(in crate::routes) mod tests {
         let reconciled = Arc::new(Mutex::new(Vec::new()));
         let released = Arc::new(Mutex::new(Vec::new()));
         let mut store = MockDeploymentStore::new();
-        store.expect_requires_execution_claims().return_const(true);
+        store
+            .expect_requires_execution_claims()
+            .return_const(options.claims);
         let stored = record.clone();
         store
             .expect_get_deployment()
             .returning(move |_, _| Ok(Some(stored.clone())));
         let acquired = record.clone();
         let granted = claim.clone();
-        store
-            .expect_acquire()
-            .times(1)
-            .returning(move |_, _, _, _| {
-                Ok(vec![crate::traits::deployment_store::AcquiredDeployment {
-                    deployment: acquired.clone(),
-                    execution_claim: Some(granted.clone()),
-                }])
-            });
+        if options.claims {
+            store
+                .expect_acquire()
+                .times(1)
+                .returning(move |_, _, _, _| {
+                    Ok(vec![crate::traits::deployment_store::AcquiredDeployment {
+                        deployment: acquired.clone(),
+                        execution_claim: Some(granted.clone()),
+                    }])
+                });
+        }
         store.expect_renew_lease().returning(|_, _, _, _| Ok(()));
         let received = reconciled.clone();
         let reconciled_record = record.clone();
@@ -1728,13 +1754,16 @@ pub(in crate::routes) mod tests {
         .await;
         state.values = values;
 
-        let body = json!({
+        let mut body = json!({
             "deploymentId": record.id,
             "session": "operator-session",
-            "supportsExecutionClaims": true,
+            "supportsExecutionClaims": options.claims,
             "maxSupportedDeploymentProtocolVersion":
                 alien_core::MAX_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION,
         });
+        if let Some(version) = options.operator_version {
+            body["operatorVersion"] = json!(version);
+        }
         let response = super::router()
             .with_state(state)
             .oneshot(
@@ -1806,6 +1835,98 @@ pub(in crate::routes) mod tests {
                 .map(|claim| claim.attempt_id.as_str()),
             Some("attempt_test")
         );
+    }
+
+    fn stack_with_egress() -> Stack {
+        let mut container = alien_core::Container::new("c".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "img".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("p".to_string())
+            .build();
+        container.egress = Some(alien_core::ContainerEgress::Internet);
+        Stack::new("app".to_string())
+            .add(container, alien_core::ResourceLifecycle::Live)
+            .build()
+    }
+
+    async fn sync_egress_release(
+        operator_version: Option<&'static str>,
+        claims: bool,
+    ) -> UnresolvableManagementSync {
+        sync_with_options(
+            deployment_record_with_state("update-pending", None),
+            Arc::new(ResolvedManagementIdentity),
+            None,
+            SyncOptions {
+                stack: stack_with_egress(),
+                operator_version,
+                claims,
+            },
+        )
+        .await
+    }
+
+    /// A release that uses a setting the Operator cannot read is refused: the
+    /// failure is saved under the claim, so it shows as the deployment's update
+    /// error, and no target is sent.
+    #[tokio::test]
+    async fn an_older_operator_is_refused_a_release_it_cannot_read_under_its_claim() {
+        let sync = sync_egress_release(Some("3.3.31"), true).await;
+        assert_eq!(sync.status, StatusCode::BAD_REQUEST, "{}", sync.response);
+        assert!(sync.response.get("target").is_none(), "{}", sync.response);
+        assert_eq!(sync.reconciled.len(), 1, "one failure checkpoint");
+        let saved = &sync.reconciled[0];
+        assert_eq!(saved.state.status, DeploymentStatus::UpdateFailed);
+        let message = &saved.state.error.as_ref().expect("saved cause").message;
+        assert!(message.contains("container egress rules"), "{message}");
+        assert!(message.contains("3.3.35 or newer"), "{message}");
+        assert!(
+            message.contains("keeps running its current release"),
+            "{message}"
+        );
+        assert_eq!(sync.released.len(), 1, "the claim is given back");
+    }
+
+    /// The standalone store has no claims, so the refusal is recorded without
+    /// one; an Operator that predates claims and reports no version is the
+    /// oldest supported one.
+    #[tokio::test]
+    async fn the_refusal_is_recorded_for_an_operator_without_claims() {
+        let sync = sync_egress_release(None, false).await;
+        assert_eq!(sync.status, StatusCode::BAD_REQUEST, "{}", sync.response);
+        assert_eq!(sync.reconciled.len(), 1, "recorded once");
+        let saved = &sync.reconciled[0];
+        assert!(saved.execution_claim.is_none());
+        assert_eq!(saved.state.status, DeploymentStatus::UpdateFailed);
+        assert!(saved
+            .state
+            .error
+            .as_ref()
+            .expect("saved cause")
+            .message
+            .contains("container egress rules"));
+        assert!(sync.released.is_empty());
+    }
+
+    /// Operators that read the setting, and development builds, get the target.
+    #[tokio::test]
+    async fn operators_that_read_the_settings_are_not_refused() {
+        for version in [Some("3.3.62"), Some("dev")] {
+            let sync = sync_egress_release(version, true).await;
+            assert_eq!(sync.status, StatusCode::OK, "{version:?} {}", sync.response);
+            assert!(sync.response.get("target").is_some(), "{}", sync.response);
+            assert!(sync.reconciled.is_empty(), "{version:?}");
+        }
     }
 
     fn pull_record_in_cluster(
@@ -2839,7 +2960,7 @@ pub(in crate::routes) mod tests {
                 None,
                 Some(manager.operator_capability()),
                 true,
-                true,
+                &crate::routes::pull_compat::OperatorVersion::Current,
             )
             .await
             .unwrap_or_else(|_| panic!("pull target"));
@@ -3082,7 +3203,7 @@ pub(in crate::routes) mod tests {
             None,
             Some(manager.operator_capability()),
             true,
-            true,
+            &crate::routes::pull_compat::OperatorVersion::Current,
         )
         .await
         .unwrap_or_else(|_| panic!("pull target"));
@@ -4560,9 +4681,13 @@ pub(in crate::routes) mod tests {
     #[test]
     fn credential_capabilities_are_dropped_for_older_operators() {
         let mut stack = credential_capability_stack();
-        // An older Operator reports neither support flag.
+        // An older Operator reports 3.3.62.
         super::downgrade_container_security(&mut stack);
-        assert!(super::downgrade_credential_capabilities(&mut stack));
+        let operator = crate::routes::pull_compat::OperatorVersion::from_report(Some("3.3.62"));
+        assert!(
+            crate::routes::pull_compat::apply(&mut stack, None, &operator).is_empty(),
+            "stripping must not refuse"
+        );
         let json = serde_json::to_value(&stack).unwrap();
         for (id, entry) in json["resources"].as_object().unwrap() {
             let config = entry["config"].as_object().unwrap();
@@ -4578,7 +4703,16 @@ pub(in crate::routes) mod tests {
                 );
             }
         }
-        assert!(!super::downgrade_credential_capabilities(&mut stack));
+    }
+
+    #[test]
+    fn operators_from_3_3_63_keep_the_capability_settings() {
+        let mut stack = credential_capability_stack();
+        let operator = crate::routes::pull_compat::OperatorVersion::from_report(Some("3.3.63"));
+        assert!(crate::routes::pull_compat::apply(&mut stack, None, &operator).is_empty());
+        let text = serde_json::to_string(&stack).unwrap();
+        assert!(text.contains("commandsCapabilityFile"));
+        assert!(text.contains("runtimeIdentityExchange"));
     }
 
     #[test]
@@ -4587,13 +4721,6 @@ pub(in crate::routes) mod tests {
         let text = serde_json::to_string(&stack).unwrap();
         assert!(text.contains("commandsCapabilityFile"));
         assert!(text.contains("runtimeIdentityExchange"));
-    }
-
-    #[test]
-    fn a_request_without_the_flag_is_an_older_operator() {
-        let request: AgentSyncRequest =
-            serde_json::from_value(serde_json::json!({ "deploymentId": "dep_1" })).unwrap();
-        assert!(!request.supports_credential_capabilities);
     }
 
     fn test_deployment_config() -> DeploymentConfig {
@@ -5698,11 +5825,42 @@ async fn agent_sync(
                             &r,
                             &req.session,
                             execution_claim,
+                            false,
                             error,
                         )
                         .await
                     }
                 };
+                let operator = super::pull_compat::OperatorVersion::from_report(
+                    req.operator_version.as_deref(),
+                );
+                if let Some(stack) = r.stacks.get(&release_stack_platform(deployment.platform)) {
+                    let refused = super::pull_compat::apply(
+                        &mut stack.clone(),
+                        deployment.stack_settings.as_ref(),
+                        &operator,
+                    );
+                    if !refused.is_empty() {
+                        tracing::info!(
+                            deployment_id = %deployment.id,
+                            release_id = %r.id,
+                            operator_version = ?req.operator_version,
+                            "Refusing a release the deployment's Operator cannot read"
+                        );
+                        return save_pull_render_failure(
+                            &state,
+                            &subject,
+                            &deployment,
+                            &r,
+                            &req.session,
+                            execution_claim,
+                            true,
+                            ErrorData::bad_request(super::pull_compat::refusal_message(&refused))
+                                .into_generic(),
+                        )
+                        .await;
+                    }
+                }
                 match build_pull_target(
                     &state,
                     &deployment,
@@ -5710,7 +5868,7 @@ async fn agent_sync(
                     management_config,
                     agent_token,
                     req.supports_pod_security,
-                    req.supports_credential_capabilities,
+                    &operator,
                 )
                 .await
                 {
@@ -5947,11 +6105,17 @@ async fn save_pull_render_failure(
     release: &crate::traits::ReleaseRecord,
     session: &str,
     execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
+    record_without_claim: bool,
     error: AlienError,
 ) -> Response {
-    let Some(execution_claim) = execution_claim else {
+    // Without a claim only a refusal is recorded (the standalone store has no
+    // claims); other failures are answered to the Operator on each sync, as
+    // before.
+    if execution_claim.is_none()
+        && !(record_without_claim && !state.deployment_store.requires_execution_claims())
+    {
         return error.into_response();
-    };
+    }
     let Some(status) = deployment_status_from_record(&deployment.status) else {
         return error.into_response();
     };
@@ -5978,7 +6142,7 @@ async fn save_pull_render_failure(
                 observed_inventory_batches: Vec::new(),
                 capabilities: Vec::new(),
                 operator_version: None,
-                execution_claim: Some(execution_claim.clone()),
+                execution_claim: execution_claim.clone(),
                 operations_report: None,
             },
         )
@@ -5992,12 +6156,14 @@ async fn save_pull_render_failure(
         );
         return save_error.into_response();
     }
-    if let Err(release_error) = state
-        .deployment_store
-        .release(subject, &deployment.id, session, Some(execution_claim))
-        .await
-    {
-        return release_error.into_response();
+    if let Some(execution_claim) = execution_claim {
+        if let Err(release_error) = state
+            .deployment_store
+            .release(subject, &deployment.id, session, Some(execution_claim))
+            .await
+        {
+            return release_error.into_response();
+        }
     }
     error.into_response()
 }
@@ -6035,28 +6201,6 @@ fn downgrade_container_security(stack: &mut alien_core::Stack) -> bool {
     removed
 }
 
-/// Drop `commandsCapabilityFile` (containers, daemons) and
-/// `runtimeIdentityExchange` (workers). Operators that predate them reject
-/// the whole target for an unknown field. Without the settings a command
-/// receiver is treated as built before capability files, so the target gets
-/// its commands-only key as `ALIEN_COMMANDS_TOKEN` (see `build_pull_target`),
-/// and a worker keeps the runtime credentials it read before identity
-/// exchange: what older Operators do today. Returns whether anything was
-/// removed.
-fn downgrade_credential_capabilities(stack: &mut alien_core::Stack) -> bool {
-    let mut removed = false;
-    for (_, entry) in stack.resources_mut() {
-        if let Some(container) = entry.config.downcast_mut::<alien_core::Container>() {
-            removed |= std::mem::take(&mut container.commands_capability_file);
-        } else if let Some(daemon) = entry.config.downcast_mut::<alien_core::Daemon>() {
-            removed |= std::mem::take(&mut daemon.commands_capability_file);
-        } else if let Some(worker) = entry.config.downcast_mut::<alien_core::Worker>() {
-            removed |= std::mem::take(&mut worker.runtime_identity_exchange);
-        }
-    }
-    removed
-}
-
 /// The management identity a pull deployment's target renders with; see
 /// [`crate::loops::deployment::resolve_deployment_management_config`] and
 /// [`ManagementRenderer::PullTarget`].
@@ -6081,7 +6225,7 @@ pub(crate) async fn build_pull_target(
     management_config: Option<alien_core::ManagementConfig>,
     agent_token: Option<String>,
     operator_supports_pod_security: bool,
-    operator_supports_credential_capabilities: bool,
+    operator: &super::pull_compat::OperatorVersion,
 ) -> Result<TargetDeployment, Response> {
     let release_stack_platform = release_stack_platform(deployment.platform);
     let management_platform = management_platform(deployment.platform, deployment.base_platform);
@@ -6135,13 +6279,7 @@ pub(crate) async fn build_pull_target(
         );
     }
 
-    if !operator_supports_credential_capabilities && downgrade_credential_capabilities(&mut stack) {
-        tracing::info!(
-            deployment_id = %deployment.id,
-            release_id = %r.id,
-            "Operator predates the credential capability settings; delivering the release without them. Upgrade the Operator to use them."
-        );
-    }
+    super::pull_compat::apply(&mut stack, deployment.stack_settings.as_ref(), operator);
 
     let held = if protected {
         held

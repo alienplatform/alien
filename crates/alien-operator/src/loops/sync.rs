@@ -401,7 +401,6 @@ async fn sync_with_manager(
         session: sync_session.clone(),
         supports_execution_claims: true,
         supports_pod_security: true,
-        supports_credential_capabilities: true,
         execution_claim,
         current_state: Some(deployment_state),
         heartbeats,

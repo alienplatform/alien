@@ -30,6 +30,7 @@ openapi = [
 ]
 
 [dependencies]
+semver = { workspace = true }
 bon = { workspace = true }
 # Core Alien crates
 alien-core = { workspace = true, features = ["bundle-signature"] }
@@ -152,5 +153,4 @@ ngrok = { workspace = true }
 url = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 flate2 = { workspace = true }
-semver = { workspace = true }
 tar = { workspace = true }
