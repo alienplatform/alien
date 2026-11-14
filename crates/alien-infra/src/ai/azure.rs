@@ -1164,9 +1164,7 @@ mod tests {
             Self {
                 usages: models
                     .iter()
-                    .map(|(model, limit, current)| {
-                        (usage_name(model), *limit, *current)
-                    })
+                    .map(|(model, limit, current)| (usage_name(model), *limit, *current))
                     .collect(),
                 ..Self::default()
             }
@@ -1328,7 +1326,8 @@ mod tests {
         ];
         for (_, model, _, _) in alien_core::ai_catalog::azure_deployments() {
             assert!(
-                live.iter().any(|l| l.eq_ignore_ascii_case(&usage_name(model))),
+                live.iter()
+                    .any(|l| l.eq_ignore_ascii_case(&usage_name(model))),
                 "no live counter for {model}: {}",
                 usage_name(model)
             );

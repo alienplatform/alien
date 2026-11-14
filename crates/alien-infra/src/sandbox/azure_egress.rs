@@ -36,8 +36,7 @@ pub(super) async fn initialize_key(
     public_key: &mut Option<egress::GatewayPublicKey>,
 ) -> Result<alien_core::bindings::SandboxEgressBinding> {
     use alien_core::bindings::{
-        SandboxEgressBinding, SandboxEgressGateway, SandboxEgressReplicas,
-        SandboxEgressSigningKey,
+        SandboxEgressBinding, SandboxEgressGateway, SandboxEgressReplicas, SandboxEgressSigningKey,
     };
     let config = ctx.desired_resource_config::<alien_core::Sandbox>()?;
     if !sandbox_egress::has_sandbox_gateway(ctx.desired_stack) {
@@ -79,6 +78,7 @@ pub(super) async fn initialize_key(
             addresses: gateway_addresses(ctx)?,
             port: GATEWAY_ADMIN_PORT,
             count: 2,
+            min_protocol: alien_core::bindings::EGRESS_GATEWAY_ADMIN_PROTOCOL,
         }),
     }))
 }

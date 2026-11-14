@@ -49,6 +49,7 @@ struct Identity {
 pub fn router(admin: Arc<LiveGateway>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/v1/protocol", get(protocol))
         .route("/metrics", get(metrics))
         .route("/v1/policies", put(update).delete(remove).get(version))
         .route("/v1/ca", post(issue_ca))
@@ -368,6 +369,12 @@ async fn metrics(State(live): State<Arc<LiveGateway>>, headers: HeaderMap) -> Re
         .connect_latency
         .render("alien_egress_connect_duration_seconds", &mut metrics);
     metrics.into_response()
+}
+
+/// Nonsecret: lets a binding refuse a gateway it cannot serve ("re-run setup to update").
+/// Must equal `alien_core::bindings::EGRESS_GATEWAY_ADMIN_PROTOCOL`.
+async fn protocol() -> Response {
+    Json(serde_json::json!({ "protocol": 1 })).into_response()
 }
 
 async fn health(State(live): State<Arc<LiveGateway>>) -> Response {

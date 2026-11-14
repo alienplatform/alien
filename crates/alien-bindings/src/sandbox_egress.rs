@@ -231,6 +231,28 @@ impl SandboxEgressManager {
                     continue;
                 }
             };
+            if let Some(min) = self
+                .config
+                .replicas
+                .as_ref()
+                .map(|replicas| replicas.min_protocol)
+                .filter(|min| *min > 0)
+            {
+                match self.protocol_check(&targets, min).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Err(unavailable(
+                            "the egress gateway is older than this release needs; re-run setup to update the egress gateway",
+                        ))
+                    }
+                    Err(error) if last => return Err(error),
+                    Err(_) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1)))
+                            .await;
+                        continue;
+                    }
+                }
+            }
             let mut acknowledged = true;
             for target in &targets {
                 let authorization =
@@ -326,6 +348,39 @@ impl SandboxEgressManager {
             .into_iter()
             .map(|address| format!("{scheme}://{address}"))
             .collect())
+    }
+
+    /// Every target must serve admin protocol `min` or newer. An older gateway (or one that has
+    /// no `/v1/protocol` at all) is refused outright: gateway VMs change only when setup is
+    /// re-run, so retrying cannot fix it. A target that cannot be reached is a retryable error.
+    async fn protocol_check(&self, targets: &[String], min: u32) -> Result<bool> {
+        #[derive(Deserialize)]
+        struct Protocol {
+            protocol: u32,
+        }
+        for target in targets {
+            let response = self
+                .admin
+                .get(format!("{target}/v1/protocol"))
+                .send()
+                .await
+                .map_err(|_| unavailable("gateway protocol request failed"))?;
+            let status = response.status();
+            let served = if status == reqwest::StatusCode::OK {
+                let body = bounded_body(response, 1024).await?;
+                serde_json::from_slice::<Protocol>(&body)
+                    .ok()
+                    .map(|p| p.protocol)
+            } else if status == reqwest::StatusCode::NOT_FOUND {
+                Some(0)
+            } else {
+                return Err(unavailable("gateway protocol request was not answered"));
+            };
+            if served.is_none_or(|served| served < min) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Read the recovery record without renewing the sandbox identity.

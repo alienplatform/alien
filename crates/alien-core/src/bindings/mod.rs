@@ -63,6 +63,7 @@ pub use sandbox::{
     AwsSandboxBinding, AzureSandboxBinding, GcpAgentPlatformSandboxBinding,
     KubernetesSandboxBinding, LocalSandboxBinding, SandboxBinding, SandboxEgressBinding,
     SandboxEgressGateway, SandboxEgressReplicas, SandboxEgressSigningKey,
+    EGRESS_GATEWAY_ADMIN_PROTOCOL,
 };
 pub use service_account::{
     AwsServiceAccountBinding, AzureServiceAccountBinding, GcpServiceAccountBinding,

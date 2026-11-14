@@ -149,6 +149,19 @@ pub struct SandboxEgressReplicas {
     pub port: u16,
     /// Replicas the gateway runs. A write refuses when fewer are resolvable.
     pub count: u32,
+    /// Lowest gateway admin protocol this binding can serve (`GET /v1/protocol`). 0 skips the
+    /// check, for gateways that replicate behind one address and are updated with the binding.
+    /// Azure's setup-created VMs are updated only by re-running setup, so they set it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub min_protocol: u32,
+}
+
+/// The gateway admin protocol this release speaks and serves at `GET /v1/protocol`. Bump only
+/// for an incompatible change: a newer gateway must keep serving older bindings.
+pub const EGRESS_GATEWAY_ADMIN_PROTOCOL: u32 = 1;
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Management-only vault reference for an Ed25519 PKCS#8 key.
