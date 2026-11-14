@@ -91,7 +91,10 @@ fn release(stack: Stack, version: &str) -> ReleaseInfo {
 }
 
 async fn deployment() -> DeploymentState {
-    let setup = installed_release();
+    deployment_between(installed_release(), next_release()).await
+}
+
+async fn deployment_between(setup: Stack, next: Stack) -> DeploymentState {
     let metadata = alien_deployment::prepare_direct_setup_update(
         setup.clone(),
         &StackState::new(Platform::Aws),
@@ -117,7 +120,7 @@ async fn deployment() -> DeploymentState {
         status: DeploymentStatus::UpdatePending,
         platform: Platform::Aws,
         current_release: Some(release(setup, "1")),
-        target_release: Some(release(next_release(), "2")),
+        target_release: Some(release(next, "2")),
         stack_state: Some(installed),
         error: None,
         environment_info: None,
@@ -175,4 +178,70 @@ async fn with_the_gate_on_the_comparison_still_refuses_the_identity() {
         "{message}"
     );
     assert!(!message.contains("Updating"), "{message}");
+}
+
+mod registry_regions {
+    //! An update accepted while a registry's regions input is empty must record the registry
+    //! without the reference, as setup installed it. Otherwise a later answer that lists regions
+    //! compares equal to the recorded reference and never asks for setup.
+    use super::*;
+    use alien_core::{ArtifactRegistry, StackInputKind};
+
+    const REGIONS: &str = "regions";
+
+    fn regions_input() -> StackInputDefinition {
+        let mut input = StackInputDefinition::deployer_boolean(REGIONS, "Regions", "Regions", None);
+        input.kind = StackInputKind::StringList;
+        input.required = false;
+        input
+    }
+
+    fn registry(reference: bool) -> ArtifactRegistry {
+        let mut registry = ArtifactRegistry::new("registry".to_string()).build();
+        if reference {
+            registry.replication_regions_input = Some(REGIONS.to_string());
+        }
+        registry
+    }
+
+    fn stack(reference: bool) -> Stack {
+        let mut builder = Stack::new("registry-regions".into())
+            .add(registry(reference), ResourceLifecycle::Frozen);
+        if reference {
+            builder = builder.inputs(vec![regions_input()]);
+        }
+        builder.build()
+    }
+
+    #[tokio::test]
+    async fn an_accepted_empty_reference_is_not_recorded() {
+        let state = deployment_between(stack(false), stack(true)).await;
+        let mut answers = config(None);
+        answers.input_values.insert(REGIONS.into(), json!([]));
+        let result = alien_deployment::step(state, answers, client(), None)
+            .await
+            .expect("update step")
+            .state;
+        assert_eq!(
+            result.status,
+            DeploymentStatus::Updating,
+            "{:?}",
+            result.error
+        );
+        let target = result
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .pending_prepared_stack
+            .as_ref()
+            .unwrap();
+        let registry = target
+            .resources
+            .get("registry")
+            .unwrap()
+            .config
+            .downcast_ref::<ArtifactRegistry>()
+            .unwrap();
+        assert_eq!(registry.replication_regions_input, None);
+    }
 }

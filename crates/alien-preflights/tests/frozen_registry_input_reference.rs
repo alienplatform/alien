@@ -183,3 +183,23 @@ async fn a_null_answer_uses_the_declared_default() {
     let errors = update_errors_between(before(), release, Some(serde_json::Value::Null)).await;
     assert!(registry_modified(&errors), "{errors:?}");
 }
+
+#[tokio::test]
+async fn regions_listed_after_an_accepted_empty_update_ask_for_a_setup_update() {
+    // First update: accepted with no regions. The stack recorded for it is the update target.
+    let first = deployment_config(Some(json!([])));
+    let mut recorded = prepare(after(), &first).await;
+    alien_preflights::compatibility::resolve_empty_frozen_input_references(&mut recorded, &first);
+    // Second update to the same release: the deployer now lists a region.
+    let second = deployment_config(Some(json!(["us-west-2"])));
+    let next = prepare(after(), &second).await;
+    let errors: Vec<String> = PreflightRunner::new()
+        .run_compatibility_checks(&recorded, &next, &second, Platform::Aws)
+        .await
+        .expect("compatibility checks should run")
+        .results
+        .iter()
+        .flat_map(|result| result.errors.clone())
+        .collect();
+    assert!(registry_modified(&errors), "{errors:?}");
+}

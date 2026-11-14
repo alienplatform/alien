@@ -426,6 +426,32 @@ pub fn unused_frozen_additions(
         .collect()
 }
 
+/// Writes into the frozen resources of an update target what setup installed for an input
+/// reference that resolves to no value: the reference is dropped. The update that accepted the
+/// reference (see [`FrozenResourcesUnchangedCheck`]) installed nothing for it, so the stack
+/// recorded afterwards must say so. Were the reference kept, a later answer that lists values
+/// would compare equal to the recorded reference, skip setup, and never be installed.
+pub fn resolve_empty_frozen_input_references(stack: &mut Stack, config: &DeploymentConfig) {
+    let resolved: Vec<_> = {
+        let answers = InputAnswers::new(&stack.inputs, &config.input_values);
+        stack
+            .resources()
+            .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+            .filter_map(|(id, entry)| {
+                entry
+                    .config
+                    .with_empty_input_references_removed(&answers)
+                    .map(|resource| (id.clone(), resource))
+            })
+            .collect()
+    };
+    for (id, resource) in resolved {
+        if let Some(entry) = stack.resources.get_mut(&id) {
+            entry.config = resource;
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
     fn description(&self) -> &'static str {

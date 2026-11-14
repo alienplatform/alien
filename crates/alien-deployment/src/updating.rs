@@ -438,6 +438,12 @@ pub async fn handle_update_pending(
         current.platform,
     )?;
     alien_core::remove_declined_live_resources(&mut mutated_stack, &unused_identities);
+    // The update installs nothing for a frozen input reference that resolves to no value; the
+    // recorded target must not keep it (a later answer listing values would compare equal).
+    alien_preflights::compatibility::resolve_empty_frozen_input_references(
+        &mut mutated_stack,
+        &config,
+    );
 
     if current.runtime_metadata.as_ref().is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
