@@ -4792,3 +4792,160 @@ async fn only_a_project_publisher_stores_a_config_statement() {
         StatusCode::CREATED
     );
 }
+
+// ---------------------------------------------------------------------------
+// Short-lived setup key for reruns by the group's install credential
+// ---------------------------------------------------------------------------
+
+/// Imports once with the group's install credential, optionally enrolls the
+/// deployment's Operator, and wires the standalone identity verifier into the
+/// router state. Returns the deployment id.
+async fn imported_with_identity(fixture: &mut Fixture, enroll_operator: bool) -> String {
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{json:#}");
+    let first: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert!(first.deployment_token_expires_at.is_none());
+
+    let identity_store = Arc::new(
+        alien_manager::stores::sqlite::SqliteRuntimeIdentityStore::new(fixture.db.clone()),
+    );
+    if enroll_operator {
+        let (code, _) = identity_store
+            .issue_enrollment_code(&first.deployment_id, chrono::Utc::now())
+            .await
+            .unwrap();
+        let key_hash = format!("{:x}", Sha256::digest(b"ax_day_v1_operator"));
+        identity_store
+            .enroll(&code, &key_hash, chrono::Utc::now())
+            .await
+            .unwrap()
+            .expect("the operator enrolls");
+        // The first rollout of the enrolled Operator revokes the install key.
+        for token in fixture.token_store.list_tokens().await.unwrap() {
+            if token.token_type == TokenType::Deployment
+                && token.deployment_id.as_deref() == Some(first.deployment_id.as_str())
+            {
+                fixture.token_store.delete_token(&token.id).await.unwrap();
+            }
+        }
+    }
+    let verifier = alien_manager::auth::standalone_identity::StandaloneRuntimeIdentity::new(
+        identity_store,
+        fixture.deployment_store.clone(),
+        fixture.state.credential_resolver.clone(),
+    )
+    .unwrap()
+    .with_token_store(fixture.token_store.clone());
+    fixture.state.runtime_identity = Some(Arc::new(verifier));
+    first.deployment_id
+}
+
+fn opt_in(mut body: StackImportRequest) -> StackImportRequest {
+    body.accepts_short_lived_deployment_token = true;
+    body
+}
+
+async fn setup_key_is_live(fixture: &Fixture, key: &str) -> bool {
+    fixture
+        .token_store
+        .validate_token(&format!("{:x}", Sha256::digest(key.as_bytes())))
+        .await
+        .unwrap()
+        .is_some()
+}
+
+#[tokio::test]
+async fn an_opt_in_rerun_after_enrollment_mints_one_short_lived_key() {
+    let mut fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let deployment_id = imported_with_identity(&mut fixture, true).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &opt_in(body)).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let response: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert_eq!(response.deployment_id, deployment_id);
+    let key = response.deployment_token.expect("a short-lived key");
+    let lifetime = response.deployment_token_expires_at.expect("an expiry") - chrono::Utc::now();
+    assert!(lifetime > chrono::Duration::minutes(14) && lifetime <= chrono::Duration::minutes(15));
+    assert!(setup_key_is_live(&fixture, &key).await);
+
+    // A second opt-in rerun replaces it: at most one key is live.
+    let again = opt_in(aws_s3_import_request(
+        "acme-prod",
+        "us-east-1",
+        "assets",
+        "acme-imports",
+    ));
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &again).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let second: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert!(!setup_key_is_live(&fixture, &key).await);
+    assert!(setup_key_is_live(&fixture, &second.deployment_token.unwrap()).await);
+}
+
+#[tokio::test]
+async fn a_rerun_without_the_flag_mints_nothing_and_has_no_token() {
+    let mut fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    imported_with_identity(&mut fixture, true).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let response: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert!(response.deployment_token_expires_at.is_none());
+    // What it always got, never a new setup key.
+    assert!(response.deployment_token.is_none_or(|key| !key.starts_with("ax_setup_")));
+}
+
+#[tokio::test]
+async fn another_groups_install_credential_mints_nothing() {
+    let mut fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    imported_with_identity(&mut fixture, true).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (_, json) = post_import(&fixture, Some(&fixture.dg_token), &opt_in(body.clone())).await;
+    let minted: StackImportResponse = serde_json::from_value(json).unwrap();
+    let key = minted.deployment_token.unwrap();
+
+    let other_group = fixture
+        .deployment_store
+        .create_deployment_group(
+            &alien_manager::auth::Subject::system(),
+            CreateDeploymentGroupParams {
+                name: "other-group".to_string(),
+                max_deployments: 100,
+                setup: DeploymentGroupSetup::default(),
+            },
+        )
+        .await
+        .unwrap();
+    let other_token = mint_token(
+        &fixture.token_store,
+        TokenType::DeploymentGroup,
+        "ax_dg_",
+        Some(other_group.id),
+        None,
+    )
+    .await;
+    let (_, json) = post_import(&fixture, Some(&other_token), &opt_in(body)).await;
+    // Whatever the other group's import does for itself, it is not handed a
+    // key for the first group's deployment, and the live key is untouched.
+    let other: StackImportResponse = serde_json::from_value(json).unwrap_or_else(|_| {
+        panic!("the other group imports its own deployment")
+    });
+    assert_ne!(other.deployment_id, minted.deployment_id);
+    assert!(other.deployment_token_expires_at.is_none());
+    assert!(setup_key_is_live(&fixture, &key).await);
+}
+
+#[tokio::test]
+async fn an_operator_with_no_key_mints_nothing() {
+    let mut fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    imported_with_identity(&mut fixture, false).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &opt_in(body)).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let response: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert!(response.deployment_token_expires_at.is_none());
+}

@@ -1004,11 +1004,11 @@ fn response_deployment_token(subject: &Subject, deployment: &DeploymentRecord) -
 
 /// The token the import answers with, and when it expires.
 ///
-/// An enrolled Operator retires the deployment's own key, so a rerun by the
-/// deployment group's install credential gets no token. A caller that says it
-/// accepts a short-lived one then gets a 15-minute setup key instead, which
-/// the caller uses for this run only. Callers that do not say so, and every
-/// other kind of caller, get what they always got.
+/// An enrolled Operator retires the deployment's own key, so the key a
+/// deployment group's install credential would be handed on a rerun no longer
+/// works. A caller that says it accepts a short-lived key then gets a 15-minute
+/// setup key instead, which it uses for this run only. Callers that do not say
+/// so, and every other kind of caller, get what they always got.
 async fn response_token(
     state: &AppState,
     subject: &Subject,
@@ -1016,14 +1016,11 @@ async fn response_token(
     deployment: &DeploymentRecord,
 ) -> Result<(Option<String>, Option<chrono::DateTime<chrono::Utc>>), Response> {
     let token = response_deployment_token(subject, deployment);
-    if token.is_some()
-        || !req.accepts_short_lived_deployment_token
-        || subject.role != Role::DeploymentGroupDeployer
-    {
+    if !req.accepts_short_lived_deployment_token || subject.role != Role::DeploymentGroupDeployer {
         return Ok((token, None));
     }
     let Some(verifier) = state.runtime_identity.as_ref() else {
-        return Ok((None, None));
+        return Ok((token, None));
     };
     match verifier.issue_setup_credential_for_group(deployment).await {
         Ok(issued) => Ok((Some(issued.token), Some(issued.expires_at))),
@@ -1032,7 +1029,7 @@ async fn response_token(
         }
         // No live Operator key: the install key is still current, or there is
         // no Operator. The response is what it was before.
-        Err(_) => Ok((None, None)),
+        Err(_) => Ok((token, None)),
     }
 }
 
