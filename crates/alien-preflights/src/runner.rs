@@ -197,6 +197,20 @@ impl PreflightRunner {
     /// Returns the settings to plan with, or `None` when nothing changes. When no series has
     /// room the settings stay as they were, so the quota check reports the refusal, and a
     /// warning names the series checked.
+    /// Automatic selection could not read quota: say why, in the log and in the preflight
+    /// result, and keep the catalog pick. Never a silent fallback.
+    #[cfg(feature = "runtime-checks")]
+    fn quota_unreadable(results: &mut Vec<CheckResult>, reason: &str) -> Option<DeploymentConfig> {
+        warn!(%reason, "Automatic machine selection cannot read Azure quota; using the catalog pick");
+        results.push(
+            CheckResult::with_warnings(vec![format!(
+                "Automatic machine selection could not use quota, so the catalog pick stays: {reason}."
+            )])
+            .with_check_description("Automatic machine selection".into()),
+        );
+        None
+    }
+
     #[cfg(feature = "runtime-checks")]
     async fn choose_machines_with_room(
         &self,
@@ -217,14 +231,23 @@ impl PreflightRunner {
             return Ok(None);
         }
         let Some(azure) = client_config.azure_config() else {
-            return Ok(None);
+            return Ok(Self::quota_unreadable(
+                results,
+                "the deployment has no Azure credentials for reading quota",
+            ));
         };
-        let Ok(http) = reqwest::Client::builder()
+        let http = match reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(15))
             .build()
-        else {
-            return Ok(None);
+        {
+            Ok(http) => http,
+            Err(err) => {
+                return Ok(Self::quota_unreadable(
+                    results,
+                    &format!("the HTTP client could not be built: {err}"),
+                ))
+            }
         };
         let skus = alien_azure_clients::AzureResourceSkusClient::new(
             http.clone(),
@@ -235,8 +258,14 @@ impl PreflightRunner {
             alien_azure_clients::AzureTokenCache::new(azure.clone()),
         );
         let region = azure.region.as_deref().unwrap_or("eastus");
-        let Some(room) = ComputeRoom::read(&skus, &usages, region).await else {
-            return Ok(None);
+        let room = match ComputeRoom::read(&skus, &usages, region).await {
+            Ok(room) => room,
+            Err(reason) => {
+                return Ok(Self::quota_unreadable(
+                    results,
+                    &format!("in {region}, {reason}"),
+                ))
+            }
         };
         let ledger = crate::runtime::azure_compute::PoolQuotaLedger::new(&room, stack_state);
         let chosen = crate::mutations::ComputeClusterMutation.choose_pool_machines(
@@ -910,6 +939,35 @@ mod setup_update_authorization_tests {
         Worker, WorkerCode, WorkerTrigger,
     };
     use indexmap::IndexMap;
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn automatic_machine_selection_says_why_when_it_cannot_read_quota() {
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let config = deployment_config();
+        let state = StackState::new(Platform::Azure);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        let stack = Stack::new("azure-pool".into())
+            .add(
+                alien_core::ComputeCluster::new("compute".into()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let mut results = Vec::new();
+        let chosen = runner
+            .choose_machines_with_room(&stack, &state, &config, &client, &mut results)
+            .await
+            .unwrap();
+        assert!(chosen.is_none());
+        assert_eq!(results.len(), 1, "{results:?}");
+        let text = format!("{results:?}");
+        assert!(
+            text.contains("no Azure credentials for reading quota"),
+            "{text}"
+        );
+    }
 
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
