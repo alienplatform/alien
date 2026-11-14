@@ -4949,3 +4949,26 @@ async fn an_operator_with_no_key_mints_nothing() {
     let response: StackImportResponse = serde_json::from_value(json).unwrap();
     assert!(response.deployment_token_expires_at.is_none());
 }
+
+/// The create-new network as the verified CloudFormation template delivers it for two availability
+/// zones: registration text built with `Fn::Join`, one entry per real zone. A masked element would
+/// arrive as a literal `null` there and be refused (`invalid type: null, expected a string`), so the
+/// template must select the whole list for the zone count.
+#[tokio::test]
+async fn verified_template_network_with_two_zones_imports() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let mut body = serde_json::to_value(aws_create_new_network_import_request(
+        ["subnet-pub-a", "subnet-pub-b"],
+        ["subnet-priv-a", "subnet-priv-b"],
+    ))
+    .unwrap();
+    let delivered: serde_json::Value = serde_json::from_str(
+        r#"{"vpcId":"vpc-0123456789abcdef0","cidrBlock":"10.42.0.0/16","internetGatewayId":"igw-0123456789abcdef0","natGatewayId":"nat-0123456789abcdef0","eipAllocationId":"eipalloc-0123456789abcdef0","egressPublicIps":["203.0.113.10"],"publicSubnetIds":["subnet-pub-a","subnet-pub-b"],"privateSubnetIds":["subnet-priv-a","subnet-priv-b"],"publicRouteTableId":"rtb-public","privateRouteTableId":"rtb-private","securityGroupId":"sg-0123456789abcdef0","availabilityZones":["eu-west-1a","eu-west-1b"],"isByoVpc":false}"#,
+    )
+    .unwrap();
+    let resources = body["resources"].as_array_mut().unwrap();
+    let network = resources.iter_mut().find(|r| r["id"] == "default-network").unwrap();
+    network["importData"] = delivered;
+    let (status, json) = post_import_json(&fixture, Some(&fixture.dg_token), body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+}
