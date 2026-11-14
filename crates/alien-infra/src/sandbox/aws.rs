@@ -63,6 +63,9 @@ const RETIRED_VERSION_DELETE_MARGIN_MINUTES: i64 = 30;
 const IMAGE_VERSION_QUOTA: usize = 50;
 /// Most retired versions marked inactive in one pass.
 const MAX_RETIREMENTS_PER_PASS: usize = 10;
+/// How long to leave retiring alone after AWS refused it for a missing grant, so a role that
+/// predates the grant is not asked on every pass.
+const RETIRE_DENIED_BACKOFF_HOURS: i64 = 6;
 
 /// A version a roll replaced, and when it stopped serving.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -147,6 +150,10 @@ pub struct AwsSandboxController {
     /// explicit recovery; elapsed time since promotion does not prove consumer drain.
     #[serde(default)]
     pub(crate) retired_versions: Vec<RetiredVersion>,
+    /// When AWS last refused to mark a version inactive for a missing grant. Retiring waits
+    /// out a backoff after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) retire_denied_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Accepted deletion, retained until the provider confirms absence.
     #[serde(default)]
     pub(crate) deleting_version: Option<String>,
@@ -1501,7 +1508,10 @@ impl AwsSandboxController {
         // The version replaced most recently stays ACTIVE as well: a dependent whose own config
         // did not change is re-rendered with the new binding only by propagation or the
         // Ready-time refresh, which can land after this pass.
-        if self.dependents_on_current_binding(ctx, resource_id) {
+        let retire_backoff = self.retire_denied_at.is_some_and(|at| {
+            chrono::Utc::now() < at + chrono::Duration::hours(RETIRE_DENIED_BACKOFF_HOURS)
+        });
+        if !retire_backoff && self.dependents_on_current_binding(ctx, resource_id) {
             let mut retired = 0;
             let keep = self.retired_versions.len().saturating_sub(1);
             for entry in self.retired_versions.iter_mut().take(keep) {
@@ -1521,6 +1531,7 @@ impl AwsSandboxController {
                 {
                     Ok(()) => {
                         entry.inactive_at = Some(chrono::Utc::now());
+                        self.retire_denied_at = None;
                         retired += 1;
                     }
                     // Gone since the listing; the next pass drops it.
@@ -1540,6 +1551,7 @@ impl AwsSandboxController {
                             "Cannot mark replaced MicroVM image versions inactive: \
                              lambda:UpdateMicrovmImageVersion is not granted"
                         );
+                        self.retire_denied_at = Some(chrono::Utc::now());
                         break;
                     }
                     Err(error) => {
@@ -6589,9 +6601,10 @@ mod tests {
         assert_eq!(controller.retired_versions[0].inactive_at, None);
     }
 
-    /// An install whose role predates the grant keeps its versions and keeps rolling.
+    /// An install whose role predates the grant keeps its versions and keeps running: the
+    /// refusal is not a step error, and later passes do not ask again right away.
     #[tokio::test]
-    async fn a_missing_retire_grant_keeps_the_version_instead_of_failing_the_step() {
+    async fn a_missing_retire_grant_is_a_quiet_no_op() {
         let mut client = ready_client(&[
             ("1.0", "SUCCESSFUL"),
             ("2.0", "SUCCESSFUL"),
@@ -6606,9 +6619,23 @@ mod tests {
                     resource_name: "1.0".to_string(),
                 }))
             });
-        let controller =
-            tick_ready_over(client, vec![retired("1.0", None), retired("2.0", None)]).await;
-        assert_eq!(controller.retired_versions[0].inactive_at, None);
+        client.expect_delete_microvm_image_version().never();
+        let mut controller = ready_controller();
+        controller.active_version = Some("3.0".to_string());
+        controller.retired_versions = vec![retired("1.0", None), retired("2.0", None)];
+        let mut executor = executor(controller, client).await;
+        for _ in 0..3 {
+            executor
+                .step()
+                .await
+                .expect("a refused retire is not an error");
+        }
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert!(controller
+            .retired_versions
+            .iter()
+            .all(|v| v.inactive_at.is_none()));
+        assert!(controller.retire_denied_at.is_some());
     }
 
     /// A sandbox-only release leaves dependents' config unchanged, and they pick up the new
