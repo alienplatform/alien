@@ -1631,6 +1631,10 @@ fn compact(text: &str) -> String {
 }
 
 const CREATE_GATE: &str = "var.kubernetes_cluster_mode == \"create\"";
+/// The network gate with no database: a created cluster, or a network the deployer requests in
+/// the advanced settings.
+const NETWORK_GATE: &str =
+    "(var.kubernetes_cluster_mode == \"create\" || local.deployment_requests_network)";
 
 /// An existing cluster is already attached to a network, and the manager prepares a stack with
 /// none for it, so the module must neither create a VPC nor register `default-network` unless it
@@ -1645,14 +1649,14 @@ async fn eks_creates_and_registers_a_default_network_only_with_a_created_cluster
     );
     assert!(
         network.contains(&format!(
-            "count = {CREATE_GATE} ? var.network_mode == \"create-new\" ? 1 : 0 : 0"
+            "count = {NETWORK_GATE} ? var.network_mode == \"create-new\" ? 1 : 0 : 0"
         )),
         "{network}"
     );
     let locals = compact(module.get("locals.tf").expect("locals.tf"));
     assert!(
         locals.contains(&format!(
-            "deployment_resources = concat({CREATE_GATE} ? [{{ id = \"default-network\""
+            "deployment_resources = concat({NETWORK_GATE} ? [{{ id = \"default-network\""
         )),
         "{locals}"
     );
@@ -1688,7 +1692,9 @@ async fn eks_keeps_the_default_network_for_a_stack_with_a_database() {
 #[tokio::test]
 async fn eks_keeps_the_default_network_only_while_a_gated_database_is_accepted() {
     let module = render_prepared_eks(Source::GatedDatabase).await;
-    let gate = format!("({CREATE_GATE} || var.input_database_enabled)");
+    let gate = format!(
+        "({CREATE_GATE} || local.deployment_requests_network || var.input_database_enabled)"
+    );
     let network = compact(
         module
             .get("default_network.tf")
@@ -1728,7 +1734,7 @@ fn eks_follows_the_ownership_of_a_cluster_the_stack_declares() {
     let locals = compact(existing.get("locals.tf").expect("locals.tf"));
     assert!(
         locals.contains(&format!(
-            "deployment_resources = concat({CREATE_GATE} ? [{{ id = \"default-network\""
+            "deployment_resources = concat({NETWORK_GATE} ? [{{ id = \"default-network\""
         )),
         "{locals}"
     );

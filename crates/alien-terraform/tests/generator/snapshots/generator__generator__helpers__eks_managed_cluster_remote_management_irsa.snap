@@ -269,6 +269,7 @@ locals {
   deployment_region            = data.aws_region.current.region
   deployment_management_config = var.deployment_model == "push" ? { platform = "aws", managingRoleArn = var.managing_role_arn } : null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_requests_network  = try(local.advanced_settings.network, null) != null
   generated_kubernetes_exposure = {
     mode = "generated"
     route = {

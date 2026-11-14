@@ -20,46 +20,45 @@ use hcl::{
     Identifier,
 };
 
-/// A gate that is not a deployer input: the module's own `kubernetes_cluster_mode` decides it.
-/// Not a valid stack input id (those are plain identifiers), so it can never collide with one.
-pub const KUBERNETES_CLUSTER_CREATE_GATE: &str = "@kubernetes-cluster-create";
+/// Local (EKS modules) that is true when the deployment settings carry a `network` from
+/// `advanced_settings`, i.e. the deployer asked for one explicitly.
+pub const ADVANCED_NETWORK_LOCAL: &str = "deployment_requests_network";
 
-/// Prefix of a gate that is true for a module-created cluster or while any of the listed
-/// deployer inputs (comma separated, all non-null booleans) is true. Built by
-/// [`kubernetes_network_gate`].
+/// Prefix of a gate that is true for a module-created cluster, an explicitly requested network,
+/// or while any of the listed deployer inputs (comma separated, all non-null booleans, possibly
+/// none) is true. Built by [`kubernetes_network_gate`].
 const KUBERNETES_NETWORK_GATE_PREFIX: &str = "@kubernetes-network:";
 
-/// The gate for a network the manager expects only for a created cluster or a cloud database
-/// whose own gate is on. With no database gates it is [`KUBERNETES_CLUSTER_CREATE_GATE`].
+/// The gate for a network the manager expects for a created cluster, a network the settings
+/// request, or a cloud database whose own gate is on.
 pub fn kubernetes_network_gate(database_gate_inputs: &[&str]) -> String {
-    if database_gate_inputs.is_empty() {
-        KUBERNETES_CLUSTER_CREATE_GATE.to_string()
-    } else {
-        format!(
-            "{KUBERNETES_NETWORK_GATE_PREFIX}{}",
-            database_gate_inputs.join(",")
-        )
-    }
+    format!(
+        "{KUBERNETES_NETWORK_GATE_PREFIX}{}",
+        database_gate_inputs.join(",")
+    )
 }
 
 /// Terraform expression carrying the gate's value.
 ///
 /// An input gate mirrors `terraform_stack_input_variable_name`; the compile-time check
 /// guarantees the input is a non-null boolean, so the expressions below never need a null
-/// guard. [`KUBERNETES_CLUSTER_CREATE_GATE`] is true only for a module-created cluster.
+/// guard.
 fn gate_variable(input_id: &str) -> String {
-    if input_id == KUBERNETES_CLUSTER_CREATE_GATE {
-        return "var.kubernetes_cluster_mode == \"create\"".to_string();
-    }
     if let Some(inputs) = input_id.strip_prefix(KUBERNETES_NETWORK_GATE_PREFIX) {
-        // Plain variables only, so evaluating every operand is safe on any Terraform version.
-        let inputs = inputs
-            .split(',')
-            .map(|input| format!("var.{}", crate::generator::stack_input_variable_name(input)));
-        return format!(
-            "(var.kubernetes_cluster_mode == \"create\" || {})",
-            inputs.collect::<Vec<_>>().join(" || ")
-        );
+        // Plain variables and locals only, so evaluating every operand is safe on any Terraform
+        // version.
+        let operands = ["var.kubernetes_cluster_mode == \"create\"".to_string()]
+            .into_iter()
+            .chain([format!("local.{ADVANCED_NETWORK_LOCAL}")])
+            .chain(
+                inputs
+                    .split(',')
+                    .filter(|input| !input.is_empty())
+                    .map(|input| {
+                        format!("var.{}", crate::generator::stack_input_variable_name(input))
+                    }),
+            );
+        return format!("({})", operands.collect::<Vec<_>>().join(" || "));
     }
     format!(
         "var.{}",

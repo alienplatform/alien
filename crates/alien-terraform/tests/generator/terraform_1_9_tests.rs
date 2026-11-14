@@ -18,8 +18,8 @@
 use super::helpers::{prepare_for_target, prepare_for_target_with, test_pins, test_utils};
 use alien_core::{
     Container, ContainerCode, KubernetesClusterOwnership, KubernetesClusterSettings,
-    KubernetesSettings, PermissionProfile, Postgres, ResourceLifecycle, ResourceSpec, Stack,
-    StackInputDefinition, StackSettings,
+    KubernetesSettings, NetworkSettings, PermissionProfile, Postgres, ResourceLifecycle,
+    ResourceSpec, Stack, StackInputDefinition, StackSettings,
 };
 use alien_terraform::{
     generate_product_terraform_module, TerraformHelmInstall, TerraformOptions,
@@ -177,6 +177,7 @@ fn with_registration_provider_stubbed(
 async fn manager_expected_ids(
     ownership: KubernetesClusterOwnership,
     database: Option<bool>,
+    network: Option<NetworkSettings>,
 ) -> Vec<String> {
     let mut source = source_stack(database.is_some());
     if database == Some(false) {
@@ -191,6 +192,7 @@ async fn manager_expected_ids(
             }),
             exposure: None,
         }),
+        network,
         ..StackSettings::default()
     };
     let stack = prepare_for_target_with(source, TerraformTarget::Eks, settings).await;
@@ -283,8 +285,8 @@ async fn registered_eks_module_evaluates_on_terraform_1_9() {
     let Some(bin_dir) = terraform_1_9_dir() else {
         return;
     };
-    let existing_ids = manager_expected_ids(KubernetesClusterOwnership::Existing, None).await;
-    let created_ids = manager_expected_ids(KubernetesClusterOwnership::Managed, None).await;
+    let existing_ids = manager_expected_ids(KubernetesClusterOwnership::Existing, None, None).await;
+    let created_ids = manager_expected_ids(KubernetesClusterOwnership::Managed, None, None).await;
     assert!(
         existing_ids.contains(&"kubernetes".to_string())
             && !existing_ids.contains(&"default-network".to_string()),
@@ -374,8 +376,10 @@ async fn a_gated_database_decides_the_registered_network_on_terraform_1_9() {
     let Some(bin_dir) = terraform_1_9_dir() else {
         return;
     };
-    let declined = manager_expected_ids(KubernetesClusterOwnership::Existing, Some(false)).await;
-    let accepted = manager_expected_ids(KubernetesClusterOwnership::Existing, Some(true)).await;
+    let declined =
+        manager_expected_ids(KubernetesClusterOwnership::Existing, Some(false), None).await;
+    let accepted =
+        manager_expected_ids(KubernetesClusterOwnership::Existing, Some(true), None).await;
     assert!(
         !declined.contains(&"default-network".to_string()),
         "a declined database leaves an existing cluster without a network: {declined:?}"
@@ -402,6 +406,43 @@ async fn a_gated_database_decides_the_registered_network_on_terraform_1_9() {
         "    input_database_enabled = true",
         &without_database(&accepted),
         "an accepted database keeps the network the manager prepares for it",
+    ));
+    plan_on_terraform_1_9(&module, &runs, &bin_dir);
+}
+
+/// A network the deployer requests through the advanced settings overlay is sent to the manager
+/// even for an existing cluster, and the manager then expects it among the registered resources.
+#[tokio::test]
+async fn an_overlay_network_is_registered_for_an_existing_cluster_on_terraform_1_9() {
+    let Some(bin_dir) = terraform_1_9_dir() else {
+        return;
+    };
+    let requested = NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    let expected =
+        manager_expected_ids(KubernetesClusterOwnership::Existing, None, Some(requested)).await;
+    assert!(
+        expected.contains(&"default-network".to_string()),
+        "the manager prepares the requested network for an existing cluster: {expected:?}"
+    );
+    let without_network =
+        manager_expected_ids(KubernetesClusterOwnership::Existing, None, None).await;
+
+    let stack = prepare_for_target(source_stack(false), TerraformTarget::Eks).await;
+    let module = registered_eks_module(&stack);
+    let mut runs = registration_run(
+        "overlay_network",
+        r#"    advanced_settings_overlay_json = "{\"network\":{\"type\":\"create\",\"availabilityZones\":2}}""#,
+        &expected,
+        "a network requested in the overlay must be registered for an existing cluster",
+    );
+    runs.push_str(&registration_run(
+        "no_overlay_network",
+        "    advanced_settings_overlay_json = \"{}\"",
+        &without_network,
+        "without a requested network an existing cluster registers none",
     ));
     plan_on_terraform_1_9(&module, &runs, &bin_dir);
 }

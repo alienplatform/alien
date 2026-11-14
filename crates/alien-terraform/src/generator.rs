@@ -2705,8 +2705,8 @@ fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
 ///
 /// An existing cluster is already attached to a network, so the manager prepares a stack with no
 /// network for it and setup must create no VPC and register none. The manager still expects the
-/// network when the source stack declares it, declares a `managed` cluster, or has a cloud
-/// database (see `kubernetes_requires_cloud_network` in `alien-preflights`). A database behind
+/// network when the source stack declares it, declares a `managed` cluster, the deployer
+/// requests one in the advanced settings, or the stack has a cloud database (see `kubernetes_requires_cloud_network` in `alien-preflights`). A database behind
 /// `enabled_when` counts only while its gate is on, because the manager drops declined frozen
 /// resources before it prepares the stack.
 ///
@@ -4500,6 +4500,18 @@ fn locals_body(
             ))
         };
         body.push(attr("advanced_settings", advanced_settings));
+    }
+    if matches!(target, TerraformTarget::Eks) {
+        // The settings above send `network` only through `local.advanced_settings`, so a network
+        // the deployer asked for there is exactly what the network gate must follow.
+        body.push(attr(
+            crate::emitters::enabled::ADVANCED_NETWORK_LOCAL,
+            if setup_only {
+                expr::raw("false")
+            } else {
+                expr::raw("try(local.advanced_settings.network, null) != null")
+            },
+        ));
     }
     if target.is_kubernetes() {
         let generated_kubernetes_exposure = extra
