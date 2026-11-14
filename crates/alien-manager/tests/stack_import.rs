@@ -4950,6 +4950,40 @@ async fn an_operator_with_no_key_mints_nothing() {
     assert!(response.deployment_token_expires_at.is_none());
 }
 
+#[tokio::test]
+async fn an_opt_in_without_an_identity_verifier_gets_the_response_it_always_got() {
+    // A manager with no runtime identity (nothing enrolls) cannot mint; the
+    // opt-in is ignored and the import answers as before.
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &opt_in(body)).await;
+    assert_eq!(status, StatusCode::CREATED, "{json:#}");
+    let response: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert!(response.deployment_token_expires_at.is_none());
+    let key = response.deployment_token.expect("the install key, as before");
+    assert!(!key.starts_with("ax_setup_"));
+}
+
+#[tokio::test]
+async fn a_deployment_key_caller_that_opts_in_is_not_handed_a_setup_key() {
+    let mut fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let deployment_id = imported_with_identity(&mut fixture, true).await;
+    // A deployment-scoped key (not the group's install key) asks for one.
+    let deployment_key = mint_token(
+        &fixture.token_store,
+        TokenType::Deployment,
+        "ax_dep_",
+        None,
+        Some(deployment_id.clone()),
+    )
+    .await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (_, json) = post_import(&fixture, Some(&deployment_key), &opt_in(body)).await;
+    if let Ok(response) = serde_json::from_value::<StackImportResponse>(json) {
+        assert!(response.deployment_token_expires_at.is_none());
+    }
+}
+
 /// The create-new network as the verified CloudFormation template delivers it for two availability
 /// zones: registration text built with `Fn::Join`, one entry per real zone. A masked element would
 /// arrive as a literal `null` there and be refused (`invalid type: null, expected a string`), so the
