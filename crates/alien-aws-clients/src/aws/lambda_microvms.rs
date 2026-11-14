@@ -706,9 +706,10 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
                 resource_name: operation.to_string(),
             };
         }
-        // A role without the action gets a 403 AccessDeniedException. Callers branch on this to
-        // fall back when an older role lacks a newer permission.
-        if *http_status == 403 {
+        // A role without the retire action gets a 403 AccessDeniedException. Callers branch on
+        // this to skip cleanup when an older role lacks the newer permission. Other calls keep
+        // their own classification so AWS's "not authorized to perform: lambda:..." text survives.
+        if *http_status == 403 && operation == "UpdateMicrovmImageVersion" {
             return ErrorData::RemoteAccessDenied {
                 resource_type: "MicrovmImage".to_string(),
                 resource_name: operation.to_string(),
@@ -1694,6 +1695,26 @@ mod tests {
     #[test]
     fn an_over_long_expiry_is_clamped_to_the_documented_maximum() {
         assert_eq!(auth_token_body(vec![80], 600)["expirationInMinutes"], 60);
+    }
+
+    /// Only the retire call maps a 403 to `RemoteAccessDenied`; other calls keep AWS's own text.
+    #[test]
+    fn a_403_keeps_its_message_outside_the_retire_call() {
+        let raw = AlienError::new(ErrorData::HttpResponseError {
+            message: "denied".to_string(),
+            url: "https://example.invalid".to_string(),
+            http_status: 403,
+            http_request_text: None,
+            http_response_text: Some("not authorized to perform: lambda:RunMicrovm".to_string()),
+        });
+        assert!(!matches!(
+            classify(&raw, "RunMicrovm"),
+            ErrorData::RemoteAccessDenied { .. }
+        ));
+        assert!(matches!(
+            classify(&raw, "UpdateMicrovmImageVersion"),
+            ErrorData::RemoteAccessDenied { .. }
+        ));
     }
 
     /// Quota exhaustion must arrive as a typed, retryable error naming the

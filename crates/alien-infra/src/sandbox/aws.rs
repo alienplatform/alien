@@ -1501,8 +1501,11 @@ impl AwsSandboxController {
         // A successful version this state does not know came from before versions were
         // retired. It starts the same clock, from now.
         // Older than anything this state replaced, so they go first, in listing order.
+        // Until a serving version is recorded (an adopted image before its first roll), nothing
+        // says which version is in use, so none is treated as replaced.
         let unknown: Vec<RetiredVersion> = succeeded
             .iter()
+            .filter(|_| self.active_version.is_some())
             .filter(|version| !self.retired_versions.iter().any(|e| &e.version == *version))
             .map(|version| {
                 let mut entry = RetiredVersion::new(version.clone());
@@ -1572,15 +1575,18 @@ impl AwsSandboxController {
                         self.retire_denied_at = Some(chrono::Utc::now());
                         break;
                     }
+                    // Cleanup never blocks an update: skip it for this pass and try again on
+                    // the next.
                     Err(error) => {
-                        return Err(error).context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "Failed to set MicroVM image '{identifier}' version '{}' \
-                                 inactive",
-                                entry.version
-                            ),
-                            resource_id: Some(resource_id.to_string()),
-                        })
+                        warn!(
+                            sandbox_id = %resource_id,
+                            image = %identifier,
+                            version = %entry.version,
+                            error = %error,
+                            "Failed to set a replaced MicroVM image version inactive; \
+                             skipping cleanup for this pass"
+                        );
+                        break;
                     }
                 }
             }
@@ -6654,6 +6660,74 @@ mod tests {
             .iter()
             .all(|v| v.inactive_at.is_none()));
         assert!(controller.retire_denied_at.is_some());
+    }
+
+    /// Cleanup never blocks an update: any other failure of the retire call is skipped for the
+    /// pass, not raised.
+    #[tokio::test]
+    async fn a_failed_retire_call_does_not_fail_the_step() {
+        let mut client = ready_client(&[
+            ("1.0", "SUCCESSFUL"),
+            ("2.0", "SUCCESSFUL"),
+            ("3.0", "SUCCESSFUL"),
+        ]);
+        client
+            .expect_update_microvm_image_version()
+            .returning(|_, _, _| {
+                Err(AlienError::new(CloudClientErrorData::GenericError {
+                    message: "boom".to_string(),
+                }))
+            });
+        client.expect_delete_microvm_image_version().never();
+        let mut controller = ready_controller();
+        controller.active_version = Some("3.0".to_string());
+        controller.retired_versions = vec![retired("1.0", None), retired("2.0", None)];
+        let mut executor = executor(controller, client).await;
+        executor
+            .step()
+            .await
+            .expect("a failed retire is not an error");
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert!(controller
+            .retired_versions
+            .iter()
+            .all(|v| v.inactive_at.is_none()));
+    }
+
+    /// An adopted image has no recorded serving version before its first roll, so nothing says
+    /// which listed version is in use: the cleanup that runs before that roll retires none.
+    #[tokio::test]
+    async fn an_adopted_image_retires_nothing_before_its_first_roll() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                description: None,
+                image_identifier: Some("test-agents".to_string()),
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        client
+            .expect_list_microvm_image_versions()
+            .returning(|_| Ok(listed(&[("1.0", "SUCCESSFUL"), ("0.9", "SUCCESSFUL")])));
+        client.expect_update_microvm_image_version().never();
+        client.expect_delete_microvm_image_version().never();
+        client.expect_update_microvm_image().returning(|_, _| {
+            Ok(UpdateMicrovmImageResponse {
+                image_arn: Some(IMAGE_ARN.to_string()),
+                name: Some("test-agents".to_string()),
+                state: Some("UPDATING".to_string()),
+                image_version: Some("2.0".to_string()),
+            })
+        });
+        let mut executor = executor(runtime_seeded_controller(), client).await;
+        executor.step().await.expect("adopt and roll");
+        let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+        assert!(controller
+            .retired_versions
+            .iter()
+            .all(|v| v.inactive_at.is_none()));
     }
 
     /// A dependent whose config did not change can still run the previous binding until its
