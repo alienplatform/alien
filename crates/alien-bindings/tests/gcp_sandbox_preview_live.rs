@@ -261,11 +261,17 @@ async fn live_preview_http_websocket_and_refusals() {
         for port in &ports {
             fresh.push(provider.preview(&first.sandbox_id, *port).await.expect("preview"));
         }
-        let path = std::env::temp_dir().join("a2657-previews.json");
-        std::fs::write(&path, serde_json::to_vec(&fresh).unwrap()).unwrap();
+        // The file holds credentials, so it is created unreadable by others and removed when
+        // `contracts` drops, which is after the driver has finished.
+        let mut contracts = tempfile::NamedTempFile::new().expect("temp file");
+        std::io::Write::write_all(&mut contracts, &serde_json::to_vec(&fresh).unwrap())
+            .expect("write the contracts");
+        std::io::Write::flush(&mut contracts).expect("flush the contracts");
         let driver = env("GCP_PREVIEW_WS_CHECK");
-        let result = std::process::Command::new(driver).arg(&path).output().expect("driver runs");
-        let _ = std::fs::remove_file(&path);
+        let result = std::process::Command::new(driver)
+            .arg(contracts.path())
+            .output()
+            .expect("driver runs");
         eprintln!("{}", String::from_utf8_lossy(&result.stdout));
         eprintln!("{}", String::from_utf8_lossy(&result.stderr));
         assert!(result.status.success(), "the WebSocket checks failed");
