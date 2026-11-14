@@ -1716,6 +1716,22 @@ async fn prepare_import_stack(
     .await
 }
 
+/// The message of the innermost error in the chain. A wrapper such as "Mutation execution
+/// failed" says nothing the installer can act on; the cause underneath names the setting (for
+/// example a machine too small for a container).
+fn root_cause_message<T>(error: &AlienError<T>) -> String
+where
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    let mut message = error.message.as_str();
+    let mut source = error.source.as_deref();
+    while let Some(inner) = source {
+        message = inner.message.as_str();
+        source = inner.source.as_deref();
+    }
+    message.to_string()
+}
+
 /// What stack preparation reads from a setup registration or a chart report.
 pub(super) struct PrepareSetupStack<'a> {
     pub platform: Platform,
@@ -1744,7 +1760,7 @@ pub(super) async fn prepare_setup_stack(
             AlienError::new(ErrorData::BadRequest {
                 reason: format!(
                     "Source stack failed setup import preflights: {}",
-                    err.message
+                    root_cause_message(&err)
                 ),
             })
         })?;
@@ -1825,7 +1841,7 @@ pub(super) async fn prepare_setup_stack(
             AlienError::new(ErrorData::BadRequest {
                 reason: format!(
                     "Failed to derive expected setup stack from import settings: {}",
-                    err.message
+                    root_cause_message(&err)
                 ),
             })
         })?;
@@ -3177,5 +3193,31 @@ mod setup_update_authorization_tests {
             !imported.resources.contains_key("frozen-old"),
             "an omitted setup-owned resource must remain removed"
         );
+    }
+}
+
+#[cfg(test)]
+mod root_cause_tests {
+    use super::*;
+    use alien_error::{AlienError, GenericError};
+
+    #[test]
+    fn the_innermost_message_is_what_the_installer_sees() {
+        let inner = AlienError::new(GenericError {
+            message: "Pool 'general' machine 'm7g.large' cannot fit one replica".to_string(),
+        });
+        let wrapped = AlienError::new(GenericError {
+            message: "Mutation execution failed".to_string(),
+        });
+        let mut wrapped = wrapped;
+        wrapped.source = Some(Box::new(inner));
+        assert_eq!(
+            root_cause_message(&wrapped),
+            "Pool 'general' machine 'm7g.large' cannot fit one replica"
+        );
+        let alone = AlienError::new(GenericError {
+            message: "No cause".to_string(),
+        });
+        assert_eq!(root_cause_message(&alone), "No cause");
     }
 }
