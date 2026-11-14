@@ -217,34 +217,52 @@ impl ValueStore {
             }
             return Ok(held);
         }
-        let sources = self.list(from).await?;
+        // The slots this claim covers, with the source version of each, are
+        // recorded before anything is copied. A retry after a crash reuses
+        // that set instead of reading the source afresh: an answer written to
+        // the source in between is newer than what the claim covered.
+        let mut marked = self.recorded_slots(to, &key).await?;
+        if marked.is_empty() {
+            for stored in self.list(from).await? {
+                self.write_marker(to, &key, &stored.slot, stored.updated_at)
+                    .await?;
+            }
+            marked = self.recorded_slots(to, &key).await?;
+        }
         let mut copied = Vec::new();
-        for stored in &sources {
-            let stored = StoredValue {
-                updated_at: now_in_stored_precision(),
-                ..stored.clone()
+        let mut removable = Vec::new();
+        for (name, version) in marked {
+            let slot = ValueSlot::from_stored(&name)?;
+            let Some(current) = self.backend.get(from, &slot).await? else {
+                // Removed from the source since: nothing to copy; a copy that
+                // was already made stays.
+                if let Some(held) = self.get(to, &slot).await? {
+                    copied.push(held.meta(to)?);
+                }
+                continue;
             };
-            self.backend.put_if_absent(to, &stored).await?;
-            let held = self.get(to, &stored.slot).await?.ok_or_else(|| {
-                ErrorData::internal(format!("Slot '{}' vanished during a copy", stored.slot))
+            let mut version = version;
+            if self.backend.get(to, &slot).await?.is_none() {
+                // Not copied yet, so it takes the source's current answer.
+                self.backend
+                    .put_if_absent(
+                        to,
+                        &StoredValue {
+                            updated_at: now_in_stored_precision(),
+                            ..current.clone()
+                        },
+                    )
+                    .await?;
+                version = current.updated_at;
+                self.write_marker(to, &key, &slot, version).await?;
+            }
+            let held = self.get(to, &slot).await?.ok_or_else(|| {
+                ErrorData::internal(format!("Slot '{}' vanished during a copy", slot))
             })?;
             copied.push(held.meta(to)?);
-        }
-        // One small marker per slot, then the completion record: no single
-        // value grows with the number of slots.
-        // The marker's own time is the version of the source value that was copied.
-        for (meta, source) in copied.iter().zip(&sources) {
-            self.backend
-                .put(
-                    to,
-                    &StoredValue {
-                        slot: ValueSlot::moved(&slot_marker_key(&key, meta.slot.as_str())),
-                        kind: ValueKind::Plain,
-                        value: meta.slot.as_str().to_string(),
-                        updated_at: source.updated_at.clone(),
-                    },
-                )
-                .await?;
+            if current.updated_at == version {
+                removable.push(slot);
+            }
         }
         self.backend
             .put(
@@ -258,11 +276,33 @@ impl ValueStore {
             )
             .await?;
         if remove_source {
-            for stored in &sources {
-                self.backend.delete(from, &stored.slot).await?;
+            for slot in &removable {
+                self.backend.delete(from, slot).await?;
             }
         }
         Ok(copied)
+    }
+
+    /// One small marker per slot of a transfer: its value is the slot name and
+    /// its time is the version of the source value the transfer covers.
+    async fn write_marker(
+        &self,
+        to: &ValueScope,
+        key: &str,
+        slot: &ValueSlot,
+        version: DateTime<Utc>,
+    ) -> Result<()> {
+        self.backend
+            .put(
+                to,
+                &StoredValue {
+                    slot: ValueSlot::moved(&slot_marker_key(key, slot.as_str())),
+                    kind: ValueKind::Plain,
+                    value: slot.as_str().to_string(),
+                    updated_at: version,
+                },
+            )
+            .await
     }
 
     /// The slot names a finished transfer recorded, one marker each, with the
@@ -635,6 +675,8 @@ mod tests {
     struct CrashingDeletes {
         inner: super::backend::KvValueBackend,
         allowed: std::sync::atomic::AtomicUsize,
+        /// How many copies (`put_if_absent`) are still allowed.
+        copies: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait::async_trait]
@@ -643,6 +685,14 @@ mod tests {
             self.inner.put(s, v).await
         }
         async fn put_if_absent(&self, s: &ValueScope, v: &StoredValue) -> Result<bool> {
+            use std::sync::atomic::Ordering;
+            if self
+                .copies
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_err()
+            {
+                return Err(ErrorData::internal("crash".to_string()));
+            }
             self.inner.put_if_absent(s, v).await
         }
         async fn get(&self, s: &ValueScope, slot: &ValueSlot) -> Result<Option<StoredValue>> {
@@ -674,6 +724,7 @@ mod tests {
         let backend = Arc::new(CrashingDeletes {
             inner: sealed_backend(Arc::new(kv)).1,
             allowed: std::sync::atomic::AtomicUsize::new(allowed),
+            copies: std::sync::atomic::AtomicUsize::new(usize::MAX),
         });
         let store = ValueStore::new(backend.clone());
         (dir, backend, store)
@@ -701,6 +752,41 @@ mod tests {
         assert_eq!(names, ["env:A", "env:B", "env:C"]);
         assert!(store.list(&reg).await.unwrap().is_empty());
         assert_eq!(store.list(&dep).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_retry_after_a_partial_copy_keeps_an_answer_written_to_the_source_meanwhile() {
+        use std::sync::atomic::Ordering;
+        let (_dir, backend, store) = crashing_store(100).await;
+        let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
+        for name in ["env:A", "env:B"] {
+            store
+                .put(&reg, &slot(name), ValueKind::Plain, "old".into())
+                .await
+                .unwrap();
+        }
+        // Dies after copying the first slot, before the completion record.
+        backend.copies.store(1, Ordering::SeqCst);
+        assert!(store.move_scope(&reg, &dep, "claim").await.is_err());
+        assert_eq!(store.list(&dep).await.unwrap().len(), 1);
+
+        // A newer answer to the copied slot lands before the retry.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        store
+            .put(&reg, &slot("env:A"), ValueKind::Plain, "new".into())
+            .await
+            .unwrap();
+        backend.copies.store(100, Ordering::SeqCst);
+        let held = store.move_scope(&reg, &dep, "claim").await.unwrap();
+        assert_eq!(held.len(), 2);
+        // The newer answer was not covered by the claim: it is not deleted.
+        let kept = store.get(&reg, &slot("env:A")).await.unwrap().unwrap();
+        assert_eq!(kept.value, "new");
+        assert!(store.get(&reg, &slot("env:B")).await.unwrap().is_none());
+        assert_eq!(
+            store.get(&dep, &slot("env:B")).await.unwrap().unwrap().value,
+            "old"
+        );
     }
 
     #[tokio::test]
