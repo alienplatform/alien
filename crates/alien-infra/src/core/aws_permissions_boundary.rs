@@ -285,9 +285,38 @@ fn recorded_boundary_name(
         "key" => read_controller::<AwsKeyController>(saved, scope)?.key_arn,
         _ => return Ok(None),
     };
-    Ok(Some(name.filter(|name| !name.is_empty()).ok_or_else(
-        || unresolved(scope, "the controller has not recorded its physical name"),
-    )?))
+    let name = name.filter(|name| !name.is_empty());
+    // A controller is initialised in one executor round and runs its first step in the next.
+    // In between it holds no name, and it has written nothing, so the writer's naming rule
+    // names it exactly as it does a resource that has not started. Any other state without a
+    // name is a record that lost it, and stays an error.
+    if name.is_none()
+        && matches!(
+            resource_type.as_str(),
+            "storage" | "queue" | "kv" | "build" | "worker" | "vault"
+        )
+        && waiting_for_first_step(saved)
+    {
+        return Ok(None);
+    }
+    Ok(Some(name.ok_or_else(|| {
+        unresolved(scope, "the controller has not recorded its physical name")
+    })?))
+}
+
+/// Whether the controller was initialised and has not run a step yet: provisioning, at the
+/// first state of its create flow, with no failure recorded.
+fn waiting_for_first_step(saved: Option<&StackResourceState>) -> bool {
+    saved.is_some_and(|saved| {
+        saved.status == ResourceStatus::Provisioning
+            && saved.last_failed_state.is_none()
+            && saved
+                .internal_state
+                .as_ref()
+                .and_then(|state| state.get("state"))
+                .and_then(Value::as_str)
+                == Some("createStart")
+    })
 }
 
 fn read_controller<T: DeserializeOwned>(
@@ -429,6 +458,68 @@ mod tests {
             error.to_string().contains("controller state is missing"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_resource_waiting_for_its_first_step_uses_the_deterministic_name() {
+        let stack = Stack::new("boundary".to_string())
+            .permission("reader", {
+                let mut profile = PermissionProfile::new();
+                profile.0.insert(
+                    "secrets".to_string(),
+                    vec![PermissionSetReference::from_inline(
+                        serde_json::from_value(json!({
+                            "id": "vault/custom", "description": "Approved parameters",
+                            "platforms": {"aws": [{"grant": {"actions": ["ssm:GetParameter"]},
+                                "binding": {"resource": {"resources": [
+                                    "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${resourceName}-approved/*"
+                                ]}}}]}
+                        }))
+                        .unwrap(),
+                    )],
+                );
+                profile
+            })
+            .add(Vault::new("secrets".to_string()).build(), ResourceLifecycle::Frozen)
+            .build();
+        // Initialised in the previous round: provisioning, default controller, no name yet.
+        let mut state = saved_resource(
+            &stack,
+            "secrets",
+            serde_json::to_value(AwsVaultController::default()).unwrap(),
+        );
+        state.resources.get_mut("secrets").unwrap().status = ResourceStatus::Provisioning;
+        let waiting = aws_permissions_boundary_for_stack(&stack, &state, &context()).unwrap();
+        let unstarted =
+            aws_permissions_boundary_for_stack(&stack, &StackState::new(Platform::Aws), &context())
+                .unwrap();
+        assert_eq!(waiting, unstarted);
+
+        // A record that lost its name, or one that already failed, is still refused.
+        state.resources.get_mut("secrets").unwrap().status = ResourceStatus::Running;
+        assert!(aws_permissions_boundary_for_stack(&stack, &state, &context()).is_err());
+        state.resources.get_mut("secrets").unwrap().status = ResourceStatus::Provisioning;
+        state
+            .resources
+            .get_mut("secrets")
+            .unwrap()
+            .internal_state
+            .as_mut()
+            .unwrap()["state"] = json!("applyingResourcePermissions");
+        assert!(aws_permissions_boundary_for_stack(&stack, &state, &context()).is_err());
+
+        // Once the vault records its prefix the boundary names it.
+        let recorded = AwsVaultController {
+            vault_prefix: Some("imported-secrets".to_string()),
+            ..Default::default()
+        };
+        let mut state = saved_resource(&stack, "secrets", serde_json::to_value(recorded).unwrap());
+        state.resources.get_mut("secrets").unwrap().status = ResourceStatus::Provisioning;
+        let required = json!({"Version": "2012-10-17", "Statement": [{"Effect": "Allow",
+            "Action": "ssm:GetParameter",
+            "Resource": "arn:aws:ssm:us-east-1:123456789012:parameter/imported-secrets-approved/*"}]});
+        let boundary = aws_permissions_boundary_for_stack(&stack, &state, &context()).unwrap();
+        assert!(aws_permissions_boundary_covers(&boundary, &required).unwrap());
     }
 
     #[test]

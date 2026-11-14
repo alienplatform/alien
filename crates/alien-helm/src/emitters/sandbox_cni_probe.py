@@ -109,7 +109,9 @@ def main():
         return {
             "apiVersion": "v1", "kind": "Pod",
             "metadata": {"name": prefix + "-" + role,
-                         "labels": {"alien.dev/cni-probe": prefix, "alien.dev/cni-role": role}},
+                         "labels": {"alien.dev/cni-probe": prefix, "alien.dev/cni-role": role},
+                         # Consolidation of an "underutilized" node would evict a probe pod mid-run.
+                         "annotations": {"karpenter.sh/do-not-disrupt": "true"}},
             "spec": {
                 "automountServiceAccountToken": False, "restartPolicy": "Never",
                 "activeDeadlineSeconds": 240, "terminationGracePeriodSeconds": 1,

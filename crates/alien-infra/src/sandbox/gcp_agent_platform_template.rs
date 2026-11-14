@@ -34,6 +34,9 @@ use alien_macros::controller;
 /// Lifecycle state the API reports for a template that is ready to cut sessions from.
 const TEMPLATE_ACTIVE: &str = "ACTIVE";
 
+/// State the API reports for a template whose container exited (it gives no reason).
+const TEMPLATE_FAILED: &str = "FAILED";
+
 /// Last path segment of a resource name — the id the client interpolates back into its paths.
 fn last_segment(name: &str) -> &str {
     name.rsplit('/').next().unwrap_or(name)
@@ -164,15 +167,23 @@ fn build_template_body(
     let (image, limits, internet_access) = template_identity(sandbox)?;
     let image = pulled_image(&image, deployment_config, sandbox.id())?;
 
-    // cpu and memory are the ceilings the API's resource map expresses; disk and max_processes have
-    // no field on this template and are enforced by the runtime tier instead.
+    // cpu, memory and ephemeral-storage are the ceilings the API's resource map expresses;
+    // max_processes has no field on this template. The API refuses ephemeral-storage above its
+    // cap, which `validate_for_platform` already refuses at plan time.
     let resources = ContainerResources {
         requests: None,
         limits: Some(HashMap::from([
             ("cpu".to_string(), limits.cpu),
             ("memory".to_string(), limits.memory),
+            ("ephemeral-storage".to_string(), limits.disk),
         ])),
     };
+
+    // Ingress only reaches a port the template declares: the agent's own, then every preview port.
+    let mut declared_ports = vec![i32::from(GCP_AGENT_PLATFORM.port)];
+    declared_ports.extend(sandbox.preview_ports.iter().map(|port| i32::from(*port)));
+    declared_ports.sort_unstable();
+    declared_ports.dedup();
 
     Ok(SandboxEnvironmentTemplate {
         name: None,
@@ -189,10 +200,13 @@ fn build_template_body(
             // Must match the port the published image EXPOSEs and listens on. `TCP` is spelled
             // out because every create this preview API has accepted carried it, and no request
             // omitting it has ever been shown to be accepted.
-            ports: vec![ContainerPort {
-                port: i32::from(GCP_AGENT_PLATFORM.port),
-                protocol: Some("TCP".to_string()),
-            }],
+            ports: declared_ports
+                .into_iter()
+                .map(|port| ContainerPort {
+                    port,
+                    protocol: Some("TCP".to_string()),
+                })
+                .collect(),
             extra: Default::default(),
         }),
         egress_control_config: Some(EgressControlConfig {
@@ -214,12 +228,13 @@ async fn create_template(
     engine: &str,
     body: SandboxEnvironmentTemplate,
 ) -> Result<Option<String>> {
-    let wire = serde_json::to_value(&body)
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "The sandbox template does not serialize".to_string(),
-            resource_id: Some(sandbox_id.to_string()),
-        })?;
+    let wire =
+        serde_json::to_value(&body)
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "The sandbox template does not serialize".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
     if let Some(name) = crate::core::verifier::gcp_sandbox_operation(
         ctx,
         sandbox_id,
@@ -423,6 +438,18 @@ impl GcpAgentPlatformTemplateController {
                 resource_id: Some(config.id.clone()),
             },
         )?;
+
+        if template.state.as_deref() == Some(TEMPLATE_FAILED) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "template '{pending}' FAILED without a reason. Agent Platform reports this \
+                     when the image's container exits at start: its ENTRYPOINT must keep running \
+                     in the foreground and serve the declared ports, and the image must be \
+                     linux/amd64"
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
 
         if template.state.as_deref() != Some(TEMPLATE_ACTIVE) {
             return Ok(HandlerAction::Stay {
@@ -854,7 +881,7 @@ mod tests {
             display_name: None,
             custom_container_environment: None,
             egress_control_config: None,
-            state: Some(TEMPLATE_ACTIVE.to_string()),
+                state: Some(TEMPLATE_ACTIVE.to_string()),
             extra: Default::default(),
         }
     }
@@ -1374,7 +1401,7 @@ mod tests {
         let provider = provider_with(Arc::new(m));
 
         let mut executor = SingleControllerExecutor::builder()
-            .resource(sandbox_with(SandboxEgress::None, "old:v1", None, None))
+            .resource(sandbox_with(SandboxEgress::Allow, "old:v1", None, None))
             .controller(GcpAgentPlatformTemplateController::mock_ready(
                 "eng", "tpl1",
             ))
@@ -1386,7 +1413,7 @@ mod tests {
             .expect("executor builds");
 
         executor
-            .update(sandbox_with(SandboxEgress::None, "new:v2", None, None))
+            .update(sandbox_with(SandboxEgress::Allow, "new:v2", None, None))
             .expect("update accepted");
         executor.run_until_terminal().await.expect("replace runs");
         assert_eq!(executor.status(), ResourceStatus::Running);
@@ -1482,6 +1509,34 @@ mod tests {
 
     // ---- 5. Validation: the body carried, and the egress refusal. ------------------------------
 
+    /// A container that exits leaves the template FAILED with no reason. The create must stop at
+    /// once and say what usually causes it, not poll a template that will never become ACTIVE.
+    #[tokio::test]
+    async fn a_failed_template_stops_the_create_and_names_the_likely_cause() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_create_template()
+            .returning(|_, _| Ok(pending_op()));
+        m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
+        m.expect_get_template().returning(|_, id| {
+            Ok(SandboxEnvironmentTemplate {
+                state: Some("FAILED".to_string()),
+                ..active_template(id)
+            })
+        });
+        let mut executor = build_executor(
+            sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None),
+            provider_with(Arc::new(m)),
+        )
+        .await;
+        let result = executor.run_until_terminal().await;
+        let message = format!(
+            "{:?}",
+            result.expect_err("a FAILED template must fail the create")
+        );
+        assert!(message.contains("exits"), "{message}");
+        assert!(message.contains("foreground"), "{message}");
+    }
+
     #[tokio::test]
     async fn create_carries_the_declared_image_limits_and_egress() {
         let mut m = MockAgentPlatformApi::new();
@@ -1555,6 +1610,71 @@ mod tests {
             serde_json::json!([{ "port": GCP_AGENT_PLATFORM.port, "protocol": "TCP" }]),
             "the create body must carry the port and protocol the API has accepted"
         );
+    }
+
+    /// The verifier signs off on exactly the body the controller builds, disk ceiling and agent
+    /// port included, and refuses the same body with a different disk ceiling or an extra key.
+    #[test]
+    fn the_verifier_accepts_the_controllers_full_template_body() {
+        use alien_verifier::cloud_write::resource::check_sandbox_template;
+        let sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let body = build_template_body(&sandbox, "pfx-agent-sbx", &deployment_config(None, None))
+            .expect("a valid sandbox builds a body");
+        let wire = serde_json::to_value(&body).expect("the template body serializes");
+        let disk = sandbox.resolved_limits().disk;
+        assert_eq!(
+            wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],
+            serde_json::json!(disk)
+        );
+        check_sandbox_template(&sandbox, "pfx", "123", &wire).expect("the controller's own body");
+
+        let mut other_disk = wire.clone();
+        other_disk["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"] =
+            serde_json::json!("1Gi");
+        check_sandbox_template(&sandbox, "pfx", "123", &other_disk)
+            .expect_err("a disk ceiling that is not the signed one");
+        let mut extra = wire.clone();
+        extra["customContainerEnvironment"]["resources"]["limits"]["gpu"] = serde_json::json!("1");
+        check_sandbox_template(&sandbox, "pfx", "123", &extra).expect_err("an extra limit");
+        let mut other_port = wire;
+        other_port["customContainerEnvironment"]["ports"][0]["port"] = serde_json::json!(8080);
+        check_sandbox_template(&sandbox, "pfx", "123", &other_port).expect_err("another port");
+    }
+
+    #[test]
+    fn build_template_body_declares_preview_ports_and_disk() {
+        let mut sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
+        sandbox.preview_ports = vec![8081, 8090, 8080];
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+            .expect("a valid sandbox builds a body");
+        let wire = serde_json::to_value(&body).expect("the template body serializes");
+        let ports: Vec<i64> = wire["customContainerEnvironment"]["ports"]
+            .as_array()
+            .expect("ports")
+            .iter()
+            .map(|p| p["port"].as_i64().expect("port"))
+            .collect();
+        assert_eq!(
+            ports,
+            vec![8080, 8081, 8090, 8971],
+            "agent port once, then each preview port"
+        );
+        assert_eq!(
+            wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],
+            "8Gi"
+        );
+    }
+
+    #[test]
+    fn build_template_body_leaves_network_placement_default() {
+        let sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+            .expect("builds");
+        let wire = serde_json::to_value(&body).expect("serializes");
+        assert!(wire["egressControlConfig"]
+            .get("networkAttachment")
+            .is_none());
+        assert!(wire.get("ingressControlConfig").is_none());
     }
 
     fn deployment_config(
