@@ -529,26 +529,55 @@ pub fn subnet_refs(prefix: &str, kind: &str) -> CfExpression {
     ])
 }
 
-/// Per-AZ availability-zone names with the same `Fn::If` masking.
+/// The same refs for the setup registration: the list for the requested zone
+/// count, chosen whole (see `complete_lists_by_zone_count`).
+pub fn registered_subnet_refs(prefix: &str, kind: &str) -> CfExpression {
+    complete_lists_by_zone_count(
+        CONDITION_NETWORK_CREATE_AZ3,
+        CONDITION_NETWORK_CREATE_AZ2,
+        (1..=3)
+            .map(|zone| CfExpression::ref_(format!("{prefix}{kind}{zone}")))
+            .collect(),
+    )
+}
+
+/// Per-AZ availability-zone names for the setup registration, chosen whole by zone count.
 pub fn availability_zone_names(ctx: &EmitContext<'_>) -> CfExpression {
     let zones = if super::eks_availability_zones::required(ctx) {
         super::eks_availability_zones::zones("ZoneNames")
     } else {
         get_azs()
     };
-    CfExpression::list([
-        select(0, zones.clone()),
+    complete_lists_by_zone_count(
+        CONDITION_NETWORK_AZ3,
+        CONDITION_NETWORK_AZ2,
+        (0..3).map(|index| select(index, zones.clone())).collect(),
+    )
+}
+
+/// One list per zone count, chosen whole. A list that masks its 2nd and 3rd
+/// elements with `Fn::If(.., AWS::NoValue)` loses them natively, but the verified
+/// setup intent carries the registration as JSON text, where each masked element
+/// becomes a literal `null` that the importer rejects.
+fn complete_lists_by_zone_count(
+    three_zones: &str,
+    two_zones: &str,
+    values: Vec<CfExpression>,
+) -> CfExpression {
+    let [first, second, third]: [CfExpression; 3] = values
+        .try_into()
+        .unwrap_or_else(|_| unreachable!("a network spans at most three zones"));
+    // The three-zone condition only holds when the two-zone one does, and a
+    // reference to the second zone's resource must sit under its own condition.
+    CfExpression::if_(
+        two_zones,
         CfExpression::if_(
-            CONDITION_NETWORK_AZ2,
-            select(1, zones.clone()),
-            CfExpression::no_value(),
+            three_zones,
+            CfExpression::list([first.clone(), second.clone(), third]),
+            CfExpression::list([first.clone(), second]),
         ),
-        CfExpression::if_(
-            CONDITION_NETWORK_AZ3,
-            select(2, zones),
-            CfExpression::no_value(),
-        ),
-    ])
+        CfExpression::list([first]),
+    )
 }
 
 /// Whether the template withholds `use-default` from `NetworkMode`, so setup always names subnets:
