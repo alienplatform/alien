@@ -842,6 +842,7 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
             setup_target: "kubernetes".to_string(),
             setup_fingerprint: "test".to_string(),
             setup_fingerprint_version: 1,
+            destroy_guard: true,
         }),
         helm_install,
         supported_aws_regions: Vec::new(),
@@ -895,6 +896,143 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
         .all(|(_, contents)| !contents.contains("destroy_guard")));
 }
 
+/// Resource blocks of a rendered module by address, each as its exact text.
+fn resource_blocks(
+    module: &alien_terraform::ModuleFiles,
+) -> std::collections::BTreeMap<String, String> {
+    let mut blocks = std::collections::BTreeMap::new();
+    for (file, contents) in module.iter() {
+        if !file.ends_with(".tf") {
+            continue;
+        }
+        let lines: Vec<&str> = contents.lines().collect();
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            if let Some(rest) = line.strip_prefix("resource \"") {
+                let parts: Vec<&str> = rest.split('"').collect();
+                let address = format!("{}.{}", parts[0], parts[2]);
+                let mut end = i;
+                while lines[end] != "}" {
+                    end += 1;
+                }
+                let text = lines[i..=end].join("\n");
+                assert!(
+                    blocks.insert(address.clone(), text).is_none(),
+                    "{address} defined twice"
+                );
+                i = end;
+            }
+            i += 1;
+        }
+    }
+    blocks
+}
+
+/// A module made before the guard existed (`destroy_guard` false) and the same
+/// module with it differ only by the guard, so the first plan of an upgrade
+/// adds one resource and destroys or replaces nothing.
+#[test]
+fn destroy_guard_is_the_only_change_between_old_and_new_registered_modules() {
+    let stack = Stack::new("eks-destroy-guard-upgrade".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("production".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let registry = TfRegistry::built_in();
+    let render = |destroy_guard: bool, product: bool| {
+        let options = TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings::default(),
+            registration: Some(TerraformRegistration {
+                provider_name: "acme_app".to_string(),
+                provider_source: "pkg.example.com/acme/app".to_string(),
+                provider_version: "1.0.0".to_string(),
+                resource_type: "deployment".to_string(),
+                release_id: Some("rel-test".to_string()),
+                setup_target: "kubernetes".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                destroy_guard,
+            }),
+            helm_install: Some(TerraformHelmInstall {
+                chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                release_name: "acme-operator".to_string(),
+            }),
+            supported_aws_regions: Vec::new(),
+        };
+        if product {
+            generate_product_terraform_module(&stack, TerraformTarget::Eks, options, false)
+        } else {
+            generate_terraform_module(&stack, TerraformTarget::Eks, options)
+        }
+        .expect("module should render")
+    };
+
+    for product in [true, false] {
+        let old = render(false, product);
+        let new = render(true, product);
+        let old_blocks = resource_blocks(&old);
+        let new_blocks = resource_blocks(&new);
+
+        assert!(
+            old_blocks
+                .keys()
+                .all(|address| new_blocks.contains_key(address)),
+            "every old resource address stays"
+        );
+        let added: Vec<&String> = new_blocks
+            .keys()
+            .filter(|address| !old_blocks.contains_key(*address))
+            .collect();
+        assert_eq!(added, vec!["acme_app_destroy_guard.this"]);
+        for (address, text) in &old_blocks {
+            assert_eq!(&new_blocks[address], text, "{address} is byte-identical");
+        }
+        for (file, contents) in new.iter() {
+            for forbidden in ["moved {", "replace_triggered_by"] {
+                assert_eq!(
+                    contents.matches(forbidden).count(),
+                    old.get(file)
+                        .map_or(0, |old_contents| old_contents.matches(forbidden).count()),
+                    "{file} gains no `{forbidden}`"
+                );
+            }
+        }
+        // Outside the guard block and the README, nothing differs.
+        for (file, contents) in old.iter() {
+            if file == "README.md" {
+                continue;
+            }
+            let new_contents = new.get(file).expect("file stays");
+            let without_guard = new_contents.replace(
+                &format!("{}\n", new_blocks["acme_app_destroy_guard.this"]),
+                "",
+            );
+            let normalize = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert_eq!(
+                normalize(&without_guard),
+                normalize(contents),
+                "{file} differs only by the guard"
+            );
+        }
+        // Without the flag, neither the module nor its README mention a guard.
+        assert!(old
+            .iter()
+            .all(|(_, contents)| !contents.contains("destroy_guard")
+                && !contents.contains("--erase-data")));
+    }
+}
+
 #[test]
 fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     let stack = Stack::new("eks-registered-setup-values".to_string())
@@ -927,6 +1065,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
                 setup_target: "kubernetes".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
+                destroy_guard: false,
             }),
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
@@ -1113,6 +1252,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
                 setup_target: "kubernetes".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
+                destroy_guard: false,
             }),
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),

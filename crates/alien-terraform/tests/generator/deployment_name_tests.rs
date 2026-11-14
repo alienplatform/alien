@@ -43,6 +43,7 @@ fn registered_module(display_name: Option<&str>) -> ModuleFiles {
                 setup_target: "aws".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
+                destroy_guard: false,
             }),
             helm_install: None,
             supported_aws_regions: Vec::new(),
