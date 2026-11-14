@@ -97,15 +97,13 @@ pub(super) fn subnet_label(network: &str, sandbox: &str) -> String {
     format!("{network}_sandbox_{sandbox}")
 }
 
-/// Host numbers of the two gateway VMs inside the gateway subnet. Azure reserves .0 to .3, so
-/// the first two usable addresses are .4 and .5; setup pins them as static private IPs.
-pub(super) const GATEWAY_HOSTS: [u8; 2] = [4, 5];
+use super::sandbox_gateway_vm::GATEWAY_HOSTS;
 
-/// Terraform expression for the static private IP of gateway replica `index`.
-pub(super) fn gateway_ip(network: &str, index: usize) -> Expression {
+/// Terraform expression for the static private IP at host number `host` of the gateway subnet.
+/// Azure reserves .0 to .3, so the gateway VMs take .4 and .5 (`GATEWAY_HOSTS`).
+pub(super) fn gateway_ip(network: &str, host: usize) -> Expression {
     expr::raw(format!(
-        "cidrhost(azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0], {})",
-        GATEWAY_HOSTS[index]
+        "cidrhost(azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0], {host})"
     ))
 }
 
@@ -119,7 +117,7 @@ fn gateway_rules(fragment: &mut TfFragment, label: &str, network: &str) {
             Rule {
                 name: &format!("gateway_{index}"),
                 priority: 100 + index as i64,
-                destination: gateway_ip(network, index),
+                destination: gateway_ip(network, GATEWAY_HOSTS[index]),
                 allowed_ports: Some(BTreeSet::from(["3128".to_string()])),
                 protocol: "Tcp",
             },
