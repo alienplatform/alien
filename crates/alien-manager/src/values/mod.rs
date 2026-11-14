@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use alien_error::AlienError;
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 
 use crate::error::{ErrorData, Result};
 
@@ -199,10 +199,17 @@ impl ValueStore {
             // source slot is removed, so a retry only finishes the removal
             // and reports what the destination holds for the recorded slots.
             let mut held = Vec::new();
-            for name in self.recorded_slots(to, &key).await? {
+            for (name, copied_version) in self.recorded_slots(to, &key).await? {
                 let slot = ValueSlot::from_stored(&name)?;
                 if remove_source {
-                    self.backend.delete(from, &slot).await?;
+                    // Remove only the version that was copied: an answer written
+                    // to the source since (after the first attempt finished) is
+                    // a newer one and stays.
+                    if let Some(current) = self.backend.get(from, &slot).await? {
+                        if current.updated_at == copied_version {
+                            self.backend.delete(from, &slot).await?;
+                        }
+                    }
                 }
                 if let Some(stored) = self.get(to, &slot).await? {
                     held.push(stored.meta(to)?);
@@ -225,7 +232,8 @@ impl ValueStore {
         }
         // One small marker per slot, then the completion record: no single
         // value grows with the number of slots.
-        for meta in &copied {
+        // The marker's own time is the version of the source value that was copied.
+        for (meta, source) in copied.iter().zip(&sources) {
             self.backend
                 .put(
                     to,
@@ -233,7 +241,7 @@ impl ValueStore {
                         slot: ValueSlot::moved(&slot_marker_key(&key, meta.slot.as_str())),
                         kind: ValueKind::Plain,
                         value: meta.slot.as_str().to_string(),
-                        updated_at: now_in_stored_precision(),
+                        updated_at: source.updated_at.clone(),
                     },
                 )
                 .await?;
@@ -257,18 +265,23 @@ impl ValueStore {
         Ok(copied)
     }
 
-    /// The slot names a finished transfer recorded, one marker each.
-    async fn recorded_slots(&self, to: &ValueScope, key: &str) -> Result<Vec<String>> {
+    /// The slot names a finished transfer recorded, one marker each, with the
+    /// version (update time) of the source value that was copied.
+    async fn recorded_slots(
+        &self,
+        to: &ValueScope,
+        key: &str,
+    ) -> Result<Vec<(String, DateTime<Utc>)>> {
         let prefix = ValueSlot::moved(key);
-        let mut names: Vec<String> = self
+        let mut names: Vec<(String, DateTime<Utc>)> = self
             .backend
             .list_prefix(to, prefix.as_str())
             .await?
             .into_iter()
             .filter(|marker| marker.slot != prefix)
-            .map(|marker| marker.value)
+            .map(|marker| (marker.value, marker.updated_at))
             .collect();
-        names.sort();
+        names.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(names)
     }
 
@@ -590,6 +603,32 @@ mod tests {
         // Another claim id copies again.
         store.copy_scope(&link, &dep, "other").await.unwrap();
         assert_eq!(store.list(&dep).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_repeated_move_keeps_an_answer_written_to_the_source_after_it_finished() {
+        let (_dir, store) = kv_store().await;
+        let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
+        store
+            .put(&reg, &slot("env:A"), ValueKind::Plain, "old".into())
+            .await
+            .unwrap();
+        store.move_scope(&reg, &dep, "claim").await.unwrap();
+        assert!(store.list(&reg).await.unwrap().is_empty());
+
+        // A newer answer lands in the source, then the same claim is presented again.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        store
+            .put(&reg, &slot("env:A"), ValueKind::Plain, "new".into())
+            .await
+            .unwrap();
+        let held = store.move_scope(&reg, &dep, "claim").await.unwrap();
+        assert_eq!(held.len(), 1);
+        let kept = store.get(&reg, &slot("env:A")).await.unwrap().unwrap();
+        assert_eq!(kept.value, "new");
+        // The deployment keeps what the first move copied.
+        let copied = store.get(&dep, &slot("env:A")).await.unwrap().unwrap();
+        assert_eq!(copied.value, "old");
     }
 
     /// A backend that starts refusing deletes after `allowed` of them.
