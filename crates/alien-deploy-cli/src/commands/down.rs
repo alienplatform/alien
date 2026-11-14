@@ -7,6 +7,7 @@ use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{ClientConfig, Platform, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_infra::ClientConfigExt;
 use clap::Parser;
 use std::{future::Future, path::PathBuf, str::FromStr};
@@ -211,7 +212,8 @@ async fn down_command_with(
         .id(&deployment_id)
         .send()
         .await
-        .into_alien_error()
+        .into_sdk_error()
+        .await
         .context(ErrorData::DeploymentFailed {
             operation: "fetch deployment".to_string(),
         })?;
@@ -269,7 +271,8 @@ async fn down_command_with(
             })
             .send()
             .await
-            .into_alien_error()
+            .into_sdk_error()
+            .await
             .context(ErrorData::DeploymentFailed {
                 operation: "force deletion".to_string(),
             })?;
@@ -326,7 +329,8 @@ async fn down_command_with(
                 })
                 .send()
                 .await
-                .into_alien_error()
+                .into_sdk_error()
+                .await
                 .context(ErrorData::DeploymentFailed {
                     operation: "request deletion".to_string(),
                 })?;
@@ -356,7 +360,8 @@ async fn down_command_with(
                 })
                 .send()
                 .await
-                .into_alien_error()
+                .into_sdk_error()
+                .await
                 .context(ErrorData::DeploymentFailed {
                     operation: "request deletion".to_string(),
                 })?;

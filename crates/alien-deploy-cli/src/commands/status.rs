@@ -6,6 +6,7 @@ use crate::output;
 use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use clap::Parser;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -193,7 +194,8 @@ async fn status_command_with(
         .id(&deployment_id)
         .send()
         .await
-        .into_alien_error()
+        .into_sdk_error()
+        .await
         .context(ErrorData::ManagementUnavailable)?
         .into_inner();
 
@@ -391,9 +393,12 @@ async fn fetch_remote_deployment_info(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::ConfigurationError {
+        let mut error = AlienError::new(ErrorData::ConfigurationError {
             message: format!("Failed to fetch deployment info (HTTP {status}): {body}"),
-        }));
+        });
+        // Keep the status so a refused key can be explained.
+        error.http_status_code = Some(status.as_u16());
+        return Err(error);
     }
 
     response
@@ -426,9 +431,12 @@ async fn resolve_remote_deployment_id(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::ConfigurationError {
+        let mut error = AlienError::new(ErrorData::ConfigurationError {
             message: format!("Failed to look up deployment by name (HTTP {status}): {body}"),
-        }));
+        });
+        // Keep the status so a refused key can be explained.
+        error.http_status_code = Some(status.as_u16());
+        return Err(error);
     }
 
     let deployments: RemoteDeploymentList =
