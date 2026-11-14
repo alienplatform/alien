@@ -161,7 +161,7 @@ jq '[.values.root_module.resources[] | select(.address=="terraform_data.deployme
 jq '. + {region: "'"$LOCATION"'"}' "$WORK/registration.json" > "$WORK/registration.tmp" && mv "$WORK/registration.tmp" "$WORK/registration.json"
 vault=$(jq -r '[.values.root_module.resources[] | select(.address=="azurerm_key_vault.secrets")][0].values.name' <<<"$tf")
 vms=$(jq -r '[.values.root_module.resources[] | select(.type=="azurerm_linux_virtual_machine" and (.address|test("sandbox_gateway")))|.values.id]|sort|join(",")' <<<"$tf")
-ips=$(jq -r '[.[]|select(.id=="default-network")][0].importData.sandboxNetwork.gatewayIps|join(",")' "$WORK/registration.json")
+ips=$(jq -r '[(.resources|if type=="string" then fromjson else . end)[]|select(.id=="default-network")][0].importData.sandboxNetwork.gatewayIps|join(",")' "$WORK/registration.json")
 subnet=$(jq -r '[.values.root_module.resources[] | select(.address=="azurerm_subnet.default_network_container_apps")][0].values.id' <<<"$tf")
 private_probe=$(jq -r '[.values.root_module.resources[] | select(.address=="azurerm_subnet.default_network_private")][0].values.address_prefixes[0]' <<<"$tf" | sed 's#\.0/.*#.4#')
 echo "vault=$vault vms=$vms ips=$ips subnet=$subnet"

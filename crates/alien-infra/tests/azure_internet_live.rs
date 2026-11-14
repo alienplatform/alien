@@ -56,11 +56,8 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
     .expect("registration JSON");
     let settings: StackSettings =
         serde_json::from_value(json_field(&registration, "stack_settings")).expect("settings");
-    let region = registration["resources"]
-        .as_array()
-        .and_then(|_| registration["region"].as_str())
-        .unwrap_or("eastus")
-        .to_string();
+    let resources = json_field(&registration, "resources");
+    let region = registration["region"].as_str().expect("region").to_string();
     let prefix = registration["resource_prefix"]
         .as_str()
         .expect("resource_prefix")
@@ -68,7 +65,7 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
 
     let mut state = StackState::with_resource_prefix(Platform::Azure, prefix);
     let registry = ImporterRegistry::built_in();
-    for imported in registration["resources"].as_array().expect("resources") {
+    for imported in resources.as_array().expect("resources") {
         let id = imported["id"].as_str().expect("resource id");
         let entry = stack
             .resources
