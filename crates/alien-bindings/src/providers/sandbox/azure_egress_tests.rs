@@ -119,7 +119,7 @@ async fn an_agent_sandbox_boots_behind_a_60s_gateway_startup_gate() {
     assert!(env["ALIEN_SANDBOX_EGRESS_GATEWAY"].contains(':'));
     assert_eq!(
         env["ALIEN_SANDBOX_MUST_DROP_PUBLIC"],
-        "1.1.1.1:443,1.1.1.1:8443"
+        "1.1.1.1:8443,1.1.1.1:8080"
     );
 }
 

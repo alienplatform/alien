@@ -118,7 +118,10 @@ impl AzureSandbox {
                 ("ALIEN_SANDBOX_EGRESS_GATEWAY", manager.gateway_authority()),
                 (
                     alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC,
-                    "1.1.1.1:443,1.1.1.1:8443",
+                    // Not :443 or :80: Azure's interposer accepts TCP there and answers 403, so a
+                    // connect proves nothing. Those ports are contained by the interposer and the
+                    // gateway's policy; the NSG drops every other public port.
+                    "1.1.1.1:8443,1.1.1.1:8080",
                 ),
             ] {
                 environment.insert(name.into(), value.into());
