@@ -311,7 +311,7 @@ fn cloud_config(image: &str, vault: &str, label: &str) -> Expression {
         "      Restart=always",
         "      RestartSec=3",
         "      ExecStartPre=-/usr/bin/docker rm -f gateway",
-        &format!("      ExecStart=/usr/bin/docker run --name gateway --env-file /etc/alien-egress-gateway.env --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp -p 3128:3128 -p 3129:3129 {image}"),
+        &format!("      ExecStart=/usr/bin/docker run --name gateway --env-file /etc/alien-egress-gateway.env --user 1000:1000 --cap-drop ALL --memory 2g --security-opt no-new-privileges --read-only --tmpfs /tmp -p 3128:3128 -p 3129:3129 {image}"),
         "      [Install]",
         "      WantedBy=multi-user.target",
         "runcmd:",
@@ -353,6 +353,8 @@ mod tests {
         let text = rendered();
         for needed in [
             "--cap-drop ALL",
+            // The gateway sizes its policy store from a finite cgroup memory.max and exits without one.
+            "--memory 2g",
             "no-new-privileges",
             "--read-only",
             "--user 1000:1000",
