@@ -28,6 +28,38 @@ const SECRETS_USER_ROLE: &str = "4633458b-17de-408a-b874-0445c86b69e6";
 /// Host indices of the two gateway addresses inside the gateway subnet.
 pub(super) const GATEWAY_HOSTS: [usize; 2] = [4, 5];
 
+/// A general-purpose size that most subscriptions allow; burstable B-series sizes are
+/// restricted on some, and vCPU quota is per family, so customers can pick another family.
+pub(super) const DEFAULT_VM_SIZE: &str = "Standard_D2s_v5";
+
+fn vm_size_variable(label: &str) -> hcl::Block {
+    hcl::Block::builder("variable")
+        .add_label(format!("{label}_vm_size"))
+        .add_attribute(("type", expr::raw("string")))
+        .add_attribute(("default", Expression::String(DEFAULT_VM_SIZE.into())))
+        .add_attribute((
+            "description",
+            Expression::String(
+                "Azure VM size of the two egress gateway VMs. Use a size with at least 2 vCPUs and 4 GiB of memory, \
+                 available to your subscription in this region and with vCPU quota for two VMs of its family."
+                    .into(),
+            ),
+        ))
+        .add_block(
+            hcl::Block::builder("validation")
+                .add_attribute((
+                    "condition",
+                    expr::raw(format!("can(regex(\"^Standard_[A-Za-z0-9_]+$\", var.{label}_vm_size))")),
+                ))
+                .add_attribute((
+                    "error_message",
+                    Expression::String("The gateway VM size must be an Azure size name such as Standard_D2s_v5.".into()),
+                ))
+                .build(),
+        )
+        .build()
+}
+
 pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragment) -> Result<()> {
     let image = gateway_image(ctx)?;
     let vault = ctx.name_for(SECRETS_VAULT_ID).ok_or_else(|| {
@@ -35,6 +67,7 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
     })?;
     let label = format!("{network}_sandbox_gateway");
     let subnet = expr::traversal(["azurerm_subnet", &label, "id"]);
+    fragment.variable_blocks.push(vm_size_variable(&label));
 
     fragment.resource_blocks.push(resource_block(
         "azurerm_user_assigned_identity",
@@ -148,9 +181,7 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
                     "computer_name",
                     Expression::String(format!("alien-egress-gateway-{index}")),
                 ),
-                // A general-purpose size every region offers to every subscription; burstable
-                // B-series sizes are restricted on some subscriptions.
-                attr("size", Expression::String("Standard_D2s_v5".into())),
+                attr("size", expr::raw(format!("var.{label}_vm_size"))),
                 attr(
                     "availability_set_id",
                     expr::traversal(["azurerm_availability_set", &label, "id"]),
@@ -338,6 +369,24 @@ mod tests {
         assert_eq!(text.matches("%s").count(), 4, "{text}");
         // jsonencode keeps the vault binding valid JSON whatever the vault name holds.
         assert!(text.contains("jsonencode"));
+    }
+
+    #[test]
+    fn the_vm_size_is_a_documented_variable_with_the_current_default() {
+        let text = hcl::to_string(
+            &hcl::Body::builder()
+                .add_block(vm_size_variable("net_sandbox_gateway"))
+                .build(),
+        )
+        .unwrap();
+        assert!(text.contains("variable \"net_sandbox_gateway_vm_size\""), "{text}");
+        assert!(text.contains("default     = \"Standard_D2s_v5\"") || text.contains("default = \"Standard_D2s_v5\""), "{text}");
+        assert!(text.contains("at least 2 vCPUs") && text.contains("quota"), "{text}");
+        assert!(text.contains("validation"), "{text}");
+        let src = include_str!("sandbox_gateway_vm.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(code.contains("var.{label}_vm_size"));
+        assert_eq!(code.matches("\"size\"").count(), 1);
     }
 
     #[test]
