@@ -46,6 +46,10 @@ pub struct CreateRemoteSandboxRequest {
     /// Variables placed in the sandbox.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Request-key and expiry labels, the only labels a caller sets. Each is format-checked
+    /// here and again by the verifier.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
 }
 
 /// Whether the deployment is a protected Azure install, whose remote creates go through here.
@@ -221,7 +225,7 @@ pub async fn create_sandbox(
 
         let provider_sandbox = Arc::new(binding_sandbox(&binding, &config)?);
         let (base, create) = provider_sandbox
-            .verified_create(request.env.clone())
+            .verified_create(request.env.clone(), request.labels.clone())
             .await
             .map_err(|e| ErrorData::bad_request(format!("{e}")))?;
         alien_infra::verifier::create_azure_sandbox(

@@ -228,12 +228,13 @@ async fn create_template(
     engine: &str,
     body: SandboxEnvironmentTemplate,
 ) -> Result<Option<String>> {
-    let wire = serde_json::to_value(&body)
-        .into_alien_error()
-        .context(ErrorData::CloudPlatformError {
-            message: "The sandbox template does not serialize".to_string(),
-            resource_id: Some(sandbox_id.to_string()),
-        })?;
+    let wire =
+        serde_json::to_value(&body)
+            .into_alien_error()
+            .context(ErrorData::CloudPlatformError {
+                message: "The sandbox template does not serialize".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
     if let Some(name) = crate::core::verifier::gcp_sandbox_operation(
         ctx,
         sandbox_id,
@@ -1644,12 +1645,8 @@ mod tests {
     fn build_template_body_declares_preview_ports_and_disk() {
         let mut sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
         sandbox.preview_ports = vec![8081, 8090, 8080];
-        let body = build_template_body(
-            &sandbox,
-            "agent-sbx",
-            &deployment_config(None, None),
-        )
-        .expect("a valid sandbox builds a body");
+        let body = build_template_body(&sandbox, "agent-sbx", &deployment_config(None, None))
+            .expect("a valid sandbox builds a body");
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         let ports: Vec<i64> = wire["customContainerEnvironment"]["ports"]
             .as_array()

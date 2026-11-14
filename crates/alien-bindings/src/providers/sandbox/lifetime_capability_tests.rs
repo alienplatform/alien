@@ -238,22 +238,68 @@ async fn a_sandbox_lifetime_and_a_command_timeout_never_reach_each_other() {
     );
 }
 
-/// Azure declares none, and the client double proves it: a call on it would panic, so a refusal
-/// that leaked through to the data plane fails this test rather than passing quietly.
+/// Azure has no wall-clock ceiling of its own, so the binding stamps the deadline on the sandbox
+/// as a label and the controller's reaper (and every verb on the binding) enforces it. The label
+/// is the earlier of the caller's `timeoutMs` and the declaration's ceiling.
 #[tokio::test]
-async fn azure_declares_no_lifetime_and_sends_nothing() {
-    let sandbox = AzureSandbox::new(
-        Arc::new(alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new()),
-        "group".to_string(),
-        "ubuntu".to_string(),
-        SandboxEgress::Internet,
-        None,
-        "1".to_string(),
-        "2Gi".to_string(),
-        None,
-    );
-
-    refuses_a_created_lifetime(&sandbox).await;
+async fn azure_stamps_the_requested_lifetime_as_the_label_the_reaper_keys_on() {
+    use alien_azure_clients::azure::sandbox_data_plane::{MockSandboxDataPlaneApi, Sandbox as Record};
+    for (declared, requested_ms, expected_seconds) in
+        [(None, 600_000u64, 600i64), (Some(60u32), 600_000, 60), (Some(3600), 600_000, 600)]
+    {
+        let mut client = MockSandboxDataPlaneApi::new();
+        let seen = Arc::new(std::sync::Mutex::new(None::<String>));
+        let sink = Arc::clone(&seen);
+        client.expect_create_sandbox().times(1).returning(move |_, request| {
+            *sink.lock().unwrap() = request.labels.get(alien_core::SANDBOX_EXPIRY_LABEL).cloned();
+            Ok(Record {
+                id: "s1".into(),
+                labels: request.labels,
+                vnet_connection_name: None,
+                egress_policy: Some(
+                    serde_json::from_value(json!({ "defaultAction": "Allow", "trafficInspection": "Full" })).unwrap(),
+                ),
+                state: Some("Running".into()),
+            })
+        });
+        client.expect_get_sandbox().returning(|_, id| {
+            Ok(Record {
+                id: id.into(),
+                labels: Default::default(),
+                vnet_connection_name: None,
+                egress_policy: Some(
+                    serde_json::from_value(json!({ "defaultAction": "Allow", "trafficInspection": "Full" })).unwrap(),
+                ),
+                state: Some("Running".into()),
+            })
+        });
+        let sandbox = AzureSandbox::new(
+            Arc::new(client),
+            "group".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::Allow,
+            None,
+            "1".to_string(),
+            "2Gi".to_string(),
+            None,
+        )
+        .with_max_lifetime(declared);
+        assert!(sandbox.capabilities().sandbox_lifetime);
+        let before = chrono::Utc::now().timestamp_millis();
+        sandbox
+            .create(CreateSandboxRequest {
+                timeout_ms: Some(requested_ms),
+                ..Default::default()
+            })
+            .await
+            .expect("a lifetime is honoured");
+        let label: i64 = seen.lock().unwrap().clone().expect("a label").parse().unwrap();
+        let seconds = (label - before) / 1000;
+        assert!(
+            (expected_seconds - 2..=expected_seconds + 2).contains(&seconds),
+            "{declared:?}/{requested_ms}: {seconds}s"
+        );
+    }
 }
 
 /// Kubernetes honours a lifetime: the broker records the deadline on the pod at the claim and the

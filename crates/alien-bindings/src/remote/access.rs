@@ -348,7 +348,7 @@ impl RemoteBindingSource {
 }
 
 /// Creates an Azure sandbox through the install's manager, for a caller whose own role cannot.
-/// Sends only the sandbox's environment: the manager rebuilds everything else from the signed
+/// Sends only the sandbox's environment and its request-key and expiry labels: the manager rebuilds everything else from the signed
 /// release and has the install's verifier create it.
 #[cfg(feature = "azure")]
 #[derive(Debug)]
@@ -363,6 +363,7 @@ impl crate::providers::sandbox::azure::SandboxCreateRoute for ManagerSandboxCrea
     async fn create(
         &self,
         environment: &std::collections::BTreeMap<String, String>,
+        labels: &std::collections::BTreeMap<String, String>,
     ) -> alien_client_core::Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox> {
         use alien_client_core::ErrorData as ClientErrorData;
         let failed =
@@ -382,6 +383,7 @@ impl crate::providers::sandbox::azure::SandboxCreateRoute for ManagerSandboxCrea
                 "deploymentId": manager.deployment_id,
                 "resourceId": self.resource_id,
                 "env": environment,
+                "labels": labels,
             }))
             .send()
             .await

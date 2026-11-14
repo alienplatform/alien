@@ -21,6 +21,32 @@ use crate::ownership_policy_for_resource_type;
 /// constant.
 pub const SECRETS_VAULT_ID: &str = "secrets";
 
+/// Permission set id of the grant that lets a machine workload profile read its
+/// own secret values from the secrets vault (AWS).
+pub const MACHINE_WORKLOAD_SECRETS_READ_ID: &str = "vault/machine-workload-secrets-read";
+
+/// Whether an installed AWS stack already has the machine workload grant on one
+/// of its recorded service accounts. Having the secrets vault is not enough: a
+/// worker gives an install the vault without the grant. Adding the grant to a
+/// frozen profile blocks the release, and delivering secrets to a profile that
+/// cannot read them breaks the workload, so setup and delivery share this signal.
+pub fn machine_secrets_installed(state: &crate::StackState) -> bool {
+    state.platform == crate::Platform::Aws
+        && state.resources.values().any(|resource| {
+            resource
+                .config
+                .downcast_ref::<crate::ServiceAccount>()
+                .is_some_and(|account| {
+                    account
+                        .resource_permission_sets
+                        .get(SECRETS_VAULT_ID)
+                        .into_iter()
+                        .flatten()
+                        .any(|set| set.id == MACHINE_WORKLOAD_SECRETS_READ_ID)
+                })
+        })
+}
+
 /// Reserved vault for secrets written by the deployer with their own credentials.
 pub const DEPLOYER_SECRETS_VAULT_ID: &str = "deployer-secrets";
 

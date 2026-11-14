@@ -3184,7 +3184,7 @@ fn variables_body(
             blocks.push(nested(optional_validated_sensitive_string_variable_block(
                 "remote_operator_sync_token",
                 "Distinct Remote Operator setup token. Never reuse the product deployment token.",
-                "var.remote_operator_sync_token == null || length(trimspace(var.remote_operator_sync_token)) > 0",
+                "var.remote_operator_sync_token == null ? true : length(trimspace(var.remote_operator_sync_token)) > 0",
                 "remote_operator_sync_token must be null or a non-empty token from a separate Remote Operator setup registration.",
             )));
             blocks.push(nested(optional_validated_sensitive_string_variable_block(
@@ -3196,7 +3196,7 @@ fn variables_body(
             blocks.push(nested(optional_validated_sensitive_string_variable_block(
                 "remote_operator_collector_token",
                 "Distinct log collector token from the same Remote Operator setup registration.",
-                "var.remote_operator_collector_token == null || length(trimspace(var.remote_operator_collector_token)) > 0",
+                "var.remote_operator_collector_token == null ? true : length(trimspace(var.remote_operator_collector_token)) > 0",
                 "remote_operator_collector_token must be null or a non-empty token from the Remote Operator setup registration.",
             )));
         }
@@ -3986,7 +3986,7 @@ fn stack_input_validation_conditions(
     let mut conditions = Vec::new();
     let variable = format!("var.{variable_name}");
     let optional_prefix = (!input.required && input.default.is_none())
-        .then(|| format!("{variable} == null || "))
+        .then(|| format!("{variable} == null ? true : "))
         .unwrap_or_default();
 
     if input.kind == StackInputKind::Integer {
@@ -4618,45 +4618,21 @@ fn stack_settings_expression(
         alien_core::Platform::Aws
             if has_dynamic_aws_network_settings(stack_settings.network.as_ref()) =>
         {
-            let kubernetes_settings = if target.is_kubernetes() {
-                "\n  kubernetes = local.deployment_kubernetes_settings"
-            } else {
-                ""
-            };
-            return expr::raw(format!(
-                r#"merge(local.advanced_settings, {{
-  deploymentModel = var.deployment_model
-  updates    = {operational}.updates_mode
-  telemetry  = {operational}.telemetry_mode
-  heartbeats = {operational}.heartbeats_mode
-  endpointAccess = var.endpoint_access
-  network = jsondecode(
-    var.network_mode == "create-new" ? jsonencode({{
+            let network = r#"jsondecode(
+    var.network_mode == "create-new" ? jsonencode({
       type              = "create"
       cidr              = var.vpc_cidr == "" ? null : var.vpc_cidr
       availabilityZones = var.availability_zones
-    }}) : var.network_mode == "use-existing" ? jsonencode({{
+    }) : var.network_mode == "use-existing" ? jsonencode({
       type             = "byo-vpc-aws"
       vpcId            = var.vpc_id
       publicSubnetIds  = compact([for id in var.public_subnet_ids : trimspace(id)])
       privateSubnetIds = compact([for id in var.private_subnet_ids : trimspace(id)])
       securityGroupIds = compact([for id in var.security_group_ids : trimspace(id)])
-    }}) : jsonencode({{
+    }) : jsonencode({
       type = "use-default"
-    }})
-  )
-{kubernetes_settings}
-}})"#
-            ));
-        }
-        alien_core::Platform::Gcp
-            if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) =>
-        {
-            let kubernetes_settings = if target.is_kubernetes() {
-                "\n  kubernetes = local.deployment_kubernetes_settings"
-            } else {
-                ""
-            };
+    })
+  )"#;
             return expr::raw(format!(
                 r#"merge(local.advanced_settings, {{
   deploymentModel = var.deployment_model
@@ -4664,22 +4640,38 @@ fn stack_settings_expression(
   telemetry  = {operational}.telemetry_mode
   heartbeats = {operational}.heartbeats_mode
   endpointAccess = var.endpoint_access
-  network = jsondecode(
-    var.network_mode == "create-new" ? jsonencode({{
+{network_in_object}}}{network_argument})"#,
+                network_in_object = network_in_object(target, &network),
+                network_argument = network_argument(target, &network),
+            ));
+        }
+        alien_core::Platform::Gcp
+            if has_dynamic_gcp_network_settings(stack_settings.network.as_ref()) =>
+        {
+            let network = r#"jsondecode(
+    var.network_mode == "create-new" ? jsonencode({
       type              = "create"
       cidr              = var.network_cidr == "" ? null : var.network_cidr
       availabilityZones = var.availability_zones
-    }}) : var.network_mode == "use-existing" ? jsonencode({{
+    }) : var.network_mode == "use-existing" ? jsonencode({
       type        = "byo-vpc-gcp"
       networkName = var.network_name
       subnetName  = var.subnet_name
       region      = var.network_region == "" ? var.gcp_region : var.network_region
-    }}) : jsonencode({{
+    }) : jsonencode({
       type = "use-default"
-    }})
-  )
-{kubernetes_settings}
-}})"#
+    })
+  )"#;
+            return expr::raw(format!(
+                r#"merge(local.advanced_settings, {{
+  deploymentModel = var.deployment_model
+  updates    = {operational}.updates_mode
+  telemetry  = {operational}.telemetry_mode
+  heartbeats = {operational}.heartbeats_mode
+  endpointAccess = var.endpoint_access
+{network_in_object}}}{network_argument})"#,
+                network_in_object = network_in_object(target, &network),
+                network_argument = network_argument(target, &network),
             ));
         }
         _ if target.is_kubernetes() => {
@@ -4705,6 +4697,28 @@ fn stack_settings_expression(
 }})"#,
             ));
         }
+    }
+}
+
+/// The registration's `network` setting, inside the settings object. A Kubernetes module can
+/// attach to an existing cluster, whose own network is the network, so it registers no network
+/// setting then (see `network_argument`); other modules always register one.
+fn network_in_object(target: TerraformTarget, network: &str) -> String {
+    if target.is_kubernetes() {
+        "  kubernetes = local.deployment_kubernetes_settings\n".to_string()
+    } else {
+        format!("  network = {network}\n\n")
+    }
+}
+
+/// The last `merge` argument: the network setting of a Kubernetes module that creates its cluster.
+fn network_argument(target: TerraformTarget, network: &str) -> String {
+    if target.is_kubernetes() {
+        format!(
+            ", jsondecode(var.kubernetes_cluster_mode == \"create\" ? jsonencode({{ network = {network} }}) : \"{{}}\")"
+        )
+    } else {
+        String::new()
     }
 }
 

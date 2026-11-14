@@ -306,7 +306,17 @@ fn start_from_with_env(
         reason: "the bundle must preserve the image's OCI command in root-owned metadata"
             .to_string(),
     };
-    let bytes = fs::read(path).into_alien_error().context(failed())?;
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::ImageCommandUnreadable {
+                    path: path.display().to_string(),
+                });
+        }
+        Err(error) => return Err(error).into_alien_error().context(failed()),
+    };
     let image: SandboxImageCommand = serde_json::from_slice(&bytes)
         .into_alien_error()
         .context(failed())?;
@@ -575,6 +585,28 @@ mod tests {
                 }
             );
         }
+    }
+
+    /// A non-root agent reading a root-only file from an older build gets the cause and the fix.
+    #[test]
+    fn an_unreadable_saved_command_names_the_cause_and_the_fix() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("image-command.json");
+        fs::write(&path, b"{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        let identity = ExecIdentity {
+            uid: 65534,
+            gid: 65534,
+        };
+        if unsafe { libc::geteuid() } == 0 {
+            return; // root reads any file, so there is nothing to refuse
+        }
+        let error = start_from(&path, identity).expect_err("an unreadable file must fail");
+        assert_eq!(error.code, "IMAGE_COMMAND_UNREADABLE");
+        let text = error.to_string();
+        assert!(text.contains("older release"), "{text}");
+        assert!(text.contains("Rebuild the sandbox image"), "{text}");
+        assert!(text.contains(path.to_str().unwrap()), "{text}");
     }
 
     #[tokio::test]

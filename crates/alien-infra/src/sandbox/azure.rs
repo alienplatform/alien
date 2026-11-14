@@ -123,6 +123,12 @@ pub struct AzureSandboxController {
     /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     #[serde(default)]
     pub(crate) idle_pause_seconds: Option<u32>,
+    /// Ports the declaration allows a preview capability for.
+    #[serde(default)]
+    pub(crate) preview_ports: Vec<u16>,
+    /// Wall-clock ceiling from the declaration.
+    #[serde(default)]
+    pub(crate) max_lifetime_seconds: Option<u32>,
     /// Ceilings every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) limits: Option<SandboxLimits>,
@@ -241,7 +247,7 @@ impl AzureSandboxController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        let lifetime_issue = self.reap_gateway_sessions(ctx, config).await;
+        let lifetime_issue = self.reap_runtime_lifetimes(ctx, config).await;
         if uses_gateway(ctx, config) {
             if !matches!(
                 self.egress,
@@ -406,6 +412,10 @@ impl AzureSandboxController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        // A runtime image update polls for minutes; expired sandboxes must not overrun meanwhile.
+        // Initial setup (`ensure_disk_image`) is not a runtime tick and never reaps.
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.reap_runtime_lifetimes(ctx, config).await;
         self.build_disk_image(ctx).await
     }
 
@@ -484,6 +494,8 @@ impl AzureSandboxController {
         // All three or none, as the declaration has them: the data plane reads a missing ceiling
         // as its own default, so filling one in alone would assert a size nobody declared.
         azure.agent = self.agent;
+        azure.preview_ports = self.preview_ports.clone();
+        azure.max_lifetime_seconds = self.max_lifetime_seconds;
         azure.egress = egress.clone();
         azure.default_policy = self
             .default_policy
@@ -529,22 +541,26 @@ impl AzureSandboxController {
     /// Azure has no identity renewal agent. Reconcile only new gateway-mode groups;
     /// legacy deployments retain their existing lifetime behavior. A stopped controller
     /// or terminal failure suspends deletion, while the identity still expires at 24 hours.
-    async fn reap_gateway_sessions(
+    async fn reap_runtime_lifetimes(
         &self,
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
     ) -> Option<String> {
-        if !uses_gateway(ctx, config) {
-            return None;
-        }
+        // Every group is listed on a runtime ready tick: a sandbox past its own deadline label
+        // is deleted whatever the group declares, a gateway adds 24-hour identities, and a
+        // declared `max_lifetime_seconds` bounds sandboxes that carry no label. A sandbox with
+        // neither label nor ceiling is never touched.
+        let ceiling = [
+            uses_gateway(ctx, config).then_some(AZURE_GATEWAY_MAX_LIFETIME_SECONDS),
+            config.lifecycle.max_lifetime_seconds,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let result = async {
             let (group, client) = self.data_plane(ctx, &config.id)?;
-            super::azure_lifetime::reap_expired_azure_sandboxes(
-                client.as_ref(),
-                &group,
-                AZURE_GATEWAY_MAX_LIFETIME_SECONDS,
-            )
-            .await
+            super::azure_lifetime::reap_expired_azure_sandboxes(client.as_ref(), &group, ceiling)
+                .await
         }
         .await;
         if let Err(error) = result {
@@ -594,6 +610,8 @@ impl AzureSandboxController {
         }
         self.default_policy = config.default_policy.clone();
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
+        self.preview_ports = config.preview_ports.clone();
+        self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
         self.limits = config.limits.clone();
         Ok(())
     }
@@ -617,7 +635,6 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        let _ = self.reap_gateway_sessions(ctx, config).await;
         // Nothing to build: `Ready` abandons any build left in flight.
         let Some(reference) = self.pending_image(config) else {
             return Ok(AzureSandboxHandlerAction::Continue {
@@ -744,18 +761,17 @@ impl AzureSandboxController {
                     Ok(None) => client.create_disk_image(&group, request).await,
                     Err(error) => return Err(error),
                 };
-                let created = built
-                    .map_err(|error| {
-                        // Azure's reason (a missing tag, a denied pull, an arm64-only image) leads
-                        // rather than sitting at the end of the chain.
-                        let reason = error.message.clone();
-                        error.context(ErrorData::CloudPlatformError {
-                            message: format!(
-                                "the disk image build from '{reference}' failed: {reason}"
-                            ),
-                            resource_id: Some(config.id.clone()),
-                        })
-                    })?;
+                let created = built.map_err(|error| {
+                    // Azure's reason (a missing tag, a denied pull, an arm64-only image) leads
+                    // rather than sitting at the end of the chain.
+                    let reason = error.message.clone();
+                    error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "the disk image build from '{reference}' failed: {reason}"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })
+                })?;
                 info!(sandbox_id = %config.id, %reference, image = %created.id, "disk image build started");
                 if created.state() != Some("Ready") {
                     self.pending_disk_image = Some(PendingDiskImage {
@@ -1077,6 +1093,8 @@ mod tests {
     fn the_binding_carries_the_regional_data_plane_endpoint() {
         let controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1132,6 +1150,8 @@ mod tests {
             .build();
         let controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1297,6 +1317,8 @@ mod tests {
     fn a_failed_capture_leaves_the_declaration_whole() {
         let mut controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1348,6 +1370,8 @@ mod tests {
     fn a_failed_capture_does_not_apply_a_tightened_egress_either() {
         let mut controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1402,6 +1426,8 @@ mod tests {
     fn the_binding_carries_the_declared_ceilings() {
         let controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1443,6 +1469,8 @@ mod tests {
     fn a_sandbox_without_declared_ceilings_publishes_none() {
         let controller = AzureSandboxController {
             agent: false,
+            preview_ports: vec![],
+            max_lifetime_seconds: None,
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
             region: Some("swedencentral".to_string()),
@@ -1553,6 +1581,8 @@ mod tests {
         ) -> AzureSandboxController {
             AzureSandboxController {
                 agent: false,
+                preview_ports: vec![],
+                max_lifetime_seconds: None,
                 state: AzureSandboxState::Ready,
                 sandbox_group: Some("sbg".to_string()),
                 region: Some("westus2".to_string()),
@@ -1631,10 +1661,78 @@ mod tests {
                 .expect("executor should build")
         }
 
+        fn listed_with(id: &str, label: Option<i64>) -> ListedSandbox {
+            ListedSandbox {
+                id: id.into(),
+                created_at: chrono::Utc::now() - chrono::Duration::hours(1),
+                labels: label
+                    .map(|at| {
+                        [(alien_core::SANDBOX_EXPIRY_LABEL.to_string(), at.to_string())].into()
+                    })
+                    .unwrap_or_default(),
+                state: "Suspended".into(),
+            }
+        }
+
+        async fn bare_executor(
+            declared: Sandbox,
+            controller: AzureSandboxController,
+            client: MockSandboxDataPlaneApi,
+        ) -> SingleControllerExecutor {
+            SingleControllerExecutor::builder()
+                .resource(declared)
+                .controller(controller)
+                .platform(Platform::Azure)
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .service_provider(provider_with(client))
+                .build()
+                .await
+                .expect("executor should build")
+        }
+
         #[tokio::test]
-        async fn only_gateway_groups_reap_sessions_on_ready_ticks() {
-            // Without a gateway in the stack nothing issues 24-hour identities, so an
-            // Internet group must not have its sessions reaped.
+        async fn an_image_update_poll_reaps_expired_labels_and_keeps_the_rest() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("new", NODE, "Building")]));
+            client.expect_list_sandboxes().times(1).returning(|_| {
+                let now = chrono::Utc::now().timestamp_millis();
+                Ok(vec![
+                    listed_with("expired", Some(now - 1000)),
+                    listed_with("future", Some(now + 3_600_000)),
+                    listed_with("unlabelled", None),
+                ])
+            });
+            client
+                .expect_delete_sandbox()
+                .withf(|group, id| group == "sbg" && id == "expired")
+                .times(1)
+                .returning(|_, _| Ok(()));
+            let mut old = adopted(Some(PYTHON), Some("old"));
+            old.state = AzureSandboxState::UpdatingDiskImage;
+            let mut run = bare_executor(sandbox(NODE), old, client).await;
+            run.step().await.expect("the image is still building");
+        }
+
+        #[tokio::test]
+        async fn initial_setup_builds_without_listing_sandboxes() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(vec![image("new", NODE, "Ready")]));
+            client.expect_list_sandboxes().never();
+            let mut controller = adopted(None, None);
+            controller.state = AzureSandboxState::EnsureDiskImage;
+            let mut run = bare_executor(sandbox(NODE), controller, client).await;
+            run.step().await.expect("setup adopts the Ready image");
+        }
+
+        #[tokio::test]
+        async fn ready_ticks_delete_past_deadline_labels_and_only_gateways_reap_unlabelled() {
+            // Every group is listed: a session whose deadline label has passed is deleted, a
+            // future label or no label is kept, and only a gateway group's 24-hour ceiling
+            // reaps the unlabelled session.
             for (egress, with_gateway) in [
                 (SandboxEgress::Internet, true),
                 (SandboxEgress::Internet, false),
@@ -1643,21 +1741,36 @@ mod tests {
             ] {
                 let gateway = egress == SandboxEgress::Internet && with_gateway;
                 let mut client = MockSandboxDataPlaneApi::new();
-                client
-                    .expect_list_sandboxes()
-                    .times(usize::from(gateway))
-                    .returning(|_| {
-                        Ok(vec![ListedSandbox {
-                            id: "expired".into(),
-                            created_at: chrono::Utc::now() - chrono::Duration::hours(25),
-                            labels: Default::default(),
-                            state: "Suspended".into(),
-                        }])
-                    });
+                client.expect_list_sandboxes().times(1).returning(|_| {
+                    let past = chrono::Utc::now().timestamp_millis() - 1000;
+                    let future = chrono::Utc::now().timestamp_millis() + 3_600_000;
+                    let listed = |id: &str, label: Option<i64>| ListedSandbox {
+                        id: id.into(),
+                        created_at: chrono::Utc::now()
+                            - chrono::Duration::hours(if label.is_some() { 1 } else { 25 }),
+                        labels: label
+                            .map(|at| {
+                                [(alien_core::SANDBOX_EXPIRY_LABEL.to_string(), at.to_string())]
+                                    .into()
+                            })
+                            .unwrap_or_default(),
+                        state: "Suspended".into(),
+                    };
+                    Ok(vec![
+                        listed("expired", None),
+                        listed("timed-out", Some(past)),
+                        listed("timed-future", Some(future)),
+                    ])
+                });
                 client
                     .expect_delete_sandbox()
-                    .times(usize::from(gateway))
+                    .withf(|group, id| group == "sbg" && id == "timed-out")
+                    .times(1)
+                    .returning(|_, _| Ok(()));
+                client
+                    .expect_delete_sandbox()
                     .withf(|group, id| group == "sbg" && id == "expired")
+                    .times(usize::from(gateway))
                     .returning(|_, _| Ok(()));
                 let mut config = sandbox("ubuntu");
                 config.egress = egress.clone();

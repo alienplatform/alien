@@ -851,11 +851,12 @@ pub const AI_CATALOG_REVISION: &str = "2026-08-20.1";
 /// is validated against the target region's model catalog at deploy time.
 ///
 /// Each entry is (deployment name, model name, model version, capacity in
-/// thousands of tokens per minute). The GPT-5 deployments and the embeddings
-/// deployment get 50, enough for chat and document indexing; the others keep 1.
+/// thousands of tokens per minute). Every deployment asks for 50, enough for chat
+/// and document indexing; one unit allows about one request a minute. The Azure
+/// controller lowers a deployment to the subscription's free quota when that is lower.
 static AZURE_DEPLOYMENTS: &[(&str, &str, &str, i32)] = &[
-    ("gpt-4.1", "gpt-4.1", "2025-04-14", 1),
-    ("model-router", "model-router", "2025-11-18", 1),
+    ("gpt-4.1", "gpt-4.1", "2025-04-14", 50),
+    ("model-router", "model-router", "2025-11-18", 50),
     ("gpt-5.5", "gpt-5.5", "2026-04-24", 50),
     ("gpt-5.6-sol", "gpt-5.6-sol", "2026-07-09", 50),
     ("text-embedding-3-large", "text-embedding-3-large", "1", 50),

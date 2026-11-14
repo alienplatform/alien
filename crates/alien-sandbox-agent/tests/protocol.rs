@@ -2353,3 +2353,126 @@ async fn transport_preview_never_reaches_the_agents_own_listener() {
     }
     assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
+
+/// An agent the way an Azure sandbox runs: the boot token authorizes the control path, the
+/// sandbox's port is reachable by anyone, and the agent issues and verifies preview capabilities.
+#[cfg(target_os = "linux")]
+async fn native_file_agent() -> (String, String, TempDir) {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path().canonicalize().expect("canonical root");
+    let token_path = dir.path().join("native-token");
+    let token = alien_sandbox_agent::native_token::NativeToken::create(&token_path).unwrap();
+    let boot_token = std::fs::read_to_string(&token_path).unwrap();
+    let state = Arc::new(AgentState {
+        image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
+        gateway_egress: None,
+        session_root: root,
+        authorization: AgentAuthorization::NativeFile(token),
+        exec_identity: ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        },
+        output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
+        interactive: Default::default(),
+        preview: Default::default(),
+        agent_binary: agent_binary(),
+    });
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind loopback");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("serve");
+    });
+    (format!("http://{address}"), boot_token, dir)
+}
+
+#[cfg(target_os = "linux")]
+async fn grant_with(
+    base: &str,
+    bearer: Option<&str>,
+    sandbox: &str,
+    port: u16,
+) -> reqwest::Response {
+    let mut request = reqwest::Client::new()
+        .post(format!("{base}/"))
+        .json(&json!({"v": 1, "op": "previewGrant", "sandbox": sandbox, "port": port}));
+    if let Some(bearer) = bearer {
+        request = request.bearer_auth(bearer);
+    }
+    request.send().await.expect("responds")
+}
+
+/// Azure: only the boot token asks for a capability, a capability carries the caller's own
+/// `Authorization` to the daemon untouched, and the boot token itself never rides a preview.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn native_file_preview_is_granted_by_the_boot_token_and_forwards_the_callers_authorization() {
+    let _env = PREVIEW_ENV.lock().await;
+    let (base, boot_token, _dir) = native_file_agent().await;
+    let (port, seen) = upstream_server().await;
+    std::env::set_var("ALIEN_SANDBOX_PREVIEW_PORTS", format!("{port},8971"));
+
+    assert_eq!(
+        grant_with(&base, None, "sandbox-a", port).await.status(),
+        401
+    );
+    assert_eq!(
+        grant_with(&base, Some("incorrect"), "sandbox-a", port)
+            .await
+            .status(),
+        401
+    );
+    let granted: serde_json::Value = grant_with(&base, Some(&boot_token), "sandbox-a", port)
+        .await
+        .json()
+        .await
+        .unwrap();
+    let capability = granted["capability"]
+        .as_str()
+        .expect("a capability")
+        .to_string();
+    assert!(
+        !capability.contains(&boot_token),
+        "the key is not the boot token"
+    );
+
+    let call = |bearer: &str, capability: Option<&str>| {
+        let mut request = reqwest::Client::new()
+            .get(format!("{base}/v1/preview/{port}/a/b?x=1"))
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("x-alien-preview-port", port.to_string());
+        if let Some(capability) = capability {
+            request = request.header("x-alien-preview-capability", capability);
+        }
+        async move { request.send().await.expect("responds") }
+    };
+    let ok = call("daemon-secret", Some(&capability)).await;
+    assert_eq!(ok.status(), 200);
+    let head = seen.lock().unwrap()[0].to_ascii_lowercase();
+    assert!(head.contains("authorization: bearer daemon-secret"));
+    assert!(!head.contains("x-alien-preview"));
+    assert!(!head.contains(&capability.to_ascii_lowercase()));
+
+    // The control token and a capability on one request is refused, not forwarded.
+    let both = call(&boot_token, Some(&capability)).await;
+    assert!(
+        matches!(both.status().as_u16(), 400 | 401 | 403),
+        "{}",
+        both.status()
+    );
+    // The boot token alone is no preview credential.
+    let alone = call(&boot_token, None).await;
+    assert!(
+        matches!(alone.status().as_u16(), 401 | 403),
+        "{}",
+        alone.status()
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1, "refused calls reach nothing");
+}
