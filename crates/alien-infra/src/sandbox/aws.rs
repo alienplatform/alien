@@ -442,6 +442,101 @@ impl AwsSandboxController {
         assert_eq!(controller.retired_versions[0].inactive_at, None);
     }
 
+    /// Real AWS: the reclaim deletes every retired version of an image whose fence has passed.
+    ///
+    /// Needs the probe image from `alien-aws-clients`' `fill_the_image_to_the_version_cap`
+    /// (`PROBE_IMAGE_ARN`, credentials in `AWS_TARGET_*`). The versions are really `INACTIVE`
+    /// there; only `inactive_at` is set back nine hours here, because the real fence outlives
+    /// a short-lived credential.
+    #[tokio::test]
+    #[ignore]
+    async fn live_reclaim_deletes_retired_versions_past_the_fence() {
+        use alien_aws_clients::lambda_microvms::{LambdaMicrovmsApi, LambdaMicrovmsClient};
+        let credentials = alien_aws_clients::AwsCredentialProvider::from_config_sync(
+            alien_aws_clients::AwsClientConfig {
+                account_id: std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap(),
+                region: std::env::var("AWS_TARGET_REGION").unwrap(),
+                credentials: alien_aws_clients::AwsCredentials::AccessKeys {
+                    access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").unwrap(),
+                    secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").unwrap(),
+                    session_token: std::env::var("AWS_TARGET_SESSION_TOKEN").ok(),
+                },
+                service_overrides: None,
+            },
+        );
+        let image = std::env::var("PROBE_IMAGE_ARN").expect("PROBE_IMAGE_ARN");
+        let real = Arc::new(LambdaMicrovmsClient::new(
+            reqwest::Client::new(),
+            credentials,
+        ));
+        let listed = real.list_microvm_image_versions(&image).await.unwrap();
+        let mut versions: Vec<String> = listed
+            .iter()
+            .filter_map(|v| v.image_version.clone())
+            .collect();
+        versions.sort_by_key(|v| v.split('.').next().unwrap().parse::<u64>().unwrap());
+        let active = versions.pop().expect("a version");
+        println!(
+            "image holds {} versions; serving {active}",
+            versions.len() + 1
+        );
+
+        let mut controller = ready_controller();
+        controller.image_identifier = Some(image.clone());
+        controller.image_arn = Some(image.clone());
+        controller.active_version = Some(active.clone());
+        controller.retired_versions = versions
+            .iter()
+            .map(|version| retired(version, Some(chrono::Duration::hours(9))))
+            .collect();
+        let mut provider = MockPlatformServiceProvider::new();
+        let client: Arc<dyn LambdaMicrovmsApi> = real.clone();
+        provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(client.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor should build");
+        for step in 0..400 {
+            executor.step().await.expect("ready tick");
+            let controller = executor.internal_state::<AwsSandboxController>().unwrap();
+            if step % 10 == 0 {
+                println!(
+                    "step {step}: {} retired left, deleting {:?}",
+                    controller.retired_versions.len(),
+                    controller.deleting_version
+                );
+            }
+            if controller.retired_versions.is_empty() && controller.deleting_version.is_none() {
+                break;
+            }
+            // `RECLAIM_STOP_AFTER=1` stops once that many versions are gone, to show one
+            // freed slot is enough for the next roll.
+            let stop_after = std::env::var("RECLAIM_STOP_AFTER")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok());
+            if stop_after.is_some_and(|n| {
+                versions.len() - controller.retired_versions.len() >= n
+                    && controller.deleting_version.is_none()
+            }) {
+                break;
+            }
+        }
+        if std::env::var("RECLAIM_STOP_AFTER").is_ok() {
+            let left = real.list_microvm_image_versions(&image).await.unwrap();
+            println!("image now holds {} versions", left.len());
+            return;
+        }
+        let left = real.list_microvm_image_versions(&image).await.unwrap();
+        println!("image now holds {} versions", left.len());
+        assert_eq!(left.len(), 1, "only the serving version remains");
+    }
+
     /// The version cap is not retried; the error says how full the image is and when room opens.
     #[tokio::test]
     async fn a_roll_refused_for_the_version_cap_says_when_room_opens() {

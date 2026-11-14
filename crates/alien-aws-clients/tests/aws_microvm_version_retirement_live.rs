@@ -75,11 +75,14 @@ fn bundle(marker: &str) -> Vec<u8> {
     zip.start_file("Dockerfile", zip::write::SimpleFileOptions::default())
         .unwrap();
     // A label is the cheapest change that makes each version's content distinct.
-    zip.write_all(format!(
+    zip.write_all(
+        format!(
             "FROM {BASE_IMAGE}\nLABEL probe={marker}\n\
              ENTRYPOINT [\"/bin/sh\", \"-c\", \"while true; do sleep 3600; done\"]\n"
-        ).as_bytes())
-        .unwrap();
+        )
+        .as_bytes(),
+    )
+    .unwrap();
     zip.finish().unwrap().into_inner()
 }
 
@@ -121,7 +124,10 @@ async fn wait_version(client: &LambdaMicrovmsClient, image: &str, version: &str)
 async fn setup_probe_image() {
     let account = std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap();
     let region = std::env::var("AWS_TARGET_REGION").unwrap();
-    assert_eq!(region, "eu-central-1", "the probe runs in eu-central-1 only");
+    assert_eq!(
+        region, "eu-central-1",
+        "the probe runs in eu-central-1 only"
+    );
     let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
     let name = format!("alien2697-{id}");
     let mut state = State::default();
@@ -268,10 +274,153 @@ async fn cleanup_probe_resources() {
     }
     if let Some(bucket) = &state.bucket {
         println!("bucket {bucket}: empty {:?}", s3.empty_bucket(bucket).await);
-        println!("bucket {bucket}: delete {:?}", s3.delete_bucket(bucket).await);
+        println!(
+            "bucket {bucket}: delete {:?}",
+            s3.delete_bucket(bucket).await
+        );
     }
     if let Some(role) = &state.role {
         let _ = iam.delete_role_policy(role, "build").await;
         println!("role {role}: delete {:?}", iam.delete_role(role).await);
+    }
+}
+
+/// Rolls the probe image until AWS refuses a roll for the version cap, marking each replaced
+/// version `INACTIVE` as the controller does, and prints the count at every step. Shows that
+/// `INACTIVE` versions still count toward the cap and that the refusal is the non-retryable
+/// version-cap error. Takes about two and a half minutes per version.
+#[tokio::test]
+#[ignore]
+async fn fill_the_image_to_the_version_cap() {
+    use alien_aws_clients::aws::lambda_microvms::MicrovmImageVersionStatus;
+    let mut state = load();
+    let image = state.image.clone().expect("run setup_probe_image first");
+    let bucket = state.bucket.clone().expect("a bucket");
+    let account = std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap();
+    let region = std::env::var("AWS_TARGET_REGION").unwrap();
+    let role_arn = format!(
+        "arn:aws:iam::{account}:role/{}",
+        state.role.clone().expect("a role")
+    );
+    let s3 = S3Client::new(Client::new(), provider());
+    let lambda = LambdaMicrovmsClient::new(Client::new(), provider());
+    let run = uuid::Uuid::new_v4().simple().to_string()[..6].to_string();
+
+    for n in 0..100 {
+        let versions = lambda.list_microvm_image_versions(&image).await.unwrap();
+        println!("roll {n}: image holds {} versions", versions.len());
+        let marker = format!("{run}-{n}");
+        let uri = put_bundle(&s3, &bucket, &marker, &mut state).await;
+        let rolled = lambda
+            .update_microvm_image(
+                &image,
+                UpdateMicrovmImageRequest::builder()
+                    .description(format!("probe {marker}"))
+                    .base_image_arn(format!(
+                        "arn:aws:lambda:{region}:aws:microvm-image:al2023-1"
+                    ))
+                    .base_image_version("1")
+                    .build_role_arn(role_arn.clone())
+                    .code_artifact(MicrovmCodeArtifact { uri })
+                    .cpu_configurations(vec![MicrovmCpuConfiguration {
+                        architecture: "ARM_64".to_string(),
+                    }])
+                    .additional_os_capabilities(vec![])
+                    .client_token(format!("roll-{run}-{n}"))
+                    .build(),
+            )
+            .await;
+        match rolled {
+            Ok(rolled) => {
+                let version = rolled.image_version.expect("a version");
+                wait_version(&lambda, &image, &version).await;
+                for old in versions {
+                    let old = old.image_version.unwrap();
+                    if old != version {
+                        lambda
+                            .update_microvm_image_version(
+                                &image,
+                                &old,
+                                MicrovmImageVersionStatus::Inactive,
+                            )
+                            .await
+                            .expect("set inactive");
+                    }
+                }
+            }
+            Err(error) => {
+                println!(
+                    "roll {n} refused at {} versions: code={} retryable={} message={}",
+                    versions.len(),
+                    error.code,
+                    error.retryable,
+                    error.message
+                );
+                assert_eq!(error.code, "VERSION_LIMIT_EXCEEDED");
+                assert!(!error.retryable);
+                return;
+            }
+        }
+    }
+    panic!("100 rolls were accepted; the cap never applied");
+}
+
+/// One roll of the probe image. `ROLL_EXPECT=refused` expects the version-cap refusal and
+/// `ROLL_EXPECT=ok` expects the roll to be accepted; the new version is marked nothing.
+#[tokio::test]
+#[ignore]
+async fn roll_the_image_once() {
+    let mut state = load();
+    let image = state.image.clone().expect("run setup_probe_image first");
+    let bucket = state.bucket.clone().expect("a bucket");
+    let account = std::env::var("AWS_TARGET_ACCOUNT_ID").unwrap();
+    let region = std::env::var("AWS_TARGET_REGION").unwrap();
+    let role_arn = format!(
+        "arn:aws:iam::{account}:role/{}",
+        state.role.clone().expect("a role")
+    );
+    let s3 = S3Client::new(Client::new(), provider());
+    let lambda = LambdaMicrovmsClient::new(Client::new(), provider());
+    let marker = format!("once-{}", uuid::Uuid::new_v4().simple());
+    let held = lambda
+        .list_microvm_image_versions(&image)
+        .await
+        .unwrap()
+        .len();
+    let uri = put_bundle(&s3, &bucket, &marker, &mut state).await;
+    let rolled = lambda
+        .update_microvm_image(
+            &image,
+            UpdateMicrovmImageRequest::builder()
+                .description(format!("probe {marker}"))
+                .base_image_arn(format!(
+                    "arn:aws:lambda:{region}:aws:microvm-image:al2023-1"
+                ))
+                .base_image_version("1")
+                .build_role_arn(role_arn)
+                .code_artifact(MicrovmCodeArtifact { uri })
+                .cpu_configurations(vec![MicrovmCpuConfiguration {
+                    architecture: "ARM_64".to_string(),
+                }])
+                .additional_os_capabilities(vec![])
+                .client_token(marker.clone())
+                .build(),
+        )
+        .await;
+    let expect = std::env::var("ROLL_EXPECT").expect("ROLL_EXPECT=ok|refused");
+    match (rolled, expect.as_str()) {
+        (Ok(rolled), "ok") => {
+            let version = rolled.image_version.expect("a version");
+            println!("roll accepted with {held} versions held: new version {version}");
+            wait_version(&lambda, &image, &version).await;
+        }
+        (Err(error), "refused") => {
+            println!(
+                "roll refused with {held} versions held: code={} retryable={}",
+                error.code, error.retryable
+            );
+            assert_eq!(error.code, "VERSION_LIMIT_EXCEEDED");
+        }
+        (other, expected) => panic!("expected {expected}, got {other:?}"),
     }
 }
