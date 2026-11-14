@@ -63,7 +63,7 @@ ENV RUST_LOG=info \
 # inherited base CMD values cannot become agent arguments or a second shell process.
 RUN mkdir -p /opt/alien \
  && printf '%s\n' '{"user":"","command":[],"env":{},"workingDirectory":"/"}' > /opt/alien/image-command.json \
- && chmod 0600 /opt/alien/image-command.json
+ && chmod 0444 /opt/alien/image-command.json
 
 EXPOSE 8971/tcp
 ENTRYPOINT ["/usr/local/bin/alien-sandbox-agent"]
