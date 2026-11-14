@@ -358,8 +358,14 @@ impl<'a> PoolQuotaLedger<'a> {
         let installed_series = state
             .resources
             .values()
-            .filter_map(|resource| resource.config.downcast_ref::<ComputeCluster>())
-            .flat_map(|cluster| &cluster.capacity_groups)
+            .filter_map(|resource| {
+                Some((resource, resource.config.downcast_ref::<ComputeCluster>()?))
+            })
+            .flat_map(|(resource, cluster)| {
+                cluster.capacity_groups.iter().filter(move |group| {
+                    crate::mutations::compute_cluster::group_was_created(resource, &group.group_id)
+                })
+            })
             .filter_map(|group| {
                 let spec = find_instance_type(Platform::Azure, group.instance_type.as_deref()?)?;
                 Some((group.group_id.clone(), spec.series))
@@ -1218,15 +1224,16 @@ mod tests {
                 data_disk_gib_range: None,
             })
             .build();
-        state.resources.insert(
-            "compute".into(),
-            StackResourceState::new_pending(
-                "compute-cluster".into(),
-                alien_core::Resource::new(cluster),
-                Some(alien_core::ResourceLifecycle::Live),
-                Vec::new(),
-            ),
+        let mut resource = StackResourceState::new_pending(
+            "compute-cluster".into(),
+            alien_core::Resource::new(cluster),
+            Some(alien_core::ResourceLifecycle::Live),
+            Vec::new(),
         );
+        // An installed deployment: running.
+        resource.status = alien_core::ResourceStatus::Running;
+        resource.internal_state = Some(json!({"opaque": true}));
+        state.resources.insert("compute".into(), resource);
         let ledger = PoolQuotaLedger::new(&room, &state);
         assert!(ledger.has_room("general", spec("Standard_D8s_v6"), 3));
         assert!(!ledger.has_room("general", spec("Standard_D4s_v5"), 1));
