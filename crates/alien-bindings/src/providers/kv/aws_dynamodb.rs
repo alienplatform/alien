@@ -446,6 +446,9 @@ impl Kv for AwsDynamodbKv {
                 .expression_attribute_values(expression_attribute_values)
                 .limit(i32::try_from(limit - items.len()).unwrap_or(i32::MAX))
                 .maybe_exclusive_start_key(exclusive_start_key)
+                // A scan decides things like whether a copy finished, so it must
+                // see every write the store has acknowledged, as `get` does.
+                .consistent_read(true)
                 .build();
 
             let response = self.client.query(request).await.map_err(|e| {
