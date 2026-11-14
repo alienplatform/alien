@@ -19421,6 +19421,10 @@
           "resources"
         ],
         "properties": {
+          "acceptsShortLivedDeploymentToken": {
+            "type": "boolean",
+            "description": "Set by a client that can use a short-lived deployment token for this run\nonly and will not store it. Without it, the response carries no new\ntoken for an installation whose Operator already holds its own key."
+          },
           "basePlatform": {
             "nullable": true,
             "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes.",
@@ -19530,6 +19534,12 @@
           "deploymentToken": {
             "type": "string",
             "description": "Deployment bearer token for the imported deployment, when available.",
+            "nullable": true
+          },
+          "deploymentTokenExpiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When `deployment_token` stops working. Set only for a short-lived token,\nwhich a client uses for this run and does not store.",
             "nullable": true
           },
           "stackSettings": {

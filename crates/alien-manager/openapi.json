@@ -21769,6 +21769,10 @@
           "resources"
         ],
         "properties": {
+          "acceptsShortLivedDeploymentToken": {
+            "type": "boolean",
+            "description": "Set by a client that can use a short-lived deployment token for this run\nonly and will not store it. Without it, the response carries no new\ntoken for an installation whose Operator already holds its own key."
+          },
           "basePlatform": {
             "oneOf": [
               {
@@ -21892,6 +21896,14 @@
               "null"
             ],
             "description": "Deployment bearer token for the imported deployment, when available."
+          },
+          "deploymentTokenExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When `deployment_token` stops working. Set only for a short-lived token,\nwhich a client uses for this run and does not store."
           },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",
