@@ -225,10 +225,7 @@ impl DailyIdentity {
                 if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
                     self.mark_enrollment_uncertain();
                 }
-                return Err(failed(&format!(
-                    "Component identity request refused (HTTP {})",
-                    status.as_u16()
-                )));
+                return Err(refused(status));
             }
             Err(error) => {
                 self.mark_enrollment_uncertain();
@@ -511,7 +508,12 @@ impl DailyIdentity {
             let mut probe = match probe {
                 Ok(probe) => probe,
                 Err(_) => {
-                    return keep_current(&state, failed("Cannot recover pending component key"))
+                    return keep_current(
+                        &state,
+                        AlienError::new(ErrorData::SyncFailed {
+                            message: "Cannot recover pending component key".into(),
+                        }),
+                    )
                 }
             };
             if probe.status().is_success() {
@@ -551,10 +553,7 @@ impl DailyIdentity {
                 return Ok(state.current);
             }
             if probe.status().as_u16() != 401 {
-                return keep_current(
-                    &state,
-                    failed("Pending component key verification is unavailable"),
-                );
+                return keep_current(&state, refused(probe.status()));
             }
         } else {
             // After a manager outage the manager still rotates the latest key
@@ -618,15 +617,7 @@ impl DailyIdentity {
         }
         let response = match outcome {
             Ok(response) => response,
-            Err(status) => {
-                return keep_current(
-                    &state,
-                    failed(&format!(
-                        "Component identity request refused (HTTP {})",
-                        status.as_u16()
-                    )),
-                )
-            }
+            Err(status) => return keep_current(&state, refused(status)),
         };
         state.expires_at = response_expiry(&response)?;
         state.current = pending.clone();
@@ -645,10 +636,7 @@ impl DailyIdentity {
     ) -> Result<Value> {
         match self.post_outcome(state, operation, body).await? {
             Ok(value) => Ok(value),
-            Err(status) => Err(failed(&format!(
-                "Component identity request refused (HTTP {})",
-                status.as_u16()
-            ))),
+            Err(status) => Err(refused(status)),
         }
     }
 
@@ -669,7 +657,11 @@ impl DailyIdentity {
             .json(&body)
             .send()
             .await
-            .map_err(|_| failed("Component identity request failed"))?;
+            .map_err(|_| {
+                AlienError::new(ErrorData::SyncFailed {
+                    message: "Component identity request failed".into(),
+                })
+            })?;
         if !response.status().is_success() {
             return Ok(Err(response.status()));
         }
@@ -693,11 +685,23 @@ impl DailyIdentity {
 #[async_trait]
 impl RuntimeProofProvider for DailyIdentity {
     async fn proof(&self, audience: &str) -> alien_client_core::Result<Value> {
-        let key = self.current_key(audience).await.context(
-            alien_client_core::ErrorData::AuthenticationError {
-                message: "Daily component identity cannot establish authority".into(),
-            },
-        )?;
+        let message = "Daily component identity cannot establish authority".to_string();
+        let key = match self.current_key(audience).await {
+            Ok(key) => key,
+            // A manager that cannot be reached can answer on the next try.
+            Err(error) if error.retryable => {
+                return Err(alien_error::ContextError::context(
+                    error,
+                    alien_client_core::ErrorData::AuthenticationError { message },
+                ))
+            }
+            Err(error) => {
+                return Err(alien_error::ContextError::context(
+                    error,
+                    alien_client_core::ErrorData::RuntimeAuthorityRefused { message },
+                ))
+            }
+        };
         Ok(json!({"type":"dailyKey","key":key}))
     }
 }
@@ -750,6 +754,20 @@ fn response_expiry(response: &Value) -> Result<DateTime<Utc>> {
     }
     Ok(expiry)
 }
+/// The manager answered an identity request with a status that is not success. A server error, a
+/// timeout or throttling can succeed on the next try; any other status is its decision.
+fn refused(status: reqwest::StatusCode) -> AlienError<ErrorData> {
+    let message = format!(
+        "Component identity request refused (HTTP {})",
+        status.as_u16()
+    );
+    if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
+        AlienError::new(ErrorData::SyncFailed { message })
+    } else {
+        failed(&message)
+    }
+}
+
 fn failed(message: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::ConfigurationError {
         message: message.into(),
@@ -855,12 +873,19 @@ impl alien_infra::RuntimeRegistryCredentialProvider for OperatorRegistryCredenti
                 }
             }
         }
-        request_capability(&self.0, purpose).await.context(
-            alien_infra::ErrorData::ResourceConfigInvalid {
-                message: "Cannot obtain bounded runtime authority".into(),
-                resource_id: None,
-            },
-        )
+        // Keep whether the failure can succeed on a later tick: a manager that is briefly
+        // unreachable must not end the resource's upkeep, while its refusal does, with its
+        // reason.
+        let unavailable = || alien_infra::ErrorData::AuthenticationFailed {
+            message: "Cannot obtain bounded runtime authority".into(),
+            method: None,
+        };
+        request_credentials(&self.0, purpose)
+            .await
+            .context(unavailable())?
+            .capability()
+            .await
+            .context(unavailable())
     }
 
     async fn registry_pull_credential(
@@ -2127,6 +2152,8 @@ mod lost_enrollment_tests {
         installed: Arc<Mutex<Option<String>>>,
         /// What the next `enroll` answer is, after the key is installed (or not).
         answer: Arc<AtomicU8>,
+        /// A status the exchange answers with instead of a credential (0: a credential).
+        exchange_status: Arc<std::sync::atomic::AtomicU16>,
     }
 
     async fn issue_code(
@@ -2171,6 +2198,12 @@ mod lost_enrollment_tests {
         axum::Json(body): axum::Json<Value>,
     ) -> axum::response::Response {
         use axum::response::IntoResponse;
+        let status = manager.exchange_status.load(Ordering::SeqCst);
+        if status != 0 {
+            return axum::http::StatusCode::from_u16(status)
+                .unwrap()
+                .into_response();
+        }
         let installed = manager.installed.lock().await;
         if installed.as_deref() != body["proof"]["key"].as_str().map(key_hash).as_deref() {
             return axum::http::StatusCode::UNAUTHORIZED.into_response();
@@ -2182,6 +2215,16 @@ mod lost_enrollment_tests {
         .into_response()
     }
 
+    /// Rotation answers with the configured status; it never rotates.
+    async fn rotate(
+        axum::extract::State(manager): axum::extract::State<EnrollManager>,
+    ) -> axum::http::StatusCode {
+        match manager.exchange_status.load(Ordering::SeqCst) {
+            0 => axum::http::StatusCode::NOT_FOUND,
+            status => axum::http::StatusCode::from_u16(status).unwrap(),
+        }
+    }
+
     async fn fixture(answer: u8) -> (Arc<OperatorDb>, String, EnrollManager, tempfile::TempDir) {
         let directory = tempfile::tempdir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2189,6 +2232,7 @@ mod lost_enrollment_tests {
         let manager = EnrollManager {
             installed: Arc::new(Mutex::new(None)),
             answer: Arc::new(AtomicU8::new(answer)),
+            exchange_status: Arc::new(std::sync::atomic::AtomicU16::new(0)),
         };
         let app = axum::Router::new()
             .route(
@@ -2197,6 +2241,7 @@ mod lost_enrollment_tests {
             )
             .route("/v1/identity/enroll", axum::routing::post(enroll))
             .route("/v1/identity/exchange", axum::routing::post(exchange))
+            .route("/v1/identity/rotate", axum::routing::post(rotate))
             .with_state(manager.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db = Arc::new(
@@ -2246,5 +2291,89 @@ mod lost_enrollment_tests {
             .await
             .expect_err("the manager refuses the enrollment");
         assert!(db.read_daily_identity().await.unwrap().is_none());
+    }
+
+    /// The registry pull credential is fetched on every sandbox tick. A manager that is briefly
+    /// unavailable must leave the sandbox retrying; only the manager's refusal may end the tick
+    /// for good, and it says why.
+    #[tokio::test]
+    async fn an_unavailable_manager_is_retryable_for_the_registry_pull_credential() {
+        use alien_infra::RuntimeRegistryCredentialProvider as _;
+        let (db, url, manager, _directory) = fixture(LOST).await;
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_fixture")
+            .await
+            .expect_err("the reply was lost");
+        DailyIdentity::new(db.clone())
+            .unwrap()
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_fixture")
+            .await
+            .expect("the saved key proves the installed enrollment");
+        db.set_deployment_id("deployment-one").await.unwrap();
+        // A settled identity: a key that is good for most of its day and nothing pending, so the
+        // proof needs no manager call and only the exchange can fail.
+        let mut state = db.read_daily_identity().await.unwrap().unwrap();
+        state.pending = None;
+        state.pending_started_at = None;
+        state.expires_at = Utc::now() + chrono::Duration::hours(20);
+        db.write_daily_identity(&state).await.unwrap();
+        let credentials = OperatorRegistryCredentials(db.clone());
+
+        manager
+            .exchange_status
+            .store(503, std::sync::atomic::Ordering::SeqCst);
+        let error = credentials
+            .registry_pull_credential("deployment-one")
+            .await
+            .err()
+            .expect("the manager is unavailable");
+        assert!(error.retryable, "a 503 can succeed later: {error:?}");
+
+        manager
+            .exchange_status
+            .store(403, std::sync::atomic::Ordering::SeqCst);
+        let error = credentials
+            .registry_pull_credential("deployment-one")
+            .await
+            .err()
+            .expect("the manager refuses");
+        assert!(!error.retryable, "a 403 is a refusal: {error:?}");
+        assert!(
+            format!("{error:?}").contains("HTTP 403"),
+            "the refusal keeps its reason: {error:?}"
+        );
+
+        // The daily key itself is past its deadline, so the proof needs a rotation first.
+        let mut state = db.read_daily_identity().await.unwrap().unwrap();
+        state.expires_at = Utc::now() - chrono::Duration::hours(1);
+        db.write_daily_identity(&state).await.unwrap();
+        manager
+            .exchange_status
+            .store(503, std::sync::atomic::Ordering::SeqCst);
+        let error = credentials
+            .registry_pull_credential("deployment-one")
+            .await
+            .err()
+            .expect("the key cannot rotate");
+        assert!(error.retryable, "a rotation can succeed later: {error:?}");
+        // The failed rotation saved a successor; a refusal is judged on a fresh attempt.
+        let mut state = db.read_daily_identity().await.unwrap().unwrap();
+        state.pending = None;
+        state.pending_started_at = None;
+        db.write_daily_identity(&state).await.unwrap();
+        manager
+            .exchange_status
+            .store(403, std::sync::atomic::Ordering::SeqCst);
+        let error = credentials
+            .registry_pull_credential("deployment-one")
+            .await
+            .err()
+            .expect("the manager refuses the rotation");
+        assert!(!error.retryable, "a refused rotation is final: {error:?}");
+        assert!(
+            format!("{error:?}").contains("HTTP 403"),
+            "the refusal keeps its reason: {error:?}"
+        );
     }
 }

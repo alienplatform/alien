@@ -314,11 +314,18 @@ impl RuntimeCredentials {
         let mut response = self.client.post(self.endpoint.clone())
             .json(&json!({"deploymentId": self.deployment_id, "purpose": self.purpose, "proof": proof}))
             .send().await.map_err(|_| invalid("identity exchange transport failed"))?;
-        if !response.status().is_success() {
-            return Err(invalid(&format!(
-                "identity exchange returned HTTP {}",
-                response.status().as_u16()
-            )));
+        let status = response.status();
+        if !status.is_success() {
+            let message = format!("identity exchange returned HTTP {}", status.as_u16());
+            // A server error, a timeout or throttling can succeed on the next try; any other
+            // 4xx is the manager's decision about this identity.
+            return Err(
+                if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
+                    invalid(&message)
+                } else {
+                    AlienError::new(ErrorData::RuntimeAuthorityRefused { message })
+                },
+            );
         }
         let mut bytes = Vec::new();
         while let Some(chunk) = response
@@ -543,6 +550,42 @@ mod tests {
         );
         exchange.join().unwrap();
         delivery.join().unwrap();
+    }
+
+    /// A manager that is briefly down must not look like a refusal: a transport failure or a
+    /// server error can succeed on the next try, while a 4xx is the manager's answer.
+    #[tokio::test]
+    async fn an_unavailable_manager_is_retryable_and_a_refusal_is_not() {
+        let (client, _, _, server) = fixture(vec![(503, json!({}))]);
+        let error = client.capability().await.err().expect("the exchange fails");
+        assert!(error.retryable, "a 503 can succeed later: {error:?}");
+        server.join().unwrap();
+
+        let (client, _, _, server) = fixture(vec![(403, json!({"message": "no grant"}))]);
+        let error = client.capability().await.err().expect("the exchange fails");
+        assert!(!error.retryable, "a 403 is a refusal: {error:?}");
+        assert!(error.message.contains("HTTP 403"), "{}", error.message);
+        server.join().unwrap();
+
+        // Nothing listens: the connection fails.
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let manager_url = format!("http://{}", closed.local_addr().unwrap());
+        drop(closed);
+        let client = RuntimeCredentials::new(
+            RuntimeCredentialConfig {
+                manager_url,
+                audience: "manager-identity".into(),
+                deployment_id: "deployment-one".into(),
+                purpose: json!({"type":"telemetry"}),
+            },
+            Arc::new(Proof(AtomicUsize::new(0))),
+        )
+        .unwrap();
+        let error = client.capability().await.err().expect("the exchange fails");
+        assert!(
+            error.retryable,
+            "a refused connection can succeed later: {error:?}"
+        );
     }
 
     #[tokio::test]

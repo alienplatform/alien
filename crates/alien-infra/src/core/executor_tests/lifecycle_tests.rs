@@ -908,3 +908,52 @@ async fn test_a_permanent_observation_failure_keeps_its_reason_on_the_resource()
     );
     Ok(())
 }
+
+/// A resource that recovers from RefreshFailed (its next observation succeeds) goes back to
+/// Running and its error is gone: only a resource that stays failed keeps its reason.
+#[tokio::test]
+async fn test_a_recovered_observation_clears_the_reason_it_failed() -> Result<()> {
+    let mut observed = test_function("observed");
+    observed.environment.insert(
+        "SIMULATE_OBSERVED_URL_REFRESH".to_string(),
+        "true".to_string(),
+    );
+    observed.environment.insert(
+        "SIMULATE_OBSERVED_REFRESH_ERROR_ONCE".to_string(),
+        "true".to_string(),
+    );
+    let stack = Stack::new("recovered-observation-test".to_owned())
+        .add(observed, ResourceLifecycle::Live)
+        .build();
+    let executor = new_executor(&stack)?;
+
+    let mut state = new_test_state();
+    let mut seen = Vec::new();
+    for _ in 0..16 {
+        state = executor.step(state).await?.next_state;
+        let resource = state.resources.get("observed").expect("resource");
+        seen.push((resource.status, resource.error.is_some()));
+    }
+
+    assert!(
+        seen.contains(&(ResourceStatus::RefreshFailed, true)),
+        "the failed observation keeps its reason while in RefreshFailed, saw: {seen:?}"
+    );
+    // Not only at the end: the step that recovers must already show no error.
+    assert!(
+        !seen.contains(&(ResourceStatus::Running, true)),
+        "a Running resource must not carry the reason it failed, saw: {seen:?}"
+    );
+    let resource = state.resources.get("observed").expect("resource");
+    assert_eq!(
+        resource.status,
+        ResourceStatus::Running,
+        "the next observation succeeds, saw: {seen:?}"
+    );
+    assert!(
+        resource.error.is_none(),
+        "a recovered resource must not keep the reason it failed: {:?}",
+        resource.error
+    );
+    Ok(())
+}

@@ -542,6 +542,21 @@ impl TestWorkerController {
                 self.ready_observations += 1;
                 self.url = Some(format!("https://observed-{}.test", self.ready_observations));
 
+                // Optionally fail one observation with an error, so tests can prove the reason
+                // is kept while the resource is in RefreshFailed and gone once it recovers.
+                if !self.refresh_failure_simulated
+                    && target_func
+                        .environment
+                        .get("SIMULATE_OBSERVED_REFRESH_ERROR_ONCE")
+                        .is_some_and(|v| v == "true")
+                {
+                    self.refresh_failure_simulated = true;
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: "Simulated observation failure".to_string(),
+                        resource_id: Some(target_func.id.clone()),
+                    }));
+                }
+
                 // Optionally simulate one failed observation: dip into
                 // RefreshFailed once, so tests can prove observation recovers.
                 if !self.refresh_failure_simulated

@@ -1563,6 +1563,71 @@ mod tests {
         assert!(!error.retryable);
         assert!(error.message.contains("Registry pull authority"), "{error}");
     }
+    /// A manager that is briefly unreachable is not the end of the sandbox's upkeep: the tick
+    /// fails with the retryable flag the provider set, so the executor tries again instead of
+    /// parking the sandbox in a terminal RefreshFailed.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn a_retryable_pull_credential_failure_stays_retryable_in_the_renewal() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource};
+        use std::sync::Arc;
+
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "manager.example/sbx/root:1".to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "1Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut provider = crate::MockPlatformServiceProvider::new();
+        provider
+            .expect_runtime_registry_pull_credential()
+            .returning(|_| {
+                let mut unavailable = AlienError::new(ErrorData::AuthenticationFailed {
+                    message: "Cannot obtain bounded runtime authority".into(),
+                    method: None,
+                });
+                unavailable.retryable = true;
+                Err(unavailable)
+            });
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(sandbox.clone()),
+            vec![EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        {
+            let config = harness.deployment_config_mut();
+            config.manager_url = Some("https://manager.example".into());
+            config.runtime_identity_audience = Some("https://manager.example".into());
+        }
+        let ctx = harness.ctx();
+
+        let error = renew_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect_err("the manager is unreachable");
+        assert!(error.retryable, "{error:?}");
+        assert!(
+            error.message.contains("bounded runtime authority"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn a_pod_security_refusal_names_the_namespace_and_the_fix() {
         let refusal = AlienError::new(ErrorData::CloudPlatformError {
