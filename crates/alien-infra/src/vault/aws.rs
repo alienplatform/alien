@@ -1485,10 +1485,7 @@ mod permission_update_tests {
             )
             .unwrap();
         }
-        eprintln!(
-            "boundary unchanged by the second release: {}",
-            before == after
-        );
+        assert_eq!(before, after, "the second release changes the boundary");
 
         // Delete everything this test created.
         let empty = Stack::new("live-vault".to_string()).build();
