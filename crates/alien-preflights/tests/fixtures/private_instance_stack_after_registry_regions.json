@@ -1,0 +1,154 @@
+{
+  "id": "alien-manager",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Encrypt the secret values of the deployments this instance manages with a key in your own cloud account.",
+      "env": [],
+      "id": "valuesKey",
+      "kind": "boolean",
+      "label": "Keep deployment values in your account",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": false
+    },
+    {
+      "default": {
+        "type": "stringList",
+        "value": []
+      },
+      "description": "AWS regions other than this instance's own where Lambda functions of your deployments run (up to 10). Images are copied there automatically. Leave empty if all deployments run in this region.",
+      "env": [],
+      "id": "deploymentRegions",
+      "kind": "stringList",
+      "label": "Deployment regions",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": false,
+      "validation": {}
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "manager": {
+        "artifact-registry": [
+          "artifact-registry/pull",
+          "artifact-registry/push",
+          "artifact-registry/provision"
+        ],
+        "command-storage": [
+          "storage/data-read",
+          "storage/data-write"
+        ],
+        "kv": [
+          "kv/data-read",
+          "kv/data-write"
+        ],
+        "management-sa": [
+          "service-account/impersonate"
+        ],
+        "telemetry-storage": [
+          "storage/data-read",
+          "storage/data-write"
+        ],
+        "values-key": [
+          "key/remote-cryptography"
+        ]
+      }
+    }
+  },
+  "resources": {
+    "artifact-registry": {
+      "config": {
+        "id": "artifact-registry",
+        "replicationRegionsInput": "deploymentRegions",
+        "type": "artifact-registry"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "command-storage": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "command-storage",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "kv": {
+      "config": {
+        "id": "kv",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "management-sa": {
+      "config": {
+        "id": "management-sa",
+        "stackPermissionSets": [
+          {
+            "description": "Assume target installation management roles that trust this manager",
+            "id": "private-manager/target-role-impersonation",
+            "platforms": {
+              "aws": [
+                {
+                  "binding": {
+                    "stack": {
+                      "resources": [
+                        "arn:aws:iam::*:role/*-management"
+                      ]
+                    }
+                  },
+                  "grant": {
+                    "actions": [
+                      "sts:AssumeRole"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "type": "service-account"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "telemetry-storage": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "telemetry-storage",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "values-key": {
+      "config": {
+        "id": "values-key",
+        "type": "key"
+      },
+      "dependencies": [],
+      "enabledWhen": "valuesKey",
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}

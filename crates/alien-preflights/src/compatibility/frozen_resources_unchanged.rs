@@ -3,7 +3,7 @@ use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
     permissions::PermissionSet, AzureStorageAccount, CapacityGroup, CapacityGroupScalePolicy,
-    ComputeCluster, ComputePoolSelection, Platform, Resource, ResourceLifecycle, Sandbox,
+    ComputeCluster, ComputePoolSelection, DeploymentConfig, InputAnswers, Platform, Resource, ResourceLifecycle, Sandbox,
     SandboxCode, ServiceAccount, Stack,
 };
 use alien_error::Context;
@@ -346,6 +346,29 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
     }
 
     async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
+        self.compare(old_stack, new_stack, None)
+    }
+
+    async fn check_with_config(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        config: &DeploymentConfig,
+        _platform: Platform,
+    ) -> Result<CheckResult> {
+        self.compare(old_stack, new_stack, Some(config))
+    }
+}
+
+impl FrozenResourcesUnchangedCheck {
+    /// `config` carries the deployment's input answers; without it input references compare as
+    /// written.
+    fn compare(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        config: Option<&DeploymentConfig>,
+    ) -> Result<CheckResult> {
         let mut errors = Vec::new();
 
         // Collect frozen resources from old stack
@@ -430,7 +453,17 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                 }
                 let old_config = on_platform(self.platform, &old_entry.config);
                 let new_config = on_platform(self.platform, &new_entry.config);
+                // A reference to an input nobody filled in is not a change to what setup
+                // recorded without the reference (a release that adds an optional input).
+                let answers = config
+                    .map(|config| InputAnswers::new(&new_stack.inputs, &config.input_values));
+                let no_value_reference = answers.is_some_and(|answers| {
+                    new_config
+                        .with_empty_input_references_removed(&answers)
+                        .is_some_and(|resolved| *old_config == *on_platform(self.platform, &resolved))
+                });
                 if old_config != new_config
+                    && !no_value_reference
                     && !runtime_managed_frozen_change(self.platform, &old_config, &new_config)
                     && !runtime_managed_sandbox_image(self.platform, &old_config, &new_config)
                     && !unchanged_legacy_service_account_grants(
@@ -446,6 +479,18 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         &old_entry.config,
                         &new_entry.config,
                     );
+                    let mut details = details;
+                    details.extend(new_config.input_references().into_iter().filter_map(
+                        |(field, input)| {
+                            // Only a reference the recorded config lacks is the new part.
+                            (!old_config.input_references().iter().any(|old| old.0 == field))
+                                .then(|| {
+                                    format!(
+                                        "'{field}' reads deployment input '{input}', which lists values the installed setup does not have"
+                                    )
+                                })
+                        },
+                    ));
                     let details = if details.is_empty() {
                         String::new()
                     } else {
