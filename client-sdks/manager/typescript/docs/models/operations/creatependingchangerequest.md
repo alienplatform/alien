@@ -9,7 +9,9 @@ let value: CreatePendingChangeRequest = {
   project: "<value>",
   createPendingChangeRequest: {
     basedOnVersion: 217411,
-    body: {},
+    body: {
+      "key": "<value>",
+    },
     summary: "<value>",
   },
 };

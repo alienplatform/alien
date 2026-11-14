@@ -5,14 +5,6 @@
 import * as z from "zod/v4";
 
 /**
- * The next list's body (`previous`, `adminThreshold`, `signers`,
- *
- * @remarks
- * `deny`, `recovered`).
- */
-export type CreatePendingChangeRequestBody = {};
-
-/**
  * Body of `POST /v1/projects/{project}/pending-changes`: the body of the
  *
  * @remarks
@@ -29,7 +21,7 @@ export type CreatePendingChangeRequest = {
    * @remarks
    * `deny`, `recovered`).
    */
-  body: CreatePendingChangeRequestBody;
+  body: { [k: string]: any };
   /**
    * One line for lists, such as `bob-thinkpad asks to: release`.
    */
@@ -37,28 +29,9 @@ export type CreatePendingChangeRequest = {
 };
 
 /** @internal */
-export type CreatePendingChangeRequestBody$Outbound = {};
-
-/** @internal */
-export const CreatePendingChangeRequestBody$outboundSchema: z.ZodType<
-  CreatePendingChangeRequestBody$Outbound,
-  CreatePendingChangeRequestBody
-> = z.object({});
-
-export function createPendingChangeRequestBodyToJSON(
-  createPendingChangeRequestBody: CreatePendingChangeRequestBody,
-): string {
-  return JSON.stringify(
-    CreatePendingChangeRequestBody$outboundSchema.parse(
-      createPendingChangeRequestBody,
-    ),
-  );
-}
-
-/** @internal */
 export type CreatePendingChangeRequest$Outbound = {
   basedOnVersion: number;
-  body: CreatePendingChangeRequestBody$Outbound;
+  body: { [k: string]: any };
   summary: string;
 };
 
@@ -68,7 +41,7 @@ export const CreatePendingChangeRequest$outboundSchema: z.ZodType<
   CreatePendingChangeRequest
 > = z.object({
   basedOnVersion: z.int(),
-  body: z.lazy(() => CreatePendingChangeRequestBody$outboundSchema),
+  body: z.record(z.string(), z.any()),
   summary: z.string(),
 });
 

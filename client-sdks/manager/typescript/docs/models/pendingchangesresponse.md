@@ -9,8 +9,11 @@ let value: PendingChangesResponse = {
   items: [
     {
       basedOnVersion: 147256,
-      body: {},
-      createdAt: "1724354458940",
+      body: {
+        "key": "<value>",
+        "key1": "<value>",
+      },
+      createdAt: "1716824244575",
       id: "<id>",
       projectId: "<id>",
       status: "approved",

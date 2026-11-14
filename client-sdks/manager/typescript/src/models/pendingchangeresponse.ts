@@ -11,11 +11,6 @@ import {
   PendingChangeStatus$inboundSchema,
 } from "./pendingchangestatus.js";
 
-/**
- * The next list's body.
- */
-export type PendingChangeResponseBody = {};
-
 export type PendingChangeResponse = {
   /**
    * Signer list version the body was prepared from.
@@ -24,7 +19,7 @@ export type PendingChangeResponse = {
   /**
    * The next list's body.
    */
-  body: PendingChangeResponseBody;
+  body: { [k: string]: any };
   createdAt: string;
   /**
    * Also the request id the pairing code covers.
@@ -51,28 +46,12 @@ export type PendingChangeResponse = {
 };
 
 /** @internal */
-export const PendingChangeResponseBody$inboundSchema: z.ZodType<
-  PendingChangeResponseBody,
-  unknown
-> = z.object({});
-
-export function pendingChangeResponseBodyFromJSON(
-  jsonString: string,
-): SafeParseResult<PendingChangeResponseBody, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => PendingChangeResponseBody$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'PendingChangeResponseBody' from JSON`,
-  );
-}
-
-/** @internal */
 export const PendingChangeResponse$inboundSchema: z.ZodType<
   PendingChangeResponse,
   unknown
 > = z.object({
   basedOnVersion: z.int(),
-  body: z.lazy(() => PendingChangeResponseBody$inboundSchema),
+  body: z.record(z.string(), z.any()),
   createdAt: z.string(),
   id: z.string(),
   projectId: z.string(),

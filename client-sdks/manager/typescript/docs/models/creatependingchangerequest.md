@@ -10,7 +10,9 @@ import { CreatePendingChangeRequest } from "@alienplatform/manager-api/models";
 
 let value: CreatePendingChangeRequest = {
   basedOnVersion: 217411,
-  body: {},
+  body: {
+    "key": "<value>",
+  },
   summary: "<value>",
 };
 ```
@@ -20,5 +22,5 @@ let value: CreatePendingChangeRequest = {
 | Field                                                                                | Type                                                                                 | Required                                                                             | Description                                                                          |
 | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
 | `basedOnVersion`                                                                     | *number*                                                                             | :heavy_check_mark:                                                                   | Signer list version the body was prepared from.                                      |
-| `body`                                                                               | [models.CreatePendingChangeRequestBody](../models/creatependingchangerequestbody.md) | :heavy_check_mark:                                                                   | The next list's body (`previous`, `adminThreshold`, `signers`,<br/>`deny`, `recovered`). |
+| `body`                                                                               | Record<string, *any*>                                                                | :heavy_check_mark:                                                                   | The next list's body (`previous`, `adminThreshold`, `signers`,<br/>`deny`, `recovered`). |
 | `summary`                                                                            | *string*                                                                             | :heavy_check_mark:                                                                   | One line for lists, such as `bob-thinkpad asks to: release`.                         |
