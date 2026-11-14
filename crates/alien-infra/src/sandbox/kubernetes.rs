@@ -498,6 +498,7 @@ impl KubernetesSandboxController {
             )
             .await?,
         );
+        renew_image_pull_secret(ctx, config, &namespace).await?;
         let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
 
         let pool = replenish_warm_pool(
@@ -842,13 +843,8 @@ async fn ensure_image_pull_secret(
     if !image_is_from_manager(image, ctx.deployment_config.manager_url.as_deref()) {
         return Ok(None);
     }
-    let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-        AlienError::new(ErrorData::ResourceControllerConfigError {
-            resource_id: sandbox.id.clone(),
-            message: "deployment_token is required to pull the sandbox image from the manager's registry".to_string(),
-        })
-    })?;
-    let name = format!("alien-sbx-{}-registry", sandbox.id);
+    let token = crate::kubernetes_registry::pull_credential(ctx, &sandbox.id).await?;
+    let name = format!("{}-registry", pull_secret_workload_name(&sandbox.id));
     let secrets = ctx
         .service_provider
         .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
@@ -858,12 +854,41 @@ async fn ensure_image_pull_secret(
         namespace,
         &name,
         image,
-        token,
+        &token,
         kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
         false,
     )
     .await?;
     Ok(Some(name))
+}
+
+/// Renews the pull Secret of a sandbox image from the manager's registry, the way a container's
+/// pull Secret is renewed: the credential the manager issues for it is short-lived, and a new pod
+/// reads whatever the Secret holds when it starts. Another registry's image has no Secret.
+async fn renew_image_pull_secret(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+) -> Result<()> {
+    let alien_core::SandboxCode::Image { image, .. } = &sandbox.code else {
+        return Ok(());
+    };
+    if !image_is_from_manager(image, ctx.deployment_config.manager_url.as_deref()) {
+        return Ok(());
+    }
+    crate::kubernetes_registry::refresh_pull_secret(
+        ctx,
+        namespace,
+        &pull_secret_workload_name(&sandbox.id),
+        &sandbox.id,
+        image,
+    )
+    .await
+}
+
+/// The name `refresh_pull_secret` derives the sandbox's pull Secret from (`<name>-registry`).
+fn pull_secret_workload_name(sandbox_id: &str) -> String {
+    format!("alien-sbx-{sandbox_id}")
 }
 
 /// Deletes the claimed pods of this sandbox whose session deadline has passed.
@@ -1375,6 +1400,168 @@ mod tests {
             })
             .expect("a docker config");
         assert!(docker_config.contains("pull-token"), "{docker_config}");
+    }
+
+    /// The credential lasts well under the sandbox's lifetime, so each health tick writes the
+    /// manager's current one over the Secret: a pod started an hour later still pulls.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn the_health_tick_renews_the_pull_secret_with_the_credential_the_manager_issues_then() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_client_core::runtime_credentials::RuntimeCapability;
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource};
+        use std::sync::{Arc, Mutex};
+
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "manager.example/sbx/root:1".to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "1Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+
+        let issued = Arc::new(Mutex::new(vec!["second-token", "first-token"]));
+        let mut provider = crate::MockPlatformServiceProvider::new();
+        let queue = issued.clone();
+        provider
+            .expect_runtime_registry_pull_credential()
+            .returning(move |_| {
+                Ok(Some(RuntimeCapability {
+                    token: queue.lock().unwrap().pop().unwrap().into(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+                }))
+            });
+        let live: Arc<Mutex<Option<k8s_openapi::api::core::v1::Secret>>> = Default::default();
+        let mut secrets = alien_k8s_clients::secrets::MockSecretsApi::new();
+        let created = live.clone();
+        secrets.expect_create_secret().returning(move |_, secret| {
+            let mut live = created.lock().unwrap();
+            if live.is_some() {
+                return Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceConflict {
+                        resource_type: "Secret".into(),
+                        resource_name: "alien-sbx-sbx-registry".into(),
+                        message: "AlreadyExists 409".into(),
+                    },
+                ));
+            }
+            let mut stored = secret.clone();
+            stored.metadata.resource_version = Some("1".into());
+            *live = Some(stored.clone());
+            Ok(stored)
+        });
+        let read = live.clone();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(read.lock().unwrap().clone().unwrap()));
+        let updated = live.clone();
+        secrets
+            .expect_update_secret()
+            .returning(move |_, _, secret| {
+                *updated.lock().unwrap() = Some(secret.clone());
+                Ok(secret.clone())
+            });
+        let secrets: Arc<dyn alien_k8s_clients::SecretsApi> = Arc::new(secrets);
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(secrets.clone()));
+
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(sandbox.clone()),
+            vec![EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        {
+            let config = harness.deployment_config_mut();
+            config.manager_url = Some("https://manager.example".into());
+            config.runtime_identity_audience = Some("https://manager.example".into());
+            config.deployment_token = None;
+        }
+        let ctx = harness.ctx();
+        let held = || {
+            let secret = live.lock().unwrap().clone().expect("a Secret");
+            let data = secret.data.expect("data");
+            String::from_utf8_lossy(&data[".dockerconfigjson"].0).into_owned()
+        };
+
+        renew_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect("first renewal");
+        assert!(held().contains("first-token"), "{}", held());
+
+        renew_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect("second renewal");
+        assert!(held().contains("second-token"), "{}", held());
+    }
+
+    /// A credential the manager no longer issues is a failure of the sandbox with its reason,
+    /// not a Secret left to expire unnoticed.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn an_unavailable_pull_credential_fails_the_renewal_with_its_reason() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource};
+        use std::sync::Arc;
+
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "manager.example/sbx/root:1".to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "1Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut provider = crate::MockPlatformServiceProvider::new();
+        provider
+            .expect_runtime_registry_pull_credential()
+            .returning(|_| Ok(None));
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(sandbox.clone()),
+            vec![EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        {
+            let config = harness.deployment_config_mut();
+            config.manager_url = Some("https://manager.example".into());
+            config.runtime_identity_audience = Some("https://manager.example".into());
+        }
+        let ctx = harness.ctx();
+
+        let error = renew_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect_err("no credential, no renewal");
+        assert!(!error.retryable);
+        assert!(error.message.contains("Registry pull authority"), "{error}");
     }
     #[test]
     fn a_pod_security_refusal_names_the_namespace_and_the_fix() {
