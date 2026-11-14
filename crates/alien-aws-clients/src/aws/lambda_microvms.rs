@@ -1219,11 +1219,7 @@ mod tests {
             }),
         );
         let error = client
-            .update_microvm_image_version(
-                "test-image",
-                "1.0",
-                MicrovmImageVersionStatus::Inactive,
-            )
+            .update_microvm_image_version("test-image", "1.0", MicrovmImageVersionStatus::Inactive)
             .await
             .expect_err("403 must fail");
         assert!(

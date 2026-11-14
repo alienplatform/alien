@@ -56,7 +56,11 @@ fn state_path() -> std::path::PathBuf {
 
 /// Every resource name the probe creates starts with this prefix; cleanup refuses anything else.
 fn is_probe_name(name: &str) -> bool {
-    name.starts_with("alien2697-")
+    // An image is stored as its ARN; the name is the last segment.
+    name.rsplit(':')
+        .next()
+        .unwrap_or(name)
+        .starts_with("alien2697-")
 }
 
 fn load() -> State {
