@@ -7,8 +7,10 @@
 //! so PR review can diff a complete module in one place.
 
 mod generator {
+    pub mod gcp_derived_grant_drift_tests;
     pub mod helpers;
     pub mod network_inputs_tests;
+    pub mod protected_registration_tests;
     pub mod remote_kv_tests;
     pub mod remote_queue_tests;
 
@@ -19,6 +21,7 @@ mod generator {
     pub mod aws_flow_log_parity_tests;
     pub mod aws_full_stack_tests;
     pub mod aws_iam_coverage_tests;
+    pub mod aws_management_network_tests;
     pub mod aws_identity_tests;
     pub mod aws_role_policy_upgrade_tests;
     pub mod aws_workload_grant_parity_tests;
@@ -28,6 +31,7 @@ mod generator {
     pub mod azure_identity_tests;
     pub mod azure_kv_upgrade_tests;
     pub mod azure_profile_grant_tests;
+    pub mod azure_protected_verifier_tests;
     pub mod azure_queue_grant_tests;
     pub mod azure_shared_grant_tests;
     pub mod azure_storage_settings_tests;
@@ -41,11 +45,14 @@ mod generator {
     pub mod gcp_data_layer_tests;
     pub mod gcp_full_stack_tests;
     pub mod gcp_identity_tests;
+    pub mod gcp_protected_verifier_tests;
     pub mod k8s_overlay_tests;
     pub mod management_url_tests;
     pub mod secrets_vault_management_tests;
     pub mod setup_management_tests;
     pub mod stack_input_tests;
     pub mod storage_notifications_tests;
+    pub mod terraform_1_9_tests;
     pub mod verified_setup_tests;
+    pub mod white_label_tests;
 }

@@ -13,9 +13,17 @@ extern crate self as alien_permissions;
 pub mod iam_policy;
 
 #[cfg(feature = "infrastructure")]
+pub mod aws_bucket_policy;
+#[cfg(feature = "infrastructure")]
 pub mod aws_key_policy;
 #[cfg(feature = "infrastructure")]
+pub mod aws_queue_policy;
+#[cfg(feature = "infrastructure")]
 pub mod aws_resource_policies;
+#[cfg(feature = "infrastructure")]
+pub mod gcp_bucket_iam;
+#[cfg(feature = "infrastructure")]
+pub mod gcp_resource_grants;
 #[cfg(feature = "infrastructure")]
 pub mod generators;
 #[cfg(feature = "infrastructure")]

@@ -1232,13 +1232,18 @@ impl ResourcePermissionsHelper {
         );
 
         let member = format!("serviceAccount:{}", management_sa_email);
-        let permission_context = permission_context.clone().with_service_account_name(
-            management_sa_email
-                .split('@')
-                .next()
-                .unwrap_or(&management_sa_email)
-                .to_string(),
-        );
+        // On a protected install management gets none of what only the verifier may do, as
+        // setup rendered it.
+        let permission_context = permission_context
+            .clone()
+            .with_service_account_name(
+                management_sa_email
+                    .split('@')
+                    .next()
+                    .unwrap_or(&management_sa_email)
+                    .to_string(),
+            )
+            .with_signing(&ctx.deployment_config.stack_settings);
 
         for permission_set_ref in &combined_refs {
             let permission_set = permission_set_ref
@@ -2268,13 +2273,18 @@ impl ResourcePermissionsHelper {
         );
 
         let member = format!("serviceAccount:{}", management_sa_email);
-        let permission_context = permission_context.clone().with_service_account_name(
-            management_sa_email
-                .split('@')
-                .next()
-                .unwrap_or(&management_sa_email)
-                .to_string(),
-        );
+        // On a protected install management gets none of what only the verifier may do, as
+        // setup rendered it.
+        let permission_context = permission_context
+            .clone()
+            .with_service_account_name(
+                management_sa_email
+                    .split('@')
+                    .next()
+                    .unwrap_or(&management_sa_email)
+                    .to_string(),
+            )
+            .with_signing(&ctx.deployment_config.stack_settings);
 
         for permission_set_ref in management_refs {
             let permission_set = permission_set_ref

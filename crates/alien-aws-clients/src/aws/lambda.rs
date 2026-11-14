@@ -48,6 +48,9 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
     /// GetFunction: the function's configuration and its tags. Lambda returns the tags only to
     /// callers allowed `lambda:ListTags`; for others `tags` is `None`.
     async fn get_function(&self, function_name: &str) -> Result<GetFunctionResponse>;
+    /// GetFunction's response exactly as Lambda returned it, for callers that
+    /// must notice fields this client doesn't model.
+    async fn get_function_json(&self, function_name: &str) -> Result<serde_json::Value>;
     /// The environment variables the function runs with, from a GetFunction call (needs
     /// `lambda:GetFunction`). Values can be secret: never log them.
     async fn get_function_environment(
@@ -70,6 +73,8 @@ pub trait LambdaApi: Send + Sync + std::fmt::Debug {
         function_name: &str,
         qualifier: Option<String>,
     ) -> Result<GetPolicyResponse>;
+    /// RemovePermission: drop statement `statement_id` from the function's resource policy.
+    async fn remove_permission(&self, function_name: &str, statement_id: &str) -> Result<()>;
 
     // Function invocation operations
     async fn invoke(&self, request: InvokeRequest) -> Result<InvokeResponse>;
@@ -319,11 +324,13 @@ impl LambdaClient {
                 resource_name: resource.into(),
             },
             // Conflict / already exists
-            "ResourceConflictException" => ErrorData::RemoteResourceConflict {
-                message,
-                resource_type: "Function".into(),
-                resource_name: resource.into(),
-            },
+            "ResourceConflictException" | "PreconditionFailedException" => {
+                ErrorData::RemoteResourceConflict {
+                    message,
+                    resource_type: "Function".into(),
+                    resource_name: resource.into(),
+                }
+            }
             // Lambda invoke-specific errors
             "EC2AccessDeniedException" | "EC2ThrottledException" | "EC2UnexpectedException" => {
                 ErrorData::RemoteServiceUnavailable { message }
@@ -564,6 +571,12 @@ impl LambdaApi for LambdaClient {
             .await
     }
 
+    async fn get_function_json(&self, function_name: &str) -> Result<serde_json::Value> {
+        let path = format!("/2015-03-31/functions/{}", function_name);
+        self.send_json(Method::GET, &path, None, None, "GetFunction", function_name)
+            .await
+    }
+
     async fn get_function_environment(
         &self,
         function_name: &str,
@@ -669,6 +682,22 @@ impl LambdaApi for LambdaClient {
             if qp.is_empty() { None } else { Some(qp) },
             None,
             "GetPolicy",
+            function_name,
+        )
+        .await
+    }
+
+    async fn remove_permission(&self, function_name: &str, statement_id: &str) -> Result<()> {
+        let path = format!(
+            "/2015-03-31/functions/{}/policy/{}",
+            function_name,
+            form_urlencoded::byte_serialize(statement_id.as_bytes()).collect::<String>()
+        );
+        self.send_no_body(
+            Method::DELETE,
+            &path,
+            None,
+            "RemovePermission",
             function_name,
         )
         .await
@@ -965,7 +994,7 @@ struct LambdaErrorDetails {
 // Request / response payloads (subset required by infra/tests)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateFunctionRequest {
     pub function_name: String,
@@ -998,13 +1027,13 @@ pub struct CreateFunctionRequest {
     pub vpc_config: Option<VpcConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct FunctionCode {
     pub image_uri: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct Environment {
     pub variables: Option<std::collections::HashMap<String, String>>,
@@ -1067,7 +1096,7 @@ pub struct FunctionUrlConfig {
     pub cors: Option<Cors>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct AddPermissionRequest {
     pub statement_id: String,
@@ -1087,14 +1116,21 @@ pub struct AddPermissionResponse {
     pub statement: Option<String>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateFunctionCodeRequest {
     pub image_uri: String,
     pub publish: Option<bool>,
+    /// Instruction set the image is built for, such as `arm64`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architectures: Option<Vec<String>>,
+    /// Update only if the function is still at this revision; otherwise Lambda answers
+    /// PreconditionFailedException.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Builder)]
+#[derive(Debug, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateFunctionConfigurationRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1108,6 +1144,30 @@ pub struct UpdateFunctionConfigurationRequest {
     /// VPC configuration for running the function inside a VPC
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vpc_config: Option<VpcConfig>,
+    /// Layer ARNs. An empty list removes every layer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layers: Option<Vec<String>>,
+    /// File systems to mount. An empty list removes every mount.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_system_configs: Option<Vec<serde_json::Value>>,
+    /// Image entry point, command and working directory overrides. Empty
+    /// values clear them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_config: Option<serde_json::Value>,
+    /// Key that encrypts the environment. An empty string returns to the
+    /// AWS managed key.
+    #[serde(rename = "KMSKeyArn", skip_serializing_if = "Option::is_none")]
+    pub kms_key_arn: Option<String>,
+    /// Where failed asynchronous invocations go. `{"TargetArn": ""}` removes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dead_letter_config: Option<serde_json::Value>,
+    /// Log format and destination.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging_config: Option<serde_json::Value>,
+    /// Update only if the function is still at this revision; otherwise Lambda answers
+    /// PreconditionFailedException.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revision_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1120,13 +1180,13 @@ pub struct GetPolicyResponse {
 // Supporting structs newly added for test compilation
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct TracingConfig {
     pub mode: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct EphemeralStorage {
     pub size: i32,
@@ -1169,7 +1229,7 @@ pub struct Cors {
 // ---------------------------------------------------------------------------
 
 /// Request to create an event source mapping
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateEventSourceMappingRequest {
     /// The Amazon Resource Name (ARN) of the event source (e.g., SQS queue)
@@ -1204,7 +1264,7 @@ pub struct CreateEventSourceMappingRequest {
 }
 
 /// Request to update an event source mapping
-#[derive(Debug, Clone, Serialize, Builder)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateEventSourceMappingRequest {
     /// The maximum number of records in each batch that Lambda pulls from your queue and sends to your function

@@ -1133,6 +1133,8 @@ impl Sandbox for AwsSandbox {
             headers,
             allowed_ports: vec![port],
             expires_in_seconds: preview_lifetime_seconds(),
+            caller_authorization_header: "Authorization".to_string(),
+            subprotocols: Vec::new(),
         })
     }
 

@@ -43,8 +43,11 @@ pub struct BrokerState {
     pub secrets: Arc<dyn SecretsApi>,
     /// Verifies the caller's ServiceAccount token
     pub token_reviews: Arc<dyn TokenReviewsApi>,
-    /// Namespace the sandbox pods live in, and the only namespace a caller may come from
+    /// Namespace the sandbox pods live in
     pub namespace: String,
+    /// The only namespace a caller's ServiceAccount may come from: the release namespace, which
+    /// is not the sandbox pods' namespace when the chart sets `sandbox.namespace`
+    pub caller_namespace: String,
 }
 
 /// The exact deployment scope and callers the broker may operate for.
@@ -198,7 +201,10 @@ impl BrokerState {
     /// The operator asks for this rather than assembling a Kubernetes client itself: the client
     /// crate is an implementation detail of this crate, and threading it through the caller
     /// would make the operator depend on it for one line.
-    pub async fn in_cluster(namespace: String) -> crate::error::Result<Self> {
+    pub async fn in_cluster(
+        caller_namespace: String,
+        namespace: String,
+    ) -> crate::error::Result<Self> {
         let client = std::sync::Arc::new(
             alien_k8s_clients::kubernetes::kubernetes_client::KubernetesClient::new(
                 alien_k8s_clients::KubernetesClientConfig::InCluster {
@@ -218,6 +224,7 @@ impl BrokerState {
             secrets: client.clone(),
             token_reviews: client,
             namespace,
+            caller_namespace,
         })
     }
 }
@@ -304,11 +311,11 @@ async fn authorize(
     // than the status code.
     let user = authenticated_user(&verdict).ok_or(StatusCode::UNAUTHORIZED)?;
 
-    if !is_service_account_in(&user, &state.broker.namespace) {
+    if !is_service_account_in(&user, &state.broker.caller_namespace) {
         return Err(StatusCode::FORBIDDEN);
     }
 
-    let username_prefix = format!("system:serviceaccount:{}:", state.broker.namespace);
+    let username_prefix = format!("system:serviceaccount:{}:", state.broker.caller_namespace);
     let service_account_name = user
         .strip_prefix(&username_prefix)
         .ok_or(StatusCode::FORBIDDEN)?;
@@ -568,6 +575,7 @@ mod tests {
                 secrets: Arc::new(MockSecretsApi::new()),
                 token_reviews: Arc::new(reviews),
                 namespace: "alien-sandbox-sbx".to_string(),
+                caller_namespace: "alien-sandbox-sbx".to_string(),
             },
             authorization: Arc::new(FixedAuthorization(BrokerDeploymentAuthorization {
                 deployment_label_key: "alien.dev/deployment".to_string(),
@@ -597,6 +605,7 @@ mod tests {
                 secrets: Arc::new(secrets),
                 token_reviews: Arc::new(reviews),
                 namespace: "shared".to_string(),
+                caller_namespace: "shared".to_string(),
             },
             authorization: Arc::new(FixedAuthorization(BrokerDeploymentAuthorization {
                 deployment_label_key: "alien.dev/deployment".to_string(),
@@ -790,6 +799,36 @@ mod tests {
             authorization.service_accounts,
             BTreeSet::from(["worker".to_string()])
         );
+    }
+
+    /// With a separate sandbox namespace, callers still come from the release namespace, and a
+    /// ServiceAccount of the sandbox namespace is not a caller.
+    #[tokio::test]
+    async fn callers_come_from_the_release_namespace_not_the_sandbox_namespace() {
+        let state = |user: &'static str| {
+            let mut reviews = MockTokenReviewsApi::new();
+            reviews
+                .expect_create_token_review()
+                .returning(move |_| Ok(verdict(true, user)));
+            let mut state = state_with(reviews);
+            state.broker.namespace = "sandboxes".to_string();
+            state.broker.caller_namespace = "release".to_string();
+            state
+        };
+
+        authorize(
+            &state("system:serviceaccount:release:worker"),
+            &bearer("valid"),
+        )
+        .await
+        .expect("a release-namespace workload is a caller");
+        let refused = authorize(
+            &state("system:serviceaccount:sandboxes:worker"),
+            &bearer("valid"),
+        )
+        .await
+        .expect_err("a sandbox-namespace account is not a caller");
+        assert_eq!(refused, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

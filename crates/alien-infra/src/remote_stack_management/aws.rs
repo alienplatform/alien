@@ -5,11 +5,14 @@ use crate::core::{
     aws_permissions_boundary_for_stack, ResourceControllerContext, ResourcePermissionsHelper,
 };
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
+use alien_aws_clients::{
+    iam::{CreateRoleRequest, CreateRoleTag, IamApi},
+    ssm::GetParameterRequest,
+};
 use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
-    InitialSetupAuthority, KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState,
-    RemoteStackManagement, RemoteStackManagementHeartbeatData,
+    InitialSetupAuthority, KubernetesCluster, Network, NetworkSettings, ObservedHealth, Platform,
+    ProviderLifecycleState, RemoteStackManagement, RemoteStackManagementHeartbeatData,
     RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus, Worker,
 };
@@ -21,7 +24,7 @@ use alien_permissions::{
         AwsIamStatement, AwsRuntimePermissionsGenerator, MAX_ATTACHED_MANAGEMENT_POLICIES,
         MAX_MANAGED_POLICY_BYTES,
     },
-    get_permission_set, BindingTarget, PermissionContext,
+    get_permission_set, AwsNetworkScope, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
 
@@ -66,6 +69,14 @@ pub struct AwsRemoteStackManagementController {
     /// controllers from before revisions were recorded.
     #[serde(default)]
     pub(crate) management_permissions_revision: Option<String>,
+    /// Reads of the install's signing settings in a row that AWS could not answer. Named so a
+    /// user's retry of a failed step starts counting again.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) wait_for_signing_read_iterations: u32,
+}
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 
 #[controller]
@@ -167,6 +178,17 @@ impl AwsRemoteStackManagementController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
+        if !refuse_a_config_without_the_installs_signing(
+            ctx,
+            &mut self.wait_for_signing_read_iterations,
+        )
+        .await?
+        {
+            return Ok(HandlerAction::Continue {
+                state: ApplyingManagementPermissions,
+                suggested_delay: Some(SIGNING_READ_RETRY_DELAY),
+            });
+        }
         let role_name = self.role_name.clone().unwrap();
         let policy_documents = self.planned_management_policy_documents(ctx, &role_name)?;
         self.install_permissions_boundary(ctx).await?;
@@ -251,6 +273,17 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        if !refuse_a_config_without_the_installs_signing(
+            ctx,
+            &mut self.wait_for_signing_read_iterations,
+        )
+        .await?
+        {
+            return Ok(HandlerAction::Continue {
+                state: UpdateStart,
+                suggested_delay: Some(SIGNING_READ_RETRY_DELAY),
+            });
+        }
         let role_name = self.role_name.clone().unwrap();
         let policy_documents = self.planned_management_policy_documents(ctx, &role_name)?;
         self.install_permissions_boundary(ctx).await?;
@@ -597,6 +630,92 @@ fn emit_aws_remote_stack_management_heartbeat(
     Ok(())
 }
 
+/// The stack's network, for the management policy: the VPC and subnet IDs once they are known
+/// (the installer named them, or the network has been created), the stack's tags for a network
+/// the Alien network controller has not finished creating, and nothing for the account's default
+/// VPC before it is discovered, which keeps the account-wide reach.
+///
+/// IDs come from the network controller only once the network has finished creating: during the
+/// first create its subnet list can be partial (the VPC exists before its subnets, sandbox
+/// gateway subnets come last), and a policy pinned to part of the network would deny the rest of
+/// it. After that the lists are always whole: an update replaces an existing VPC's subnets in
+/// one step when it starts, and records sandbox gateway subnets in one step when they all exist,
+/// keeping the previous ones until then. So an updating, failed-update or failed-refresh network
+/// still names its subnets.
+pub(crate) fn aws_network_scope(ctx: &ResourceControllerContext<'_>) -> Option<AwsNetworkScope> {
+    use crate::core::state_utils::StackResourceStateExt;
+
+    let (network_id, network) = ctx
+        .desired_stack
+        .resources
+        .iter()
+        .find_map(|(id, entry)| entry.config.downcast_ref::<Network>().map(|n| (id, n)))?;
+    let controller = ctx
+        .state
+        .resources
+        .get(network_id)
+        .filter(|state| {
+            matches!(
+                state.status,
+                ResourceStatus::Running
+                    | ResourceStatus::Updating
+                    | ResourceStatus::UpdateFailed
+                    | ResourceStatus::RefreshFailed
+            )
+        })
+        .and_then(|state| {
+            state
+                .get_internal_controller_typed::<crate::network::AwsNetworkController>()
+                .ok()
+        });
+    // Sandbox gateway subnets hold the internal load balancers that link sandboxes to
+    // containers.
+    let gateway_subnet_ids = || {
+        controller
+            .as_ref()
+            .and_then(|controller| controller.sandbox_network.as_ref())
+            .map(|sandbox| sandbox.gateway_subnet_ids.clone())
+            .unwrap_or_default()
+    };
+    match &network.settings {
+        NetworkSettings::ByoVpcAws {
+            vpc_id,
+            public_subnet_ids,
+            private_subnet_ids,
+            ..
+        } => Some(AwsNetworkScope::Vpc {
+            vpc_id: vpc_id.clone(),
+            subnet_ids: [
+                public_subnet_ids.clone(),
+                private_subnet_ids.clone(),
+                gateway_subnet_ids(),
+            ]
+            .concat(),
+        }),
+        NetworkSettings::Create { .. } | NetworkSettings::UseDefault => {
+            match controller.as_ref().and_then(|c| c.vpc_id.clone()) {
+                Some(vpc_id) => {
+                    let controller = controller.as_ref().expect("checked");
+                    Some(AwsNetworkScope::Vpc {
+                        vpc_id,
+                        subnet_ids: [
+                            controller.public_subnet_ids.clone(),
+                            controller.private_subnet_ids.clone(),
+                            gateway_subnet_ids(),
+                        ]
+                        .concat(),
+                    })
+                }
+                None if matches!(network.settings, NetworkSettings::Create { .. }) => {
+                    Some(AwsNetworkScope::StackTagged)
+                }
+                None => None,
+            }
+        }
+        NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. } => None,
+    }
+}
+
 // Separate impl block for helper methods
 impl AwsRemoteStackManagementController {
     /// Generate trust policy for cross-account access with specific role restriction
@@ -632,6 +751,8 @@ impl AwsRemoteStackManagementController {
             .with_aws_account_id(aws_config.account_id.clone());
 
         permission_context.aws_permissions_boundary_arn = self.permissions_boundary_arn.clone();
+        permission_context = permission_context.with_signing(&ctx.deployment_config.stack_settings);
+        permission_context.aws_network = aws_network_scope(ctx);
 
         // Add managing role ARN from stack settings for cross-account access (required)
         let aws_management = ctx.get_aws_management_config()?
@@ -664,6 +785,10 @@ impl AwsRemoteStackManagementController {
             &ctx.get_aws_config()?.account_id,
             &permissions_boundary_name(ctx.resource_prefix),
         ));
+        // The boundary is a ceiling and management checks it without the stack's network
+        // (`validate_installed_aws_permissions_boundary`); the network narrows the role's own
+        // policies only.
+        context.aws_network = None;
         aws_permissions_boundary_for_stack(ctx.desired_stack, ctx.state, &context)
     }
 
@@ -1408,6 +1533,7 @@ impl AwsRemoteStackManagementController {
             role_name: Some(role_name.to_string()),
             management_permissions_applied: true,
             management_permissions_revision: None,
+            wait_for_signing_read_iterations: 0,
             permissions_boundary_arn: None,
             permissions_boundary_document: None,
             _internal_stay_count: None,
@@ -1442,6 +1568,98 @@ fn permissions_boundary_description(resource_prefix: &str) -> String {
     format!("Permissions boundary for the roles that deployment {resource_prefix} manages")
 }
 
+/// How long a step waits before reading the install's signing settings again after a throttle,
+/// timeout or service outage.
+const SIGNING_READ_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// How many reads in a row may go unanswered before the step fails, about an hour at
+/// [`SIGNING_READ_RETRY_DELAY`]. A deployment that can never reach the parameter store then
+/// shows an error instead of waiting for ever.
+const SIGNING_READ_MAX_FAILURES: u32 = 120;
+
+/// Refuse to render management permissions from a deployment config without signing settings
+/// when the install has them at `/signed/<prefix>/fingerprint`: the config comes from the control
+/// plane, the parameter only from setup.
+///
+/// Only a protected install's management may read the parameter (setup grants the read in
+/// `<prefix>-management-limits`, which management can't change), so on an unprotected install
+/// the read is denied and that answers the question too.
+///
+/// Returns `false` when AWS could not answer for a transient reason (throttling, a timeout or an
+/// outage): the caller waits and asks again rather than failing the deployment, since the answer
+/// decides nothing until it is known. After [`SIGNING_READ_MAX_FAILURES`] unanswered reads in a
+/// row, or on any other failure, it is an error.
+async fn refuse_a_config_without_the_installs_signing(
+    ctx: &ResourceControllerContext<'_>,
+    unanswered_reads: &mut u32,
+) -> Result<bool> {
+    if ctx.deployment_config.stack_settings.signing.is_some() {
+        return Ok(true);
+    }
+    let settings_location = alien_signing::settings::names::aws_settings(ctx.resource_prefix);
+    let client = ctx
+        .service_provider
+        .get_aws_ssm_client(ctx.get_aws_config()?)
+        .await?;
+    match client
+        .get_parameter(GetParameterRequest {
+            name: settings_location.clone(),
+            with_decryption: None,
+        })
+        .await
+    {
+        Ok(_) => Err(AlienError::new(
+            ErrorData::SigningSettingsMissingFromConfig {
+                resource_id: ctx.desired_config.id().to_string(),
+                settings_location,
+            },
+        )),
+        Err(error)
+            if is_remote_not_found(&error)
+                || matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
+                ) =>
+        {
+            *unanswered_reads = 0;
+            Ok(true)
+        }
+        Err(error)
+            if matches!(
+                error.error,
+                Some(
+                    alien_client_core::ErrorData::RateLimitExceeded { .. }
+                        | alien_client_core::ErrorData::Timeout { .. }
+                        | alien_client_core::ErrorData::RemoteServiceUnavailable { .. }
+                        | alien_client_core::ErrorData::HttpRequestFailed { .. }
+                )
+            ) =>
+        {
+            *unanswered_reads += 1;
+            if *unanswered_reads >= SIGNING_READ_MAX_FAILURES {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Could not read '{settings_location}' to tell whether the install is protected, {unanswered_reads} times in a row"
+                    ),
+                    resource_id: Some(ctx.desired_config.id().to_string()),
+                }));
+            }
+            warn!(
+                settings_location = %settings_location,
+                error = %error,
+                "Could not read the install's signing settings; trying again"
+            );
+            Ok(false)
+        }
+        Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to read '{settings_location}' to tell whether the install is protected"
+            ),
+            resource_id: Some(ctx.desired_config.id().to_string()),
+        })),
+    }
+}
+
 /// Whether the policy at `arn` carries `description`, or `None` when it does not exist.
 async fn created_by_setup(
     client: &dyn IamApi,
@@ -1473,9 +1691,13 @@ fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorD
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use alien_aws_clients::iam::{
-        CreatePolicyResponse, CreatePolicyResult, CreateRoleResponse, CreateRoleResult,
-        ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, MockIamApi, Policy, Role,
+    use alien_aws_clients::{
+        iam::{
+            CreatePolicyResponse, CreatePolicyResult, CreateRoleResponse, CreateRoleResult,
+            ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, MockIamApi, Policy,
+            Role,
+        },
+        ssm::{GetParameterResponse, MockSsmApi, Parameter},
     };
     use alien_core::{
         RemoteStackManagement, ResourceLifecycle, ResourceStatus, Sandbox, SandboxCode,
@@ -1485,6 +1707,276 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::{MockPlatformServiceProvider, StackResourceStateExt};
+
+    fn ssm_answering(
+        name: String,
+        answer: fn(&str) -> alien_client_core::Result<GetParameterResponse>,
+    ) -> Arc<MockSsmApi> {
+        let mut ssm = MockSsmApi::new();
+        ssm.expect_get_parameter()
+            .times(1)
+            .returning(move |request| {
+                assert_eq!(request.name, name, "reads only this install's settings");
+                answer(&request.name)
+            });
+        Arc::new(ssm)
+    }
+
+    /// A control plane that drops `signing` from the deployment config of a protected install
+    /// would have management render its permissions as unprotected. The settings setup wrote
+    /// at `/signed/<prefix>/fingerprint` stop it before any policy is written.
+    #[tokio::test]
+    async fn a_config_without_signing_is_refused_where_setup_wrote_the_settings() {
+        let prefix = "acme-prod";
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().returning(|request| {
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: Role {
+                        path: "/".to_string(),
+                        role_name: request.role_name.clone(),
+                        role_id: "AROAEXAMPLE".to_string(),
+                        arn: format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                        create_date: "2026-09-24T00:00:00Z".to_string(),
+                        assume_role_policy_document: None,
+                        description: None,
+                        max_session_duration: None,
+                        permissions_boundary: None,
+                        tags: None,
+                        role_last_used: None,
+                    },
+                },
+            })
+        });
+        // No create_policy, put_role_policy or attach expectation: writing any policy panics.
+        let iam = Arc::new(iam);
+        let ssm = ssm_answering(format!("/signed/{prefix}/fingerprint"), |name| {
+            Ok(GetParameterResponse {
+                parameter: Some(Parameter {
+                    name: Some(name.to_string()),
+                    value: Some(format!(
+                        r#"{{"fingerprint":"SHA256:{}","prefix":"acme-prod","channel":"production"}}"#,
+                        "ab".repeat(32)
+                    )),
+                    parameter_type: Some("String".to_string()),
+                    version: Some(1),
+                    arn: None,
+                    last_modified_date: None,
+                    data_type: None,
+                }),
+            })
+        });
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ssm_client()
+            .returning(move |_| Ok(ssm.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .resource_prefix(prefix)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds");
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("a protected install's management refuses a config without signing");
+
+        assert_eq!(
+            error.code, "SIGNING_SETTINGS_MISSING_FROM_CONFIG",
+            "{error:?}"
+        );
+        assert!(
+            error.message.contains("/signed/acme-prod/fingerprint"),
+            "{}",
+            error.message
+        );
+    }
+
+    /// A throttled or unreachable parameter store must not push the deployment into a failed state
+    /// (the executor gives up on a step after ten errors): the step waits and asks again, and the
+    /// settings it finally reads still decide.
+    #[tokio::test]
+    async fn a_throttled_signing_read_waits_and_is_asked_again() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let prefix = "acme-prod";
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().returning(|request| {
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: Role {
+                        path: "/".to_string(),
+                        role_name: request.role_name.clone(),
+                        role_id: "AROAEXAMPLE".to_string(),
+                        arn: format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                        create_date: "2026-09-24T00:00:00Z".to_string(),
+                        assume_role_policy_document: None,
+                        description: None,
+                        max_session_duration: None,
+                        permissions_boundary: None,
+                        tags: None,
+                        role_last_used: None,
+                    },
+                },
+            })
+        });
+        let iam = Arc::new(iam);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let mut ssm = MockSsmApi::new();
+        ssm.expect_get_parameter().returning(move |request| {
+            let read = counted.fetch_add(1, Ordering::SeqCst) + 1;
+            match read {
+                1..=12 => Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RateLimitExceeded {
+                        message: "ThrottlingException".to_string(),
+                    },
+                )),
+                _ => Ok(GetParameterResponse {
+                    parameter: Some(Parameter {
+                        name: Some(request.name.clone()),
+                        value: Some(format!(
+                            r#"{{"fingerprint":"SHA256:{}","prefix":"acme-prod","channel":"production"}}"#,
+                            "ab".repeat(32)
+                        )),
+                        parameter_type: Some("String".to_string()),
+                        version: Some(1),
+                        arn: None,
+                        last_modified_date: None,
+                        data_type: None,
+                    }),
+                }),
+            }
+        });
+        let ssm = Arc::new(ssm);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ssm_client()
+            .returning(move |_| Ok(ssm.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .resource_prefix(prefix)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds");
+
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the settings read after the throttling still refuse the config");
+
+        assert_eq!(
+            error.code, "SIGNING_SETTINGS_MISSING_FROM_CONFIG",
+            "{error:?}"
+        );
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            13,
+            "twelve throttled reads, then the answer"
+        );
+        let delays = executor.suggested_delays();
+        assert_eq!(
+            delays
+                .iter()
+                .filter(|delay| **delay == SIGNING_READ_RETRY_DELAY)
+                .count(),
+            12,
+            "each throttled read waits {SIGNING_READ_RETRY_DELAY:?}: {delays:?}"
+        );
+    }
+
+    /// A parameter store that never answers must end in an error, not a deployment that stays
+    /// "Updating" for ever.
+    #[tokio::test]
+    async fn a_signing_read_that_never_gets_an_answer_ends_in_an_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().returning(|request| {
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: Role {
+                        path: "/".to_string(),
+                        role_name: request.role_name.clone(),
+                        role_id: "AROAEXAMPLE".to_string(),
+                        arn: format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                        create_date: "2026-09-24T00:00:00Z".to_string(),
+                        assume_role_policy_document: None,
+                        description: None,
+                        max_session_duration: None,
+                        permissions_boundary: None,
+                        tags: None,
+                        role_last_used: None,
+                    },
+                },
+            })
+        });
+        let iam = Arc::new(iam);
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let mut ssm = MockSsmApi::new();
+        ssm.expect_get_parameter().returning(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "no route to ssm".to_string(),
+                },
+            ))
+        });
+        let ssm = Arc::new(ssm);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ssm_client()
+            .returning(move |_| Ok(ssm.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .resource_prefix("acme-prod")
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds");
+
+        let mut steps = 0;
+        let mut waits = 0;
+        let error = loop {
+            steps += 1;
+            assert!(steps < 300, "the step never failed");
+            match executor.step().await {
+                Ok(step) if step.suggested_delay == Some(SIGNING_READ_RETRY_DELAY) => waits += 1,
+                Ok(_) => {}
+                Err(error) => break error,
+            }
+        };
+
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR", "{error:?}");
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            SIGNING_READ_MAX_FAILURES as usize,
+            "the cap, no more"
+        );
+        assert_eq!(waits, SIGNING_READ_MAX_FAILURES as usize - 1);
+    }
 
     /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
     /// them on itself, by the name it is created under, and on every role carrying setup's sandbox
@@ -1564,10 +2056,22 @@ mod tests {
             Ok(())
         });
         let iam = Arc::new(iam);
+        // An unprotected install's management may not read `/signed/`.
+        let ssm = ssm_answering(format!("/signed/{prefix}/fingerprint"), |name| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteAccessDenied {
+                    resource_type: "SSM Resource".to_string(),
+                    resource_name: name.to_string(),
+                },
+            ))
+        });
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_iam_client()
             .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ssm_client()
+            .returning(move |_| Ok(ssm.clone()));
 
         let sandbox = |id: &str| {
             Sandbox::new(id.to_string())
@@ -1745,6 +2249,352 @@ mod tests {
                         == serde_json::json!(["arn:aws:ssm:*:*:parameter/private/*"])
             }),
             "{statements:#?}"
+        );
+    }
+
+    async fn network_scope(
+        settings: alien_core::NetworkSettings,
+        lifecycle: ResourceLifecycle,
+        created: Option<crate::network::AwsNetworkController>,
+    ) -> Option<AwsNetworkScope> {
+        network_scope_at(settings, lifecycle, created, ResourceStatus::Running).await
+    }
+
+    async fn network_scope_at(
+        settings: alien_core::NetworkSettings,
+        lifecycle: ResourceLifecycle,
+        created: Option<crate::network::AwsNetworkController>,
+        status: ResourceStatus,
+    ) -> Option<AwsNetworkScope> {
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .with_stack_resource(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(settings)
+                    .build(),
+                lifecycle,
+            )
+            .build()
+            .await
+            .expect("executor builds");
+        if let Some(created) = created {
+            let mut saved = executor.stack_state().resources["default-network"].clone();
+            saved.status = status;
+            saved
+                .set_internal_controller(Some(Box::new(created)))
+                .unwrap();
+            executor.insert_saved_resource("default-network", saved);
+        }
+        executor.with_context(aws_network_scope)
+    }
+
+    /// The installer named the VPC and its subnets: they are the stack's network before
+    /// anything exists, and a blank entry stays blank, matching no subnet.
+    #[tokio::test]
+    async fn a_named_vpc_scopes_management_to_its_ids() {
+        let scope = network_scope(
+            alien_core::NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                public_subnet_ids: vec!["subnet-0aaaaaaaaaaaaaaa1".to_string()],
+                private_subnet_ids: vec!["subnet-0aaaaaaaaaaaaaaa2".to_string()],
+                security_group_ids: vec![String::new()],
+            },
+            ResourceLifecycle::Frozen,
+            None,
+        )
+        .await;
+        assert_eq!(
+            scope,
+            Some(AwsNetworkScope::Vpc {
+                vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                subnet_ids: vec![
+                    "subnet-0aaaaaaaaaaaaaaa1".to_string(),
+                    "subnet-0aaaaaaaaaaaaaaa2".to_string()
+                ],
+            })
+        );
+    }
+
+    /// A network setup created, or management created on an earlier release, is named by its
+    /// IDs.
+    #[tokio::test]
+    async fn a_created_network_scopes_management_to_its_ids() {
+        for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+            let scope = network_scope(
+                alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                },
+                lifecycle,
+                Some(crate::network::AwsNetworkController::mock_ready("vpc-1", 2)),
+            )
+            .await;
+            assert_eq!(
+                scope,
+                Some(AwsNetworkScope::Vpc {
+                    vpc_id: "vpc-1".to_string(),
+                    subnet_ids: vec![
+                        "subnet-pub-vpc-1-0".to_string(),
+                        "subnet-pub-vpc-1-1".to_string(),
+                        "subnet-priv-vpc-1-0".to_string(),
+                        "subnet-priv-vpc-1-1".to_string(),
+                    ],
+                })
+            );
+        }
+    }
+
+    /// The network controller tags what it creates with the stack's tags, so a network that
+    /// does not exist yet is the one carrying them.
+    #[tokio::test]
+    async fn a_network_still_to_be_created_scopes_management_by_its_tags() {
+        let scope = network_scope(
+            alien_core::NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            },
+            ResourceLifecycle::Live,
+            None,
+        )
+        .await;
+        assert_eq!(scope, Some(AwsNetworkScope::StackTagged));
+    }
+
+    /// A network still being created has a VPC before its subnets, and sandbox gateway
+    /// subnets last. Management must not be pinned to that partial list: until the network is
+    /// Running, a network Alien creates is named by the stack's tags and the default VPC is
+    /// left open, as before it was discovered.
+    #[tokio::test]
+    async fn a_network_still_being_created_is_not_pinned_to_its_partial_ids() {
+        let mut partial = crate::network::AwsNetworkController::mock_ready("vpc-1", 2);
+        partial.public_subnet_ids.clear();
+        partial.private_subnet_ids.clear();
+        for status in [
+            ResourceStatus::Provisioning,
+            ResourceStatus::ProvisionFailed,
+        ] {
+            let scope = network_scope_at(
+                alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                },
+                ResourceLifecycle::Frozen,
+                Some(partial.clone()),
+                status,
+            )
+            .await;
+            assert_eq!(scope, Some(AwsNetworkScope::StackTagged), "{status:?}");
+            let scope = network_scope_at(
+                alien_core::NetworkSettings::UseDefault,
+                ResourceLifecycle::Live,
+                Some(partial.clone()),
+                status,
+            )
+            .await;
+            assert_eq!(scope, None, "{status:?}");
+        }
+    }
+
+    /// A network that finished creating keeps naming its subnets while it is updated, after a
+    /// failed update and after a failed refresh: a setup run in those states must not fall back
+    /// to tags or, for the default VPC, to the account-wide reach.
+    #[tokio::test]
+    async fn a_created_network_stays_pinned_while_it_is_updated() {
+        for status in [
+            ResourceStatus::Updating,
+            ResourceStatus::UpdateFailed,
+            ResourceStatus::RefreshFailed,
+        ] {
+            for settings in [
+                alien_core::NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                },
+                alien_core::NetworkSettings::UseDefault,
+            ] {
+                let scope = network_scope_at(
+                    settings.clone(),
+                    ResourceLifecycle::Frozen,
+                    Some(crate::network::AwsNetworkController::mock_ready("vpc-1", 2)),
+                    status,
+                )
+                .await;
+                assert!(
+                    matches!(
+                        scope,
+                        Some(AwsNetworkScope::Vpc { ref vpc_id, ref subnet_ids })
+                            if vpc_id == "vpc-1" && subnet_ids.len() == 4
+                    ),
+                    "{status:?} {settings:?}: {scope:?}"
+                );
+            }
+        }
+    }
+
+    /// A named VPC whose subnet lists are blank renders a subnet condition that matches no
+    /// subnet, as CloudFormation and Terraform do, never one that matches every subnet.
+    #[tokio::test]
+    async fn a_named_vpc_without_subnets_allows_no_subnet() {
+        let executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .with_stack_resource(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(alien_core::NetworkSettings::ByoVpcAws {
+                        vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                        public_subnet_ids: vec![],
+                        private_subnet_ids: vec![],
+                        security_group_ids: vec![String::new()],
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .management_permissions(alien_core::permissions::ManagementPermissions::extend(
+                alien_core::PermissionProfile::new().global([
+                    alien_core::PermissionSetReference::from("compute-cluster/management"),
+                    alien_core::PermissionSetReference::from("container/provision"),
+                ]),
+            ))
+            .build()
+            .await
+            .expect("executor builds");
+        let text = executor
+            .with_context(|ctx| {
+                AwsRemoteStackManagementController::default()
+                    .planned_management_policy_documents(ctx, "stack-management")
+            })
+            .expect("policies render")
+            .join("\n");
+        for expected in [
+            r#""elasticloadbalancing:Subnet":[""]"#,
+            r#""autoscaling:VPCZoneIdentifiers":[""]"#,
+        ] {
+            assert!(text.contains(expected), "{expected} missing from {text}");
+        }
+        for open in [
+            r#""elasticloadbalancing:Subnet":["*"]"#,
+            r#""autoscaling:VPCZoneIdentifiers":["*"]"#,
+        ] {
+            assert!(!text.contains(open), "{open} in {text}");
+        }
+    }
+
+    /// A network that gains or changes subnets (an edited subnet list, an internet sandbox
+    /// adding gateway subnets) changes the revision, so the next direct setup run rewrites the
+    /// management policy for it.
+    #[tokio::test]
+    async fn a_changed_network_changes_the_management_revision() {
+        async fn revision(private_subnet_ids: Vec<&str>) -> String {
+            SingleControllerExecutor::builder()
+                .resource(RemoteStackManagement::new("management".to_string()).build())
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .controller(AwsRemoteStackManagementController::default())
+                .platform(Platform::Aws)
+                .with_stack_resource(
+                    alien_core::Network::new("default-network".to_string())
+                        .settings(alien_core::NetworkSettings::ByoVpcAws {
+                            vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                            public_subnet_ids: vec![],
+                            private_subnet_ids: private_subnet_ids
+                                .into_iter()
+                                .map(str::to_string)
+                                .collect(),
+                            security_group_ids: vec![String::new()],
+                        })
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .management_permissions(alien_core::permissions::ManagementPermissions::extend(
+                    alien_core::PermissionProfile::new().global([
+                        alien_core::PermissionSetReference::from("compute-cluster/management"),
+                    ]),
+                ))
+                .build()
+                .await
+                .expect("executor builds")
+                .with_context(super::super::management_permissions_revision)
+                .expect("revision")
+                .expect("the stack has a management profile")
+        }
+        let one = revision(vec!["subnet-0aaaaaaaaaaaaaaa1"]).await;
+        assert_eq!(one, revision(vec!["subnet-0aaaaaaaaaaaaaaa1"]).await);
+        let two = revision(vec!["subnet-0aaaaaaaaaaaaaaa1", "subnet-0aaaaaaaaaaaaaaa2"]).await;
+        assert_ne!(one, two);
+    }
+
+    /// What direct setup installs on the management role names the stack's VPC and subnets.
+    #[tokio::test]
+    async fn direct_setup_installs_the_network_conditions() {
+        let executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .with_stack_resource(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(alien_core::NetworkSettings::ByoVpcAws {
+                        vpc_id: "vpc-0aaaaaaaaaaaaaaa1".to_string(),
+                        public_subnet_ids: vec!["subnet-0aaaaaaaaaaaaaaa1".to_string()],
+                        private_subnet_ids: vec![],
+                        security_group_ids: vec![String::new()],
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .management_permissions(alien_core::permissions::ManagementPermissions::extend(
+                alien_core::PermissionProfile::new().global([
+                    alien_core::PermissionSetReference::from("compute-cluster/management"),
+                    alien_core::PermissionSetReference::from("container/provision"),
+                ]),
+            ))
+            .build()
+            .await
+            .expect("executor builds");
+        let documents = executor
+            .with_context(|ctx| {
+                AwsRemoteStackManagementController::default()
+                    .planned_management_policy_documents(ctx, "stack-management")
+            })
+            .expect("policies render");
+        let text = documents.join("\n");
+        for expected in [
+            r#""ec2:Vpc":"arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0aaaaaaaaaaaaaaa1""#,
+            r#""ec2:VpcID":"vpc-0aaaaaaaaaaaaaaa1""#,
+            r#""elasticloadbalancing:Subnet":["subnet-0aaaaaaaaaaaaaaa1"]"#,
+            r#""autoscaling:VPCZoneIdentifiers":["subnet-0aaaaaaaaaaaaaaa1"]"#,
+        ] {
+            assert!(text.contains(expected), "{expected} missing from {text}");
+        }
+    }
+
+    /// The account's default VPC carries no stack tags; before it is discovered, management
+    /// keeps the account-wide reach.
+    #[tokio::test]
+    async fn an_undiscovered_default_vpc_leaves_the_network_open() {
+        let scope = network_scope(
+            alien_core::NetworkSettings::UseDefault,
+            ResourceLifecycle::Live,
+            None,
+        )
+        .await;
+        assert_eq!(scope, None);
+        let scope = network_scope(
+            alien_core::NetworkSettings::UseDefault,
+            ResourceLifecycle::Live,
+            Some(crate::network::AwsNetworkController::mock_ready(
+                "vpc-default",
+                1,
+            )),
+        )
+        .await;
+        assert!(
+            matches!(scope, Some(AwsNetworkScope::Vpc { ref vpc_id, .. }) if vpc_id == "vpc-default"),
+            "{scope:?}"
         );
     }
 }

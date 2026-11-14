@@ -5,6 +5,7 @@ use alien_error::{Context, IntoAlienError};
 use reqwest::Method;
 
 use k8s_openapi::api::core::v1::Service;
+use k8s_openapi::api::discovery::v1::EndpointSlice;
 use k8s_openapi::List;
 
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ use mockall::automock;
 pub trait ServiceApi: Send + Sync + std::fmt::Debug {
     async fn create_service(&self, namespace: &str, service: &Service) -> Result<Service>;
     async fn get_service(&self, namespace: &str, name: &str) -> Result<Service>;
+    async fn get_endpoint_slice(&self, namespace: &str, name: &str) -> Result<EndpointSlice>;
     async fn list_services(
         &self,
         namespace: &str,
@@ -61,6 +63,19 @@ impl KubernetesClient {
     pub async fn get_service(&self, namespace: &str, name: &str) -> Result<Service> {
         let url = format!(
             "{}/api/v1/namespaces/{}/services/{}",
+            self.get_base_url(),
+            urlencoding::encode(namespace),
+            urlencoding::encode(name)
+        );
+        let builder = self.client().request(Method::GET, &url);
+
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
+    /// Get an EndpointSlice by name in the specified namespace
+    pub async fn get_endpoint_slice(&self, namespace: &str, name: &str) -> Result<EndpointSlice> {
+        let url = format!(
+            "{}/apis/discovery.k8s.io/v1/namespaces/{}/endpointslices/{}",
             self.get_base_url(),
             urlencoding::encode(namespace),
             urlencoding::encode(name)
@@ -157,6 +172,10 @@ impl ServiceApi for KubernetesClient {
 
     async fn get_service(&self, namespace: &str, name: &str) -> Result<Service> {
         self.get_service(namespace, name).await
+    }
+
+    async fn get_endpoint_slice(&self, namespace: &str, name: &str) -> Result<EndpointSlice> {
+        self.get_endpoint_slice(namespace, name).await
     }
 
     async fn list_services(

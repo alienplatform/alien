@@ -4917,7 +4917,7 @@ impl AwsNetworkController {
 
         // A created VPC's flow log objects go first. Under direct setup they are looked up even
         // without a record: an older binary that rewrote this state dropped it.
-        if self.flow_logs.is_some() || (self.vpc_id.is_some() && Self::flow_log_owned_here(ctx)) {
+        if self.flow_logs.is_some() || (self.vpc_id.is_some() && Self::flow_log_discoverable(ctx)) {
             return Ok(HandlerAction::Continue {
                 state: DeletingFlowLogs,
                 suggested_delay: None,

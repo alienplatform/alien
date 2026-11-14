@@ -1,6 +1,31 @@
-use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY};
+use alien_core::{
+    StackSettings, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+};
 
 // Core types are re-exported by the generators that need them
+
+/// Where the management identity may place the network-facing resources it creates on AWS:
+/// instances, security groups and load balancers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AwsNetworkScope {
+    /// The stack's own VPC, known when setup renders the policy: setup created it or the
+    /// installer named it. Subnet IDs are the ones a load balancer or Auto Scaling group may use.
+    Vpc {
+        vpc_id: String,
+        subnet_ids: Vec<String>,
+    },
+    /// Management creates the network itself, after the policy is written. Its VPC and subnets
+    /// carry the stack's ownership tags from creation, so tags stand in for IDs.
+    StackTagged,
+}
+
+/// Label prefix of statements rendered when the stack's VPC is known or unknown, but not
+/// tag-scoped. Without a known VPC their `${awsVpcId}` and `${awsSubnetIds}` render as `*`.
+pub const VPC_PINNED_LABEL_PREFIX: &str = "vpc-pinned-";
+/// Label prefix of statements rendered only for a network management creates itself.
+pub const VPC_TAGGED_LABEL_PREFIX: &str = "vpc-tagged-";
+/// Condition value that renders as the list of the stack's subnet IDs.
+pub const AWS_SUBNET_IDS_VARIABLE: &str = "${awsSubnetIds}";
 
 /// Context for generating permissions with type-safe variables
 #[derive(Debug, Clone)]
@@ -10,6 +35,9 @@ pub struct PermissionContext {
     pub aws_region: Option<String>,
     /// Setup-approved boundary ARN. Absent for deployments created without a boundary.
     pub aws_permissions_boundary_arn: Option<String>,
+    /// The stack's network, when setup knows it. Absent renders the network conditions with
+    /// wildcards (the account's default VPC, or a caller that has no network to name).
+    pub aws_network: Option<AwsNetworkScope>,
 
     // GCP variables
     pub project_name: Option<String>,
@@ -43,6 +71,16 @@ pub struct PermissionContext {
     /// GCP custom-role namespace to use instead of the one derived from
     /// `stack_prefix`, for deployments whose roles already use another one.
     pub gcp_custom_role_namespace: Option<String>,
+
+    /// AWS account that publishes the machine images a protected install's verifier may
+    /// boot. Set only when rendering the verifier; it is a constant of this build.
+    pub machine_image_publisher: Option<String>,
+
+    /// The install is protected: it runs only what the vendor signed. Set only when rendering
+    /// the management identity of a protected install. It never receives the grants kept for
+    /// setups that recorded no boundary, it loses what only the verifier may do (see
+    /// [`crate::generators::verifier_owned`]), and the catalog's `signing-` statements apply.
+    pub signing_protected: bool,
 }
 
 impl PermissionContext {
@@ -52,6 +90,7 @@ impl PermissionContext {
             aws_account_id: None,
             aws_region: None,
             aws_permissions_boundary_arn: None,
+            aws_network: None,
             project_name: None,
             project_number: None,
             region: None,
@@ -72,6 +111,8 @@ impl PermissionContext {
             managing_role_arn: None,
             managing_account_id: None,
             gcp_custom_role_namespace: None,
+            machine_image_publisher: None,
+            signing_protected: false,
         }
     }
 
@@ -85,6 +126,33 @@ impl PermissionContext {
     pub fn with_aws_permissions_boundary_arn(mut self, arn: impl Into<String>) -> Self {
         self.aws_permissions_boundary_arn = Some(arn.into());
         self
+    }
+
+    /// Keep network-facing creates inside the stack's own network.
+    pub fn with_aws_network(mut self, network: AwsNetworkScope) -> Self {
+        self.aws_network = Some(network);
+        self
+    }
+
+    /// The stack's VPC ID, or `*` when it is unknown or tag-scoped.
+    pub fn aws_vpc_id(&self) -> &str {
+        match &self.aws_network {
+            Some(AwsNetworkScope::Vpc { vpc_id, .. }) => vpc_id,
+            _ => "*",
+        }
+    }
+
+    /// The stack's subnet IDs, or `*` when they are unknown or tag-scoped. A known VPC with
+    /// no subnets yields one empty ID, which matches no subnet, as CloudFormation and
+    /// Terraform render a blank subnet list.
+    pub fn aws_subnet_ids(&self) -> Vec<String> {
+        match &self.aws_network {
+            Some(AwsNetworkScope::Vpc { subnet_ids, .. }) if subnet_ids.is_empty() => {
+                vec![String::new()]
+            }
+            Some(AwsNetworkScope::Vpc { subnet_ids, .. }) => subnet_ids.clone(),
+            _ => vec!["*".to_string()],
+        }
     }
 
     /// Builder pattern for AWS region
@@ -213,6 +281,23 @@ impl PermissionContext {
         self
     }
 
+    /// Builder pattern for the AWS account that publishes bootable machine images
+    pub fn with_machine_image_publisher(mut self, account_id: impl Into<String>) -> Self {
+        self.machine_image_publisher = Some(account_id.into());
+        self
+    }
+
+    /// Builder pattern for a protected install's management identity
+    pub fn with_signing_protected(mut self, protected: bool) -> Self {
+        self.signing_protected = protected;
+        self
+    }
+
+    /// Mark the management identity protected when the stack settings pin signing.
+    pub fn with_signing(self, settings: &StackSettings) -> Self {
+        self.with_signing_protected(settings.signing.is_some())
+    }
+
     /// Extract AWS account ID from an IAM role ARN
     /// Format: arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
     pub fn extract_account_id_from_role_arn(role_arn: &str) -> Option<String> {
@@ -230,6 +315,7 @@ impl PermissionContext {
             "awsAccountId" => self.aws_account_id.as_deref(),
             "awsRegion" => self.aws_region.as_deref(),
             "awsPermissionsBoundaryArn" => self.aws_permissions_boundary_arn.as_deref(),
+            "awsVpcId" => Some(self.aws_vpc_id()),
             "projectName" => self.project_name.as_deref(),
             "projectNumber" => self.project_number.as_deref(),
             "region" => self.region.as_deref(),
@@ -249,6 +335,7 @@ impl PermissionContext {
             "managingProjectId" => self.managing_project_id.as_deref(),
             "managingSubscriptionId" => self.managing_subscription_id.as_deref(),
             "managingResourceGroup" => self.managing_resource_group.as_deref(),
+            "machineImagePublisher" => self.machine_image_publisher.as_deref(),
             "stackTag" => Some(ALIEN_STACK_TAG_KEY),
             "resourceTag" => Some(ALIEN_RESOURCE_TAG_KEY),
             "managedByTag" => Some(ALIEN_MANAGED_BY_TAG_KEY),

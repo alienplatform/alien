@@ -1,0 +1,12 @@
+name = "acme-registry-input"
+platforms = ["aws"]
+
+[input.deployment_regions]
+kind = "string-list"
+provided-by = "deployer"
+label = "Deployment regions"
+description = "Regions the deployments run in."
+default = []
+
+[artifact-registry.images]
+replication-regions-input = "deployment_regions"

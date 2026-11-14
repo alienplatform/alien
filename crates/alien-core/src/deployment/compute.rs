@@ -29,6 +29,13 @@ pub struct HorizonClusterConfig {
     /// cluster can stay on the image it runs while others move to a newer one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub horizon_machine_image: Option<HorizonMachineImage>,
+
+    /// Control-plane URL this cluster's machines use, when it differs from
+    /// [`HorizonConfig::url`], for example a relay in front of the control
+    /// plane. Chosen when the cluster is created and never changed by later
+    /// updates, so machines that have already joined keep the URL they use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_url: Option<String>,
 }
 
 /// Trusted manager endpoint and audience used by a machine to obtain leaf capabilities.
@@ -392,6 +399,7 @@ mod tests {
             clusters: HashMap::from([(
                 "compute".to_string(),
                 HorizonClusterConfig {
+                    machine_url: None,
                     cluster_id: "cluster-1".to_string(),
                     management_token: "hm_test".to_string(),
                     runtime_identity: None,
@@ -419,5 +427,36 @@ mod tests {
                 .map(|image| image.machine_image_version),
             Some("2".to_string())
         );
+    }
+
+    #[test]
+    fn cluster_machine_url_is_optional_and_ignored_by_older_readers() {
+        let config: HorizonConfig = serde_json::from_value(json!({
+            "url": "https://horizon.example.com",
+            "clusters": {
+                "relayed": {
+                    "clusterId": "cluster-1",
+                    "managementToken": "hm_test",
+                    "machineUrl": "https://relay.example.com/v1/horizon"
+                },
+                "direct": { "clusterId": "cluster-2", "managementToken": "hm_test" }
+            }
+        }))
+        .expect("a config written before the field existed must deserialize");
+
+        assert_eq!(
+            config.clusters["relayed"].machine_url.as_deref(),
+            Some("https://relay.example.com/v1/horizon")
+        );
+        assert_eq!(config.clusters["direct"].machine_url, None);
+        // A cluster without its own machine URL writes back exactly as before.
+        assert_eq!(
+            serde_json::to_value(&config.clusters["direct"]).unwrap(),
+            json!({ "clusterId": "cluster-2", "managementToken": "hm_test" })
+        );
+        // An older reader accepts a cluster that carries a machine URL.
+        let previous: PreviousHorizonConfig =
+            serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert_eq!(previous.clusters["relayed"].cluster_id, "cluster-1");
     }
 }

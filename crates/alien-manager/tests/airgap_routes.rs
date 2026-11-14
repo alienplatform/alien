@@ -183,6 +183,8 @@ async fn fixture_with_site(delay: Duration, site: Site) -> Fixture {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await
@@ -285,6 +287,7 @@ async fn fixture_with_site(delay: Duration, site: Site) -> Fixture {
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         charts: None,
         release_channels: None,
+        signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),

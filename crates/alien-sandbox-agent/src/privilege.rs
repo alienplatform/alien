@@ -46,7 +46,7 @@ pub unsafe fn drop_to(identity: ExecIdentity) -> io::Result<()> {
 /// their workers, but cannot administer networking, mount filesystems or set socket
 /// marks (which recent kernels also permit with NET_RAW).
 #[cfg(target_os = "linux")]
-pub const IMAGE_ROOT_CAPABILITIES: u32 = 0xa80405fb;
+pub const IMAGE_ROOT_CAPABILITIES: u32 = alien_core::sandbox_image::IMAGE_ROOT_CAPABILITY_MASK;
 
 /// Enter the image USER with a bounded root grant or no capabilities for non-root.
 ///

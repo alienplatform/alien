@@ -192,6 +192,8 @@ async fn setup() -> Setup {
                 git_commit_sha: None,
                 git_commit_ref: None,
                 git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
             },
         )
         .await

@@ -1,0 +1,35 @@
+{
+  "id": "acme-registry-input",
+  "inputs": [
+    {
+      "default": {
+        "type": "stringList",
+        "value": []
+      },
+      "description": "Regions the deployments run in.",
+      "env": [],
+      "id": "deployment_regions",
+      "kind": "stringList",
+      "label": "Deployment regions",
+      "providedBy": [
+        "deployer"
+      ],
+      "required": true,
+      "validation": {}
+    }
+  ],
+  "resources": {
+    "images": {
+      "config": {
+        "id": "images",
+        "type": "artifact-registry",
+        "replicationRegionsInput": "deployment_regions"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws"
+  ]
+}

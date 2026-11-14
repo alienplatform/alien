@@ -30,6 +30,7 @@ impl ResourceImporter for AzureAiImporter {
             location: Some(data.location),
             availability: None,
             availability_observed_at: None,
+            capacity_warnings: vec![],
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

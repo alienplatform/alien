@@ -238,7 +238,9 @@ pub async fn build_after(
         None => None,
     };
     if config.peers.is_some() && embedded.is_none() && sourced.is_none() {
-        return Err(invalid("peers requires replicaSecret or replicaSecretSource"));
+        return Err(invalid(
+            "peers requires replicaSecret or replicaSecretSource",
+        ));
     }
     let secrets = replica_secrets(previous, embedded, sourced)?;
     // The CA seed stays with the first secret this process knew, so issued CAs are stable
@@ -301,7 +303,9 @@ fn decode_replica_secret(secret: &str) -> Result<[u8; 32]> {
 /// Terraform generate printable passwords, not raw bytes); its SHA-256 is the 32-byte key.
 fn sourced_replica_secret(secret: &str) -> Result<[u8; 32]> {
     if secret.len() < 32 {
-        return Err(invalid("the replica secret source must hold at least 32 characters"));
+        return Err(invalid(
+            "the replica secret source must hold at least 32 characters",
+        ));
     }
     Ok(sha2::Sha256::digest(secret.as_bytes()).into())
 }
@@ -388,7 +392,9 @@ async fn read_aws_secret(secret_id: &str) -> Result<String> {
 
 #[cfg(not(feature = "aws"))]
 async fn read_aws_secret(_secret_id: &str) -> Result<String> {
-    Err(invalid("this gateway build cannot read AWS Secrets Manager"))
+    Err(invalid(
+        "this gateway build cannot read AWS Secrets Manager",
+    ))
 }
 
 #[cfg(test)]
@@ -400,18 +406,27 @@ mod replica_secret_tests {
     const OTHER: [u8; 32] = [3; 32];
 
     fn embedded(secrets: &[[u8; 32]]) -> Option<Previous<'_>> {
-        Some(Previous { secrets, sourced: false })
+        Some(Previous {
+            secrets,
+            sourced: false,
+        })
     }
 
     fn sourced(secrets: &[[u8; 32]]) -> Option<Previous<'_>> {
-        Some(Previous { secrets, sourced: true })
+        Some(Previous {
+            secrets,
+            sourced: true,
+        })
     }
 
     #[test]
     fn boot_accepts_what_the_configuration_names() {
         assert_eq!(replica_secrets(None, Some(OLD), None).unwrap(), [OLD]);
         assert_eq!(replica_secrets(None, None, Some(NEW)).unwrap(), [NEW]);
-        assert_eq!(replica_secrets(None, Some(OLD), Some(NEW)).unwrap(), [OLD, NEW]);
+        assert_eq!(
+            replica_secrets(None, Some(OLD), Some(NEW)).unwrap(),
+            [OLD, NEW]
+        );
         assert!(replica_secrets(None, None, None).unwrap().is_empty());
     }
 
@@ -421,8 +436,14 @@ mod replica_secret_tests {
     fn a_refresh_moves_from_the_embedded_secret_to_a_source_keeping_both() {
         let moved = replica_secrets(embedded(&[OLD]), None, Some(NEW)).unwrap();
         assert_eq!(moved, [OLD, NEW]);
-        assert_eq!(replica_secrets(sourced(&moved), None, Some(NEW)).unwrap(), [OLD, NEW]);
-        assert_eq!(replica_secrets(embedded(&[OLD]), Some(OLD), Some(NEW)).unwrap(), [OLD, NEW]);
+        assert_eq!(
+            replica_secrets(sourced(&moved), None, Some(NEW)).unwrap(),
+            [OLD, NEW]
+        );
+        assert_eq!(
+            replica_secrets(embedded(&[OLD]), Some(OLD), Some(NEW)).unwrap(),
+            [OLD, NEW]
+        );
     }
 
     #[test]

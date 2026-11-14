@@ -382,11 +382,12 @@ async fn validate_sandbox_nsg(
             || rule.destination_address_prefix.as_deref() != Some(gateway_cidr)
             || !rule.destination_address_prefixes.is_empty()
             || rule.destination_port_range.is_some()
-            || ports != BTreeSet::from(["3128", "3129"])
+            // Deployments that have not taken the proxy-only rule yet still carry 3128 and 3129.
+            || (ports != BTreeSet::from(["3128"]) && ports != BTreeSet::from(["3128", "3129"]))
         {
             return Err(invalid(
                 resource,
-                "Sandbox NSG permits traffic outside the gateway proxy and admin ports",
+                "Sandbox NSG permits traffic outside the gateway proxy port",
             ));
         }
         allowed += 1;

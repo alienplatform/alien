@@ -18,6 +18,22 @@ expression: schemas
     "title": "AwsAiImportData",
     "type": "object"
   },
+  "signing_verifier": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "The verifier setup created, on any cloud: its name, `<prefix>-verifier` (the Lambda function, the Cloud Run service or the Container App).",
+    "properties": {
+      "name": {
+        "description": "The verifier's name in the cloud.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name"
+    ],
+    "title": "SigningVerifierImportData",
+    "type": "object"
+  },
   "aws_artifact_registry": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "AWS ArtifactRegistry ImportData.",
@@ -1213,7 +1229,7 @@ expression: schemas
         "description": "Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.",
         "properties": {
           "gatewayCidrs": {
-            "description": "Gateway ranges allowed by the sandbox subnet NSGs on TCP3128 and TCP3129.",
+            "description": "Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before\nthe admin port was removed from that rule also allow TCP 3129; both are accepted.",
             "items": {
               "type": "string"
             },

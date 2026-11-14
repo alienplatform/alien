@@ -92,3 +92,17 @@
 {{- end -}}
 {{- .runtimeEncryptionKey -}}
 {{- end -}}
+
+{{- define "deployment.validateGitops" -}}
+{{- if dig "enabled" false (default dict .Values.gitops) -}}
+  {{- if not .Values.management.existingSecret.name -}}
+    {{- fail "gitops.enabled requires management.existingSecret.name: a GitOps tool renders this chart on every sync, so the management token must come from a Secret you manage, not from values." -}}
+  {{- end -}}
+  {{- if not .Values.runtime.encryption.existingSecret.name -}}
+    {{- fail "gitops.enabled requires runtime.encryption.existingSecret.name: without cluster access every render would generate a different encryption key and make the installed state unreadable." -}}
+  {{- end -}}
+  {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not .Values.logCollector.token) (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
+    {{- fail "gitops.enabled with logCollector.mode=nodeAgent requires logCollector.token: a generated collector token would change on every render. Use logCollector.mode=podApi, which needs no token." -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}

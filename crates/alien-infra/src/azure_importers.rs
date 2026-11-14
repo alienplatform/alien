@@ -70,6 +70,11 @@ pub fn register(registry: &mut ImporterRegistry) {
             AzureRemoteStackManagementImporter,
         )
         .register(
+            alien_core::SigningVerifier::RESOURCE_TYPE,
+            Platform::Azure,
+            crate::signing_verifier::SigningVerifierImporter,
+        )
+        .register(
             RemoteBindings::RESOURCE_TYPE,
             Platform::Azure,
             AzureRemoteBindingsImporter,

@@ -57,6 +57,14 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     resource_entry.lifecycle,
                     policy.allowed_lifecycles()
                 ));
+                if resource_type == "postgres" {
+                    errors.push(format!(
+                        "Postgres '{}' has to be Frozen: change its lifecycle to frozen. Setup \
+                         creates the database, and a change to it (size, version, network) goes \
+                         through setup",
+                        resource_id
+                    ));
+                }
             }
 
             // A remote grant on Azure or GCP names a parent that must exist when the package
@@ -908,14 +916,29 @@ mod tests {
         }
     }
 
+    /// Each consumer gets the lifecycle its type allows: a database is Frozen, a
+    /// container is Live.
     fn stack_with_encrypted_consumer(consumer: alien_core::Resource, id: &str) -> Stack {
+        let lifecycle = if consumer.resource_type() == Postgres::RESOURCE_TYPE {
+            ResourceLifecycle::Frozen
+        } else {
+            ResourceLifecycle::Live
+        };
+        stack_with_encrypted_consumer_as(consumer, id, lifecycle)
+    }
+
+    fn stack_with_encrypted_consumer_as(
+        consumer: alien_core::Resource,
+        id: &str,
+        lifecycle: ResourceLifecycle,
+    ) -> Stack {
         let mut stack = stack_with_encrypted_storage(ResourceLifecycle::Frozen);
         stack.resources.shift_remove("customer-data");
         stack.resources.insert(
             id.to_string(),
             ResourceEntry {
                 config: consumer,
-                lifecycle: ResourceLifecycle::Live,
+                lifecycle,
                 dependencies: Vec::new(),
                 display_name: None,
                 description: None,
@@ -1006,6 +1029,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_live_encrypted_postgres_is_refused_with_the_frozen_only_message() {
+        let result = FrozenResourceLifecycleCheck
+            .check(
+                &stack_with_encrypted_consumer_as(
+                    encrypted_postgres(),
+                    "database",
+                    ResourceLifecycle::Live,
+                ),
+                Platform::Aws,
+            )
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("Postgres 'database' has to be Frozen")),
+            "{:?}",
+            result.errors
+        );
+    }
+
+    #[tokio::test]
     async fn encrypted_storage_must_be_frozen() {
         let result = FrozenResourceLifecycleCheck
             .check(
@@ -1065,6 +1112,40 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("must contain exactly one Storage resource")));
+    }
+
+    #[tokio::test]
+    async fn a_live_postgres_is_refused_on_every_cloud_and_says_what_to_do() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            let stack = |lifecycle| {
+                Stack::new("shop".to_string())
+                    .add(alien_core::Postgres::new("db".to_string()).build(), lifecycle)
+                    .build()
+            };
+            let result = FrozenResourceLifecycleCheck
+                .check(&stack(ResourceLifecycle::Live), platform)
+                .await
+                .unwrap();
+            assert!(!result.success, "{platform:?}");
+            let text = result.errors.join("\n");
+            assert!(
+                text.contains("allowed lifecycles are Frozen")
+                    && text.contains("change its lifecycle to frozen")
+                    && text.contains("goes through setup"),
+                "{platform:?}: {text}"
+            );
+            let frozen = FrozenResourceLifecycleCheck
+                .check(&stack(ResourceLifecycle::Frozen), platform)
+                .await
+                .unwrap();
+            assert!(frozen.success, "{platform:?}: {:?}", frozen.errors);
+        }
     }
 
     fn stack_with_encrypted_postgres() -> Stack {

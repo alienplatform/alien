@@ -15,7 +15,7 @@ fn problems(validator: &Validator, toml_text: &str) -> Vec<String> {
     let document: Value = toml::from_str(toml_text).expect("the test document is TOML");
     validator
         .iter_errors(&document)
-        .map(|error| format!("{}: {error}", error.instance_path))
+        .map(|error| format!("{}: {error}", error.instance_path()))
         .collect()
 }
 

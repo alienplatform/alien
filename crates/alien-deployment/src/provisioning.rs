@@ -34,11 +34,12 @@ fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &Stack
 /// Note: Stack settings are set during Pending phase and should not change mid-deployment.
 pub async fn handle_provisioning(
     current: DeploymentState,
-    config: DeploymentConfig,
+    mut config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling Provisioning status");
+    config.release_statements = crate::helpers::release_statements(current.target_release.as_ref());
 
     // Clone current first before moving any fields
     let mut next = current.clone();
@@ -274,6 +275,8 @@ pub async fn handle_provisioning(
                 version: None,
                 description: None,
                 stack: target_stack,
+                signed: None,
+                signer_lists: Vec::new(),
             });
             next.status = DeploymentStatus::UpdatePending;
         } else {
@@ -540,6 +543,8 @@ mod tests {
                 version: None,
                 description: None,
                 stack: target.clone(),
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             stack_state: Some(state),
             error: None,
@@ -737,6 +742,8 @@ mod tests {
             version: None,
             description: None,
             stack: target,
+            signed: None,
+            signer_lists: Vec::new(),
         });
         state
     }

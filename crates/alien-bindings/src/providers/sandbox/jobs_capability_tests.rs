@@ -238,7 +238,10 @@ async fn azure_legacy_sessions_have_no_job_host_after_transport_lookup() {
             state: Some("Running".into()),
             vnet_connection_name: None,
             egress_policy: Some(
-                serde_json::from_value(json!({ "defaultAction": "Allow", "trafficInspection": "Full" })).unwrap(),
+                serde_json::from_value(
+                    json!({ "defaultAction": "Allow", "trafficInspection": "Full" }),
+                )
+                .unwrap(),
             ),
         })
     });

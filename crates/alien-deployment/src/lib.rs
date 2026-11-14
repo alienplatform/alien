@@ -37,6 +37,7 @@ pub use alien_core::{
 };
 
 // Re-export helper functions
+pub use ai_access_check::check_declared_ai_models;
 pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
 pub use helpers::deployment_state_error_from_headline;
@@ -47,7 +48,6 @@ pub use helpers::{
     set_ephemeral_secrets_digest_key, set_secrets_digest_key, set_secrets_digest_key_if_unset,
     value_digest,
 };
-pub use ai_access_check::check_declared_ai_models;
 pub use observe::run_observe_pass;
 
 use tracing::{debug, info, warn};
@@ -295,8 +295,13 @@ pub async fn step(
                 .await?
         }
         DeploymentStatus::Provisioning => {
-            provisioning::handle_provisioning(current, config, client_config, service_provider)
-                .await?
+            Box::pin(provisioning::handle_provisioning(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::WaitingForMachines | DeploymentStatus::WaitingForSecrets => {
             // A prepared target identifies an update. Initial setup can already have
@@ -306,34 +311,68 @@ pub async fn step(
                 .as_ref()
                 .is_some_and(|metadata| metadata.pending_prepared_stack.is_some());
             if has_pending_target {
-                updating::handle_updating(current, config, client_config, service_provider).await?
+                Box::pin(updating::handle_updating(
+                    current,
+                    config,
+                    client_config,
+                    service_provider,
+                ))
+                .await?
             } else {
-                provisioning::handle_provisioning(current, config, client_config, service_provider)
-                    .await?
+                Box::pin(provisioning::handle_provisioning(
+                    current,
+                    config,
+                    client_config,
+                    service_provider,
+                ))
+                .await?
             }
         }
         DeploymentStatus::Running => {
-            running::handle_running(current, config, client_config, service_provider).await?
+            Box::pin(running::handle_running(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::UpdatePending => {
-            updating::handle_update_pending(
+            Box::pin(updating::handle_update_pending(
                 current,
                 require_target_stack()?,
                 config,
                 client_config,
                 service_provider,
-            )
+            ))
             .await?
         }
         DeploymentStatus::Updating => {
-            updating::handle_updating(current, config, client_config, service_provider).await?
+            Box::pin(updating::handle_updating(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::DeletePending => {
-            deleting::handle_delete_pending(current, config, client_config, service_provider)
-                .await?
+            Box::pin(deleting::handle_delete_pending(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::Deleting => {
-            deleting::handle_deleting(current, config, client_config, service_provider).await?
+            Box::pin(deleting::handle_deleting(
+                current,
+                config,
+                client_config,
+                service_provider,
+            ))
+            .await?
         }
         DeploymentStatus::TeardownRequired => deleting::handle_teardown_required(current).await?,
         // Failed states - retry failed resources and transition back to active status

@@ -137,6 +137,7 @@ async fn ubuntu_without_user_keeps_released_exec_identity() {
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     };
     let built = alien_build::build_stack(
         Stack::new("ubuntu-compat".into())

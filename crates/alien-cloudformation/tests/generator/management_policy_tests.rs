@@ -74,11 +74,16 @@ fn management_policy_grants_an_overlapping_statement_once() {
         .values()
         .filter(|resource| {
             resource.resource_type == "AWS::IAM::ManagedPolicy"
-                && resource.logical_id.starts_with("ManagementRoleManagementPolicy")
+                && resource
+                    .logical_id
+                    .starts_with("ManagementRoleManagementPolicy")
         })
         .flat_map(|policy| statements(&policy.properties["PolicyDocument"]))
         .collect();
-    assert!(!management_statements.is_empty(), "the management role should have a policy");
+    assert!(
+        !management_statements.is_empty(),
+        "the management role should have a policy"
+    );
 
     let listing: Vec<_> = management_statements
         .iter()

@@ -15,6 +15,7 @@ pub mod output;
 #[cfg(feature = "platform")]
 pub mod platform_deployment_resolver;
 pub mod project_link;
+pub mod signing;
 pub mod ui;
 
 #[cfg(test)]
@@ -38,16 +39,16 @@ use crate::commands::{
     CustomersArgs, DomainsArgs, ExamplesArgs, UsageArgs,
 };
 use crate::commands::{
-    build_and_post_release_simple, build_command, build_dev_status, commands_task,
+    approve_task, build_and_post_release_simple, build_command, build_dev_status, commands_task,
     commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task,
-    destroy_local_deployment, destroy_task, ensure_server_running_for_dev_session,
+    destroy_local_deployment, destroy_task, devices_task, ensure_server_running_for_dev_session,
     fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
     onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
     render_task, stack_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task,
-    vault_task, whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs,
-    DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs,
-    OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StackArgs, StatusArgs, UpgradeArgs,
-    WhoamiArgs,
+    vault_task, whoami_task, write_dev_status, ApproveArgs, BuildArgs, BuildSubcommand, CliEnvVar,
+    CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, DevicesArgs, InitArgs,
+    LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StackArgs,
+    StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -183,7 +184,9 @@ impl Cli {
             | Some(Commands::Commands(_))
             | Some(Commands::Serve(_))
             | Some(Commands::Stack(_))
-            | Some(Commands::Upgrade(_)) => false,
+            | Some(Commands::Upgrade(_))
+            | Some(Commands::Approve(_)) => false,
+            Some(Commands::Devices(args)) => args.wants_json_output(),
         }
     }
 }
@@ -196,6 +199,10 @@ pub enum Commands {
     Build(BuildArgs),
     /// Push images and create a release
     Release(ReleaseArgs),
+    /// Trust a teammate's device, or sign a change prepared in the dashboard
+    Approve(ApproveArgs),
+    /// The devices and CI keys trusted to sign releases
+    Devices(DevicesArgs),
     /// Render setup artifacts for review
     Render(RenderArgs),
     /// Inspect an alien.toml stack
@@ -2230,6 +2237,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Render(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Stack(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Upgrade(_)) => unreachable!("handled before ctx resolution"),
+            Some(Commands::Devices(args)) => devices_task(args, ctx).await?,
+            Some(Commands::Approve(args)) => approve_task(args, ctx).await?,
             Some(Commands::Build(args)) => build_command(args).await?,
             Some(Commands::Release(args)) => release_command(args, ctx).await?,
             Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,

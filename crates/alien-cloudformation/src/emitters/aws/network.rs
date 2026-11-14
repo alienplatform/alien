@@ -12,8 +12,9 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
         availability_zone_names, az_condition, existing_security_group_id, get_azs,
-        list_parameter_value, required_logical_id, resource_config, select, subnet_refs, tags,
-        CONDITION_HAS_VPC_CIDR, PARAM_PRIVATE_SUBNET_IDS, PARAM_PUBLIC_SUBNET_IDS, PARAM_VPC_CIDR,
+        list_parameter_value, registered_subnet_refs, required_logical_id, resource_config, select,
+        tags, CONDITION_HAS_VPC_CIDR, PARAM_PRIVATE_SUBNET_IDS, PARAM_PUBLIC_SUBNET_IDS,
+        PARAM_VPC_CIDR,
     },
     template::{CfExpression, CfResource},
 };
@@ -142,8 +143,14 @@ impl CfEmitter for AwsNetworkEmitter {
                                     prefix, "NatEip",
                                 ))]),
                             ),
-                            ("publicSubnetIds", subnet_refs(prefix, "PublicSubnet")),
-                            ("privateSubnetIds", subnet_refs(prefix, "PrivateSubnet")),
+                            (
+                                "publicSubnetIds",
+                                registered_subnet_refs(prefix, "PublicSubnet"),
+                            ),
+                            (
+                                "privateSubnetIds",
+                                registered_subnet_refs(prefix, "PrivateSubnet"),
+                            ),
                             (
                                 "publicRouteTableId",
                                 CfExpression::ref_(network_id(prefix, "PublicRouteTable")),
@@ -183,7 +190,7 @@ impl CfEmitter for AwsNetworkEmitter {
                             false,
                         );
                         if ctx.targets_kubernetes
-                            || alien_core::restricts_network_mode(ctx.stack, false)
+                            || crate::emitters::aws::helpers::network_mode_names_subnets(ctx.stack)
                         {
                             byo
                         } else {
@@ -541,7 +548,7 @@ fn cidr_blocks(vpc_id: &str, count: i64) -> CfExpression {
 
 // AWS::NoValue becomes JSON null inside Fn::ToJsonString. Select the complete
 // list so setup registration receives only the two or three real subnet values.
-fn created_sandbox_subnet_values(
+pub(crate) fn created_sandbox_subnet_values(
     prefix: &str,
     suffix: &str,
     attribute: Option<&str>,
@@ -574,7 +581,7 @@ pub(crate) fn gateway_egress_rules(ctx: &EmitContext<'_>) -> Result<CfExpression
         CfExpression::object([
             ("IpProtocol", CfExpression::from("tcp")),
             ("FromPort", CfExpression::Integer(3128)),
-            ("ToPort", CfExpression::Integer(3129)),
+            ("ToPort", CfExpression::Integer(3128)),
             ("CidrIp", cidr),
             (
                 "Description",

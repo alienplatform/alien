@@ -86,6 +86,19 @@ impl std::fmt::Debug for GrpcTestResources {
 }
 
 async fn setup_grpc_server() -> anyhow::Result<GrpcTestResources> {
+    // A probed free port can be taken by another test process before the server binds it;
+    // the server task then ends before it signals readiness. Retry on a fresh port.
+    let mut last_error = None;
+    for _ in 0..5 {
+        match start_grpc_server().await {
+            Ok(resources) => return Ok(resources),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.expect("at least one attempt ran"))
+}
+
+async fn start_grpc_server() -> anyhow::Result<GrpcTestResources> {
     // The worker-protocol gRPC server (Control + WaitUntil) needs no bindings
     // provider — bindings are resolved in-process by the child app. This temp dir
     // is just kept alive on the returned handle.

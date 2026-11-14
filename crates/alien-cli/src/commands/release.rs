@@ -2,12 +2,19 @@ use crate::execution_context::{ExecutionMode, ManagerContext};
 use crate::get_current_dir;
 use crate::git_utils::collect_git_metadata;
 use crate::output::print_json;
+use crate::signing::{
+    self,
+    api::SigningApi,
+    release::{ReleaseSigner, SigningPlan},
+    RepoSigning,
+};
 use crate::ui::{command, contextual_heading, dim_label, success_line};
 use crate::{ErrorData, Result};
 use alien_build::{
     settings::{registry_proxy_push_policy, PushSettings},
     ImageDestinations,
 };
+use alien_core::release_statement::{code_image, code_image_mut, image_digest};
 use alien_core::{
     alien_event, is_deployer_secret_input, AlienEvent, Container, ContainerCode, Daemon,
     DaemonCode, Platform, Sandbox, SandboxCode, Stack, StackInputDefinition, StackInputKind,
@@ -21,7 +28,7 @@ use alien_manager_api::SdkResultExt as _;
 use alien_platform_api::types::GitMetadata;
 use clap::Parser;
 use dockdash::{ClientProtocol, RegistryAuth};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -64,7 +71,8 @@ use tracing::{info, warn};
     alien release --image-repo my-registry.com/my-app --registry-auth basic --registry-username user --registry-password pass
 
     # Skip git metadata collection
-    alien release --no-git"
+    alien release --no-git
+"
 )]
 pub struct ReleaseArgs {
     /// Target platforms to release (comma-separated). If not specified, auto-discovers
@@ -166,6 +174,10 @@ struct ReleaseJsonOutput {
     platforms: Vec<String>,
     /// Channel advanced by this command, or null for a create-only release.
     channel: Option<String>,
+    /// Signer id that signed the release, or null when it went out unsigned.
+    signed_by: Option<String>,
+    /// Why the release went out unsigned, when it did.
+    not_signed: Option<String>,
 }
 
 type ReleaseResult = String;
@@ -188,7 +200,6 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
         #[cfg(feature = "platform")]
         parse_release_title(Some(title))?;
     }
-
     if args.no_stack {
         let declared = release_declare(&args, &ctx).await?;
         if args.json {
@@ -199,6 +210,8 @@ pub async fn release_command(args: ReleaseArgs, ctx: ExecutionMode) -> Result<()
                 workspace: declared.project_link.workspace,
                 platforms: Vec::new(),
                 channel: (!args.no_promote).then(|| args.channel.clone()),
+                signed_by: None,
+                not_signed: Some("a stackless release has nothing to sign".to_string()),
             })?;
         } else {
             println!("{}", success_line("Release declared."));
@@ -315,17 +328,17 @@ async fn release_task_json(args: ReleaseArgs, ctx: ExecutionMode) -> Result<Rele
     let platforms = config.platforms.clone();
     let channel = (!args.no_promote).then(|| args.channel.clone());
 
-    match release_task_core(args, config, &ctx).await {
-        Ok(release_id) => Ok(ReleaseJsonOutput {
-            success: true,
-            release_id: Some(release_id),
-            project: project_name,
-            workspace: workspace_name,
-            platforms,
-            channel,
-        }),
-        Err(err) => Err(err),
-    }
+    let outcome = release_task_core(args, config, &ctx).await?;
+    Ok(ReleaseJsonOutput {
+        success: true,
+        release_id: Some(outcome.release_id),
+        project: project_name,
+        workspace: workspace_name,
+        platforms,
+        channel,
+        signed_by: outcome.signed_by,
+        not_signed: outcome.not_signed,
+    })
 }
 
 /// Resolved release configuration shared across human and JSON output paths.
@@ -339,6 +352,71 @@ struct ReleaseConfig {
     git_metadata: Option<GitMetadata>,
     platforms: Vec<String>,
     onboarding_inputs: Vec<StackInputDefinition>,
+    signing: SigningState,
+}
+
+/// How this release is signed, decided before anything is built so a key
+/// that can't sign is known before the push.
+struct SigningState {
+    plan: SigningPlan,
+    /// Protected deployments following the channel. They refuse an unsigned
+    /// release, so with any of them a release that can't be signed fails.
+    protected: u64,
+    channel: String,
+    /// Whether the release goes to the channel now. With `--no-promote` it is
+    /// signed for the channel but no deployment runs it until it's promoted.
+    promoted: bool,
+    /// Prints to stderr in JSON mode, so stdout stays one JSON document.
+    json: bool,
+    /// Local development: releases there are unsigned and say nothing about it.
+    quiet: bool,
+}
+
+impl SigningState {
+    fn signing(&self) -> Option<&ReleaseSigner> {
+        match &self.plan {
+            SigningPlan::Sign(signer) => Some(signer),
+            SigningPlan::Unsigned(_) | SigningPlan::Requested(_) => None,
+        }
+    }
+
+    /// Give up signing for `reason`, failing when protected deployments
+    /// would refuse the unsigned release.
+    fn cannot_sign(&mut self, reason: impl Into<String>) -> Result<()> {
+        self.plan = SigningPlan::Unsigned(reason.into());
+        self.refuse_unsigned()
+    }
+
+    fn refuse_unsigned(&self) -> Result<()> {
+        let reason = match &self.plan {
+            SigningPlan::Sign(_) => return Ok(()),
+            SigningPlan::Unsigned(reason) | SigningPlan::Requested(reason) => reason,
+        };
+        if self.protected == 0 || !self.promoted {
+            return Ok(());
+        }
+        Err(AlienError::new(ErrorData::ReleaseFailed {
+            message: format!(
+                "{} protected deployments follow {} and run only signed releases, but this release can't be signed: {reason}",
+                self.protected, self.channel
+            ),
+        }))
+    }
+
+    fn say(&self, line: &str) {
+        if self.json {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    }
+}
+
+/// What `alien release` created.
+struct ReleaseOutcome {
+    release_id: String,
+    signed_by: Option<String>,
+    not_signed: Option<String>,
 }
 
 #[derive(Clone)]
@@ -397,6 +475,17 @@ async fn load_release_config(
 
     let is_dev = ctx.is_dev();
 
+    let interactive = show_human_output && !args.json && crate::output::can_prompt();
+    let mut signing = plan_signing(
+        args,
+        ctx,
+        &project_link.project_id,
+        &current_dir,
+        interactive,
+    )
+    .await?;
+    signing.refuse_unsigned()?;
+
     let source_stack = load_source_stack_for_release(args.prebuilt, &current_dir).await?;
 
     // Determine target platforms:
@@ -450,16 +539,32 @@ async fn load_release_config(
     // Build for every platform unless --prebuilt is set.
     // Content-hash dedup in the build layer makes this fast when nothing changed.
     if let Some(stack) = source_stack.as_ref() {
-        auto_build_for_platforms(
-            &target_platforms,
-            stack,
-            &output_dir,
-            show_human_output,
-            args.override_base_image.clone(),
-            kubernetes_base_platform,
-            args.targets.as_deref(),
-        )
-        .await?;
+        if signing.signing().is_some() {
+            if let Some(image) = &args.override_base_image {
+                signing.cannot_sign(format!(
+                    "--override-base-image {image} replaces the base images this CLI pins"
+                ))?;
+            }
+        }
+        let build = |require_pinned: bool| {
+            auto_build_for_platforms(
+                &target_platforms,
+                stack,
+                &output_dir,
+                show_human_output,
+                args.override_base_image.clone(),
+                kubernetes_base_platform,
+                args.targets.as_deref(),
+                require_pinned,
+            )
+        };
+        match build(signing.signing().is_some()).await {
+            Err(error) if signing.signing().is_some() && unpinned_base_image(&error) => {
+                signing.cannot_sign(error_reason(&error))?;
+                build(false).await?;
+            }
+            result => result?,
+        }
     }
 
     // Re-discover platforms after potential auto-build
@@ -544,7 +649,172 @@ async fn load_release_config(
         git_metadata,
         platforms,
         onboarding_inputs,
+        signing,
     })
+}
+
+/// Whether `error` is a build refusing a base image this CLI doesn't pin.
+fn unpinned_base_image(error: &AlienError<ErrorData>) -> bool {
+    let mut current = error.source.as_deref();
+    while let Some(error) = current {
+        if error.code == "BASE_IMAGE_NOT_PINNED" {
+            return true;
+        }
+        current = error.source.as_deref();
+    }
+    false
+}
+
+/// The innermost message of `error`, which says what went wrong.
+fn error_reason(error: &AlienError<ErrorData>) -> String {
+    let mut message = error.message.clone();
+    let mut current = error.source.as_deref();
+    while let Some(error) = current {
+        message = error.message.clone();
+        current = error.source.as_deref();
+    }
+    message
+}
+
+/// Decide how this release is signed and count the protected deployments
+/// that follow its channel.
+async fn plan_signing(
+    args: &ReleaseArgs,
+    ctx: &ExecutionMode,
+    project_id: &str,
+    dir: &Path,
+    interactive: bool,
+) -> Result<SigningState> {
+    let channel = args.channel.clone();
+    if ctx.is_dev() {
+        return Ok(SigningState {
+            plan: SigningPlan::Unsigned("local development is unsigned".to_string()),
+            protected: 0,
+            channel,
+            promoted: !args.no_promote,
+            json: args.json,
+            quiet: true,
+        });
+    }
+    // Signing starts only with `alien devices init`, which writes the pin. Without it the
+    // release is unsigned exactly as it was before signing existed, and asks the control
+    // plane nothing about it: any protected install refuses an unsigned release itself.
+    if RepoSigning::read(dir)?.is_none() {
+        return Ok(SigningState {
+            plan: SigningPlan::Unsigned(signing::release::signing_off_hint()),
+            protected: 0,
+            channel,
+            promoted: !args.no_promote,
+            json: args.json,
+            quiet: false,
+        });
+    }
+    let api = SigningApi::from_context(ctx).await?;
+    let protected = protected_following(ctx, project_id, &channel).await?;
+    // Planning may show a recovery code or a pairing code; progress drawn
+    // meanwhile would erase it.
+    let progress = crate::ui::pause_progress();
+    let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
+    drop(progress);
+    Ok(SigningState {
+        plan,
+        protected,
+        channel,
+        promoted: !args.no_promote,
+        json: args.json,
+        quiet: false,
+    })
+}
+
+/// How many protected deployments of the project follow `channel`: those
+/// whose setup pins a fingerprint for it. A protected deployment that
+/// doesn't say which channel it follows is counted, so a release that can't
+/// be signed never slips past one.
+async fn protected_following(ctx: &ExecutionMode, project_id: &str, channel: &str) -> Result<u64> {
+    let mut query = signing::api::project_query(ctx, project_id).await?;
+    query.push(("limit".to_string(), "100".to_string()));
+    let mut count = 0;
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut page_query = query.clone();
+        if let Some(cursor) = &cursor {
+            page_query.push(("cursor".to_string(), cursor.clone()));
+        }
+        let page = signing::api::get_json(ctx, "/v1/deployments", &page_query).await?;
+        for item in page["items"].as_array().into_iter().flatten() {
+            let pinned = item["stackSettings"]["signing"]["channel"].as_str();
+            let protected = item["protected"].as_bool() == Some(true) || pinned.is_some();
+            if protected && pinned.is_none_or(|pinned| pinned == channel) {
+                count += 1;
+            }
+        }
+        cursor = page["nextCursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            return Ok(count);
+        }
+    }
+}
+
+/// The enforcer builds the release now on `channel` pins, with its id, when
+/// that release is signed.
+async fn previous_components(
+    ctx: &ExecutionMode,
+    chain: &alien_signing::SignerChain,
+    project_id: &str,
+    channel: &str,
+) -> Result<
+    Option<(
+        String,
+        std::result::Result<BTreeMap<String, String>, String>,
+    )>,
+> {
+    let query = signing::api::project_query(ctx, project_id).await?;
+    let channels = signing::api::get_json(ctx, "/v1/release-channels", &query).await?;
+    let Some(release_id) = channels["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| item["name"].as_str() == Some(channel))
+        .and_then(|item| item["currentReleaseId"].as_str())
+        .map(str::to_string)
+    else {
+        return Ok(None);
+    };
+    let release =
+        signing::api::get_json(ctx, &format!("/v1/releases/{release_id}"), &query).await?;
+    let Some(statement) = release["signedStacks"]
+        .as_object()
+        .and_then(|stacks| stacks.values().next())
+    else {
+        return Ok(None);
+    };
+    let statement: alien_signing::SignedStatement = serde_json::from_value(statement.clone())
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Release {release_id} carries a statement that doesn't parse"),
+            url: None,
+        })?;
+    // The control plane's word until it checks out against the device list.
+    let checked = statement
+        .open()
+        .map_err(|error| format!("it doesn't open ({error})"))
+        .and_then(|opened| {
+            signing::check_statement(
+                chain,
+                &opened,
+                alien_signing::Kind::Release,
+                None,
+                chrono::Utc::now(),
+            )?;
+            let body: alien_signing::ReleaseBody = opened
+                .body()
+                .map_err(|error| format!("its body doesn't parse ({error})"))?;
+            if body.channel != channel {
+                return Err(format!("it is signed for channel {}", body.channel));
+            }
+            Ok(body.components)
+        });
+    Ok(Some((release_id, checked)))
 }
 
 /// Core release logic for console mode.
@@ -567,9 +837,19 @@ async fn release_task(args: ReleaseArgs, ctx: ExecutionMode) -> Result<ReleaseRe
         )
     );
 
-    let release_id = release_task_core(args, config, &ctx).await?;
-    println!("{}", success_line("Release created."));
-    println!("{} {}", dim_label("Release"), release_id);
+    let channel = args.channel.clone();
+    let outcome = release_task_core(args, config, &ctx).await?;
+    let release_id = outcome.release_id.clone();
+    match &outcome.signed_by {
+        Some(signer) if !no_promote => {
+            println!("✓ Release {release_id} · signed by {signer} · {channel}")
+        }
+        Some(signer) => println!("✓ Release {release_id} · signed by {signer}"),
+        None => {
+            println!("{}", success_line("Release created."));
+            println!("{} {}", dim_label("Release"), release_id);
+        }
+    }
     if no_promote {
         println!("No channel changed. No deployment updates scheduled.");
         println!(
@@ -593,7 +873,7 @@ async fn release_task_core(
     args: ReleaseArgs,
     config: ReleaseConfig,
     ctx: &ExecutionMode,
-) -> Result<ReleaseResult> {
+) -> Result<ReleaseOutcome> {
     let release_started = Instant::now();
     let ReleaseConfig {
         output_dir,
@@ -613,6 +893,8 @@ async fn release_task_core(
         local: None,
         test: None,
     };
+    let mut signing = config.signing;
+    let mut pushed_stacks: Vec<(Platform, Stack)> = Vec::new();
 
     for platform_str in &platforms_to_release {
         let platform_started = Instant::now();
@@ -640,15 +922,20 @@ async fn release_task_core(
                 rebase_prebuilt_stack_image_paths(&mut built_stack, &output_dir)?;
             }
 
-            push_platform_stack(
+            let (pushed, unpinned) = push_platform_stack(
                 &args,
                 ctx,
                 &project_link.project_id,
                 platform,
                 built_stack,
                 &output_dir,
+                signing.signing().is_some(),
             )
-            .await?
+            .await?;
+            if let Some(reason) = unpinned {
+                signing.cannot_sign(reason)?;
+            }
+            pushed
         } else {
             built_stack
         };
@@ -671,12 +958,21 @@ async fn release_task_core(
             Platform::Local => stack_by_platform.local = Some(stack_json),
             Platform::Test => stack_by_platform.test = Some(stack_json),
         }
+        pushed_stacks.push((platform, pushed_stack));
 
         info!(
             "   ✓ {} platform ready in {:.2}s",
             platform_str,
             platform_started.elapsed().as_secs_f64()
         );
+    }
+
+    let signed = sign_release(ctx, &project_link.project_id, &mut signing, pushed_stacks).await?;
+    let mut signed_stacks = HashMap::new();
+    let mut setup_templates = HashMap::new();
+    for (platform, statement, setup) in signed {
+        signed_stacks.insert(platform.as_str().to_string(), manager_statement(&statement));
+        setup_templates.insert(platform.as_str().to_string(), setup);
     }
 
     // Create release
@@ -694,6 +990,8 @@ async fn release_task_core(
             manager,
             &project_link.project_id,
             stack_by_platform,
+            signed_stacks,
+            setup_templates,
             sdk_git_metadata,
             &args.channel,
         )
@@ -708,6 +1006,8 @@ async fn release_task_core(
                 &project_link.project_id,
                 workspace_query.as_deref(),
                 stack_by_platform,
+                signed_stacks,
+                setup_templates,
                 git_metadata,
                 (!args.no_promote).then_some(args.channel.as_str()),
                 args.title.as_deref(),
@@ -730,7 +1030,187 @@ async fn release_task_core(
         release_started.elapsed().as_secs_f64()
     );
 
-    Ok(release_id)
+    let (signed_by, not_signed) = match &signing.plan {
+        SigningPlan::Sign(signer) => (Some(signer.signer.id().to_string()), None),
+        SigningPlan::Unsigned(reason) | SigningPlan::Requested(reason) => {
+            (None, (!signing.quiet).then(|| reason.clone()))
+        }
+    };
+    Ok(ReleaseOutcome {
+        release_id,
+        signed_by,
+        not_signed,
+    })
+}
+
+/// Setup template bytes (base64) by template name, as the release uploads them.
+type SetupUpload = HashMap<String, String>;
+
+/// Sign every platform's pushed stack, or say in one line why the release
+/// goes out unsigned. Enforcer builds that changed since the release now on
+/// the channel are listed before the signature is asked for. Each statement
+/// comes with the setup template bytes whose digests it signs.
+async fn sign_release(
+    ctx: &ExecutionMode,
+    project_id: &str,
+    signing: &mut SigningState,
+    pushed: Vec<(Platform, Stack)>,
+) -> Result<Vec<(Platform, alien_core::SignedStatement, SetupUpload)>> {
+    // What's signed and the touch or PIN prompt stay on screen while the
+    // device waits.
+    let _progress = crate::ui::pause_progress();
+    let mut bodies = Vec::new();
+    let mut uploads: HashMap<Platform, SetupUpload> = HashMap::new();
+    if let Some(signer) = signing.signing() {
+        let fingerprint = signer
+            .chain
+            .digest_of(1)
+            .map(alien_signing::fingerprint)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SigningFailed {
+                    message: "The verified device list has no version 1".to_string(),
+                })
+            })?;
+        let settings = alien_core::StackSigning {
+            fingerprint,
+            channel: signing.channel.clone(),
+        };
+        let components = signing::release::enforcer_digests()?;
+        let mut refused = None;
+        let api = signing::api::SigningApi::from_context(ctx).await?;
+        let hosting = match api.setup_hosting(project_id).await {
+            Ok(hosting) => {
+                signing.say(&format!(
+                    "  {}",
+                    signing::release::hosting_summary(&hosting)
+                ));
+                Some(hosting)
+            }
+            Err(error) => {
+                refused = Some(error_reason(&error));
+                None
+            }
+        };
+        for (platform, stack) in pushed {
+            let Some(hosting) = &hosting else { break };
+            let built = match signing::release::setup_templates(
+                &stack,
+                platform,
+                &settings,
+                hosting,
+                alien_core::SetupPins::compiled_in(),
+            )
+            .await
+            {
+                Ok(rendered) => {
+                    uploads.insert(platform, signing::release::setup_upload(&rendered));
+                    signing::release::body(
+                        platform,
+                        &stack,
+                        &signing.channel,
+                        &components,
+                        signing::release::signed_setup(&rendered),
+                    )
+                }
+                Err(error) => Err(error),
+            };
+            match built {
+                Ok(body) => bodies.push((platform, stack, body)),
+                Err(error) => {
+                    refused = Some(format!("{}: {}", platform.as_str(), error_reason(&error)));
+                    break;
+                }
+            }
+        }
+        if let Some(reason) = refused {
+            signing.cannot_sign(reason)?;
+        } else if let Some((release, previous)) =
+            previous_components(ctx, &signer.chain, project_id, &signing.channel).await?
+        {
+            match previous {
+                Ok(previous) => {
+                    let changes = signing::release::component_changes(&previous, &components);
+                    if !changes.is_empty() {
+                        signing.say(&format!("  Enforcer builds change since {release}:"));
+                        for change in changes {
+                            signing.say(&format!("    {change}"));
+                        }
+                    }
+                }
+                Err(reason) => signing.say(&format!(
+                    "  ! {release}, now on {}, doesn't check out against the device list: {reason}. Enforcer build changes since it aren't shown.",
+                    signing.channel
+                )),
+            }
+        }
+    }
+    let Some(signer) = signing.signing() else {
+        if let SigningPlan::Unsigned(reason) = &signing.plan {
+            if !signing.quiet {
+                signing.say(&format!("  not signed: {reason}"));
+            }
+        }
+        return Ok(Vec::new());
+    };
+    let deployments = format!(
+        "{} protected deployment{}",
+        signing.protected,
+        if signing.protected == 1 { "" } else { "s" }
+    );
+    signing.say(&if signing.promoted {
+        format!("  Releasing to {} · {deployments} will run it", signing.channel)
+    } else {
+        format!(
+            "  Signing for {} without promoting it · no deployment runs it until it's promoted ({deployments} follow {})",
+            signing.channel, signing.channel
+        )
+    });
+    if let Some(gesture) = signer.signer.gesture() {
+        let prompt = format!("  {gesture} to sign ▸ ");
+        if signing.json {
+            eprint!("{prompt}");
+        } else {
+            print!("{prompt}");
+            std::io::stdout().flush().into_alien_error().context(
+                ErrorData::CliInteractionFailed {
+                    message: "Failed to show the signing prompt".to_string(),
+                },
+            )?;
+        }
+    }
+    let statements = signing::release::sign_all(signer, bodies)?;
+    if signer.signer.gesture().is_some() {
+        signing.say("✓");
+    }
+    statements
+        .into_iter()
+        .map(|(platform, statement)| {
+            let setup = uploads.remove(&platform).ok_or_else(|| {
+                AlienError::new(ErrorData::SigningFailed {
+                    message: format!("The {} setup templates went missing", platform.as_str()),
+                })
+            })?;
+            Ok((platform, statement, setup))
+        })
+        .collect()
+}
+
+/// The manager SDK's copy of a signed statement. Both are the same two
+/// strings; the payload is carried, never re-encoded.
+fn manager_statement(
+    statement: &alien_core::SignedStatement,
+) -> alien_manager_api::types::SignedStatement {
+    alien_manager_api::types::SignedStatement {
+        payload: statement.payload.clone(),
+        signatures: statement
+            .signatures
+            .iter()
+            .map(|signature| alien_manager_api::types::Signature {
+                signer: signature.signer.clone(),
+                sig: signature.sig.clone(),
+            })
+            .collect(),
+    }
 }
 
 /// Fail before building when a manager you run has no such channel.
@@ -770,6 +1250,8 @@ async fn create_manager_release(
     manager: &ManagerContext,
     project_id: &str,
     stack: ManagerStackByPlatform,
+    signed_stacks: HashMap<String, alien_manager_api::types::SignedStatement>,
+    setup_templates: HashMap<String, SetupUpload>,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
     channel: &str,
 ) -> Result<String> {
@@ -783,6 +1265,8 @@ async fn create_manager_release(
             git_metadata,
             project_id: project_id.to_string(),
             channel: Some(channel.to_string()),
+            signed_stacks,
+            setup_templates,
         })
         .send()
         .await
@@ -812,6 +1296,8 @@ async fn create_platform_release(
     project_id: &str,
     workspace: Option<&str>,
     stack: ManagerStackByPlatform,
+    signed_stacks: HashMap<String, alien_manager_api::types::SignedStatement>,
+    setup_templates: HashMap<String, SetupUpload>,
     git_metadata: Option<GitMetadata>,
     channel: Option<&str>,
     title: Option<&str>,
@@ -848,7 +1334,6 @@ async fn create_platform_release(
         .promote(promote)
         .git_metadata(git_metadata)
         .title(parse_release_title(title)?);
-
     let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {
         AlienError::new(ErrorData::ApiRequestFailed {
             message: format!("Failed to build release request: {}", e),
@@ -856,36 +1341,110 @@ async fn create_platform_release(
         })
     })?;
 
-    let mut request = platform_client.create_release();
-    if let Some(workspace) = workspace {
-        let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(
-            workspace,
-        )
-        .map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "workspace".to_string(),
-                message: format!("Invalid workspace: {}", e),
-            })
-        })?;
-        request = request.workspace(&workspace_param);
-    }
-
-    let response =
-        request
-            .body(body)
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
+    let release_id = if signed_stacks.is_empty() {
+        let mut request = platform_client.create_release();
+        if let Some(workspace) = workspace {
+            let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(
+                workspace,
+            )
+            .map_err(|e| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "workspace".to_string(),
+                    message: format!("Invalid workspace: {}", e),
+                })
+            })?;
+            request = request.workspace(&workspace_param);
+        }
+        let response = request.body(body).send().await.into_sdk_error().context(
+            ErrorData::ApiRequestFailed {
                 message: "Failed to create release on platform API".to_string(),
                 url: None,
+            },
+        )?;
+        response.id.to_string()
+    } else {
+        // The signed statements and the setup template bytes they digest
+        // travel byte for byte beside the stack. The generated client
+        // doesn't carry them, so the request is sent as JSON with the same
+        // body plus `signedStacks` and `setupTemplates`.
+        let mut json = serde_json::to_value(&body).into_alien_error().context(
+            ErrorData::ApiRequestFailed {
+                message: "Failed to serialize the release request".to_string(),
+                url: None,
+            },
+        )?;
+        json["signedStacks"] = serde_json::to_value(&signed_stacks)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to carry the signed statements".to_string(),
+                url: None,
             })?;
+        json["setupTemplates"] = serde_json::to_value(&setup_templates)
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to carry the setup templates".to_string(),
+                url: None,
+            })?;
+        let url = format!("{}/v1/releases", http.base_url.trim_end_matches('/'));
+        let mut request = http.client.post(&url).json(&json);
+        if let Some(workspace) = workspace {
+            request = request.query(&[("workspace", workspace)]);
+        }
+        let response =
+            request
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to create release on platform API".to_string(),
+                    url: Some(url.clone()),
+                })?;
+        let status = response.status();
+        let text =
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: format!("Failed to read the platform API's response (HTTP {status})"),
+                    url: Some(url.clone()),
+                })?;
+        if !status.is_success() {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "The platform refused the signed release (HTTP {status}): {}",
+                    refusal_reason(&text)
+                ),
+                url: Some(url),
+            }));
+        }
+        let created: serde_json::Value = serde_json::from_str(&text).into_alien_error().context(
+            ErrorData::ApiRequestFailed {
+                message: "The platform API's release response is not JSON".to_string(),
+                url: Some(url.clone()),
+            },
+        )?;
+        created["id"].as_str().map(str::to_string).ok_or_else(|| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: "The platform API's release response has no id".to_string(),
+                url: Some(url),
+            })
+        })?
+    };
 
-    let release_id = response.id.to_string();
     info!("Release created successfully!");
     info!("   ID: {}", release_id);
 
     Ok(release_id)
+}
+
+/// The reason in an API error body (its `message`), as the API wrote it;
+/// the whole body when it has none.
+fn refusal_reason(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|error| error["message"].as_str().map(str::to_string))
+        .unwrap_or_else(|| body.to_string())
 }
 
 /// Result of a stackless declare.
@@ -1088,6 +1647,7 @@ async fn auto_build_for_platforms(
     override_base_image: Option<String>,
     kubernetes_base_platform: Option<Platform>,
     user_targets: Option<&[String]>,
+    require_pinned_base_images: bool,
 ) -> Result<()> {
     let stack_needs_x86_64_on_aws = stack_requires_x86_64_on_aws(stack);
 
@@ -1110,15 +1670,18 @@ async fn auto_build_for_platforms(
             None
         };
 
+        let mut settings = auto_build_settings_for_platform(
+            platform_str,
+            output_dir,
+            override_base_image.clone(),
+            kubernetes_base_platform,
+            effective_targets,
+        )?;
+        // A signed release builds only from base images this CLI pins.
+        settings.require_pinned_base_images = require_pinned_base_images;
         plans.push(AutoBuildPlan {
             platform: platform_str.clone(),
-            settings: auto_build_settings_for_platform(
-                platform_str,
-                output_dir,
-                override_base_image.clone(),
-                kubernetes_base_platform,
-                effective_targets,
-            )?,
+            settings,
         });
     }
 
@@ -1208,6 +1771,7 @@ pub(crate) fn auto_build_settings_for_platform(
         debug_mode: false,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     })
 }
 
@@ -1386,6 +1950,8 @@ async fn resolve_push_destinations(
 }
 
 /// Pushes the platform's images and returns the stack that names them.
+/// With `pin_digests`, every image is pinned to its digest for signing; an
+/// image that can't be pinned leaves the stack unpinned, with the reason.
 ///
 /// A manager rollout that renames the registry's repositories can refuse a push to the name
 /// resolved before it. The destinations are then resolved once more and, when they changed, the
@@ -1397,10 +1963,13 @@ async fn push_platform_stack(
     platform: Platform,
     built_stack: Stack,
     output_dir: &PathBuf,
-) -> Result<Stack> {
+    pin_digests: bool,
+) -> Result<(Stack, Option<String>)> {
     let push_failed = || ErrorData::ReleaseFailed {
         message: format!("Failed to push images for {} platform", platform.as_str()),
     };
+    // Signing checks each pushed image against the archives it was built into.
+    let built_for_pinning = pin_digests.then(|| built_stack.clone());
     let mut destinations =
         resolve_push_destinations(args, ctx, project_id, platform, &built_stack).await?;
     let first = push_stack_with_cache_to_destinations(
@@ -1442,6 +2011,16 @@ async fn push_platform_stack(
         }
         result => result.context(push_failed())?,
     };
+    // Look digests up where the images were pushed, before any rewrite to the
+    // host deployments pull from: the digest is the same on both.
+    let mut unpinned = None;
+    if let Some(built) = &built_for_pinning {
+        let mut pinned = pushed.clone();
+        match pin_stack_images(&mut pinned, built, &destinations.settings.options).await {
+            Ok(()) => pushed = pinned,
+            Err(error) => unpinned = Some(error_reason(&error)),
+        }
+    }
     if let Some(public_host) = destinations.public_registry_host {
         let push_host = destinations
             .settings
@@ -1452,7 +2031,7 @@ async fn push_platform_stack(
             .to_string();
         retarget_stack_registry(&mut pushed, &push_host, &public_host);
     }
-    Ok(pushed)
+    Ok((pushed, unpinned))
 }
 
 /// Create push settings from manual CLI arguments
@@ -2293,6 +2872,82 @@ async fn push_stack_with_cache(
     .await
 }
 
+/// Pin every image in `pushed` to a digest, as `repository@sha256:<digest>`.
+/// An image built here gets the digest of what the registry holds, once it is
+/// checked to be the image in its local archives: a registry can't choose what
+/// gets signed. An image the release didn't build must already name a digest.
+async fn pin_stack_images(
+    pushed: &mut Stack,
+    built: &Stack,
+    options: &dockdash::PushOptions,
+) -> Result<()> {
+    for (resource_id, entry) in pushed.resources_mut() {
+        let failed = |image: &str, reason: &str| ErrorData::ReleaseFailed {
+            message: format!("Can't sign the image of '{resource_id}' ({image}): {reason}"),
+        };
+        if entry.config.downcast_ref::<Sandbox>().is_some() {
+            return Err(AlienError::new(failed(
+                "sandbox",
+                "signed releases don't support sandboxes yet; their image is assembled in the registry",
+            )));
+        }
+        let Some(image) = code_image_mut(&mut entry.config) else {
+            continue;
+        };
+        let archives = built
+            .resources()
+            .find(|(id, _)| *id == resource_id)
+            .and_then(|(_, built)| code_image(&built.config))
+            .map(local_archives)
+            .unwrap_or_default();
+        if archives.is_empty() {
+            if image_digest(image).is_none() {
+                return Err(AlienError::new(failed(
+                    image,
+                    "it wasn't built by this release, so name it by digest (image@sha256:...)",
+                )));
+            }
+            continue;
+        }
+        let digest = alien_build::registry::verified_digest(image, &archives, options)
+            .await
+            .context(failed(image, "the pushed image doesn't check out"))?;
+        *image = format!("{}@{digest}", image_repository(image));
+    }
+    Ok(())
+}
+
+/// The OCI archives in a built resource's local image directory, if `image` is one.
+fn local_archives(image: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(image) else {
+        return Vec::new();
+    };
+    let mut archives: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "tar")
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.contains(".oci."))
+        })
+        .collect();
+    archives.sort();
+    archives
+}
+
+/// `image` without its tag or digest. A `:` before the last `/` is a registry
+/// port, not a tag.
+fn image_repository(image: &str) -> &str {
+    let without_digest = image
+        .split_once('@')
+        .map_or(image, |(repository, _)| repository);
+    match without_digest.rsplit_once(':') {
+        Some((repository, tag)) if !tag.contains('/') => repository,
+        _ => without_digest,
+    }
+}
+
 async fn push_stack_with_cache_to_destinations(
     mut built_stack: Stack,
     platform: Platform,
@@ -2863,9 +3518,20 @@ mod tests {
             git_metadata: None,
             platforms: vec!["test".to_string()],
             onboarding_inputs: vec![],
+            signing: SigningState {
+                plan: SigningPlan::Unsigned("not under test".to_string()),
+                protected: 0,
+                channel: "production".to_string(),
+                promoted: true,
+                json: false,
+                quiet: true,
+            },
         };
         assert_eq!(
-            release_task_core(args, config, &ctx).await.unwrap(),
+            release_task_core(args, config, &ctx)
+                .await
+                .unwrap()
+                .release_id,
             release_id
         );
         assert_eq!(fs::read(build_dir.join("stack.json")).unwrap(), stack_bytes);
@@ -3517,6 +4183,7 @@ mod tests {
                 debug_mode: false,
                 rebuild: false,
                 pull_base_images: false,
+                require_pinned_base_images: false,
             },
         }
     }
@@ -3661,9 +4328,11 @@ mod tests {
                 Platform::Kubernetes,
                 stack,
                 &output_dir,
+                false,
             )
             .await
-            .unwrap_or_else(|e| panic!("{targets:?}: the push is retried: {e:?}"));
+            .unwrap_or_else(|e| panic!("{targets:?}: the push is retried: {e:?}"))
+            .0;
 
             let host = manager_url.trim_start_matches("http://");
             let images: Vec<String> = pushed
@@ -3687,6 +4356,162 @@ mod tests {
                 .await
                 .unwrap_or_else(|e| panic!("{targets:?}: the released image is missing: {e}"));
         }
+    }
+
+    /// Every release names its pushed images by digest (main does since #1487);
+    /// signing additionally checks each digest against the archive it was
+    /// built from, and refuses to sign an image it can't vouch for.
+    #[tokio::test]
+    async fn signed_and_unsigned_releases_pin_images_to_the_same_digest() {
+        let (manager_url, _) = start_renaming_manager(|_| false).await;
+        let output = tempfile::tempdir().unwrap();
+        let output_dir = output.path().to_path_buf();
+        let artifact = output_dir.join("build/kubernetes/web-hash");
+        std::fs::create_dir_all(&artifact).unwrap();
+        let layer = dockdash::Layer::builder()
+            .unwrap()
+            .data("/app/web", b"web", Some(0o755))
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        dockdash::Image::builder()
+            .platform("linux", &dockdash::Arch::Amd64)
+            .layer(layer)
+            .output_to(artifact.join("linux-x64.oci.tar"))
+            .build()
+            .await
+            .unwrap();
+        let stack = Stack::new("pinned".to_string())
+            .add(
+                test_container("web", artifact.display().to_string()),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let ctx = ExecutionMode::Standalone {
+            server_url: manager_url.clone(),
+            api_key: "test-token".to_string(),
+        };
+        let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
+        let image = |stack: &Stack| {
+            let (_, entry) = stack.resources().next().unwrap();
+            container_image(entry.config.downcast_ref::<Container>().unwrap()).to_string()
+        };
+
+        let unsigned = push_platform_stack(
+            &args,
+            &ctx,
+            "prj_a",
+            Platform::Kubernetes,
+            stack.clone(),
+            &output_dir,
+            false,
+        )
+        .await
+        .unwrap()
+        .0;
+        let host = manager_url.trim_start_matches("http://");
+        let unsigned_ref = image(&unsigned);
+        assert!(
+            unsigned_ref.starts_with(&format!("{host}/acme-artifacts/prj_a@sha256:")),
+            "an unsigned release names its image by digest, as main does: {unsigned_ref}"
+        );
+
+        let signed = push_platform_stack(
+            &args,
+            &ctx,
+            "prj_a",
+            Platform::Kubernetes,
+            stack,
+            &output_dir,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(signed.1, None, "every image built here is pinned");
+        let pinned = image(&signed.0);
+        let client = oci_client::Client::new(oci_client::client::ClientConfig {
+            protocol: oci_client::client::ClientProtocol::Http,
+            ..Default::default()
+        });
+        let digest = unsigned_ref.rsplit_once('@').unwrap().1.to_string();
+        // This manager names another repository on the second resolve; the
+        // content, and so the digest, is the same.
+        assert_eq!(pinned, format!("{host}/artifacts/prj_a@{digest}"));
+        let served = client
+            .fetch_manifest_digest(
+                &oci_client::Reference::try_from(pinned.as_str()).unwrap(),
+                &oci_client::secrets::RegistryAuth::Anonymous,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            served, digest,
+            "the pinned reference resolves to the pushed image"
+        );
+    }
+
+    /// The registry can't vouch for an image this release didn't build, so
+    /// signing needs the developer to name it by digest; without one the
+    /// release goes out unsigned, saying why.
+    #[tokio::test]
+    async fn signing_an_image_not_built_here_needs_its_digest() {
+        let (manager_url, _) = start_renaming_manager(|_| false).await;
+        let output = tempfile::tempdir().unwrap();
+        let ctx = ExecutionMode::Standalone {
+            server_url: manager_url.clone(),
+            api_key: "test-token".to_string(),
+        };
+        let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
+        let stack_with = |image: &str| {
+            Stack::new("remote".to_string())
+                .add(
+                    test_container("web", image.to_string()),
+                    ResourceLifecycle::Live,
+                )
+                .build()
+        };
+        let push = |stack: Stack, sign: bool| {
+            let output_dir = output.path().to_path_buf();
+            let (args, ctx) = (&args, &ctx);
+            async move {
+                push_platform_stack(
+                    args,
+                    ctx,
+                    "prj_a",
+                    Platform::Kubernetes,
+                    stack,
+                    &output_dir,
+                    sign,
+                )
+                .await
+            }
+        };
+
+        let (_, unpinned) = push(stack_with("registry.example.com/team/web:v1"), true)
+            .await
+            .unwrap();
+        let reason = unpinned.expect("a tag the release didn't push can't be signed");
+        assert!(reason.contains("name it by digest"), "{reason}");
+
+        let pinned = format!("registry.example.com/team/web@sha256:{}", "a".repeat(64));
+        let (_, unpinned) = push(stack_with(&pinned), true)
+            .await
+            .expect("a digest the developer named is signed as is");
+        assert_eq!(unpinned, None);
+        push(stack_with("registry.example.com/team/web:v1"), false)
+            .await
+            .expect("an unsigned release keeps accepting tags");
+    }
+
+    #[test]
+    fn image_repository_strips_only_the_tag() {
+        assert_eq!(
+            image_repository("host:5000/team/app:v1"),
+            "host:5000/team/app"
+        );
+        assert_eq!(image_repository("host:5000/team/app"), "host:5000/team/app");
+        assert_eq!(image_repository("host/app:v1@sha256:abc"), "host/app");
     }
 
     /// A hosted manager in front of a real registry. It names the project's repository
@@ -3843,10 +4668,18 @@ mod tests {
             };
             let args = ReleaseArgs::try_parse_from(["release"]).unwrap();
 
-            let pushed =
-                push_platform_stack(&args, &ctx, "prj_a", Platform::Aws, stack, &output_dir)
-                    .await
-                    .unwrap_or_else(|e| panic!("splits={splits}: push failed: {e:?}"));
+            let pushed = push_platform_stack(
+                &args,
+                &ctx,
+                "prj_a",
+                Platform::Aws,
+                stack,
+                &output_dir,
+                false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("splits={splits}: push failed: {e:?}"))
+            .0;
 
             let host = url.trim_start_matches("http://");
             let proxy_only = if splits {
@@ -3967,6 +4800,11 @@ mod tests {
                         "updatedAt": "2026-01-01T00:00:00Z",
                     }] }))
                 }),
+            )
+            // No protected deployment follows the channel, so the release may go unsigned.
+            .route(
+                "/v1/deployments",
+                get(|| async { Json(serde_json::json!({ "items": [] })) }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());

@@ -306,6 +306,8 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         volume_restores: Vec::new(),
         value_slots: Vec::new(),
         deletion_policy: Default::default(),
+        release_statements: None,
+        signed_config: None,
     }
 }
 
@@ -316,6 +318,8 @@ fn create_initial_state(stack: Stack) -> DeploymentState {
         version: Some("1.0.0".to_string()),
         description: None,
         stack,
+        signed: None,
+        signer_lists: Vec::new(),
     };
 
     DeploymentState {
@@ -490,6 +494,8 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_machines() {
         version: Some("2.0.0".into()),
         description: None,
         stack: target,
+        signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, target_release.clone());
     state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
@@ -1018,6 +1024,8 @@ async fn test_update_flow_happy_path_promotes_release() {
         version: Some("2.0.0".to_string()),
         description: None,
         stack: stack_v2,
+        signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, release_v2.clone());
 
@@ -1448,6 +1456,8 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
         version: Some("2.0.0".to_string()),
         description: None,
         stack: create_test_stack("test-stack", "test-function"),
+        signed: None,
+        signer_lists: Vec::new(),
     };
     state.target_release = Some(release_v2.clone());
     state.status = DeploymentStatus::UpdatePending;
@@ -1490,6 +1500,98 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
     assert_eq!(
         completed.current_release.as_ref().unwrap().release_id,
         release_v2.release_id
+    );
+}
+
+/// The setup update authority binds to the setup it was prepared for, not to one release: when
+/// the release it was recorded for fails, a newer release needing the same setup still uses it,
+/// and one needing other setup still waits for setup.
+#[tokio::test]
+async fn a_setup_authorization_carries_to_a_newer_release_with_the_same_setup() {
+    let config = create_test_config("hash_v1", false);
+    let running = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(running.status, DeploymentStatus::Running);
+    let baseline = running
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+        .expect("running deployment has prepared stack")
+        .setup_update_digest();
+    // The setup the re-import prepared adds one setup-owned resource; its digest is the one a
+    // deployment of that stack prepares.
+    let with_storage =
+        || create_test_stack_with_storage("test-stack", "setup-storage", "test-function");
+    let target = run_to_completion(create_initial_state(with_storage()), config.clone())
+        .await
+        .runtime_metadata
+        .and_then(|metadata| metadata.prepared_stack)
+        .expect("a deployment of the target stack has a prepared stack")
+        .setup_update_digest();
+    assert_ne!(baseline, target, "the target needs setup");
+
+    let update_to = |release_id: &str, stack: Stack| {
+        let mut state = running.clone();
+        start_update(
+            &mut state,
+            ReleaseInfo {
+                release_id: Some(release_id.to_string()),
+                version: None,
+                description: None,
+                stack,
+                signed: None,
+                signer_lists: Vec::new(),
+            },
+        );
+        // Recorded for release 2, whose apply failed before it could use it.
+        state
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .setup_update_authorization = Some(SetupUpdateAuthorization {
+            nonce: "setup-revision".to_string(),
+            baseline_frozen_digest: baseline.clone(),
+            target_frozen_digest: target.clone(),
+            release_id: "rel_v2".to_string(),
+            setup_target: "target".to_string(),
+            setup_fingerprint: "fingerprint".to_string(),
+            setup_fingerprint_version: 1,
+        });
+        state
+    };
+
+    let accepted = alien_deployment::step(
+        update_to("rel_v3", with_storage()),
+        config.clone(),
+        ClientConfig::Test,
+        None,
+    )
+    .await
+    .expect("release 3 needs the setup release 2's authorization was prepared for");
+    assert_eq!(accepted.state.status, DeploymentStatus::Updating);
+
+    let other_setup =
+        create_test_stack_with_storage("test-stack", "other-storage", "test-function");
+    let error = alien_deployment::step(
+        update_to("rel_v3", other_setup),
+        config,
+        ClientConfig::Test,
+        None,
+    )
+    .await
+    .expect_err("release 3 needs other setup");
+    let mut codes = vec![error.code.clone()];
+    let mut source = error.source.as_deref();
+    while let Some(inner) = source {
+        codes.push(inner.code.clone());
+        source = inner.source.as_deref();
+    }
+    assert!(
+        codes.iter().any(|code| code == "DEPLOYMENT_SETUP_REQUIRED"),
+        "{codes:?}"
     );
 }
 
@@ -1563,6 +1665,8 @@ async fn an_update_omitting_a_frozen_resource_waits_for_setup() {
             description: None,
             // The release omits the setup-owned frozen resource.
             stack: target,
+            signed: None,
+            signer_lists: Vec::new(),
         },
     );
     // The update step refuses before changing anything; the runner records this as
@@ -1634,6 +1738,8 @@ async fn an_update_after_setup_removed_a_frozen_resource_does_not_recreate_it() 
         version: Some("2.0.0".to_string()),
         description: None,
         stack: create_test_stack("test-stack", "test-function"),
+        signed: None,
+        signer_lists: Vec::new(),
     });
     state.status = DeploymentStatus::Updating;
 
@@ -1694,6 +1800,8 @@ async fn update_completes_after_removed_resource_is_deleted() {
             version: Some("2.0.0".to_string()),
             description: None,
             stack: stack_v2,
+            signed: None,
+            signer_lists: Vec::new(),
         },
     );
 
@@ -1729,6 +1837,8 @@ async fn stale_waiting_for_machines_returns_to_updating() {
         version: Some("2.0.0".to_string()),
         description: None,
         stack: create_test_stack("test-stack", "test-function-v2"),
+        signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, release_v2.clone());
     state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
@@ -1818,6 +1928,8 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         version: Some("2.0.0".to_string()),
         description: None,
         stack: stack_v2,
+        signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, release_v2);
     // Setup registration transitions the deployment directly to UpdatePending;
@@ -1981,6 +2093,8 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         version: Some("3.0.0".to_string()),
         description: None,
         stack: create_test_stack("test-stack", "test-function-v2"),
+        signed: None,
+        signer_lists: Vec::new(),
     });
     corrective_state
         .runtime_metadata
@@ -3102,6 +3216,8 @@ async fn test_deleted_is_noop() {
         version: Some("1.0.0".to_string()),
         description: None,
         stack,
+        signed: None,
+        signer_lists: Vec::new(),
     });
 
     // Call step on Deleted
@@ -3161,6 +3277,8 @@ fn release_of(release_id: &str, stack: Stack) -> ReleaseInfo {
         version: Some("1.0.0".to_string()),
         description: None,
         stack,
+        signed: None,
+        signer_lists: Vec::new(),
     }
 }
 
@@ -3578,12 +3696,16 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
             version: Some("1.0.0".to_string()),
             description: None,
             stack: settled_stack.clone(),
+            signed: None,
+            signer_lists: Vec::new(),
         }),
         target_release: Some(ReleaseInfo {
             release_id: Some("rel_v2".to_string()),
             version: Some("2.0.0".to_string()),
             description: None,
             stack: target_stack,
+            signed: None,
+            signer_lists: Vec::new(),
         }),
         stack_state: Some(StackState::new(Platform::Test)),
         error: None,
@@ -3738,6 +3860,8 @@ async fn initial_update_resumes_prepared_target_after_waiting_for_secrets() {
         version: Some("2.0.0".into()),
         description: None,
         stack: target,
+        signed: None,
+        signer_lists: Vec::new(),
     };
     start_update(&mut state, target_release.clone());
     let blocked = run_until_status(

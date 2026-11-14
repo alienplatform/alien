@@ -1,4 +1,4 @@
-use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
+use crate::core::{verifier::ResourceWrite, ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -22,6 +22,46 @@ use tracing::info;
 
 fn get_topic_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+/// On a protected install, hand `writes` for the queue `queue_id` to the install's verifier, which
+/// checks each against the signed stack and sends it unchanged. Returns whether it did; an
+/// unprotected install returns `false` and the caller sends the writes itself.
+async fn protected_queue_writes(
+    ctx: &ResourceControllerContext<'_>,
+    queue_id: &str,
+    writes: Vec<ResourceWrite>,
+) -> Result<bool> {
+    let Some(release) = crate::core::verifier::protected_statements(ctx, queue_id)? else {
+        return Ok(false);
+    };
+    crate::core::verifier::apply_resource_write(
+        &crate::core::verifier::gcp_verifier(ctx)?,
+        release,
+        ctx.deployment_config.signed_config.as_ref(),
+        queue_id,
+        writes,
+    )
+    .await?;
+    Ok(true)
+}
+
+fn policy_json(policy: &IamPolicy, queue_id: &str) -> Result<serde_json::Value> {
+    serde_json::to_value(policy)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "The Pub/Sub IAM policy does not serialize".to_string(),
+            resource_id: Some(queue_id.to_string()),
+        })
+}
+
+fn body_json<T: serde::Serialize>(body: &T, queue_id: &str) -> Result<serde_json::Value> {
+    serde_json::to_value(body)
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "The Pub/Sub request does not serialize".to_string(),
+            resource_id: Some(queue_id.to_string()),
+        })
 }
 
 #[controller]
@@ -52,13 +92,24 @@ impl GcpQueueController {
         let topic = get_topic_name(ctx.resource_prefix, &q.id);
 
         // Create topic id without full path; client expects id
-        client
-            .create_topic(topic.clone(), Topic::default())
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create Pub/Sub topic '{}'", topic),
-                resource_id: Some(q.id.clone()),
-            })?;
+        if !protected_queue_writes(
+            ctx,
+            &q.id,
+            vec![ResourceWrite::CreateTopic {
+                topic: topic.clone(),
+                body: body_json(&Topic::default(), &q.id)?,
+            }],
+        )
+        .await?
+        {
+            client
+                .create_topic(topic.clone(), Topic::default())
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create Pub/Sub topic '{}'", topic),
+                    resource_id: Some(q.id.clone()),
+                })?;
+        }
 
         self.topic_name = Some(topic);
         info!(topic=?self.topic_name, "Created Pub/Sub topic");
@@ -93,13 +144,24 @@ impl GcpQueueController {
             .topic(format!("projects/{}/topics/{}", cfg.project_id, topic))
             .build();
 
-        client
-            .create_subscription(sub.clone(), subscription)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create Pub/Sub subscription '{}'", sub),
-                resource_id: Some(q.id.clone()),
-            })?;
+        if !protected_queue_writes(
+            ctx,
+            &q.id,
+            vec![ResourceWrite::CreateSubscription {
+                subscription: sub.clone(),
+                body: body_json(&subscription, &q.id)?,
+            }],
+        )
+        .await?
+        {
+            client
+                .create_subscription(sub.clone(), subscription)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create Pub/Sub subscription '{}'", sub),
+                    resource_id: Some(q.id.clone()),
+                })?;
+        }
 
         self.subscription_name = Some(sub);
         info!(topic=?self.topic_name, subscription=?self.subscription_name, "GCP Pub/Sub created");
@@ -125,14 +187,38 @@ impl GcpQueueController {
         if let Some(topic_name) = &self.topic_name {
             let gcp_config = ctx.get_gcp_config()?;
             let mut iam_bindings = Vec::new();
-            ResourcePermissionsHelper::collect_gcp_resource_scoped_iam_bindings(
-                ctx,
-                &config.id,
-                topic_name,
-                "queue",
-                &mut iam_bindings,
-            )
-            .await?;
+            // On a protected install the grants are what the signed stack gives the queue,
+            // derived from the stack and the install alone, the way the verifier derives them to
+            // check the writes. Management's own are setup's.
+            if crate::core::verifier::protected_statements(ctx, &config.id)?.is_some() {
+                iam_bindings.extend(
+                    alien_permissions::gcp_resource_grants::gcp_resource_scoped_bindings(
+                        ctx.desired_stack,
+                        &alien_permissions::gcp_resource_grants::GcpInstall {
+                            prefix: ctx.resource_prefix,
+                            project_id: &gcp_config.project_id,
+                            project_number: None,
+                            region: &gcp_config.region,
+                        },
+                        &config.id,
+                        "queue",
+                        topic_name,
+                    )
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to derive the grants of topic '{topic_name}'"),
+                        resource_id: Some(config.id.clone()),
+                    })?,
+                );
+            } else {
+                ResourcePermissionsHelper::collect_gcp_resource_scoped_iam_bindings(
+                    ctx,
+                    &config.id,
+                    topic_name,
+                    "queue",
+                    &mut iam_bindings,
+                )
+                .await?;
+            }
 
             // Apply IAM permissions to the topic
             {
@@ -140,7 +226,19 @@ impl GcpQueueController {
                 let topic_name_owned = topic_name.clone();
                 let iam_policy =
                     gcp_iam_policy_for_kind(&iam_bindings, GcpBindingResourceKind::PubsubTopic);
-                if !iam_policy.bindings.is_empty() {
+                if !iam_policy.bindings.is_empty()
+                    && protected_queue_writes(
+                        ctx,
+                        &config.id,
+                        vec![ResourceWrite::SetTopicIamPolicy {
+                            topic: topic_name_owned.clone(),
+                            policy: policy_json(&iam_policy, &config.id)?,
+                        }],
+                    )
+                    .await?
+                {
+                    info!(topic = %topic_name_owned, "Applied IAM policy to topic through the verifier");
+                } else if !iam_policy.bindings.is_empty() {
                     let config_id_owned = config.id.clone();
                     client
                         .set_topic_iam_policy(topic_name_owned.clone(), iam_policy)
@@ -164,7 +262,19 @@ impl GcpQueueController {
                     &iam_bindings,
                     GcpBindingResourceKind::PubsubSubscription,
                 );
-                if !iam_policy.bindings.is_empty() {
+                if !iam_policy.bindings.is_empty()
+                    && protected_queue_writes(
+                        ctx,
+                        &config.id,
+                        vec![ResourceWrite::SetSubscriptionIamPolicy {
+                            subscription: sub_name_owned.clone(),
+                            policy: policy_json(&iam_policy, &config.id)?,
+                        }],
+                    )
+                    .await?
+                {
+                    info!(subscription = %sub_name_owned, "Applied IAM policy to subscription through the verifier");
+                } else if !iam_policy.bindings.is_empty() {
                     let config_id_owned = config.id.clone();
                     client
                         .set_subscription_iam_policy(sub_name_owned.clone(), iam_policy)
@@ -632,6 +742,21 @@ mod tests {
     use alien_gcp_clients::pubsub::{MockPubSubApi, Subscription, Topic};
     use std::sync::Arc;
 
+    /// The topic and subscription the controller sends are the shape the verifier's rule accepts:
+    /// a topic with no field, a subscription with its topic alone.
+    #[test]
+    fn the_requests_the_verifier_sees_carry_no_field_beyond_the_signed_ones() {
+        let topic = serde_json::to_value(Topic::default()).unwrap();
+        assert_eq!(topic, serde_json::json!({}));
+        let subscription = Subscription::builder()
+            .topic("projects/p/topics/t".to_string())
+            .build();
+        assert_eq!(
+            serde_json::to_value(&subscription).unwrap(),
+            serde_json::json!({"topic": "projects/p/topics/t"})
+        );
+    }
+
     #[tokio::test]
     async fn storage_ingress_changes_reconcile_an_unchanged_queue_and_preserve_other_members() {
         let queue = Queue::new("work".into()).build();
@@ -993,13 +1118,24 @@ impl GcpQueueController {
             },
         )?;
         if set_storage_publisher(&mut policy, &member, desired) {
-            client
-                .set_topic_iam_policy(topic.clone(), policy)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    resource_id: Some(queue.id.clone()),
-                    message: format!("Update storage ingress policy for topic '{topic}'"),
-                })?;
+            if !protected_queue_writes(
+                ctx,
+                &queue.id,
+                vec![ResourceWrite::SetTopicIamPolicy {
+                    topic: topic.clone(),
+                    policy: policy_json(&policy, &queue.id)?,
+                }],
+            )
+            .await?
+            {
+                client
+                    .set_topic_iam_policy(topic.clone(), policy)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        resource_id: Some(queue.id.clone()),
+                        message: format!("Update storage ingress policy for topic '{topic}'"),
+                    })?;
+            }
         }
         self.storage_publisher_member = desired.then_some(member);
         self.storage_publisher_pending = None;

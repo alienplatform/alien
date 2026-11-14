@@ -14,6 +14,7 @@ jsonschema = ["alien-core/jsonschema"]
 test-utils = []
 
 [dependencies]
+alien-signing = { workspace = true }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-permissions = { workspace = true }
@@ -33,3 +34,4 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 indexmap = { workspace = true }
 insta = { workspace = true, features = ["json"] }
 regex = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots"] }

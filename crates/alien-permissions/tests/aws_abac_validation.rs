@@ -783,7 +783,12 @@ fn tag_absent_grants_are_reads_of_gone_objects() {
                         keys.keys().any(|key| {
                             !matches!(
                                 key.as_str(),
-                                "autoscaling:LaunchConfigurationName" | "cloudwatch:AlarmActions"
+                                "autoscaling:LaunchConfigurationName"
+                                    | "autoscaling:LoadBalancerNames"
+                                    | "autoscaling:TrafficSourceIdentifiers"
+                                    | "autoscaling:VPCZoneIdentifiers"
+                                    | "cloudwatch:AlarmActions"
+                                    | "elasticloadbalancing:Subnet"
                             )
                         })
                     });

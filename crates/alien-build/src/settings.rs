@@ -103,6 +103,9 @@ pub struct BuildSettings {
     pub rebuild: bool,
     /// Have Docker re-resolve the base images its builds start `FROM`.
     pub pull_base_images: bool,
+    /// Build only from base images pinned by digest in this CLI, refusing
+    /// any other (see [`crate::pinned_base_images`]). Signed releases set it.
+    pub require_pinned_base_images: bool,
 }
 
 /// Settings for pushing built images to a registry.
@@ -168,6 +171,7 @@ mod tests {
             debug_mode: true,
             rebuild: false,
             pull_base_images: false,
+            require_pinned_base_images: false,
         }
     }
 

@@ -238,6 +238,14 @@ pub struct AzureSandboxBinding {
     /// travel with the create body is a declaration the sandbox never hears about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_pause_seconds: Option<u32>,
+    /// Ports a preview capability may be granted for. The in-sandbox agent only forwards to ports
+    /// it is told about, so the same list reaches it as `ALIEN_SANDBOX_PREVIEW_PORTS` at create.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_ports: Vec<u16>,
+    /// Wall-clock ceiling on a sandbox, if the declaration asked for one. Azure has no ceiling of
+    /// its own, so it travels to the binding that stamps it on each sandbox for the reaper.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lifetime_seconds: Option<u32>,
     /// Catalog name or registry image every sandbox is created from, as `code` declares it. A
     /// registry image is resolved by label to the disk image the controller built, so the value
     /// stays one a setup package can render.
@@ -394,6 +402,8 @@ impl SandboxBinding {
             resource_group: resource_group.into(),
             egress: egress.into(),
             idle_pause_seconds,
+            preview_ports: Vec::new(),
+            max_lifetime_seconds: None,
             disk_image: disk_image.into(),
             // Ceilings are set on the struct where a caller has them; a positional argument each
             // would make this constructor ten wide for the case that rarely carries them.

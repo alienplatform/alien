@@ -71,6 +71,9 @@ struct Group {
     count: Option<Expression>,
     /// The `count` as Terraform formats it, which tells gates apart.
     gate: Option<String>,
+    /// Grants added after installs exist (see [`is_trailing`]) form groups of their own,
+    /// so they never move a statement between the policies already installed.
+    trailing: bool,
     grants: Vec<usize>,
 }
 
@@ -112,6 +115,7 @@ pub(crate) fn consolidate_role_policies(
             let count = attribute(block, "count").cloned();
             let gate = count.as_ref().map(format_expression).transpose()?;
             let statements = statements(block, &address)?;
+            let trailing = !statements.is_empty() && statements.iter().all(is_trailing);
             let depends_on = match attribute(block, "depends_on") {
                 Some(Expression::Array(dependencies)) => dependencies.clone(),
                 Some(_) => return Err(invalid(&address, "has a depends_on that is not a list")),
@@ -126,7 +130,10 @@ pub(crate) fn consolidate_role_policies(
                 depends_on,
             });
             match groups.iter_mut().find(|group| {
-                group.role == role && group.instance == instance && group.gate == gate
+                group.role == role
+                    && group.instance == instance
+                    && group.gate == gate
+                    && group.trailing == trailing
             }) {
                 Some(group) => group.grants.push(grant),
                 None => groups.push(Group {
@@ -135,6 +142,7 @@ pub(crate) fn consolidate_role_policies(
                     role_name,
                     count,
                     gate,
+                    trailing,
                     grants: vec![grant],
                 }),
             }
@@ -492,6 +500,22 @@ impl DependencyGraph {
 
 /// Merges statements that differ only in their resources, then only in their actions, without
 /// granting any action on a resource it was not granted on. Sids stay unique.
+/// Statements added to existing installs' roles after the policies were first consolidated.
+/// Merged into the statements already there, they would reflow every installed policy, so
+/// grants made only of them are folded into policies of their own.
+const TRAILING_SID_PREFIXES: &[&str] = &["VaultMachineWorkloadSecrets"];
+
+fn is_trailing(statement: &Expression) -> bool {
+    let Expression::Object(object) = statement else {
+        return false;
+    };
+    object.iter().any(|(key, value)| {
+        object_key(key) == Some("Sid")
+            && matches!(value, Expression::String(sid)
+                if TRAILING_SID_PREFIXES.iter().any(|prefix| sid.starts_with(prefix)))
+    })
+}
+
 fn compact(statements: Vec<Expression>) -> Vec<Expression> {
     let statements = merge_values(statements, "Resource");
     let mut statements = merge_values(statements, "Action");
@@ -775,6 +799,9 @@ fn group_label(group: &Group) -> String {
         }
         label.push('_');
         label.push_str(&short_hash(gate));
+    }
+    if group.trailing {
+        label.push_str("_late");
     }
     label.push_str("_setup");
     label

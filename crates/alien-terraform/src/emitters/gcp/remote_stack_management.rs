@@ -56,7 +56,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
         ));
 
         let member = service_account_member_for_label(label);
-        let context = permission_context(label, ctx.stack.id());
+        let context = permission_context(label, ctx.stack.id()).with_signing(ctx.stack_settings);
         if let Some(profile) = ctx.stack.management().profile() {
             for permission_set_ref in global_permission_refs(ctx, profile) {
                 if let Some(permission_set) = permission_set_ref
@@ -107,6 +107,16 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
                     }
                 }
             }
+        }
+
+        // Management dispatches commands to workers through each worker's commands topic. The
+        // controller cannot write the topic's policy on a protected install, so setup grants
+        // management publishing on every topic named `<prefix>-*-rq` once. A worker a later
+        // release adds needs no setup update; preflight refuses a queue that ends in `-rq`.
+        if ctx.stack_settings.signing.is_some() && management_dispatches_commands(ctx) {
+            fragment
+                .resource_blocks
+                .push(commands_topic_publisher(label, &member));
         }
 
         super::federation::emit(&mut fragment, label, &RemoteStackManagement::RESOURCE_TYPE);
@@ -219,4 +229,41 @@ fn terraform_label_segment(value: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Whether the management profile gives any worker the command-dispatch set.
+fn management_dispatches_commands(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.management().profile().is_some_and(|profile| {
+        profile.0.values().flatten().any(|reference| {
+            matches!(reference, PermissionSetReference::Name(id) if id == "worker/dispatch-command")
+        })
+    })
+}
+
+/// The one project-level publisher grant management holds for command dispatch, limited by name
+/// to the commands topics of this install's workers.
+fn commands_topic_publisher(label: &str, member: &Expression) -> hcl::Block {
+    let condition = alien_permissions::generators::GcpIamCondition {
+        title: "Commands topics of this install".to_string(),
+        description: "Publishing only to the commands topics of this install's workers".to_string(),
+        expression: "resource.type == \"pubsub.googleapis.com/Topic\" && resource.name.startsWith(\"projects/${var.gcp_project}/topics/${local.resource_prefix}-\") && resource.name.endsWith(\"-rq\")".to_string(),
+    };
+    let binding = alien_permissions::generators::GcpIamBinding {
+        role: "roles/pubsub.publisher".to_string(),
+        members: Vec::new(),
+        target: GcpBindingTargetScope::Project,
+        target_resource_name: None,
+        resource_kind: None,
+        condition: Some(condition),
+    };
+    let mut fragment = TfFragment::default();
+    push_iam_member(
+        &mut fragment,
+        &format!("{label}_commands_topic_publisher"),
+        Expression::String(binding.role.clone()),
+        member,
+        &binding,
+    )
+    .expect("a project binding always renders");
+    fragment.resource_blocks.remove(0)
 }

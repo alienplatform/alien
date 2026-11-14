@@ -357,6 +357,7 @@ mod tests {
                 targets_kubernetes: false,
                 stack_settings: &settings,
                 names: &names,
+                pins: &alien_core::SetupPins::default(),
             };
             run(&ctx)
         }
@@ -487,6 +488,7 @@ mod tests {
                     targets_kubernetes: false,
                     stack_settings: &settings,
                     names: &names,
+                    pins: &alien_core::SetupPins::default(),
                 };
                 GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders")
             };

@@ -55,14 +55,20 @@ fn gcp_key_used_by_a_volume_is_usable_by_the_compute_service_agent() {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    assert!(rendered.contains("resource \"google_kms_crypto_key_iam_member\" \"customer_key_compute_disks\""));
+    assert!(rendered
+        .contains("resource \"google_kms_crypto_key_iam_member\" \"customer_key_compute_disks\""));
     // `google_project_service_identity` returns a null email for Compute: `terraform validate`
     // accepts that and only `apply` fails, so the member is built from the project number.
     assert!(rendered.contains(
         "member = \"serviceAccount:service-${data.google_project.customer_key_project.number}@compute-system.iam.gserviceaccount.com\""
     ), "{rendered}");
     // The grant waits for the agent to exist (first Compute use in a project creates it).
-    assert!(rendered.contains("depends_on = [ google_project_service_identity.customer_key_compute_agent ]"), "{rendered}");
+    assert!(
+        rendered.contains(
+            "depends_on = [ google_project_service_identity.customer_key_compute_agent ]"
+        ),
+        "{rendered}"
+    );
     assert_terraform_valid(&module, "gcp_key_with_volume");
 
     // A key no volume uses gets no Compute grant.
@@ -336,6 +342,64 @@ fn gcp_queue_renders_pubsub_topic_and_subscription() {
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_queue_minimal", &module);
     assert_terraform_valid(&module, "gcp_queue_minimal");
+}
+
+/// A protected install's verifier derives a worker's queue and KV bindings from the install's
+/// prefix (`alien_signing::binding_env`); the topic, subscription and database setup creates
+/// must be the ones it names.
+#[test]
+fn gcp_queue_and_kv_are_named_the_way_the_enforcers_derive_them() {
+    let stack = Stack::new("acme-data".to_string())
+        .add(
+            Queue::new("jobs".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Kv::new("metadata".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+
+    let derived = alien_signing::binding_env(
+        &std::collections::BTreeMap::from([
+            ("jobs".to_string(), "queue".to_string()),
+            ("metadata".to_string(), "kv".to_string()),
+        ]),
+        &alien_signing::BindingContext {
+            platform: "gcp".to_string(),
+            prefix: "PREFIX".to_string(),
+            account: "project".to_string(),
+            region: None,
+        },
+    )
+    .unwrap();
+    let derived = |id: &str| -> serde_json::Value {
+        serde_json::from_str(&derived.values[&alien_signing::binding_env_name(id)]).unwrap()
+    };
+    let templated = |value: &serde_json::Value| {
+        format!(
+            "\"{}\"",
+            value
+                .as_str()
+                .unwrap()
+                .replace("PREFIX", "${local.resource_prefix}")
+        )
+    };
+    let name_of = |kind: &str| resource_attributes(&module, kind)[0].1["name"].clone();
+
+    assert_eq!(
+        name_of("google_pubsub_topic"),
+        templated(&derived("jobs")["topic"])
+    );
+    assert_eq!(
+        name_of("google_pubsub_subscription"),
+        templated(&derived("jobs")["subscription"])
+    );
+    assert_eq!(
+        name_of("google_firestore_database"),
+        templated(&derived("metadata")["databaseId"])
+    );
 }
 
 #[test]

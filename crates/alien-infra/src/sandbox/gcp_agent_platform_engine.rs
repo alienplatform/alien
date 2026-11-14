@@ -93,16 +93,30 @@ impl GcpAgentPlatformEngineController {
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
         info!(id=%config.id, "Creating Agent Platform reasoning engine");
-        let operation =
-            client
-                .create_engine(&display_name)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create reasoning engine '{display_name}'"),
-                    resource_id: Some(config.id.clone()),
-                })?;
+        let sandbox_id = config.id.strip_suffix("-engine").unwrap_or(&config.id);
+        let operation_name = match crate::core::verifier::gcp_sandbox_operation(
+            ctx,
+            sandbox_id,
+            crate::core::verifier::ResourceWrite::CreateSandboxEngine {
+                display_name: display_name.clone(),
+            },
+        )
+        .await?
+        {
+            Some(name) => Some(name),
+            None => {
+                client
+                    .create_engine(&display_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to create reasoning engine '{display_name}'"),
+                        resource_id: Some(config.id.clone()),
+                    })?
+                    .name
+            }
+        };
 
-        self.pending_operation = Some(require_operation_name(operation.name, &config.id)?);
+        self.pending_operation = Some(require_operation_name(operation_name, &config.id)?);
         Ok(HandlerAction::Continue {
             state: AwaitingEngineOperation,
             suggested_delay: Some(Duration::from_secs(2)),

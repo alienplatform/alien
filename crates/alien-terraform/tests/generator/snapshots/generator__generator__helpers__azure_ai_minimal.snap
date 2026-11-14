@@ -511,7 +511,7 @@ resource "azurerm_cognitive_deployment" "llm_gpt-4_1" {
 
   sku {
     name     = "GlobalStandard"
-    capacity = 1
+    capacity = 50
   }
 
   depends_on = [
@@ -531,7 +531,7 @@ resource "azurerm_cognitive_deployment" "llm_model-router" {
 
   sku {
     name     = "GlobalStandard"
-    capacity = 1
+    capacity = 50
   }
 
   depends_on = [

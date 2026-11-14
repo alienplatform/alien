@@ -84,6 +84,12 @@ fn bounded_asg_updates_require_numeric_versions_but_allow_capacity_changes(
                         let mut request = Request::new(action, arn)
                             .resource_tags(&tags)
                             .request_tags(&tags);
+                        // A create always names its subnets; one without them is refused
+                        // (see aws_management_network_scope).
+                        if action == "autoscaling:CreateAutoScalingGroup" {
+                            request = request
+                                .with_values("autoscaling:VPCZoneIdentifiers", &["subnet-0a"]);
+                        }
                         if let Some(version) = version {
                             request =
                                 request.with("autoscaling:LaunchTemplateVersionSpecified", version);

@@ -18,6 +18,19 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A build that must be signed uses a base image this CLI build doesn't
+    /// pin by digest.
+    #[error(
+        code = "BASE_IMAGE_NOT_PINNED",
+        message = "base image '{image}' is not pinned in this CLI build",
+        retryable = "false",
+        internal = "false"
+    )]
+    BaseImageNotPinned {
+        /// The base image reference.
+        image: String,
+    },
+
     /// Resource configuration is invalid for the target platform.
     #[error(
         code = "INVALID_RESOURCE_ON_PLATFORM",

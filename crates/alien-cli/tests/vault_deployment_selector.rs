@@ -28,7 +28,7 @@ fn standalone_vault_accepts_deployment_ids_and_names() {
                 .json_body(json!({"id":DEPLOYMENT,"name":name,
                 "platform":"local","status":"running","deploymentGroupId":"dg_local",
                 "deploymentProtocolVersion":1,"projectId":"default","workspaceId":"default",
-                "retryRequested":false,"updateBlocked":false,"createdAt":"2026-01-01T00:00:00Z"}));
+                "retryRequested":false,"updateBlocked":false,"protected":false,"signingChannel":null,"createdAt":"2026-01-01T00:00:00Z"}));
         });
         let prefixed_name = manager.mock(|when, then| {
             when.method(GET).path("/v1/deployments/dep_example");
@@ -106,7 +106,7 @@ async fn local_vault_accepts_deployment_ids_and_names() {
                 when.method(GET).path("/v1/deployment-groups");
                 then.status(200)
                     .json_body(json!({"items":[{"id":"dg_local", "name":"local-dev",
-                "maxDeployments":100,"deploymentCount":1,"createdAt":"2026-01-01T00:00:00Z",
+                "maxDeployments":100,"deploymentCount":1, "accessApprover":"customer", "externalId":null,"createdAt":"2026-01-01T00:00:00Z",
                 "projectId":"default","workspaceId":"default"}]}));
             })
             .await;
@@ -117,7 +117,7 @@ async fn local_vault_accepts_deployment_ids_and_names() {
                     .json_body(json!({"items":[{"id":DEPLOYMENT,"name":name,
                 "platform":"local","status":"running","deploymentGroupId":"dg_local",
                 "deploymentProtocolVersion":1,"projectId":"default","workspaceId":"default",
-                "retryRequested":false,"updateBlocked":false,"createdAt":"2026-01-01T00:00:00Z"}]}));
+                "retryRequested":false,"updateBlocked":false,"protected":false,"signingChannel":null,"createdAt":"2026-01-01T00:00:00Z"}]}));
             })
             .await;
         let directory = TempDir::new().unwrap();

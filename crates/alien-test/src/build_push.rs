@@ -217,6 +217,7 @@ fn create_build_settings(
         debug_mode: true,
         rebuild: false,
         pull_base_images: false,
+        require_pinned_base_images: false,
     })
 }
 

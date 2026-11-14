@@ -51,9 +51,9 @@ impl ValueAccessAuthorizer for StandaloneValueAccess {
     ) -> std::result::Result<ValueGrant, AlienError<ErrorData>> {
         let subject = self.subject(headers).await?;
         let deployment_id = scope.deployment_id();
-        if needed == ValueAccess::Migrate {
+        if matches!(needed, ValueAccess::Migrate | ValueAccess::Export) {
             return Err(ErrorData::forbidden(
-                "Migrating values is not supported here",
+                "Migrating or exporting values is not supported here",
             ));
         }
         let deployment = self
@@ -65,7 +65,7 @@ impl ValueAccessAuthorizer for StandaloneValueAccess {
         let allowed = match needed {
             ValueAccess::Read => self.authz.can_read_deployment(&subject, &deployment),
             ValueAccess::Write => self.authz.can_update_deployment(&subject, &deployment),
-            ValueAccess::Migrate => false,
+            ValueAccess::Migrate | ValueAccess::Export => false,
         };
         if !allowed {
             return Err(ErrorData::forbidden(format!(

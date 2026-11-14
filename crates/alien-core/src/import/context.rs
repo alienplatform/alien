@@ -1,4 +1,4 @@
-use crate::{ManagementConfig, Platform, ResourceEntry, Stack, StackSettings};
+use crate::{ManagementConfig, Platform, ResourceEntry, SetupPins, Stack, StackSettings};
 use indexmap::IndexMap;
 
 /// Context passed to generator-side import emitters.
@@ -22,6 +22,9 @@ pub struct EmitContext<'a> {
     pub stack_settings: &'a StackSettings,
     /// Stable names precomputed by the outer generator.
     pub names: &'a IndexMap<String, String>,
+    /// What the CLI build pins for a protected setup: the verifier images and the
+    /// machine-image publisher.
+    pub pins: &'a SetupPins,
 }
 
 impl<'a> EmitContext<'a> {

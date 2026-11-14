@@ -115,6 +115,8 @@ impl Fixture {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -158,6 +160,8 @@ impl Fixture {
                 version: None,
                 description: None,
                 stack: alien_core::Stack::new("app".to_string()).build(),
+                signed: None,
+                signer_lists: Vec::new(),
             }),
             target_release: None,
             stack_state: None,

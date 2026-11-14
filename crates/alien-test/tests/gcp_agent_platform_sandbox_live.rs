@@ -46,11 +46,12 @@ use alien_bindings::providers::sandbox::gcp_agent_platform::GcpAgentPlatformSand
 use alien_bindings::traits::{
     CommandOutput, CreateSandboxRequest, RunCommandRequest, Sandbox, SandboxState,
 };
+use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
 use alien_core::{GcpClientConfig, GcpCredentials};
 use alien_gcp_clients::gcp::agent_platform::{
-    AgentPlatformApi, AgentPlatformClient, ContainerResources, CustomContainerEnvironment,
-    CustomContainerSpec, EgressControlConfig, PollBudget, ReasoningEngine,
-    SandboxEnvironmentTemplate,
+    AgentPlatformApi, AgentPlatformClient, ContainerPort, ContainerResources,
+    CustomContainerEnvironment, CustomContainerSpec, EgressControlConfig, PollBudget,
+    ReasoningEngine, SandboxEnvironmentTemplate,
 };
 
 // ---- Configuration and clients ----------------------------------------------------------------
@@ -202,7 +203,12 @@ fn template_body(image: &str, internet_access: bool) -> SandboxEnvironmentTempla
                     ("memory".to_string(), "4Gi".to_string()),
                 ])),
             }),
-            ports: vec![],
+            // Ingress only reaches a declared port; the controller declares the agent's own.
+            // Without it, the first `:execute` against an image fails with a 404.
+            ports: vec![ContainerPort {
+                port: i32::from(GCP_AGENT_PLATFORM.port),
+                protocol: Some("TCP".to_string()),
+            }],
             extra: Default::default(),
         }),
         egress_control_config: Some(EgressControlConfig {

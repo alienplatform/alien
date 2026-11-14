@@ -39,6 +39,10 @@ pub fn router() -> Router<AppState> {
             "/v1/values/{scope}/verify",
             post(verify_values).layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES)),
         )
+        .route(
+            "/v1/values/{scope}/export",
+            post(export_values).layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES)),
+        )
         .route("/v1/values/{scope}/{slot}", delete(delete_value))
 }
 
@@ -458,4 +462,175 @@ pub(crate) async fn verify_values(
         Ok(response) => Json(response).into_response(),
         Err(e) => e.into_response(),
     }
+}
+
+#[derive(Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ExportValuesRequest {
+    /// Base URL of the manager that takes the values. The caller's token names the one URL
+    /// allowed; any other is refused.
+    pub target_url: String,
+    /// Token the target accepts for writing these slots. Passed on as is.
+    pub target_token: String,
+    #[cfg_attr(feature = "openapi", schema(value_type = Vec<String>))]
+    pub slots: Vec<ValueSlot>,
+}
+
+impl std::fmt::Debug for ExportValuesRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExportValuesRequest")
+            .field("target_url", &self.target_url)
+            .field("slots", &self.slots)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Plain http is accepted only for a loopback host, which never leaves the machine.
+fn export_target_allowed(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    match parsed.scheme() {
+        "https" => true,
+        "http" => parsed.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host
+                    .trim_matches(|c| c == '[' || c == ']')
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        }),
+        _ => false,
+    }
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/values/{scope}/export",
+    operation_id = "export_values",
+    tag = "values",
+    description = "Sends the stored values of the named slots to another manager, which writes them with the token given. The values go from this manager to the target; the response carries only the target's metadata. The caller's token must be an export token naming the target URL, and the request may name no other.",
+    params(("scope" = String, Path, description = "dep:<deploymentId>")),
+    request_body = ExportValuesRequest,
+    responses(
+        (status = 200, description = "The target's metadata of the stored values", body = ValueSlotsResponse),
+        (status = 403, description = "The token is not an export token, the target URL is not the one it names, or a slot is outside it"),
+        (status = 404, description = "A named slot holds no value here"),
+        (status = 502, description = "The target refused or could not be reached")
+    ),
+    security(("bearer" = []))
+))]
+pub(crate) async fn export_values(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(scope): Path<String>,
+    body: std::result::Result<Json<ExportValuesRequest>, JsonRejection>,
+) -> Response {
+    async fn run(
+        state: &AppState,
+        headers: &HeaderMap,
+        scope: &str,
+        request: ExportValuesRequest,
+    ) -> Result<ValueSlotsResponse> {
+        let values = values(state)?;
+        let scope: ValueScope = scope.parse()?;
+        let selection = SlotSelection::Slots(request.slots.clone());
+        let grant = authorize(&values, headers, &scope, ValueAccess::Export, &selection).await?;
+        let named = grant.export_target.as_deref().ok_or_else(|| {
+            ErrorData::forbidden("This token does not name a manager to export to".to_string())
+        })?;
+        if named.trim_end_matches('/') != request.target_url.trim_end_matches('/') {
+            return Err(ErrorData::forbidden(
+                "The target is not the manager this token names".to_string(),
+            ));
+        }
+        if !export_target_allowed(named) {
+            return Err(ErrorData::forbidden(
+                "Values are exported only to an https URL".to_string(),
+            ));
+        }
+        check_item_count(request.slots.len())?;
+        let mut distinct = std::collections::HashSet::new();
+        if let Some(repeated) = request.slots.iter().find(|slot| !distinct.insert(*slot)) {
+            return Err(ErrorData::bad_request(format!(
+                "The slot '{repeated}' appears more than once in one export request"
+            )));
+        }
+
+        // Read every slot before sending any, so a missing one sends nothing.
+        let mut outgoing = Vec::with_capacity(request.slots.len());
+        for slot in &request.slots {
+            let stored = values.store.get(&scope, slot).await?.ok_or_else(|| {
+                alien_error::AlienError::new(ErrorData::ValueExportSlotMissing {
+                    slot: slot.to_string(),
+                })
+            })?;
+            outgoing.push(serde_json::json!({
+                "slot": slot.to_string(),
+                "value": stored.value,
+                "kind": stored.kind,
+            }));
+        }
+
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| ErrorData::internal(e.to_string()))?;
+        let url = format!("{}/v1/values/{}", named.trim_end_matches('/'), scope);
+        let response = client
+            .put(&url)
+            .bearer_auth(&request.target_token)
+            .json(&serde_json::json!({ "values": outgoing }))
+            .send()
+            .await
+            .map_err(|_| export_failed("the target could not be reached".to_string()))?;
+        if !response.status().is_success() {
+            return Err(export_failed(format!(
+                "the target answered {}",
+                response.status().as_u16()
+            )));
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TargetSlot {
+            slot: ValueSlot,
+            kind: ValueKind,
+            digest: String,
+            updated_at: chrono::DateTime<chrono::Utc>,
+        }
+        #[derive(Deserialize)]
+        struct TargetSlots {
+            slots: Vec<TargetSlot>,
+        }
+        let stored: TargetSlots = response
+            .json()
+            .await
+            .map_err(|_| export_failed("the target's answer could not be read".to_string()))?;
+        Ok(ValueSlotsResponse {
+            slots: stored
+                .slots
+                .into_iter()
+                .map(|s| ValueSlotEntry {
+                    slot: s.slot,
+                    kind: s.kind,
+                    digest: s.digest,
+                    updated_at: s.updated_at,
+                    value: None,
+                })
+                .collect(),
+        })
+    }
+    let request = match read_body(body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    match run(&state, &headers, &scope, request).await {
+        Ok(response) => Json(response).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+fn export_failed(reason: String) -> alien_error::AlienError<ErrorData> {
+    alien_error::AlienError::new(ErrorData::ValueExportFailed { reason })
 }

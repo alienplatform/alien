@@ -114,6 +114,27 @@ pub fn deployer_secret_slots<'a>(
         .collect()
 }
 
+/// The deployer secret slots of a protected install: every one is read from the vault, since
+/// the legacy delivery of a stored value is not available there. A secret input's own value
+/// plays no part, so what the signed release says and what setup grants agree whatever the
+/// control plane stores for it.
+pub fn protected_deployer_secret_slots<'a>(
+    inputs: &'a [StackInputDefinition],
+    values: &HashMap<String, serde_json::Value>,
+    platform: Platform,
+) -> Vec<DeployerSecretSlot<'a>> {
+    let values: HashMap<String, serde_json::Value> = values
+        .iter()
+        .filter(|(id, _)| {
+            !inputs
+                .iter()
+                .any(|input| &input.id == *id && is_deployer_secret_input(input))
+        })
+        .map(|(id, value)| (id.clone(), value.clone()))
+        .collect();
+    deployer_secret_slots(inputs, &values, Some(&[]), &[], platform)
+}
+
 // Only trusted legacy delivery can replace omitted presence metadata. No values
 // are read here, and scope coverage follows the same exact-id/prefix rules as delivery.
 fn legacy_secret_delivery_complete(

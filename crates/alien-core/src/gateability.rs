@@ -21,6 +21,32 @@ use crate::ownership_policy_for_resource_type;
 /// constant.
 pub const SECRETS_VAULT_ID: &str = "secrets";
 
+/// Permission set id of the grant that lets a machine workload profile read its
+/// own secret values from the secrets vault (AWS).
+pub const MACHINE_WORKLOAD_SECRETS_READ_ID: &str = "vault/machine-workload-secrets-read";
+
+/// Whether an installed AWS stack already has the machine workload grant on one
+/// of its recorded service accounts. Having the secrets vault is not enough: a
+/// worker gives an install the vault without the grant. Adding the grant to a
+/// frozen profile blocks the release, and delivering secrets to a profile that
+/// cannot read them breaks the workload, so setup and delivery share this signal.
+pub fn machine_secrets_installed(state: &crate::StackState) -> bool {
+    state.platform == crate::Platform::Aws
+        && state.resources.values().any(|resource| {
+            resource
+                .config
+                .downcast_ref::<crate::ServiceAccount>()
+                .is_some_and(|account| {
+                    account
+                        .resource_permission_sets
+                        .get(SECRETS_VAULT_ID)
+                        .into_iter()
+                        .flatten()
+                        .any(|set| set.id == MACHINE_WORKLOAD_SECRETS_READ_ID)
+                })
+        })
+}
+
 /// Reserved vault for secrets written by the deployer with their own credentials.
 pub const DEPLOYER_SECRETS_VAULT_ID: &str = "deployer-secrets";
 
@@ -40,6 +66,7 @@ const STACK_DERIVED_TYPES: &[&str] = &[
     "network",
     "remote-stack-management",
     "resource-access",
+    "verifier",
     "service_activation",
     "service-activation",
     "azure_resource_group",
@@ -169,19 +196,17 @@ mod tests {
     }
 
     #[test]
-    fn postgres_is_live_gateable_only() {
+    fn postgres_is_frozen_gateable_only() {
         assert_eq!(gate_refusal("postgres", "db"), None);
         let gateability = type_gateability("postgres");
-        // Frozen postgres has no setup emitter today; the gate rule allows it
-        // and the missing emitter refuses the render, exactly as for an
-        // ungated frozen postgres.
-        assert!(gateability.live);
+        assert!(gateability.frozen && !gateability.live);
     }
 
     #[test]
-    fn redis_gates_like_postgres() {
+    fn redis_is_gateable_in_both_lifecycles() {
         assert_eq!(gate_refusal("redis", "cache"), None);
-        assert!(type_gateability("redis").live);
+        let gateability = type_gateability("redis");
+        assert!(gateability.frozen && gateability.live);
     }
 
     #[test]

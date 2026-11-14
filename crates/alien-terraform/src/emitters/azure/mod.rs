@@ -42,7 +42,9 @@ pub use kv::AzureKvEmitter;
 pub use network::AzureNetworkEmitter;
 pub use queue::AzureQueueEmitter;
 pub use remote_bindings::AzureRemoteBindingsEmitter;
-pub use remote_stack_management::AzureRemoteStackManagementEmitter;
+pub use remote_stack_management::{
+    azure_machine_signing_grants, AzureRemoteStackManagementEmitter, AZURE_MACHINE_SIGNING_ACTIONS,
+};
 pub use resource_group::AzureResourceGroupEmitter;
 pub use sandbox::AzureSandboxEmitter;
 pub use service_account::AzureServiceAccountEmitter;

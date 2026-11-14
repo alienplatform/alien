@@ -31,6 +31,15 @@ pub fn map_kubernetes_error(
             resource_type,
             resource_name,
         },
+        // An admission refusal carries the reason a caller can act on (which Pod Security level
+        // refused which field); the generic access-denied shape drops it.
+        403 if response_text.contains("violates PodSecurity") => ErrorData::HttpResponseError {
+            message: format!("Kubernetes admission refused the request: {response_text}"),
+            url: url.to_string(),
+            http_status,
+            http_request_text: request_body,
+            http_response_text: Some(response_text.to_string()),
+        },
         403 | 401 => ErrorData::RemoteAccessDenied {
             resource_type,
             resource_name,
@@ -521,6 +530,22 @@ mod tests {
     use httpmock::{Method::GET, Method::POST, MockServer};
     use std::io::{Seek, Write};
     use std::time::Duration;
+
+    #[test]
+    fn a_pod_security_refusal_keeps_its_reason_while_other_forbidden_stays_access_denied() {
+        let refusal = r#"{"kind":"Status","code":403,"details":{"kind":"pods","name":"p"},"message":"pods \"p\" is forbidden: violates PodSecurity \"baseline:latest\""}"#;
+        match map_kubernetes_error(403, refusal, "https://k/api/v1/pods", None) {
+            ErrorData::HttpResponseError { message, .. } => {
+                assert!(message.contains("violates PodSecurity"), "{message}")
+            }
+            other => panic!("expected the reason to be kept, got {other:?}"),
+        }
+        let plain = r#"{"kind":"Status","code":403,"details":{"kind":"pods","name":"p"},"message":"forbidden"}"#;
+        assert!(matches!(
+            map_kubernetes_error(403, plain, "https://k/api/v1/pods", None),
+            ErrorData::RemoteAccessDenied { .. }
+        ));
+    }
 
     /// The default back-off without its waits, so the test counts attempts instead of sleeping.
     fn no_wait_backoff() -> ExponentialBuilder {

@@ -184,6 +184,7 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
         let template = generate_cloudformation_template(
             &stack,
             CloudFormationOptions {
+                pins: alien_core::SetupPins::compiled_in(),
                 registry: &registry,
                 source_stack: &stack,
                 target: CloudFormationTarget::Aws,
@@ -307,4 +308,114 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
         let yaml = to_yaml(&template).expect("template should serialize");
         alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("parameter updates");
     }
+}
+
+/// A container that declares resource ranges leaves the machine list open (the right machines
+/// depend on the chosen resources), so the machine override has no `AllowedValues`. It is still
+/// inserted into the verified registration's JSON text, which refuses a parameter that could
+/// hold a quote, so the generator must give it the text pattern instead.
+#[test]
+fn machine_override_without_a_machine_list_still_converts_to_a_verified_intent() {
+    use alien_core::{
+        Container, ContainerCode, ContainerResourceChoices, RemoteStackManagement,
+        ResourceChoiceRange, ResourceSpec,
+    };
+
+    let mut container = Container::new("api".to_string())
+        .cluster("compute".to_string())
+        .code(ContainerCode::Image {
+            image: "example.com/api:1".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.25".into(),
+            desired: "1".into(),
+        })
+        .memory(ResourceSpec {
+            min: "512Mi".into(),
+            desired: "1Gi".into(),
+        })
+        .permissions("execution".to_string())
+        .build();
+    container.resource_choices = Some(ContainerResourceChoices {
+        cpu: Some(ResourceChoiceRange {
+            min: "0.25".into(),
+            max: "2".into(),
+            default: "1".into(),
+        }),
+        memory: Some(ResourceChoiceRange {
+            min: "512Mi".into(),
+            max: "4Gi".into(),
+            default: "1Gi".into(),
+        }),
+    });
+    let stack = Stack::new("open-machine-list".to_string())
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(group(
+                    "general",
+                    CapacityGroupScalePolicy::Fixed {
+                        machines: range(1, 3, 1),
+                    },
+                ))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(container, ResourceLifecycle::Live)
+        .build();
+    let settings = StackSettings {
+        compute: Some(ComputeSettings {
+            containers: Default::default(),
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: None,
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }),
+        ..StackSettings::default()
+    };
+    let mut registry = CfRegistry::built_in();
+    registry.register(
+        ComputeCluster::RESOURCE_TYPE,
+        Platform::Aws,
+        ComputeClusterEmitter,
+    );
+    registry.register(Container::RESOURCE_TYPE, Platform::Aws, ComputeClusterEmitter);
+    let mut template = generate_cloudformation_template(
+        &stack,
+        CloudFormationOptions {
+            pins: alien_core::SetupPins::compiled_in(),
+            registry: &registry,
+            source_stack: &stack,
+            target: CloudFormationTarget::Aws,
+            stack_settings: settings,
+            setup_target: "aws".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
+            registration: RegistrationMode::CustomResource {
+                lambda_arn: "arn:aws:lambda:us-east-1:123456789012:function:register".to_string(),
+                callback_url: None,
+            },
+            description: None,
+            management_trust: Default::default(),
+        },
+    )
+    .expect("template should render");
+    let machine = &template.parameters["ComputeGeneralMachine"];
+    assert!(machine.allowed_values.is_none(), "the list is open here");
+    assert!(
+        machine.allowed_pattern.is_some(),
+        "an open machine override must exclude quotes and control characters"
+    );
+    alien_cloudformation::add_verified_setup_intent(&mut template)
+        .expect("the verified intent accepts the machine override");
 }
