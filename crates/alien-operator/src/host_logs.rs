@@ -241,9 +241,15 @@ fn truncate_line(mut body: String) -> String {
     body
 }
 
-/// The `journalctl` arguments: after the saved cursor, or from now when there
-/// is none.
-pub(crate) fn journalctl_args(saved_cursor: Option<&str>, units: &[String]) -> Vec<String> {
+/// The `journalctl` arguments: after the saved cursor, or when there is none
+/// from `start_unix_secs`, the moment collection began. The start stays the
+/// same across reader restarts until a cursor is saved, so entries that could
+/// not be queued yet are read again, not skipped.
+pub(crate) fn journalctl_args(
+    saved_cursor: Option<&str>,
+    units: &[String],
+    start_unix_secs: i64,
+) -> Vec<String> {
     // --all: without it journalctl prints a field over 4 KB as null, and the entry would be lost.
     // Only the fields the record uses are printed; the cursor and timestamps always are.
     let mut args = vec![
@@ -258,7 +264,7 @@ pub(crate) fn journalctl_args(saved_cursor: Option<&str>, units: &[String]) -> V
     }
     match saved_cursor {
         Some(cursor) => args.push(format!("--after-cursor={cursor}")),
-        None => args.push("--lines=0".to_string()),
+        None => args.push(format!("--since=@{start_unix_secs}")),
     }
     args
 }
@@ -273,9 +279,12 @@ const MAX_LOGGED_STDERR_KINDS: usize = 8;
 async fn run_journald(state: Arc<OperatorState>, _started_at: DateTime<Utc>) {
     let units = log_units_from_env().unwrap_or_default();
     let mut failures = 0u32;
+    let mut start_unix_secs = Utc::now().timestamp();
     loop {
         let mut progressed = false;
-        if let Err(error) = read_journal_once(&state, &units, &mut progressed).await {
+        if let Err(error) =
+            read_journal_once(&state, &units, start_unix_secs, &mut progressed).await
+        {
             if !state.cancel.is_cancelled() {
                 warn!(error = %error, "Journal reader failed; will restart");
             }
@@ -296,6 +305,7 @@ async fn run_journald(state: Arc<OperatorState>, _started_at: DateTime<Utc>) {
                 .await
                 .is_ok()
             {
+                start_unix_secs = Utc::now().timestamp();
                 warn!("The saved journal position is not accepted by the journal; continuing from now");
             }
         }
@@ -315,8 +325,65 @@ pub(crate) struct BoundedLine {
     pub truncated: bool,
 }
 
-/// Read up to the next newline, keeping at most `max` bytes; the rest of a
-/// longer line is consumed so the next call starts at the next line.
+/// A line being read. The bytes read so far live here, not in the future, so a
+/// read that is dropped (a timer won a `select!`) loses nothing: the next call
+/// continues the same line.
+#[derive(Debug, Default)]
+pub(crate) struct PartialLine {
+    bytes: Vec<u8>,
+    truncated: bool,
+    read_any: bool,
+}
+
+impl PartialLine {
+    /// Read up to the next newline, keeping at most `max` bytes; the rest of a
+    /// longer line is consumed so the next call starts at the next line.
+    /// Cancel-safe: the only await is `fill_buf`, and bytes are moved into
+    /// `self` before anything else can be awaited.
+    pub(crate) async fn read<R>(
+        &mut self,
+        reader: &mut R,
+        max: usize,
+    ) -> std::io::Result<Option<BoundedLine>>
+    where
+        R: tokio::io::AsyncBufRead + Unpin,
+    {
+        loop {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                let done = std::mem::take(self);
+                return Ok(done.read_any.then_some(BoundedLine {
+                    bytes: done.bytes,
+                    truncated: done.truncated,
+                }));
+            }
+            self.read_any = true;
+            let (chunk, found_newline) = match available.iter().position(|byte| *byte == b'\n') {
+                Some(index) => (&available[..index], true),
+                None => (available, false),
+            };
+            let room = max.saturating_sub(self.bytes.len());
+            if chunk.len() > room {
+                self.truncated = true;
+            }
+            self.bytes
+                .extend_from_slice(&chunk[..chunk.len().min(room)]);
+            let consumed = chunk.len() + usize::from(found_newline);
+            reader.consume(consumed);
+            if found_newline {
+                let done = std::mem::take(self);
+                return Ok(Some(BoundedLine {
+                    bytes: done.bytes,
+                    truncated: done.truncated,
+                }));
+            }
+        }
+    }
+}
+
+/// Read one whole line within a size bound (not cancel-safe; use `PartialLine`
+/// when the read can be dropped).
+#[cfg(test)]
 pub(crate) async fn read_bounded_line<R>(
     reader: &mut R,
     max: usize,
@@ -324,30 +391,7 @@ pub(crate) async fn read_bounded_line<R>(
 where
     R: tokio::io::AsyncBufRead + Unpin,
 {
-    let mut bytes = Vec::new();
-    let mut truncated = false;
-    let mut read_any = false;
-    loop {
-        let available = reader.fill_buf().await?;
-        if available.is_empty() {
-            return Ok(read_any.then_some(BoundedLine { bytes, truncated }));
-        }
-        read_any = true;
-        let (chunk, found_newline) = match available.iter().position(|byte| *byte == b'\n') {
-            Some(index) => (&available[..index], true),
-            None => (available, false),
-        };
-        let room = max.saturating_sub(bytes.len());
-        if chunk.len() > room {
-            truncated = true;
-        }
-        bytes.extend_from_slice(&chunk[..chunk.len().min(room)]);
-        let consumed = chunk.len() + usize::from(found_newline);
-        reader.consume(consumed);
-        if found_newline {
-            return Ok(Some(BoundedLine { bytes, truncated }));
-        }
-    }
+    PartialLine::default().read(reader, max).await
 }
 
 /// The value of a string field near the start of a journal JSON line. journalctl
@@ -398,6 +442,7 @@ async fn log_journalctl_stderr(stderr: tokio::process::ChildStderr) {
 async fn read_journal_once(
     state: &OperatorState,
     units: &[String],
+    start_unix_secs: i64,
     progressed: &mut bool,
 ) -> Result<()> {
     let db = &state.db;
@@ -414,6 +459,7 @@ async fn read_journal_once(
         .args(journalctl_args(
             saved.as_ref().map(|s| s.timestamp.as_str()),
             units,
+            start_unix_secs,
         ))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -437,6 +483,7 @@ async fn read_journal_once(
     let mut batch: Vec<PodLogRecord> = Vec::new();
     let mut batch_bytes = 0usize;
     let mut cursor: Option<String> = None;
+    let mut partial = PartialLine::default();
     let mut flush_interval = time::interval(Duration::from_secs(1));
     flush_interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     loop {
@@ -449,7 +496,7 @@ async fn read_journal_once(
                 flush_cursor_batch(db, &deployment_id, JOURNALD_KEY, "journal", &mut batch, cursor.as_deref()).await?;
                 batch_bytes = 0;
             }
-            line = read_bounded_line(&mut reader, MAX_JOURNAL_LINE_BYTES) => {
+            line = partial.read(&mut reader, MAX_JOURNAL_LINE_BYTES) => {
                 let line = line.into_alien_error().context(ErrorData::PodLogReadFailed {
                     message: "could not read the journal".to_string(),
                 })?;
@@ -846,13 +893,36 @@ mod tests {
 
     #[test]
     fn journalctl_resumes_after_the_saved_cursor_and_otherwise_starts_now() {
-        assert!(journalctl_args(None, &[]).contains(&"--lines=0".to_string()));
-        assert!(journalctl_args(None, &[]).contains(&"--all".to_string()));
-        let narrowed = journalctl_args(None, &["nginx.service".to_string()]);
+        // Without a cursor the start is fixed, so a retry reads the same entries again.
+        assert!(journalctl_args(None, &[], 1700000000).contains(&"--since=@1700000000".to_string()));
+        assert_eq!(
+            journalctl_args(None, &[], 1700000000),
+            journalctl_args(None, &[], 1700000000)
+        );
+        assert!(journalctl_args(None, &[], 5).contains(&"--all".to_string()));
+        let narrowed = journalctl_args(None, &["nginx.service".to_string()], 5);
         assert!(narrowed.contains(&"--unit=nginx.service".to_string()));
-        let resumed = journalctl_args(Some("s=abc;i=9"), &[]);
+        let resumed = journalctl_args(Some("s=abc;i=9"), &[], 5);
         assert!(resumed.contains(&"--after-cursor=s=abc;i=9".to_string()));
-        assert!(!resumed.iter().any(|arg| arg.starts_with("--lines")));
+        assert!(!resumed.iter().any(|arg| arg.starts_with("--since")));
+    }
+
+    #[tokio::test]
+    async fn a_read_dropped_mid_line_loses_no_bytes() {
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, read_half) = tokio::io::duplex(64);
+        let mut reader = tokio::io::BufReader::new(read_half);
+        let mut partial = PartialLine::default();
+        writer.write_all(b"{\"first\":").await.unwrap();
+        // The timer wins: the read future is dropped with part of the line read.
+        let timed_out =
+            tokio::time::timeout(Duration::from_millis(50), partial.read(&mut reader, 1024)).await;
+        assert!(timed_out.is_err());
+        writer.write_all(b"1}\nnext\n").await.unwrap();
+        let line = partial.read(&mut reader, 1024).await.unwrap().unwrap();
+        assert_eq!(line.bytes, b"{\"first\":1}");
+        let next = partial.read(&mut reader, 1024).await.unwrap().unwrap();
+        assert_eq!(next.bytes, b"next");
     }
 
     #[tokio::test]

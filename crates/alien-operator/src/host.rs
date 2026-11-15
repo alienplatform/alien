@@ -102,12 +102,14 @@ pub(crate) fn host_sample(
     )
 }
 
-/// Loaded service units from `systemctl list-units --output=json`.
-pub(crate) fn unit_samples(json_output: &str) -> Vec<ObservedResourceSample> {
+/// Loaded service units from `systemctl list-units --output=json`, and whether
+/// the list is whole: `false` when the output could not be read or more than
+/// `MAX_UNITS` services were cut off.
+pub(crate) fn unit_samples(json_output: &str) -> (Vec<ObservedResourceSample>, bool) {
     let Ok(Value::Array(units)) = serde_json::from_str::<Value>(json_output) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
-    units
+    let samples: Vec<_> = units
         .iter()
         .filter_map(|unit| {
             let name = unit.get("unit")?.as_str()?;
@@ -144,8 +146,9 @@ pub(crate) fn unit_samples(json_output: &str) -> Vec<ObservedResourceSample> {
                 ]),
             ))
         })
-        .take(MAX_UNITS)
-        .collect()
+        .collect();
+    let complete = samples.len() <= MAX_UNITS;
+    (samples.into_iter().take(MAX_UNITS).collect(), complete)
 }
 
 /// One container: image, state, restarts and health. The environment is never
@@ -218,7 +221,11 @@ pub(crate) fn mem_total_bytes(meminfo: &str) -> u64 {
 
 async fn docker_inventory(
     docker: &bollard::Docker,
-) -> crate::error::Result<(Option<ObservedResourceSample>, Vec<ObservedResourceSample>)> {
+) -> crate::error::Result<(
+    Option<ObservedResourceSample>,
+    Vec<ObservedResourceSample>,
+    bool,
+)> {
     use alien_error::{Context as _, IntoAlienError as _};
     let failed = |message: &str| crate::error::ErrorData::PodLogReadFailed {
         message: message.to_string(),
@@ -243,6 +250,7 @@ async fn docker_inventory(
         .await
         .into_alien_error()
         .context(failed("could not list Docker containers"))?;
+    let complete = listed.len() <= MAX_CONTAINERS;
     let mut containers = Vec::new();
     for container in listed.into_iter().take(MAX_CONTAINERS) {
         let Some(id) = container.id else { continue };
@@ -282,22 +290,32 @@ async fn docker_inventory(
                 .filter(|status| !status.is_empty() && *status != "none"),
         ));
     }
-    Ok((Some(host), containers))
+    Ok((Some(host), containers, complete))
 }
 
 async fn collect(config: HostLogsConfig) -> Option<ObservedInventoryBatch> {
     let mut resources = Vec::new();
     let mut host = None;
+    // A batch that is not whole must not replace the scope: what is missing
+    // would be read as removed.
+    let mut complete = true;
     if config.docker {
         match docker_client() {
             Ok(docker) => match docker_inventory(&docker).await {
-                Ok((docker_host, containers)) => {
+                Ok((docker_host, containers, whole)) => {
                     host = docker_host;
                     resources.extend(containers);
+                    complete &= whole;
                 }
-                Err(error) => warn!(error = %error, "Docker inventory failed"),
+                Err(error) => {
+                    complete = false;
+                    warn!(error = %error, "Docker inventory failed");
+                }
             },
-            Err(error) => warn!(error = %error, "Docker inventory failed"),
+            Err(error) => {
+                complete = false;
+                warn!(error = %error, "Docker inventory failed");
+            }
         }
     }
     if config.journald {
@@ -314,9 +332,14 @@ async fn collect(config: HostLogsConfig) -> Option<ObservedInventoryBatch> {
             .await;
         match output {
             Ok(output) if output.status.success() => {
-                resources.extend(unit_samples(&String::from_utf8_lossy(&output.stdout)));
+                let (units, whole) = unit_samples(&String::from_utf8_lossy(&output.stdout));
+                resources.extend(units);
+                complete &= whole;
             }
-            Ok(_) | Err(_) => warn!("Could not list systemd units for the inventory"),
+            Ok(_) | Err(_) => {
+                complete = false;
+                warn!("Could not list systemd units for the inventory");
+            }
         }
     }
     let host = host.unwrap_or_else(|| {
@@ -339,7 +362,7 @@ async fn collect(config: HostLogsConfig) -> Option<ObservedInventoryBatch> {
         controller_platform: Platform::Local,
         backend: HeartbeatBackend::Local,
         observed_at: Utc::now(),
-        complete: true,
+        complete,
         resources,
     })
 }
@@ -396,12 +419,21 @@ mod inventory_tests {
             {"unit":"broken.service","load":"loaded","active":"failed","sub":"failed","description":"x"},
             {"unit":"sshd.socket","load":"loaded","active":"active","sub":"listening","description":"s"}
         ]"#;
-        let units = unit_samples(json);
+        let (units, complete) = unit_samples(json);
+        assert!(complete);
         assert_eq!(units.len(), 2);
         assert_eq!(units[0].health, ObservedHealth::Healthy);
         assert_eq!(units[1].health, ObservedHealth::Unhealthy);
         assert_eq!(units[1].lifecycle, ProviderLifecycleState::Failed);
-        assert!(unit_samples("not json").is_empty());
+        // An unreadable list, or one cut at the limit, is not a whole list.
+        let (none, complete) = unit_samples("not json");
+        assert!(none.is_empty() && !complete);
+        let many: Vec<_> = (0..MAX_UNITS + 1)
+            .map(|i| json!({"unit": format!("u{i}.service"), "active": "active", "sub": "running"}))
+            .collect();
+        let (cut, complete) = unit_samples(&serde_json::to_string(&many).unwrap());
+        assert_eq!(cut.len(), MAX_UNITS);
+        assert!(!complete);
     }
 
     #[test]

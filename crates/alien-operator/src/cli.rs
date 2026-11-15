@@ -603,6 +603,7 @@ async fn run_operator_cli(
                 args.namespace.clone(),
                 args.encryption_key_file.as_deref(),
                 args.data_persistent,
+                join_token.is_some(),
             )
             .await?
         }
@@ -1957,9 +1958,10 @@ async fn open_operator_db(
     namespace: Option<String>,
     encryption_key_file: Option<&std::path::Path>,
     data_persistent: Option<bool>,
+    has_join_token: bool,
 ) -> Result<(crate::db::OperatorDb, String)> {
     let Some(secret_name) = identity_secret else {
-        let key = match local_key_file_to_generate(data_dir, encryption_key_file) {
+        let key = match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
             Some(path) => load_or_create_local_key(&path).await?,
             None => load_encryption_key(encryption_key_file).await?,
         };
@@ -2075,14 +2077,13 @@ const IN_CLUSTER_NAMESPACE_FILE: &str = "/var/run/secrets/kubernetes.io/servicea
 fn local_key_file_to_generate(
     data_dir: &str,
     encryption_key_file: Option<&std::path::Path>,
+    has_join_token: bool,
 ) -> Option<PathBuf> {
     if encryption_key_file.is_some() || env_string("OPERATOR_ENCRYPTION_KEY").is_some() {
         return None;
     }
     let path = PathBuf::from(data_dir).join(LOCAL_KEY_FILE_NAME);
-    let has_token = env_string("OPERATOR_ENROLLMENT_TOKEN").is_some()
-        || env_string("OPERATOR_ENROLLMENT_TOKEN_FILE").is_some();
-    (has_token || path.exists()).then_some(path)
+    (has_join_token || path.exists()).then_some(path)
 }
 
 const LOCAL_KEY_FILE_NAME: &str = "operator.key";
@@ -2520,7 +2521,19 @@ mod tests {
         assert_eq!(super::load_or_create_local_key(&path).await.unwrap(), first);
         // A key file that was given wins; nothing is generated beside it.
         assert!(
-            super::local_key_file_to_generate(dir.path().to_str().unwrap(), Some(&path)).is_none()
+            super::local_key_file_to_generate(dir.path().to_str().unwrap(), Some(&path), true)
+                .is_none()
+        );
+        // A token given as a flag (not only as an environment variable) starts
+        // a fresh install: the key file is chosen for it.
+        let fresh = tempfile::tempdir().unwrap();
+        assert_eq!(
+            super::local_key_file_to_generate(fresh.path().to_str().unwrap(), None, true),
+            Some(fresh.path().join("operator.key"))
+        );
+        assert!(
+            super::local_key_file_to_generate(fresh.path().to_str().unwrap(), None, false)
+                .is_none()
         );
         // A key file that is too open is refused, not read.
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
