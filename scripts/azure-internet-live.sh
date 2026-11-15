@@ -44,17 +44,17 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$WORK"
 
 token() { # token <scope>
-  curl -fsS -X POST "https://login.microsoftonline.com/$AZURE_TARGET_TENANT_ID/oauth2/v2.0/token" \
+  curl -fsS --max-time 60 -X POST "https://login.microsoftonline.com/$AZURE_TARGET_TENANT_ID/oauth2/v2.0/token" \
     -d grant_type=client_credentials -d client_id="$AZURE_TARGET_CLIENT_ID" \
     -d client_secret="$AZURE_TARGET_CLIENT_SECRET" -d scope="$1" | jq -r .access_token
 }
 arm() { # arm <METHOD> <path> [curl args]; prints the body, fails on HTTP errors
   local method=$1 path=$2; shift 2
-  curl -sS -X "$method" -H "Authorization: Bearer $(token https://management.azure.com/.default)" \
+  curl -sS --max-time 120 -X "$method" -H "Authorization: Bearer $(token https://management.azure.com/.default)" \
     -H 'content-type: application/json' "https://management.azure.com$path" "$@"
 }
 arm_status() { # arm_status <METHOD> <path>  -> HTTP status only
-  curl -sS -o /dev/null -w '%{http_code}' -X "$1" -H "Authorization: Bearer $(token https://management.azure.com/.default)" \
+  curl -sS --max-time 60 -o /dev/null -w '%{http_code}' -X "$1" -H "Authorization: Bearer $(token https://management.azure.com/.default)" \
     "https://management.azure.com$2"
 }
 
@@ -85,7 +85,7 @@ teardown() {
 }
 
 sp_object_id() {
-  curl -fsS -H "Authorization: Bearer $(token https://graph.microsoft.com/.default)" \
+  curl -fsS --max-time 60 -H "Authorization: Bearer $(token https://graph.microsoft.com/.default)" \
     "https://graph.microsoft.com/v1.0/servicePrincipals(appId='$AZURE_TARGET_CLIENT_ID')?\$select=id" | jq -r .id
 }
 
