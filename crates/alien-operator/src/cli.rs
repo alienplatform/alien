@@ -88,6 +88,12 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN_FILE")]
     pub enrollment_token_file: Option<PathBuf>,
 
+    /// The same enrollment token given directly, for targets that cannot mount
+    /// a file (`docker run -e`, container platform secrets). The file wins when
+    /// both are set. The value is never logged.
+    #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN", hide_env_values = true)]
+    pub enrollment_token: Option<String>,
+
     /// Name of a Kubernetes Secret, in the operator's namespace, that holds the
     /// enrolled identity and the local database key. The data directory is then
     /// only a cache. Unset, the identity stays in the local database.
@@ -566,14 +572,11 @@ async fn run_operator_cli(
 
     // The token is only needed until the operator is enrolled. A release
     // upgraded without it has no token file, and the saved identity is enough.
-    let join_token = match args.enrollment_token_file.as_deref() {
-        Some(path) if tokio::fs::try_exists(path).await.unwrap_or(false) => {
-            Some(crate::enrollment_token::EnrollmentToken::parse(
-                &read_secret_file(path, "enrollment token").await?,
-            )?)
-        }
-        _ => None,
-    };
+    let join_token = resolve_join_token(
+        args.enrollment_token_file.as_deref(),
+        args.enrollment_token.as_deref(),
+    )
+    .await?;
     refuse_owned_secret_with_identity_store(
         args.owned_secret.as_deref(),
         args.identity_secret.as_deref(),
@@ -687,7 +690,7 @@ async fn run_operator_cli(
         .await?;
     }
     let stored_identity = db.read_daily_identity().await?;
-    if args.enrollment_token_file.is_some()
+    if (args.enrollment_token_file.is_some() || args.enrollment_token.is_some())
         && join_token.is_none()
         && !stored_identity
             .as_ref()
@@ -764,7 +767,7 @@ async fn run_operator_cli(
         // A start from an empty cache has no deployment state yet; an
         // observe-only environment starts as running, as it does when it
         // registers itself.
-        if args.identity_secret.is_some()
+        if join_token.is_some()
             && args.initial_desired_release == InitialDesiredReleaseArg::None
             && db.get_deployment_state().await?.is_none()
         {
@@ -2173,6 +2176,27 @@ fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<Operat
         .map(|()| Some(report))
 }
 
+/// The enrollment token from its file when that exists, else from the
+/// environment value. A blank value counts as no token.
+async fn resolve_join_token(
+    file: Option<&std::path::Path>,
+    inline: Option<&str>,
+) -> Result<Option<crate::enrollment_token::EnrollmentToken>> {
+    if let Some(path) = file {
+        if tokio::fs::try_exists(path).await.unwrap_or(false) {
+            return Ok(Some(crate::enrollment_token::EnrollmentToken::parse(
+                &read_secret_file(path, "enrollment token").await?,
+            )?));
+        }
+    }
+    match inline.map(str::trim) {
+        Some(value) if !value.is_empty() => {
+            Ok(Some(crate::enrollment_token::EnrollmentToken::parse(value)?))
+        }
+        _ => Ok(None),
+    }
+}
+
 async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String>> {
     if let Some(path) = file {
         return Ok(Some(read_secret_file(path, "sync token").await?));
@@ -2390,6 +2414,50 @@ mod tests {
                 "{persistent:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn the_join_token_comes_from_the_file_or_the_environment_value() {
+        use base64::Engine as _;
+        let token = |code: &str| {
+            format!(
+                "ax_join_v1_{}",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+                    r#"{{"u":"https://manager.example.com","a":"https://manager.example.com","c":"{code}"}}"#
+                ))
+            )
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("token");
+        std::fs::write(&file, token("from-file")).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let from_env = super::resolve_join_token(None, Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(from_env.code, "from-env");
+        // The file wins, and a missing file falls through to the value.
+        let both = super::resolve_join_token(Some(&file), Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(both.code, "from-file");
+        let missing = dir.path().join("absent");
+        let fallback = super::resolve_join_token(Some(&missing), Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fallback.code, "from-env");
+        assert!(super::resolve_join_token(None, Some("  "))
+            .await
+            .unwrap()
+            .is_none());
+        let error = super::resolve_join_token(None, Some("ax_join_v1_secretsecret"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("secretsecret"), "{error}");
     }
 
     #[test]

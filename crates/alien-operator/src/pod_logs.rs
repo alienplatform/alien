@@ -29,7 +29,7 @@ use crate::{
 };
 
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
-const RECONNECT_DELAY: Duration = Duration::from_secs(2);
+pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 const DEFAULT_MAX_STREAMS: usize = 32;
 const DEFAULT_CLUSTER_MAX_STREAMS: usize = 200;
 /// Cluster discovery is heavier than a single namespace, so it runs less often.
@@ -40,9 +40,9 @@ const CLUSTER_PAGE_SIZE: &str = "500";
 const CLUSTER_ROTATION_SECONDS: i64 = 300;
 const DEFAULT_EXCLUDED_NAMESPACES: [&str; 3] = ["kube-system", "kube-public", "kube-node-lease"];
 const HARD_MAX_STREAMS: usize = 256;
-const MAX_LINE_BYTES: usize = 256 * 1024;
-const MAX_BATCH_RECORDS: usize = 100;
-const MAX_BATCH_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_LINE_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_BATCH_RECORDS: usize = 100;
+pub(crate) const MAX_BATCH_BYTES: usize = 256 * 1024;
 
 /// Values set by the reviewed Helm chart or standalone Operator manifest.
 #[derive(Debug, Clone)]
