@@ -76,6 +76,16 @@ pub(crate) struct KubernetesSecret {
 }
 
 impl KubernetesSecret {
+    /// Use an existing client, for tests against a real API server.
+    #[cfg(test)]
+    pub(crate) fn with_client(client: KubernetesClient, namespace: &str, name: &str) -> Self {
+        Self {
+            client,
+            namespace: namespace.into(),
+            name: name.into(),
+        }
+    }
+
     pub(crate) async fn in_cluster(namespace: &str, name: &str) -> Result<Self> {
         let config = KubernetesClientConfig::try_incluster().await.context(
             ErrorData::ConfigurationError {
@@ -841,5 +851,96 @@ mod tests {
         assert_eq!(restarted.read().await.unwrap().unwrap().current, "key-a");
         assert_eq!(restarted.encryption_key().await.unwrap(), key);
         store.write(&state("dep_1", "key-b")).await.unwrap();
+    }
+
+    /// Against a real API server (a Kind cluster) through `kubectl proxy`:
+    ///
+    ///   kubectl create namespace alien-identity-test
+    ///   kubectl proxy --port 8001 &
+    ///   REAL_API_PROXY=http://127.0.0.1:8001 cargo test -p alien-operator --lib \
+    ///     identity_store::tests::real_api -- --ignored --test-threads=1
+    ///
+    /// The fakes above model `resourceVersion` compare-and-swap; this checks the real thing.
+    #[tokio::test]
+    #[ignore = "needs a cluster: set REAL_API_PROXY"]
+    async fn real_api_server_conflicts_recreation_and_deletion() {
+        use alien_k8s_clients::KubernetesClientConfig;
+        let proxy = std::env::var("REAL_API_PROXY").expect("REAL_API_PROXY");
+        let namespace = "alien-identity-test";
+        let name = format!("identity-{}", std::process::id());
+        let client = KubernetesClient::new(KubernetesClientConfig::Manual {
+            server_url: proxy,
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: None,
+            client_certificate_data: None,
+            client_key_data: None,
+            token: None,
+            username: None,
+            password: None,
+            namespace: Some(namespace.into()),
+            additional_headers: Default::default(),
+        })
+        .await
+        .expect("client");
+        let secret = |version: Option<String>| Secret {
+            metadata: ObjectMeta {
+                name: Some(name.clone()),
+                namespace: Some(namespace.into()),
+                resource_version: version,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let make_store = || {
+            SecretIdentityStore::new(
+                Arc::new(KubernetesSecret::with_client(
+                    client.clone(),
+                    namespace,
+                    &name,
+                )),
+                &name,
+            )
+        };
+        // The chart creates the Secret empty.
+        client
+            .create_secret(namespace, &secret(None))
+            .await
+            .expect("create the empty Secret");
+
+        let (a, b) = (make_store(), make_store());
+        // Two operators racing for the local key settle on one, on the real server.
+        let (key_a, key_b) = tokio::join!(a.encryption_key(), b.encryption_key());
+        assert_eq!(key_a.unwrap(), key_b.unwrap());
+
+        a.persist_enrolled(&state("dep_1", "key-a")).await.unwrap();
+        b.read().await.unwrap();
+        a.write(&state("dep_1", "key-from-a")).await.unwrap();
+        // b holds a stale resourceVersion: the real server answers 409.
+        let error = b.write(&state("dep_1", "key-from-b")).await.unwrap_err();
+        assert!(
+            matches!(error.error, Some(ErrorData::IdentityConflict)),
+            "{error}"
+        );
+        assert_eq!(b.read().await.unwrap().unwrap().current, "key-from-a");
+
+        // `helm upgrade --force` or `kubectl replace` recreates the Secret empty.
+        client
+            .delete_secret(namespace, &name)
+            .await
+            .expect("delete");
+        assert_eq!(a.read().await.unwrap().unwrap().current, "key-from-a");
+        assert!(a.rotation_blocked().is_some());
+        client
+            .create_secret(namespace, &secret(None))
+            .await
+            .expect("recreate empty");
+        assert_eq!(a.read().await.unwrap().unwrap().current, "key-from-a");
+        assert!(a.rotation_blocked().is_none());
+        // The identity is back in the Secret for a restarted operator.
+        assert_eq!(
+            make_store().read().await.unwrap().unwrap().current,
+            "key-from-a"
+        );
+        client.delete_secret(namespace, &name).await.ok();
     }
 }
