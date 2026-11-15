@@ -354,14 +354,20 @@ fn critical_e2e_provider_operations_are_declared() {
         },
         OperationCoverage {
             // Runtime Auto Scaling Group creation (new capacity groups, failure domains). The
-            // GCP update preflight reads each pool's machine type and the per-family vCPU limit.
+            // GCP update preflight reads the region's zones, each pool's machine type, the
+            // regional quotas, and the per-family vCPU limit.
             permission_set_id: "compute-cluster/management",
             aws_actions: &[
                 "autoscaling:CreateAutoScalingGroup",
                 "autoscaling:DescribeScalingActivities",
                 "ec2:DescribeInstanceTypeOfferings",
             ],
-            gcp_permissions: &["compute.machineTypes.get", "cloudquotas.quotas.get"],
+            gcp_permissions: &[
+                "compute.zones.list",
+                "compute.machineTypes.get",
+                "compute.regions.get",
+                "cloudquotas.quotas.get",
+            ],
             gcp_predefined_roles: &[],
             azure_actions: &[],
             azure_data_actions: &[],
