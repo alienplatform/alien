@@ -154,7 +154,9 @@ azure_location = "$LOCATION"
 default_network_sandbox_gateway_vm_size = "$VM_SIZE"
 EOF
 export ARM_SUBSCRIPTION_ID="$SUB" ARM_TENANT_ID="$AZURE_TARGET_TENANT_ID" ARM_CLIENT_ID="$AZURE_TARGET_CLIENT_ID" ARM_CLIENT_SECRET="$AZURE_TARGET_CLIENT_SECRET"
-(cd "$module" && terraform init -input=false >/dev/null && terraform apply -input=false -auto-approve) | tee "$WORK/apply.log"
+# Azure occasionally resets a connection mid-apply; apply is idempotent, so one retry continues it.
+(cd "$module" && terraform init -input=false >/dev/null \
+  && { terraform apply -input=false -auto-approve || terraform apply -input=false -auto-approve; }) | tee "$WORK/apply.log"
 
 # 4. Facts from the applied module.
 tf=$(cd "$module" && terraform show -json)
