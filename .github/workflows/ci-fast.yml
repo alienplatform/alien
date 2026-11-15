@@ -2,17 +2,19 @@ name: Tests
 
 # Two tiers share one required check, `All tests passed`:
 #
-# - Pull requests (every push, drafts included) run the fast tier: format, lint, typecheck,
+# - Draft pull requests (every push) run the fast tier: format, lint, typecheck,
 #   generated-file drift, `cargo check` of the whole workspace, and the tests of only the
 #   crates the pull request changed.
-# - The merge queue (`merge_group`) runs the full suites once per merge: the tests of every
-#   crate the merge can affect, Worker integration, the whole TypeScript suite and the Node
-#   addon portability builds. So do pushes of release commits.
+# - Pull requests that are ready for review run the full tier: the tests of every crate the
+#   change can affect (changed crates and what depends on them), Worker integration, the whole
+#   TypeScript suite and the Node addon portability builds. Marking a draft ready starts a new
+#   run that replaces the draft's, so a draft's fast-tier result never satisfies the check.
+#   `merge_group` and pushes of release commits run the full tier too.
 # - A pull request labeled `full-ci`, and `workflow_dispatch`, run the full tier on the whole
-#   workspace. The label is read when the run starts, so add it and re-run the workflow (or
-#   push); a re-run reads the labels again.
+#   workspace, drafts included.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   merge_group:
   push:
     branches: [main]
@@ -67,7 +69,8 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      # The merge queue, release pushes, `full-ci` pull requests and manual runs run the full tier.
+      # Ready (non-draft) pull requests, the merge queue, release pushes, `full-ci` pull requests and
+      # manual runs run the full tier. Draft pull requests run the fast tier.
       full_tier: ${{ steps.tier.outputs.full_tier }}
       # Manual runs and `full-ci` pull requests also ignore the path filters and test everything.
       run_all: ${{ steps.tier.outputs.run_all }}
@@ -97,9 +100,15 @@ jobs:
           run_all=false
           case "$EVENT" in
             pull_request)
-              # Read the labels now, not from the event, so a re-run after labeling sees them.
+              # Read the draft state and labels now, not from the event, so a re-run after
+              # marking the PR ready or labeling it sees them.
+              draft=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.draft')
               labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" --jq '.[].name')
-              if grep -qx 'full-ci' <<< "$labels"; then run_all=true; else full_tier=false; fi
+              if grep -qx 'full-ci' <<< "$labels"; then
+                run_all=true
+              elif [[ "$draft" == "true" ]]; then
+                full_tier=false
+              fi
               ;;
             workflow_dispatch) run_all=true ;;
           esac
@@ -107,10 +116,10 @@ jobs:
           echo "run_all=$run_all" >> "$GITHUB_OUTPUT"
           echo "Tier: full=$full_tier, whole workspace=$run_all ($EVENT)"
 
-      # Pull requests test only the crates they changed (and compile the whole workspace in
-      # `Rust check`). The merge queue tests the changed crates and everything that depends on
-      # them, against the queue's base. Any change outside the packages (other than docs) is
-      # checked on a pull request and fully tested in the merge queue. Pushes of release
+      # Draft pull requests test only the crates they changed (and compile the whole workspace
+      # in `Rust check`). Ready pull requests and the merge queue test the changed crates and
+      # everything that depends on them, against the base. Any change outside the packages
+      # (other than docs) is only checked on a draft and fully tested on a ready pull request. Pushes of release
       # commits, `full-ci` pull requests and manual runs test the whole workspace.
       - name: Select Rust packages to test
         id: rust_selection
@@ -131,7 +140,7 @@ jobs:
           BASE_SHA="$QUEUE_BASE_SHA"
           if [[ "$EVENT" == "pull_request" ]]; then
             BASE_SHA="$PR_BASE_SHA"
-            flags+=(--own-only)
+            [[ "$FULL_TIER" == "true" ]] || flags+=(--own-only)
           fi
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
           python3 scripts/affected-rust-packages.py "$BASE_SHA" HEAD "${flags[@]}" >> "$GITHUB_OUTPUT"
@@ -846,7 +855,7 @@ jobs:
     needs: [pr-conventions, changes]
     # The tested packages, alien-test-app, the addon and the gateway depend on most workspace
     # crates, so any Rust change runs this job; worker_integration adds the JS inputs.
-    # Full tier only: the merge queue, `full-ci` pull requests and manual runs.
+    # Full tier only: ready pull requests, the merge queue, `full-ci` pull requests and manual runs.
     if: >-
       needs.changes.outputs.full_tier == 'true' &&
       (needs.changes.outputs.run_all == 'true' ||
@@ -935,7 +944,7 @@ jobs:
   node-addon-portability:
     name: Node addon (${{ matrix.triple }}, older glibc)
     needs: [pr-conventions, changes]
-    # Full tier only: the merge queue, `full-ci` pull requests and manual runs.
+    # Full tier only: ready pull requests, the merge queue, `full-ci` pull requests and manual runs.
     if: >-
       needs.changes.outputs.full_tier == 'true' &&
       (needs.changes.outputs.run_all == 'true' ||
@@ -1001,7 +1010,7 @@ jobs:
       - name: Verify glibc floor and load on older base images
         run: packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
 
-  # Reusable workflows that also run nightly. Full tier only, and only when the merge touches
+  # Reusable workflows that also run nightly. Full tier only, and only when the change touches
   # their inputs, so `All tests passed` covers them.
   python-bindings:
     name: Python bindings
@@ -1043,7 +1052,52 @@ jobs:
       - name: Verify every test area
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          FULL_TIER: ${{ needs.changes.outputs.full_tier }}
+          RUN_ALL: ${{ needs.changes.outputs.run_all }}
+          RUST: ${{ needs.changes.outputs.rust }}
+          RUST_MODE: ${{ needs.changes.outputs.rust_mode }}
+          TYPESCRIPT: ${{ needs.changes.outputs.typescript }}
+          WORKER_INTEGRATION: ${{ needs.changes.outputs.worker_integration }}
+          NODE_ADDON: ${{ needs.changes.outputs.node_addon }}
+          PYTHON: ${{ needs.changes.outputs.python }}
+          TPM: ${{ needs.changes.outputs.tpm }}
+          CHANGES: ${{ needs.changes.result }}
+          RUST_TESTS: ${{ needs.rust.result }}
+          TYPESCRIPT_TESTS: ${{ needs.typescript.result }}
+          WORKER_RESULT: ${{ needs.worker-integration.result }}
+          ADDON_RESULT: ${{ needs.node-addon-portability.result }}
+          PYTHON_RESULT: ${{ needs.python-bindings.result }}
+          TPM_RESULT: ${{ needs.tpm-device-key.result }}
         run: |
           for result in $RESULTS; do
             [[ "$result" == "success" || "$result" == "skipped" ]] || exit 1
           done
+          # A skipped job is fine only when its path filter says nothing it covers changed.
+          # Without this, a failed or skipped `Detect test areas` run, or a draft's fast tier,
+          # would pass as if the full suites had run.
+          [[ "$CHANGES" == "success" ]] || { echo "::error::Detect test areas did not succeed"; exit 1; }
+          [[ "$FULL_TIER" == "true" ]] || exit 0
+          need() {
+            if [[ "$2" != "success" ]]; then
+              echo "::error::$1 was required by the full tier but its result is '$2'"
+              exit 1
+            fi
+          }
+          if [[ "$RUN_ALL" == "true" || ( "$RUST" == "true" && ( "$RUST_MODE" == "affected" || "$RUST_MODE" == "full" ) ) ]]; then
+            need "Rust crates" "$RUST_TESTS"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$TYPESCRIPT" == "true" ]]; then
+            need "TypeScript packages and CLIs" "$TYPESCRIPT_TESTS"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$RUST" == "true" || "$WORKER_INTEGRATION" == "true" ]]; then
+            need "Worker integration" "$WORKER_RESULT"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$RUST" == "true" || "$NODE_ADDON" == "true" ]]; then
+            need "Node addon portability" "$ADDON_RESULT"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$PYTHON" == "true" ]]; then
+            need "Python bindings" "$PYTHON_RESULT"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$TPM" == "true" ]]; then
+            need "TPM device key" "$TPM_RESULT"
+          fi
