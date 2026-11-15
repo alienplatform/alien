@@ -544,24 +544,30 @@ async fn list_cluster_pods(
     client: &KubernetesClient,
     namespaces: &[String],
     selector: Option<&str>,
-) -> Result<Vec<Pod>> {
+    visit: &mut (dyn FnMut(Pod) + Send),
+) -> Result<()> {
     let base = client.get_base_url().trim_end_matches('/').to_string();
     if namespaces.is_empty() {
-        return list_pods_at(client, &format!("{base}/api/v1/pods"), selector, false).await;
+        return list_pods_at(
+            client,
+            &format!("{base}/api/v1/pods"),
+            selector,
+            false,
+            visit,
+        )
+        .await;
     }
-    let mut pods = Vec::new();
     for namespace in namespaces {
-        pods.extend(
-            list_pods_at(
-                client,
-                &format!("{base}/api/v1/namespaces/{namespace}/pods"),
-                selector,
-                true,
-            )
-            .await?,
-        );
+        list_pods_at(
+            client,
+            &format!("{base}/api/v1/namespaces/{namespace}/pods"),
+            selector,
+            true,
+            visit,
+        )
+        .await?;
     }
-    Ok(pods)
+    Ok(())
 }
 
 async fn list_pods_at(
@@ -569,11 +575,11 @@ async fn list_pods_at(
     url: &str,
     selector: Option<&str>,
     from_cache: bool,
-) -> Result<Vec<Pod>> {
+    visit: &mut (dyn FnMut(Pod) + Send),
+) -> Result<()> {
     let failed = |message: &str| ErrorData::PodLogReadFailed {
         message: message.to_string(),
     };
-    let mut pods = Vec::new();
     let mut continue_token: Option<String> = None;
     loop {
         let mut request = client
@@ -606,10 +612,14 @@ async fn list_pods_at(
             .await
             .into_alien_error()
             .context(failed("the Pod listing could not be read"))?;
-        pods.extend(page.items);
+        // Each Pod is handed over as its page arrives; the page is dropped
+        // after, so memory does not grow with the cluster.
+        for pod in page.items {
+            visit(pod);
+        }
         continue_token = page.metadata.continue_.filter(|token| !token.is_empty());
         if continue_token.is_none() {
-            return Ok(pods);
+            return Ok(());
         }
     }
 }
@@ -647,6 +657,20 @@ fn choose_streams(eligible: Vec<(String, Source)>, max_streams: usize, slot: i64
     for sources in by_namespace.values_mut() {
         sources.sort();
     }
+    // More namespaces than streams: each window serves `max_streams` namespaces
+    // with one container each, and the window moves on every slot, so every
+    // namespace (and, through the round count, every container in it) is reached.
+    if by_namespace.len() > max_streams {
+        let count = by_namespace.len();
+        let first = (slot.unsigned_abs() as usize).wrapping_mul(max_streams);
+        let namespaces: Vec<_> = by_namespace.into_values().collect();
+        return (first..first + max_streams)
+            .map(|position| {
+                let sources = &namespaces[position % count];
+                sources[(position / count) % sources.len()].clone()
+            })
+            .collect();
+    }
     // Hand out the streams one at a time, namespace by namespace.
     let mut share: std::collections::BTreeMap<&String, usize> = by_namespace
         .keys()
@@ -678,6 +702,60 @@ fn choose_streams(eligible: Vec<(String, Source)>, max_streams: usize, slot: i64
     chosen
 }
 
+/// What one cluster listing keeps of each Pod: its uid (so cursors of Pods that
+/// are gone can be pruned) and the containers to read. The Pod itself is dropped
+/// at once, and Pods of excluded namespaces leave nothing but their uid.
+struct PodSurvey<'a> {
+    config: &'a PodLogCollectionConfig,
+    cluster: &'a ClusterLogScope,
+    started_at: DateTime<Utc>,
+    live: HashSet<String>,
+    eligible: Vec<(String, Source)>,
+    namespaces: HashMap<String, String>,
+}
+
+impl<'a> PodSurvey<'a> {
+    fn new(
+        config: &'a PodLogCollectionConfig,
+        cluster: &'a ClusterLogScope,
+        started_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            config,
+            cluster,
+            started_at,
+            live: HashSet::new(),
+            eligible: Vec::new(),
+            namespaces: HashMap::new(),
+        }
+    }
+
+    fn add(&mut self, pod: Pod) {
+        let Some(namespace) = pod.metadata.namespace.as_deref() else {
+            return;
+        };
+        if !self.cluster.includes(namespace) {
+            return;
+        }
+        if let Some(uid) = pod.metadata.uid.clone() {
+            self.live.insert(uid);
+        }
+        let terminal = pod
+            .status
+            .as_ref()
+            .and_then(|status| status.phase.as_deref())
+            .is_some_and(|phase| phase != "Running");
+        if terminal && !finished_since(&pod, self.started_at) {
+            return;
+        }
+        for source in selected_sources(&pod, self.config, self.started_at) {
+            self.namespaces
+                .insert(source.pod_uid.clone(), namespace.to_string());
+            self.eligible.push((namespace.to_string(), source));
+        }
+    }
+}
+
 async fn reconcile_cluster(
     state: &Arc<OperatorState>,
     client: &KubernetesClient,
@@ -695,38 +773,25 @@ async fn reconcile_cluster(
             return Ok(());
         }
     };
-    let pods =
-        list_cluster_pods(client, &cluster.namespaces, cluster.pod_selector.as_deref()).await?;
+    let mut survey = PodSurvey::new(config, cluster, started_at);
+    list_cluster_pods(
+        client,
+        &cluster.namespaces,
+        cluster.pod_selector.as_deref(),
+        &mut |pod| survey.add(pod),
+    )
+    .await?;
+    let PodSurvey {
+        live,
+        eligible,
+        namespaces,
+        ..
+    } = survey;
     // The whole listing arrived: cursors of Pods that are gone can be dropped.
-    let live: HashSet<String> = pods
-        .iter()
-        .filter_map(|pod| pod.metadata.uid.clone())
-        .collect();
     if let Err(error) = state.db.prune_pod_log_offsets(&live).await {
         warn!(error = %error, "Could not prune log cursors of Pods that no longer exist");
     }
-    let mut eligible = Vec::new();
-    let mut namespaces = HashMap::<String, String>::new();
-    for pod in &pods {
-        let Some(namespace) = pod.metadata.namespace.as_deref() else {
-            continue;
-        };
-        if !cluster.includes(namespace) {
-            continue;
-        }
-        let terminal = pod
-            .status
-            .as_ref()
-            .and_then(|status| status.phase.as_deref())
-            .is_some_and(|phase| phase != "Running");
-        if terminal && !finished_since(pod, started_at) {
-            continue;
-        }
-        for source in selected_sources(pod, config, started_at) {
-            namespaces.insert(source.pod_uid.clone(), namespace.to_string());
-            eligible.push((namespace.to_string(), source));
-        }
-    }
+    let mut eligible = eligible;
     let known: HashSet<_> = eligible.iter().map(|(_, source)| source.clone()).collect();
     completed.retain(|source| known.contains(source));
     eligible.retain(|(_, source)| !completed.contains(source));
@@ -1429,6 +1494,56 @@ mod tests {
     }
 
     #[test]
+    fn more_namespaces_than_streams_every_namespace_and_container_is_read_in_turn() {
+        // 7 namespaces with 2 containers each, 3 streams: no window may leave the
+        // later namespaces out for good.
+        let eligible: Vec<_> = (0..7)
+            .flat_map(|n| (0..2).map(move |i| source(&format!("ns{n}"), i)))
+            .collect();
+        let mut seen = HashSet::new();
+        for slot in 0..30 {
+            let chosen = choose_streams(eligible.clone(), 3, slot);
+            assert_eq!(chosen.len(), 3, "slot {slot}");
+            seen.extend(chosen.into_iter().map(|s| s.pod_uid));
+        }
+        assert_eq!(seen.len(), 14);
+    }
+
+    fn survey_pod(namespace: &str, uid: &str) -> Pod {
+        serde_json::from_value(serde_json::json!({
+            "metadata": {"name": uid, "namespace": namespace, "uid": uid},
+            "spec": {"containers": [{"name": "app"}]},
+            "status": {"phase": "Running"}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_survey_keeps_nothing_of_pods_in_excluded_namespaces() {
+        let config = PodLogCollectionConfig {
+            label_key: "unused".to_string(),
+            label_value: "unused".to_string(),
+            legacy_daemonset: None,
+            replacement_daemonset: None,
+            max_streams: 32,
+            cluster: Some(ClusterLogScope {
+                namespaces: Vec::new(),
+                exclude_namespaces: vec!["noisy".into()],
+                pod_selector: None,
+            }),
+        };
+        let cluster = config.cluster.clone().unwrap();
+        let mut survey = PodSurvey::new(&config, &cluster, Utc::now());
+        for i in 0..1000 {
+            survey.add(survey_pod("noisy", &format!("n{i}")));
+        }
+        survey.add(survey_pod("apps", "a1"));
+        assert_eq!(survey.live, HashSet::from(["a1".to_string()]));
+        assert_eq!(survey.eligible.len(), 1);
+        assert_eq!(survey.namespaces.len(), 1);
+    }
+
+    #[test]
     fn over_the_cap_every_container_is_read_in_turn() {
         let eligible: Vec<_> = (0..25).map(|i| source("apps", i)).collect();
         let mut seen = HashSet::new();
@@ -1612,14 +1727,13 @@ mod tests {
             }),
         );
         let (client, server) = fake_api(app).await;
-        let pods = list_cluster_pods(&client, &[], Some("app=web"))
-            .await
-            .unwrap();
+        let mut names = Vec::new();
+        list_cluster_pods(&client, &[], Some("app=web"), &mut |pod| {
+            names.extend(pod.metadata.name)
+        })
+        .await
+        .unwrap();
         server.abort();
-        let names: Vec<_> = pods
-            .iter()
-            .filter_map(|p| p.metadata.name.clone())
-            .collect();
         assert_eq!(names, ["a", "b", "c", "d"]);
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 3);
@@ -1652,14 +1766,13 @@ mod tests {
                 }),
             );
         let (client, server) = fake_api(app).await;
-        let pods = list_cluster_pods(&client, &["a".into(), "b".into()], None)
-            .await
-            .unwrap();
+        let mut names = Vec::new();
+        list_cluster_pods(&client, &["a".into(), "b".into()], None, &mut |pod| {
+            names.extend(pod.metadata.name)
+        })
+        .await
+        .unwrap();
         server.abort();
-        let names: Vec<_> = pods
-            .iter()
-            .filter_map(|p| p.metadata.name.clone())
-            .collect();
         assert_eq!(names, ["in-a", "in-b"]);
     }
 

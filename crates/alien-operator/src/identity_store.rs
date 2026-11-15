@@ -193,6 +193,13 @@ pub(crate) struct SecretIdentityStore {
     stopping: AtomicBool,
 }
 
+/// The outcome of writing a known identity back into a Secret that lost it.
+enum Restore {
+    Done(Secret),
+    NothingToRestore,
+    Failed,
+}
+
 impl SecretIdentityStore {
     pub(crate) fn new(backend: Arc<dyn SecretBackend>, name: &str) -> Self {
         Self {
@@ -254,8 +261,21 @@ impl SecretIdentityStore {
                 inner.fetched_at = Some(std::time::Instant::now());
                 let saved = parse_identity(&secret).ok().flatten();
                 if saved.is_none() {
-                    if let Some(restored) = self.restore(inner, &secret).await {
-                        secret = restored;
+                    match self.restore(inner, &secret).await {
+                        Restore::Done(restored) => secret = restored,
+                        Restore::NothingToRestore => {}
+                        // The identity in memory (maybe with a key the manager
+                        // has not confirmed) is not saved: rotating now could
+                        // lose it on restart.
+                        Restore::Failed => {
+                            self.block(
+                                &format!(
+                                    "The identity Secret '{}' lost the identity and it could not be written back",
+                                    self.name
+                                ),
+                                true,
+                            );
+                        }
                     }
                 }
                 inner.memory = parse_identity(&secret)
@@ -292,15 +312,20 @@ impl SecretIdentityStore {
     /// Write the enrolled identity (and the local key) known in memory back into
     /// a Secret that lost them. A conflict or failure leaves the Secret as read:
     /// the next read tries again.
-    async fn restore(&self, inner: &mut Inner, secret: &Secret) -> Option<Secret> {
+    async fn restore(&self, inner: &mut Inner, secret: &Secret) -> Restore {
         if self.stopping.load(Ordering::Relaxed) {
-            return None;
+            return Restore::NothingToRestore;
         }
-        let identity = inner
+        let Some(identity) = inner
             .memory
             .as_ref()
-            .filter(|state| !state.deployment_id.is_empty())?;
-        let value = serialize(identity).ok()?;
+            .filter(|state| !state.deployment_id.is_empty())
+        else {
+            return Restore::NothingToRestore;
+        };
+        let Ok(value) = serialize(identity) else {
+            return Restore::Failed;
+        };
         let mut restored = secret.clone();
         let mut data = restored.data.take().unwrap_or_default();
         data.insert(IDENTITY_KEY.into(), value);
@@ -312,9 +337,9 @@ impl SecretIdentityStore {
         match self.backend.put(&restored).await {
             Ok(PutOutcome::Stored(stored)) => {
                 inner.secret = Some(stored.clone());
-                Some(stored)
+                Restore::Done(stored)
             }
-            _ => None,
+            _ => Restore::Failed,
         }
     }
 
@@ -482,7 +507,9 @@ fn parse_identity(secret: &Secret) -> Result<Option<DailyIdentityState>> {
         return Ok(None);
     }
     let text = std::str::from_utf8(&bytes.0).map_err(|_| unreadable())?;
-    serde_json::from_str(text).map(Some).map_err(|_| unreadable())
+    serde_json::from_str(text)
+        .map(Some)
+        .map_err(|_| unreadable())
 }
 
 fn serialize(state: &DailyIdentityState) -> Result<ByteString> {
@@ -966,6 +993,28 @@ mod tests {
         fake.refuse_writes.store(true, Ordering::Relaxed);
         assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
         assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
+    }
+
+    #[tokio::test]
+    async fn a_failed_restore_leaves_rotation_blocked_on_every_read() {
+        let fake = Fake::with_empty_secret();
+        let store = store(&fake);
+        store
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        fake.recreate_empty();
+        fake.refuse_writes.store(true, Ordering::Relaxed);
+        for _ in 0..3 {
+            // The identity is still served from memory, but the key is not saved
+            // anywhere, so the pending-key path must not send a rotation.
+            assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
+            assert!(store.rotation_blocked().is_some());
+        }
+        // Once the write works, the next read restores and unblocks.
+        fake.refuse_writes.store(false, Ordering::Relaxed);
+        assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
+        assert!(store.rotation_blocked().is_none());
     }
 
     #[tokio::test]
