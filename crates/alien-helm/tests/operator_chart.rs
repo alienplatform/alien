@@ -931,3 +931,57 @@ fn a_second_release_can_leave_out_the_shared_approval_definition() {
     assert!(second.contains("name: OPERATOR_ACCESS_REQUESTS\n              value: \"true\""));
     assert_eq!(rules(kind(&second_docs, "ClusterRole")[0]).len(), 9);
 }
+
+#[test]
+fn the_documented_operations_example_reaches_the_operator_and_a_wrong_shape_is_refused() {
+    // The example in the values file comment, as a values file.
+    let directory = tempfile::tempdir().unwrap();
+    let values = directory.path().join("values.yaml");
+    std::fs::write(
+        &values,
+        "operations:\n  plugins:\n    kubernetes:\n      approval:\n        get-pods: auto\n",
+    )
+    .unwrap();
+    let rendered = render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "-f",
+        values.to_str().unwrap(),
+    ]);
+    let deployment = documents(&rendered)
+        .into_iter()
+        .find(|document| document["kind"] == "Deployment")
+        .unwrap();
+    let env = deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap();
+    let value = env
+        .iter()
+        .find(|entry| entry["name"] == "OPERATOR_OPERATIONS")
+        .and_then(|entry| entry["value"].as_str())
+        .expect("OPERATOR_OPERATIONS is set");
+    let parsed: serde_json::Value = serde_json::from_str(value).unwrap();
+    assert_eq!(
+        parsed,
+        serde_json::json!({"plugins": {"kubernetes": {"approval": {"get-pods": "auto"}}}})
+    );
+    // The permissions do not depend on `operations`.
+    let without = render(&["--set", &format!("token={TOKEN}")]);
+    let rules = |rendered: &str| {
+        documents(rendered)
+            .into_iter()
+            .find(|document| document["kind"] == "ClusterRole")
+            .unwrap()["rules"]
+            .clone()
+    };
+    assert_eq!(rules(&rendered), rules(&without));
+
+    // A plugin that is not an object is refused at install, not at runtime.
+    let error = refusal(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set-json",
+        "operations={\"plugins\":{\"kubernetes\":\"auto\"}}",
+    ]);
+    assert!(error.contains("operations"), "{error}");
+}

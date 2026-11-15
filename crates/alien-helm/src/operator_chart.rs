@@ -226,8 +226,18 @@ brand:
   # Label and approval-resource domain, for example "acme.dev"; its first label names the approval kind.
   labelDomain: ""
 
-# Operation approval settings passed to the Operator, for example
-# {{"kubernetes": {{"approval": {{"get-pods": "auto"}}}}}}.
+# Approval rules and settings for the built-in operations, passed to the Operator as JSON.
+# Built-in plugins go under `plugins`, by plugin name; `approval` maps an operation name (or `*`)
+# to `auto` or `manual`. Operations no rule matches need approval. For example:
+#
+#   operations:
+#     plugins:
+#       kubernetes:
+#         approval:
+#           get-pods: auto
+#
+# This only sets approval and settings. It does not change the permissions the chart grants: those
+# follow `permission`. `custom` takes published custom plugins ({{name, version, approval, settings}}).
 operations: {{}}
 
 resources:
@@ -295,7 +305,28 @@ fn values_schema_json() -> serde_json::Result<String> {
                     "installDefinition": {"type": "boolean"}
                 }
             },
-            "operations": {"type": "object"},
+            "operations": {
+                "type": "object",
+                "properties": {
+                    "plugins": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "object",
+                            "properties": {
+                                "settings": {"type": "object"},
+                                "approval": {"type": "object"}
+                            }
+                        }
+                    },
+                    "custom": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["name", "version"]
+                        }
+                    }
+                }
+            },
             "brand": {
                 "type": "object",
                 "additionalProperties": false,
