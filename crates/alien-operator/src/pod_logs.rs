@@ -86,19 +86,38 @@ fn env_list(name: &str) -> Result<Option<Vec<String>>> {
     }))
 }
 
+/// The namespaces never read: the system ones unless they are included, plus
+/// the installer's own list.
+fn cluster_excluded_namespaces(extra: Vec<String>, include_system: bool) -> Vec<String> {
+    let mut excluded: Vec<String> = if include_system {
+        Vec::new()
+    } else {
+        DEFAULT_EXCLUDED_NAMESPACES
+            .iter()
+            .map(|n| n.to_string())
+            .collect()
+    };
+    for namespace in extra {
+        if !excluded.contains(&namespace) {
+            excluded.push(namespace);
+        }
+    }
+    excluded
+}
+
 /// `OPERATOR_POD_LOG_SCOPE=cluster` selects cluster scope.
+/// `OPERATOR_POD_LOG_EXCLUDE_NAMESPACES` adds to the system namespaces that are
+/// always left out; `OPERATOR_POD_LOG_INCLUDE_SYSTEM_NAMESPACES=true` turns
+/// those defaults off.
 fn cluster_scope_from_env() -> Result<Option<ClusterLogScope>> {
     match env_value("OPERATOR_POD_LOG_SCOPE")?.as_deref() {
         None | Some("namespace") => Ok(None),
         Some("cluster") => Ok(Some(ClusterLogScope {
             namespaces: env_list("OPERATOR_POD_LOG_NAMESPACES")?.unwrap_or_default(),
-            exclude_namespaces: env_list("OPERATOR_POD_LOG_EXCLUDE_NAMESPACES")?.unwrap_or_else(
-                || {
-                    DEFAULT_EXCLUDED_NAMESPACES
-                        .iter()
-                        .map(|n| n.to_string())
-                        .collect()
-                },
+            exclude_namespaces: cluster_excluded_namespaces(
+                env_list("OPERATOR_POD_LOG_EXCLUDE_NAMESPACES")?.unwrap_or_default(),
+                env_value("OPERATOR_POD_LOG_INCLUDE_SYSTEM_NAMESPACES")?
+                    .is_some_and(|value| value.eq_ignore_ascii_case("true")),
             ),
             pod_selector: env_value("OPERATOR_POD_LOG_POD_SELECTOR")?,
         })),
@@ -1694,5 +1713,25 @@ mod tests {
             "namespace scope keeps its floor: {}",
             since[1]
         );
+    }
+
+    #[test]
+    fn extra_exclusions_add_to_the_system_namespaces_unless_those_are_included() {
+        let extra = vec!["monitoring".to_string(), "kube-system".to_string()];
+        assert_eq!(
+            cluster_excluded_namespaces(extra.clone(), false),
+            [
+                "kube-system",
+                "kube-public",
+                "kube-node-lease",
+                "monitoring"
+            ]
+        );
+        assert_eq!(
+            cluster_excluded_namespaces(extra, true),
+            ["monitoring", "kube-system"]
+        );
+        assert!(cluster_excluded_namespaces(Vec::new(), true).is_empty());
+        assert_eq!(cluster_excluded_namespaces(Vec::new(), false).len(), 3);
     }
 }
