@@ -873,16 +873,14 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
             "{mode}: {helm}"
         );
         assert!(
-            compact.contains("depends_on = [ acme_app_deployment.this, helm_release.runtime, ]")
-                || compact
-                    .contains("depends_on = [ acme_app_deployment.this, helm_release.runtime ]"),
+            compact.contains("depends_on = [ acme_app_deployment.this, helm_release.runtime,"),
             "{mode}: {helm}"
         );
         assert!(compact.contains("deployment_id = acme_app_deployment.this.deployment_id"));
         assert!(compact.contains("management_url = var.management_url"));
         let readme = module.get("README.md").expect("README.md");
         assert!(
-            readme.contains("delete the deployment with its data erased"),
+            readme.contains("wait until its status is `teardown-required`, `retention-required` or `deleted`"),
             "{mode} README names the erase-first order"
         );
         assert!(
@@ -1029,7 +1027,7 @@ fn destroy_guard_is_the_only_change_between_old_and_new_registered_modules() {
         assert!(old
             .iter()
             .all(|(_, contents)| !contents.contains("destroy_guard")
-                && !contents.contains("data erased")));
+                && !contents.contains("teardown-required")));
     }
 }
 
@@ -1977,4 +1975,144 @@ fn assert_network_in_every_mode(module: &alien_terraform::ModuleFiles) {
         !network.contains("var.kubernetes_cluster_mode"),
         "{network}"
     );
+}
+
+/// Addresses in the `depends_on` of one rendered resource block (parsed HCL).
+fn guard_depends_on(block_text: &str) -> Vec<String> {
+    let body = hcl::parse(block_text).expect("guard block parses");
+    let block = body.blocks().next().expect("one resource block");
+    let attribute = block
+        .body()
+        .attributes()
+        .find(|attribute| attribute.key() == "depends_on")
+        .expect("guard has depends_on");
+    match attribute.expr() {
+        hcl::Expression::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                hcl::Expression::Traversal(traversal) => {
+                    let hcl::Expression::Variable(root) = &traversal.expr else {
+                        panic!("unexpected depends_on root: {item:?}");
+                    };
+                    let mut address = root.to_string();
+                    for operator in &traversal.operators {
+                        let hcl::TraversalOperator::GetAttr(name) = operator else {
+                            panic!("unexpected depends_on operator: {item:?}");
+                        };
+                        address = format!("{address}.{name}");
+                    }
+                    address
+                }
+                other => panic!("unexpected depends_on item: {other:?}"),
+            })
+            .collect(),
+        other => panic!("depends_on is not a list: {other:?}"),
+    }
+}
+
+/// The property that makes a refused `terraform destroy` remove nothing: the
+/// destroy guard lists every other managed resource of the module (all .tf
+/// files) in its `depends_on`, so Terraform destroys the guard first.
+#[test]
+fn destroy_guard_is_destroyed_before_every_other_resource() {
+    let registry = TfRegistry::built_in();
+    for (target, provider) in [
+        (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
+        (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
+        (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
+    ] {
+        for retained_data in [false, true] {
+            for product in [false, true] {
+                let mut stack = Stack::new("guard-first".to_string()).add(
+                    KubernetesCluster::new("kubernetes".to_string())
+                        .provider(provider.clone())
+                        .ownership(KubernetesClusterOwnership::Managed)
+                        .namespace("production".to_string())
+                        .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                );
+                if retained_data {
+                    if target == TerraformTarget::Aks {
+                        stack = stack
+                            .add(
+                                AzureResourceGroup::new("default-resource-group".to_string())
+                                    .build(),
+                                ResourceLifecycle::Frozen,
+                            )
+                            .add(
+                                alien_core::AzureStorageAccount::new(
+                                    "default-storage-account".to_string(),
+                                )
+                                .build(),
+                                ResourceLifecycle::Frozen,
+                            );
+                    }
+                    stack = stack.add(
+                        Storage::new("data".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    );
+                }
+                let stack = stack.build();
+                let options = TerraformOptions {
+                    setup_identity: None,
+                    pins: alien_core::SetupPins::compiled_in(),
+                    display_name: None,
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    registration: Some(TerraformRegistration {
+                        provider_name: "acme_app".to_string(),
+                        provider_source: "pkg.example.com/acme/app".to_string(),
+                        provider_version: "1.0.0".to_string(),
+                        resource_type: "deployment".to_string(),
+                        release_id: Some("rel-test".to_string()),
+                        setup_target: "kubernetes".to_string(),
+                        setup_fingerprint: "test".to_string(),
+                        setup_fingerprint_version: 1,
+                        destroy_guard: true,
+                    }),
+                    helm_install: Some(TerraformHelmInstall {
+                        chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                        release_name: "acme-operator".to_string(),
+                    }),
+                    supported_aws_regions: Vec::new(),
+                };
+                let module = if product {
+                    generate_product_terraform_module(&stack, target, options, false)
+                } else {
+                    generate_terraform_module(&stack, target, options)
+                }
+                .unwrap_or_else(|error| panic!("{target:?} module should render: {error}"));
+                let label = format!("{target:?} retained={retained_data} product={product}");
+
+                let blocks = resource_blocks(&module);
+                let guard = "acme_app_destroy_guard.this";
+                assert!(blocks.contains_key(guard), "{label}: guard emitted");
+                if retained_data {
+                    assert!(
+                        blocks.contains_key("terraform_data.retention_inventory"),
+                        "{label}: retention inventory present"
+                    );
+                }
+                if product {
+                    assert!(
+                        blocks.contains_key("terraform_data.remote_operator_ownership"),
+                        "{label}: Remote Operator state latch present"
+                    );
+                }
+                // The guard lists every other managed resource directly.
+                let others: std::collections::BTreeSet<String> = blocks
+                    .keys()
+                    .filter(|address| address.as_str() != guard)
+                    .cloned()
+                    .collect();
+                let listed: std::collections::BTreeSet<String> =
+                    guard_depends_on(&blocks[guard]).into_iter().collect();
+                assert_eq!(
+                    others, listed,
+                    "{label}: the guard's depends_on must be exactly every other resource"
+                );
+            }
+        }
+    }
 }
