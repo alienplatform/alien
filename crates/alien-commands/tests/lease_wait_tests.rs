@@ -1502,7 +1502,13 @@ fn open_fds() -> usize {
 async fn measure_open_waits() {
     use tokio::io::AsyncWriteExt;
     const WAITS: usize = 5_000;
-    let server = pull_server().await;
+    // Spread over the per-process cap's worth of keys is not needed: the per-target
+    // bound is lifted so one target can hold them all.
+    let server = TestCommandServer::builder()
+        .with_pull_mode()
+        .with_max_open_lease_waits_per_target(WAITS + 1)
+        .build()
+        .await;
     let body = serde_json::json!({
         "deploymentId": DEPLOYMENT_ID,
         "target": {"resourceId": server.default_target.resource_id, "resourceType": "daemon"},
