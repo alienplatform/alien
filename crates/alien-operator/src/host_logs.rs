@@ -271,60 +271,94 @@ pub(crate) fn journalctl_args(
     args
 }
 
-/// Reader failures in a row, with no entry read and a cursor complaint from journalctl, after which a saved cursor is given up.
-const CURSOR_FAILURES_BEFORE_RESET: u32 = 5;
+/// How long the saved-cursor check may take.
+const CURSOR_CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 /// Longest raw journal line read whole. A longer one is cut here and read past.
 const MAX_JOURNAL_LINE_BYTES: usize = 2 * 1024 * 1024;
 /// Distinct journalctl error messages logged; each is logged once.
 const MAX_LOGGED_STDERR_KINDS: usize = 8;
 
+/// What `journalctl --cursor=<saved> -n 1` says about a saved cursor.
+///
+/// Measured on systemd 249 (Ubuntu 22.04) and 252 (Debian 12, Amazon Linux 2023):
+/// * a cursor that is not well formed: exit status 1 and `Failed to seek to cursor: Invalid argument`;
+/// * a well formed cursor whose entry is not in the journal (rotated away, other boot's files
+///   gone): exit status 0, no output, nothing on stderr. Following from such a cursor
+///   (`--follow --after-cursor`) also exits 0 and then prints nothing, not even new entries,
+///   so it is never an error the reader could see; the check is the only way to find it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CursorCheck {
+    Present,
+    Gone,
+    /// journalctl could not answer (missing, no permission, timeout): keep the cursor.
+    Unknown,
+}
+
+pub(crate) fn classify_cursor_check(
+    exit_code: Option<i32>,
+    stdout_has_entry: bool,
+    stderr: &str,
+) -> CursorCheck {
+    match exit_code {
+        Some(0) if stdout_has_entry => CursorCheck::Present,
+        Some(0) if stderr.trim().is_empty() => CursorCheck::Gone,
+        Some(1) if stderr.contains("Failed to seek to cursor") => CursorCheck::Gone,
+        _ => CursorCheck::Unknown,
+    }
+}
+
+async fn check_saved_cursor(cursor: &str) -> CursorCheck {
+    let mut command = tokio::process::Command::new("journalctl");
+    command
+        .env_clear()
+        .arg(format!("--cursor={cursor}"))
+        .args(["-n", "1", "--output=cat", "--no-pager"])
+        .kill_on_drop(true);
+    match time::timeout(CURSOR_CHECK_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => classify_cursor_check(
+            output.status.code(),
+            !output.stdout.is_empty(),
+            &String::from_utf8_lossy(&output.stderr),
+        ),
+        _ => CursorCheck::Unknown,
+    }
+}
+
+/// The wall-clock second of a journal cursor (its `t=` field, microseconds in hex).
+pub(crate) fn cursor_unix_secs(cursor: &str) -> Option<i64> {
+    let field = cursor.split(';').find_map(|part| part.strip_prefix("t="))?;
+    let micros = i64::from_str_radix(field, 16).ok()?;
+    Some(micros / 1_000_000)
+}
+
 async fn run_journald(state: Arc<OperatorState>, _started_at: DateTime<Utc>) {
     let units = log_units_from_env().unwrap_or_default();
-    let mut failures = 0u32;
     let mut start_unix_secs = Utc::now().timestamp();
     loop {
-        let mut progressed = false;
-        let cursor_rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        if let Err(error) = read_journal_once(
-            &state,
-            &units,
-            start_unix_secs,
-            &mut progressed,
-            cursor_rejected.clone(),
-        )
-        .await
+        // A saved cursor the journal no longer has would follow silently and read nothing.
+        // Collection then continues from the second of the last entry read.
+        if let Ok(Some(saved)) = state
+            .db
+            .get_pod_log_offset(JOURNALD_KEY, "journal", 0)
+            .await
         {
-            if !state.cancel.is_cancelled() {
-                warn!(error = %error, "Journal reader failed; will restart");
+            if check_saved_cursor(&saved.timestamp).await == CursorCheck::Gone
+                && state
+                    .db
+                    .delete_pod_log_offset(JOURNALD_KEY, "journal", 0)
+                    .await
+                    .is_ok()
+            {
+                start_unix_secs =
+                    cursor_unix_secs(&saved.timestamp).unwrap_or_else(|| Utc::now().timestamp());
+                warn!(
+                    "The saved journal position is not in the journal any more; continuing from the time of the last entry read"
+                );
             }
         }
-        // Only a failure where journalctl itself complained about the cursor counts;
-        // a missing journalctl or a database error keeps the saved position.
-        let rejected = cursor_rejected.load(std::sync::atomic::Ordering::Relaxed);
-        failures = if progressed {
-            0
-        } else if rejected {
-            failures + 1
-        } else {
-            failures
-        };
-        if failures >= CURSOR_FAILURES_BEFORE_RESET {
-            failures = 0;
-            // The journal may no longer accept the saved cursor (rotated away, or corrupt).
-            if matches!(
-                state
-                    .db
-                    .get_pod_log_offset(JOURNALD_KEY, "journal", 0)
-                    .await,
-                Ok(Some(_))
-            ) && state
-                .db
-                .delete_pod_log_offset(JOURNALD_KEY, "journal", 0)
-                .await
-                .is_ok()
-            {
-                start_unix_secs = Utc::now().timestamp();
-                warn!("The saved journal position is not accepted by the journal; continuing from now");
+        if let Err(error) = read_journal_once(&state, &units, start_unix_secs).await {
+            if !state.cancel.is_cancelled() {
+                warn!(error = %error, "Journal reader failed; will restart");
             }
         }
         tokio::select! {
@@ -456,21 +490,10 @@ fn first_time_seen(seen: &mut HashSet<String>, line: &str) -> bool {
 
 /// Log each distinct journalctl error once, so a persistent failure does not
 /// fill the log.
-/// A `journalctl` message that says the saved cursor was not accepted.
-pub(crate) fn is_cursor_rejection(line: &str) -> bool {
-    line.to_ascii_lowercase().contains("cursor")
-}
-
-async fn log_journalctl_stderr(
-    stderr: tokio::process::ChildStderr,
-    cursor_rejected: Arc<std::sync::atomic::AtomicBool>,
-) {
+async fn log_journalctl_stderr(stderr: tokio::process::ChildStderr) {
     let mut lines = tokio::io::BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let line: String = line.chars().take(300).collect();
-        if is_cursor_rejection(&line) {
-            cursor_rejected.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
         let new = {
             let mut guard = LOGGED_JOURNALCTL_ERRORS
                 .lock()
@@ -487,8 +510,6 @@ async fn read_journal_once(
     state: &OperatorState,
     units: &[String],
     start_unix_secs: i64,
-    progressed: &mut bool,
-    cursor_rejected: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     let db = &state.db;
     let deployment_id = db.get_deployment_id().await?.ok_or_else(|| {
@@ -516,7 +537,7 @@ async fn read_journal_once(
             message: "could not start journalctl; the operator needs it and membership of the systemd-journal group".to_string(),
         })?;
     if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(log_journalctl_stderr(stderr, cursor_rejected));
+        tokio::spawn(log_journalctl_stderr(stderr));
     }
     let stdout = child.stdout.take().ok_or_else(|| {
         AlienError::new(ErrorData::PodLogReadFailed {
@@ -551,7 +572,6 @@ async fn read_journal_once(
                         message: "journalctl exited".to_string(),
                     }));
                 };
-                *progressed = true;
                 let text = String::from_utf8_lossy(&line.bytes);
                 let entry = if line.truncated {
                     oversize_entry(&text)
@@ -890,17 +910,54 @@ async fn flush_docker_batch(
 mod tests {
     use super::*;
 
+    // The inputs are what journalctl printed in systemd containers (249 and 252).
     #[test]
-    fn only_a_cursor_complaint_counts_as_the_journal_rejecting_the_cursor() {
-        assert!(is_cursor_rejection(
-            "Failed to seek to cursor: Invalid argument"
-        ));
-        assert!(!is_cursor_rejection(
-            "No journal files were opened due to insufficient permissions."
-        ));
-        assert!(!is_cursor_rejection(
-            "Failed to open journal: No such file or directory"
-        ));
+    fn a_saved_cursor_is_checked_against_what_journalctl_really_does() {
+        // present: exit 0 and the entry
+        assert_eq!(
+            classify_cursor_check(Some(0), true, ""),
+            CursorCheck::Present
+        );
+        // well formed, not in the journal: exit 0, no output, no message
+        assert_eq!(classify_cursor_check(Some(0), false, ""), CursorCheck::Gone);
+        // not well formed: exit 1 and this message
+        assert_eq!(
+            classify_cursor_check(
+                Some(1),
+                false,
+                "Failed to seek to cursor: Invalid argument\n"
+            ),
+            CursorCheck::Gone
+        );
+        // journalctl could not read the journal: the cursor is kept
+        assert_eq!(
+            classify_cursor_check(
+                Some(0),
+                false,
+                "No journal files were opened due to insufficient permissions.\n"
+            ),
+            CursorCheck::Unknown
+        );
+        assert_eq!(
+            classify_cursor_check(
+                Some(1),
+                false,
+                "Failed to open journal: No such file or directory"
+            ),
+            CursorCheck::Unknown
+        );
+        assert_eq!(classify_cursor_check(None, false, ""), CursorCheck::Unknown);
+    }
+
+    #[test]
+    fn the_time_of_a_cursor_is_its_t_field() {
+        let cursor = "s=b6a2b076ed2a4f6c8567201cfee99b9a;i=701;b=2da74311f60541d1a5005950e39925fa;m=7ffe2fb85;t=6604bccf51f42;x=d395f14e40b73164";
+        assert_eq!(
+            cursor_unix_secs(cursor),
+            Some(0x6604bccf51f42_i64 / 1_000_000)
+        );
+        assert_eq!(cursor_unix_secs("garbage"), None);
+        assert_eq!(cursor_unix_secs("t=zz"), None);
     }
 
     #[test]
