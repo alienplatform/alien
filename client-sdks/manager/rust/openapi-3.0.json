@@ -12819,6 +12819,12 @@
           "target": {
             "$ref": "#/components/schemas/CommandTarget",
             "description": "The specific resource requesting leases. Required: leases are scoped to a\nsingle target, so callers must identify which resource they're polling for."
+          },
+          "waitSeconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How long the server may hold this request open when no command is\nqueued yet, in seconds (0 to 25, default 0). A waiting request is\nanswered as soon as a command for the target is queued. The server\ncaps the value at 25 and at the caller's credential lifetime; a server\nthat does not support waiting answers at once.",
+            "minimum": 0
           }
         }
       },
@@ -19723,6 +19729,11 @@
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "requestedUpdateRan": {
+            "type": "string",
+            "description": "The rollout in which an update ran because the controller asked for one while the\nconfig was unchanged. While the controller keeps asking in that same rollout, its\ndependents no longer wait for it, so a check that never settles cannot hold them back\nfor good. A later rollout is a new request and is waited for again. Cleared once the\ncontroller stops asking. State written before this field existed (it was a flag then)\nreads as none.",
+            "nullable": true
           },
           "retryAttempt": {
             "type": "integer",
