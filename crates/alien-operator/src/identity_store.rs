@@ -143,6 +143,17 @@ struct Inner {
     /// The last identity seen, served while the Secret is missing or
     /// unreachable so a running operator keeps its key.
     memory: Option<DailyIdentityState>,
+    /// The local database key last seen in, or generated for, the Secret.
+    key: Option<String>,
+}
+
+/// What reading the Secret came to.
+enum Loaded {
+    Found(Secret),
+    /// The Secret does not exist.
+    Missing,
+    /// The API server could not be asked; the Secret may well exist.
+    Unreadable,
 }
 
 pub(crate) struct SecretIdentityStore {
@@ -188,18 +199,29 @@ impl SecretIdentityStore {
         self.reported.store(false, Ordering::Relaxed);
     }
 
-    /// Read the Secret and remember it. `None` when it does not exist or cannot
-    /// be read; the reason is then in [`Self::rotation_blocked`].
-    async fn load(&self, inner: &mut Inner) -> Option<Secret> {
+    /// Read the Secret and remember it. When the Secret exists but holds no
+    /// identity (it was recreated empty by `helm upgrade --force`, `kubectl
+    /// replace` or a GitOps replace) and an enrolled identity is known in
+    /// memory, that identity is written back against the version just read.
+    async fn load(&self, inner: &mut Inner) -> Loaded {
         match self.backend.get().await {
-            Ok(Some(secret)) => {
+            Ok(Some(mut secret)) => {
                 self.unblock();
                 inner.secret = Some(secret.clone());
+                let saved = parse_identity(&secret).ok().flatten();
+                if saved.is_none() {
+                    if let Some(restored) = self.restore(inner, &secret).await {
+                        secret = restored;
+                    }
+                }
                 inner.memory = parse_identity(&secret)
                     .ok()
                     .flatten()
                     .or(inner.memory.take());
-                Some(secret)
+                if let Some(key) = secret_text(&secret, ENCRYPTION_KEY).filter(|k| valid_key(k)) {
+                    inner.key = Some(key);
+                }
+                Loaded::Found(secret)
             }
             Ok(None) => {
                 inner.secret = None;
@@ -207,7 +229,7 @@ impl SecretIdentityStore {
                     "The identity Secret '{}' does not exist",
                     self.name
                 ));
-                None
+                Loaded::Missing
             }
             Err(source) => {
                 inner.secret = None;
@@ -215,8 +237,34 @@ impl SecretIdentityStore {
                     "The identity Secret '{}' cannot be read ({})",
                     self.name, source
                 ));
-                None
+                Loaded::Unreadable
             }
+        }
+    }
+
+    /// Write the enrolled identity (and the local key) known in memory back into
+    /// a Secret that lost them. A conflict or failure leaves the Secret as read:
+    /// the next read tries again.
+    async fn restore(&self, inner: &mut Inner, secret: &Secret) -> Option<Secret> {
+        let identity = inner
+            .memory
+            .as_ref()
+            .filter(|state| !state.deployment_id.is_empty())?;
+        let value = serialize(identity).ok()?;
+        let mut restored = secret.clone();
+        let mut data = restored.data.take().unwrap_or_default();
+        data.insert(IDENTITY_KEY.into(), value);
+        if let Some(key) = inner.key.clone() {
+            data.entry(ENCRYPTION_KEY.into())
+                .or_insert_with(|| ByteString(key.into_bytes()));
+        }
+        restored.data = Some(data);
+        match self.backend.put(&restored).await {
+            Ok(PutOutcome::Stored(stored)) => {
+                inner.secret = Some(stored.clone());
+                Some(stored)
+            }
+            _ => None,
         }
     }
 
@@ -230,8 +278,8 @@ impl SecretIdentityStore {
         let mut secret = match inner.secret.clone() {
             Some(secret) => secret,
             None => match self.load(inner).await {
-                Some(secret) => secret,
-                None => {
+                Loaded::Found(_) => inner.secret.clone().expect("loaded secret is remembered"),
+                Loaded::Missing | Loaded::Unreadable => {
                     return Err(AlienError::new(ErrorData::ConfigurationError {
                         message: self
                             .blocked
@@ -278,12 +326,27 @@ impl SecretIdentityStore {
     pub(crate) async fn encryption_key(&self) -> Result<String> {
         let mut inner = self.inner.lock().await;
         for _ in 0..KEY_ATTEMPTS {
-            let Some(secret) = self.load(&mut inner).await else {
-                return random_hex_key();
+            let secret = match self.load(&mut inner).await {
+                Loaded::Found(secret) => secret,
+                // The Secret is gone: keep the key in use, or use one that lives in
+                // memory only.
+                Loaded::Missing => return self.memory_key(&mut inner),
+                // The API server could not be asked. A key already in use stays; with
+                // none, a throwaway key would orphan the cache and the caller must
+                // retry instead.
+                Loaded::Unreadable => {
+                    return match inner.key.clone() {
+                        Some(key) => Ok(key),
+                        None => Err(AlienError::new(ErrorData::ConfigurationError {
+                            message: format!(
+                                "The identity Secret '{}' cannot be read yet; retrying",
+                                self.name
+                            ),
+                        })),
+                    }
+                }
             };
-            if let Some(key) = secret_text(&secret, ENCRYPTION_KEY)
-                .filter(|key| key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit()))
-            {
+            if let Some(key) = secret_text(&secret, ENCRYPTION_KEY).filter(|k| valid_key(k)) {
                 return Ok(key);
             }
             let key = random_hex_key()?;
@@ -294,9 +357,12 @@ impl SecretIdentityStore {
                 })
                 .await
             {
-                Ok(()) => return Ok(key),
+                Ok(()) => {
+                    inner.key = Some(key.clone());
+                    return Ok(key);
+                }
                 Err(error) if matches!(error.error, Some(ErrorData::IdentityConflict)) => continue,
-                Err(_) => return random_hex_key(),
+                Err(_) => return self.memory_key(&mut inner),
             }
         }
         Err(AlienError::new(ErrorData::ConfigurationError {
@@ -306,6 +372,19 @@ impl SecretIdentityStore {
             ),
         }))
     }
+
+    fn memory_key(&self, inner: &mut Inner) -> Result<String> {
+        if let Some(key) = inner.key.clone() {
+            return Ok(key);
+        }
+        let key = random_hex_key()?;
+        inner.key = Some(key.clone());
+        Ok(key)
+    }
+}
+
+fn valid_key(key: &str) -> bool {
+    key.len() == 64 && key.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 fn random_hex_key() -> Result<String> {
@@ -349,15 +428,41 @@ impl IdentityStore for SecretIdentityStore {
     async fn read(&self) -> Result<Option<DailyIdentityState>> {
         let mut inner = self.inner.lock().await;
         match self.load(&mut inner).await {
-            Some(secret) => parse_identity(&secret),
-            // Missing or unreachable: keep serving the key already in use.
-            None => Ok(inner.memory.clone()),
+            Loaded::Found(secret) => parse_identity(&secret),
+            // Deleted: keep serving the key already in use.
+            Loaded::Missing => Ok(inner.memory.clone()),
+            // Unreachable: with no identity in memory, "no saved identity" would be a
+            // guess that lets enrollment build a new one over an enrolled identity.
+            Loaded::Unreadable => match inner.memory.clone() {
+                Some(state) => Ok(Some(state)),
+                None => Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: format!(
+                        "The identity Secret '{}' cannot be read yet; retrying",
+                        self.name
+                    ),
+                })),
+            },
         }
     }
 
     async fn write(&self, state: &DailyIdentityState) -> Result<()> {
         let value = serialize(state)?;
         let mut inner = self.inner.lock().await;
+        if inner.secret.is_none() {
+            self.load(&mut inner).await;
+        }
+        // An enrolled identity is never replaced by one that is not enrolled.
+        let enrolled_saved = inner
+            .secret
+            .as_ref()
+            .and_then(|secret| parse_identity(secret).ok().flatten())
+            .or_else(|| inner.memory.clone())
+            .is_some_and(|saved| !saved.deployment_id.is_empty());
+        if state.deployment_id.is_empty() && enrolled_saved {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "Refusing to replace the enrolled operator identity with one that is not enrolled".into(),
+            }));
+        }
         self.update(&mut inner, |data| {
             data.insert(IDENTITY_KEY.into(), value);
         })
@@ -373,7 +478,15 @@ impl IdentityStore for SecretIdentityStore {
             }));
         }
         let mut inner = self.inner.lock().await;
-        let secret = self.load(&mut inner).await;
+        let secret = match self.load(&mut inner).await {
+            Loaded::Found(secret) => Some(secret),
+            Loaded::Missing => None,
+            Loaded::Unreadable => {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("The identity Secret '{}' cannot be read", self.name),
+                }))
+            }
+        };
         if let Some(saved) = secret.as_ref().map(parse_identity).transpose()?.flatten() {
             if !saved.deployment_id.is_empty() && saved.deployment_id != state.deployment_id {
                 return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -392,12 +505,15 @@ impl IdentityStore for SecretIdentityStore {
 
     async fn clear_unenrolled(&self) -> Result<()> {
         let mut inner = self.inner.lock().await;
-        let Some(secret) = self.load(&mut inner).await else {
-            inner.memory = inner
-                .memory
-                .take()
-                .filter(|state| !state.deployment_id.is_empty());
-            return Ok(());
+        let secret = match self.load(&mut inner).await {
+            Loaded::Found(secret) => secret,
+            Loaded::Missing | Loaded::Unreadable => {
+                inner.memory = inner
+                    .memory
+                    .take()
+                    .filter(|state| !state.deployment_id.is_empty());
+                return Ok(());
+            }
         };
         if parse_identity(&secret)?.is_some_and(|saved| saved.deployment_id.is_empty()) {
             self.update(&mut inner, |data| {
@@ -444,6 +560,7 @@ mod tests {
         secret: std::sync::Mutex<Option<Secret>>,
         version: AtomicU32,
         refuse_writes: AtomicBool,
+        refuse_reads: AtomicBool,
     }
 
     impl Fake {
@@ -460,7 +577,20 @@ mod tests {
                 })),
                 version: AtomicU32::new(1),
                 refuse_writes: AtomicBool::new(false),
+                refuse_reads: AtomicBool::new(false),
             })
+        }
+        /// What `helm upgrade --force`, `kubectl replace` and GitOps replace do.
+        fn recreate_empty(&self) {
+            let version = self.version.fetch_add(1, Ordering::Relaxed) + 1;
+            *self.secret.lock().unwrap() = Some(Secret {
+                metadata: ObjectMeta {
+                    name: Some("identity".into()),
+                    resource_version: Some(version.to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
         }
         fn delete(&self) {
             *self.secret.lock().unwrap() = None;
@@ -473,6 +603,11 @@ mod tests {
     #[async_trait]
     impl SecretBackend for Fake {
         async fn get(&self) -> Result<Option<Secret>> {
+            if self.refuse_reads.load(Ordering::Relaxed) {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "connection refused".into(),
+                }));
+            }
             Ok(self.secret.lock().unwrap().clone())
         }
         async fn put(&self, secret: &Secret) -> Result<PutOutcome> {
@@ -647,5 +782,64 @@ mod tests {
             .unwrap();
         store.clear_unenrolled().await.unwrap();
         assert!(store.read().await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_secret_is_not_read_as_no_identity() {
+        let fake = Fake::with_empty_secret();
+        store(&fake)
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        let before = fake.stored();
+        let restarted = store(&fake);
+        fake.refuse_reads.store(true, Ordering::Relaxed);
+        assert!(restarted.read().await.is_err());
+        assert!(restarted.encryption_key().await.is_err());
+        // Nothing may be written while the Secret cannot be read.
+        assert!(restarted.write(&state("", "candidate")).await.is_err());
+        fake.refuse_reads.store(false, Ordering::Relaxed);
+        assert_eq!(fake.stored().data, before.data);
+        assert_eq!(restarted.read().await.unwrap().unwrap().current, "key-a");
+    }
+
+    #[tokio::test]
+    async fn an_enrolled_identity_is_never_replaced_by_an_unenrolled_one() {
+        let fake = Fake::with_empty_secret();
+        store(&fake)
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        // A restarted operator has nothing in memory and has not read yet.
+        let restarted = store(&fake);
+        let error = restarted.write(&state("", "candidate")).await.unwrap_err();
+        assert!(error.to_string().contains("enrolled"));
+        assert_eq!(
+            store(&fake).read().await.unwrap().unwrap().deployment_id,
+            "dep_1"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_running_operator_restores_its_identity_into_a_recreated_secret() {
+        let fake = Fake::with_empty_secret();
+        let store = store(&fake);
+        let key = store.encryption_key().await.unwrap();
+        store
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        fake.delete();
+        assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
+        assert!(store.rotation_blocked().is_some());
+        // The fix the error message names, or a forced upgrade, recreates it empty.
+        fake.recreate_empty();
+        assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
+        assert!(store.rotation_blocked().is_none());
+        // The Secret holds the identity and the local key again, so a restart finds both.
+        let restarted = self::store(&fake);
+        assert_eq!(restarted.read().await.unwrap().unwrap().current, "key-a");
+        assert_eq!(restarted.encryption_key().await.unwrap(), key);
+        store.write(&state("dep_1", "key-b")).await.unwrap();
     }
 }
