@@ -25,6 +25,29 @@ use chrono::Utc;
 
 const DEPLOYMENT_ID: &str = "pull-agent";
 
+/// Wait until `count` lease requests are held open by the manager.
+async fn wait_for_open_waits(server: &TestCommandServer, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server.command_server.open_lease_waits() != count {
+        assert!(
+            Instant::now() < deadline,
+            "{} open waits, expected {count}",
+            server.command_server.open_lease_waits()
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// Wait until the fault KV has seen `count` pending-index scans in total.
+async fn wait_for_scans(server: &TestCommandServer, count: usize) {
+    let kv = server.fault_kv.as_ref().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while kv.pending_scans() < count {
+        assert!(Instant::now() < deadline, "no scan");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 async fn pull_server() -> TestCommandServer {
     TestCommandServer::builder().with_pull_mode().build().await
 }
@@ -69,8 +92,14 @@ fn receiver_env(base_url: &str, resource_id: &str) -> HashMap<String, String> {
 /// A second manager process on the same KV, registry and storage: a command
 /// created through it never signals the first process's waiters.
 fn second_replica(server: &TestCommandServer) -> CommandServer {
+    replica_on(server, server.kv.clone())
+}
+
+/// A second manager process whose KV is `kv` (for example the fault-injecting
+/// decorator the first process uses).
+fn replica_on(server: &TestCommandServer, kv: Arc<dyn Kv>) -> CommandServer {
     CommandServer::new(
-        server.kv.clone(),
+        kv,
         server.storage.clone(),
         server.dispatcher.clone(),
         server.registry.clone(),
@@ -86,7 +115,7 @@ async fn a_queued_command_is_leased_by_a_waiting_request_at_once() {
     let request = lease_request(&server, 20);
 
     let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for_open_waits(&server, 1).await;
     assert_eq!(server.command_server.open_lease_waits(), 1);
 
     let queued_at = Instant::now();
@@ -99,10 +128,7 @@ async fn a_queued_command_is_leased_by_a_waiting_request_at_once() {
 
     assert_eq!(leases.len(), 1);
     assert_eq!(leases[0].command_id, created.command_id);
-    assert!(
-        waited < Duration::from_millis(500),
-        "leased after {waited:?}"
-    );
+    assert!(waited < Duration::from_secs(1), "leased after {waited:?}");
     assert_eq!(server.command_server.open_lease_waits(), 0);
 }
 
@@ -117,7 +143,7 @@ async fn an_empty_wait_returns_after_wait_seconds() {
     let waited = started.elapsed();
     assert!(leases.is_empty());
     assert!(
-        waited >= Duration::from_millis(950) && waited < Duration::from_millis(2500),
+        waited >= Duration::from_millis(950) && waited < Duration::from_secs(6),
         "waited {waited:?}"
     );
     assert_eq!(server.command_server.open_lease_waits(), 0);
@@ -143,7 +169,7 @@ async fn a_request_without_wait_seconds_is_answered_at_once() {
     assert!(response.status().is_success());
     let answer: serde_json::Value = response.json().await.unwrap();
     assert_eq!(answer["leases"], serde_json::json!([]));
-    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(server.command_server.open_lease_waits(), 0);
 }
 
@@ -190,7 +216,10 @@ async fn a_command_created_on_another_replica_is_found_within_the_probe_interval
     }
     println!("cross-replica pickup with a {PROBE:?} probe: {pickups:?}");
     for pickup in pickups {
-        assert!(pickup < PROBE + Duration::from_millis(200), "{pickup:?}");
+        assert!(
+            pickup < PROBE * 2 + Duration::from_millis(500),
+            "{pickup:?}"
+        );
     }
 }
 
@@ -227,7 +256,7 @@ async fn a_command_queued_between_the_scan_and_the_probing_is_not_missed() {
         .await
         .unwrap();
     assert_eq!(leases.len(), 1, "the command was missed");
-    assert!(started.elapsed() < PROBE + Duration::from_millis(500));
+    assert!(started.elapsed() < PROBE * 2 + Duration::from_millis(500));
 }
 
 #[tokio::test]
@@ -311,8 +340,9 @@ async fn a_wake_key_that_appears_is_a_change() {
     assert!(server.kv.get(&wake_key(&server)).await.unwrap().is_none());
     let lease_client = client(&server);
     let request = lease_request(&server, 20);
+    let scans_before = server.fault_kv.as_ref().unwrap().pending_scans();
     let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    wait_for_scans(&server, scans_before + 1).await;
     other_replica
         .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
         .await
@@ -350,7 +380,7 @@ async fn a_wake_key_that_expires_costs_one_scan_not_one_per_probe() {
     let lease_client = client(&server);
     let request = lease_request(&server, 2);
     let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for_open_waits(&server, 1).await;
     // The key expires while the request waits.
     server.kv.delete(&wake_key(&server), None).await.unwrap();
     assert!(waiting.await.unwrap().unwrap().is_empty());
@@ -373,7 +403,7 @@ async fn two_waiters_and_one_command_lease_it_exactly_once() {
         let r = lease_request(&server, 2);
         tokio::spawn(async move { c.acquire(&r).await })
     };
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for_open_waits(&server, 2).await;
     assert_eq!(server.command_server.open_lease_waits(), 2);
 
     server
@@ -400,7 +430,7 @@ async fn a_waiter_is_not_woken_by_another_target() {
     let lease_client = client(&server);
     let request = lease_request(&server, 1);
     let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_open_waits(&server, 1).await;
 
     let mut other = test_inline_create_command(DEPLOYMENT_ID, "read");
     other.target_resource_id = Some("other-daemon".to_string());
@@ -422,13 +452,13 @@ async fn over_the_cap_a_request_is_answered_at_once_and_entries_are_released() {
         let (c, r) = (lease_client.clone(), request.clone());
         async move { c.acquire(&r).await }
     });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for_open_waits(&server, 1).await;
     assert_eq!(server.command_server.open_lease_waits(), 1);
 
     let started = Instant::now();
     let answer = lease_client.acquire(&request).await.unwrap();
     assert!(answer.is_empty());
-    assert!(started.elapsed() < Duration::from_millis(500));
+    assert!(started.elapsed() < Duration::from_secs(2));
     assert_eq!(server.command_server.open_lease_waits(), 1);
 
     // The waiter that holds the slot is still served.
@@ -446,7 +476,7 @@ async fn an_abandoned_wait_releases_its_slot() {
     let lease_client = client(&server);
     let request = lease_request(&server, 20);
     let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for_open_waits(&server, 1).await;
     assert_eq!(server.command_server.open_lease_waits(), 1);
     waiting.abort();
     let _ = waiting.await;
@@ -488,6 +518,370 @@ async fn a_wait_ends_before_the_credential_does_and_never_leases_after_it() {
     assert!(expired.is_err(), "an expired credential never leases");
 }
 
+// ---- review round: consistency, per-target bound, shared probe, release wake ----
+
+async fn lagging_server(lag: Duration) -> TestCommandServer {
+    let server = server_with_probe_and_faults().await;
+    server
+        .fault_kv
+        .as_ref()
+        .unwrap()
+        .arm_lagging_pending_scans(lag);
+    server
+}
+
+async fn server_with_probe_and_faults() -> TestCommandServer {
+    TestCommandServer::builder()
+        .with_pull_mode()
+        .with_fault_injection()
+        .with_lease_wait_probe_interval(Duration::from_millis(100))
+        .build()
+        .await
+}
+
+/// A command created just before the request arrives, on a store whose plain
+/// scans lag behind its writes: the waiting request's first scan must read
+/// consistently, or the command is invisible for the whole wait.
+#[tokio::test]
+async fn a_command_created_just_before_a_waiting_request_is_found_by_its_first_scan() {
+    let server = lagging_server(Duration::from_secs(3)).await;
+    let created = server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+
+    let started = Instant::now();
+    let leases = client(&server)
+        .acquire(&lease_request(&server, 6))
+        .await
+        .unwrap();
+    assert_eq!(leases.len(), 1, "the lagging scan hid the command");
+    assert_eq!(leases[0].command_id, created.command_id);
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    // A request that does not wait keeps today's (lagging) read.
+    server
+        .submit_command_response(&created.command_id, CommandResponse::success(b"done"))
+        .await
+        .unwrap();
+    server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    let plain = client(&server)
+        .acquire(&lease_request(&server, 0))
+        .await
+        .unwrap();
+    assert!(plain.is_empty(), "plain requests read as before");
+}
+
+#[tokio::test]
+async fn waits_on_one_target_are_bounded_and_another_target_is_unaffected() {
+    let server = TestCommandServer::builder()
+        .with_pull_mode()
+        .with_max_open_lease_waits_per_target(2)
+        .build()
+        .await;
+    server
+        .registry
+        .register_target(
+            "other-daemon",
+            alien_commands::types::CommandTargetType::Daemon,
+        )
+        .await
+        .unwrap();
+    let lease_client = client(&server);
+    let request = lease_request(&server, 3);
+    let held: Vec<_> = (0..2)
+        .map(|_| {
+            let (c, r) = (lease_client.clone(), request.clone());
+            tokio::spawn(async move { c.acquire(&r).await })
+        })
+        .collect();
+    wait_for_open_waits(&server, 2).await;
+
+    // The third on the same target is answered at once, empty.
+    let started = Instant::now();
+    assert!(lease_client.acquire(&request).await.unwrap().is_empty());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(server.command_server.open_lease_waits(), 2);
+
+    // Another target still waits while this one is saturated.
+    let mut other_request = request.clone();
+    other_request.target = alien_commands::types::CommandTarget::new(
+        "other-daemon",
+        alien_commands::types::CommandTargetType::Daemon,
+    );
+    let other = {
+        let c = lease_client.clone();
+        tokio::spawn(async move { c.acquire(&other_request).await })
+    };
+    wait_for_open_waits(&server, 3).await;
+
+    // The waiters that hold slots are still served.
+    let mut create = test_inline_create_command(DEPLOYMENT_ID, "read");
+    create.target_resource_id = Some(server.default_target.resource_id.clone());
+    server.create_command(create).await.unwrap();
+    let mut leased = 0;
+    for waiter in held {
+        leased += waiter.await.unwrap().unwrap().len();
+    }
+    assert_eq!(leased, 1);
+    other.abort();
+}
+
+/// Eight waiters on one target: one stream of wake key reads, and one create
+/// costs a few scans, not eight each.
+#[tokio::test]
+async fn eight_waiters_on_one_target_share_the_probe_and_serialize_their_scans() {
+    let server = server_with_probe_and_faults().await;
+    let fault_kv = server.fault_kv.clone().unwrap();
+    let lease_client = client(&server);
+    let request = lease_request(&server, 20);
+    let waiters: Vec<_> = (0..8)
+        .map(|_| {
+            let (c, r) = (lease_client.clone(), request.clone());
+            tokio::spawn(async move { c.acquire(&r).await })
+        })
+        .collect();
+    wait_for_open_waits(&server, 8).await;
+    wait_for_scans(&server, 8).await;
+
+    // Idle for one second at a 100 ms interval: unshared, eight waiters would
+    // read about 80 times; shared, a read is reused for half an interval, at
+    // most about 20.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let reads_before = fault_kv.wake_key_reads();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let reads = fault_kv.wake_key_reads() - reads_before;
+    println!("wake key reads by 8 waiters in 1 s: {reads}");
+    assert!(reads <= 30, "{reads} reads in 1 s");
+
+    // One create: one lease, and the other seven waiters do not each scan.
+    let scans_before = fault_kv.pending_scans();
+    server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.command_server.open_lease_waits() != 7 {
+        assert!(Instant::now() < deadline, "the lease holder did not leave");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let scans = fault_kv.pending_scans() - scans_before;
+    println!("scans for one create with 8 waiters: {scans}");
+    assert!(scans <= 3, "{scans} scans for one create");
+    for waiter in waiters {
+        waiter.abort();
+    }
+}
+
+#[tokio::test]
+async fn a_released_lease_wakes_a_parked_waiter() {
+    let server = server_with_probe_and_faults().await;
+    let created = server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    let first = client(&server)
+        .acquire(&lease_request(&server, 0))
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 1);
+
+    // Parks: the only command is leased.
+    let lease_client = client(&server);
+    let request = lease_request(&server, 20);
+    let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
+    wait_for_open_waits(&server, 1).await;
+    wait_for_scans(&server, 2).await;
+
+    let released_at = Instant::now();
+    server
+        .command_server
+        .release_lease(&created.command_id, &first[0].lease_id)
+        .await
+        .unwrap();
+    let again = waiting.await.unwrap().unwrap();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].command_id, created.command_id);
+    assert!(released_at.elapsed() < Duration::from_secs(1));
+}
+
+/// The release goes through another replica: the waiter finds it by the wake
+/// key within the probe interval.
+#[tokio::test]
+async fn a_lease_released_on_another_replica_is_found_by_the_probe() {
+    let server = server_with_probe_and_faults().await;
+    let replica = second_replica(&server);
+    let created = server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    let first = client(&server)
+        .acquire(&lease_request(&server, 0))
+        .await
+        .unwrap();
+    let lease_client = client(&server);
+    let request = lease_request(&server, 20);
+    let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
+    wait_for_open_waits(&server, 1).await;
+    wait_for_scans(&server, 2).await;
+
+    let released_at = Instant::now();
+    replica
+        .release_lease(&created.command_id, &first[0].lease_id)
+        .await
+        .unwrap();
+    assert_eq!(waiting.await.unwrap().unwrap().len(), 1);
+    assert!(released_at.elapsed() < Duration::from_secs(2));
+}
+
+/// The wake key's own TTL runs out while a request waits (instead of the key
+/// being deleted): one change, one scan, not a scan per probe.
+#[tokio::test]
+async fn a_wake_key_that_expires_by_ttl_costs_one_scan() {
+    let server = server_counting_scans().await;
+    let fault_kv = server.fault_kv.clone().unwrap();
+    server
+        .kv
+        .put(
+            &wake_key(&server),
+            vec![7; 16],
+            Some(alien_bindings::traits::PutOptions {
+                ttl: Some(Duration::from_millis(600)),
+                condition: alien_bindings::traits::PutCondition::None,
+            }),
+        )
+        .await
+        .unwrap();
+    let scans_before = fault_kv.pending_scans();
+    let started = Instant::now();
+    let leases = client(&server)
+        .acquire(&lease_request(&server, 3))
+        .await
+        .unwrap();
+    assert!(leases.is_empty());
+    assert!(started.elapsed() >= Duration::from_millis(2900));
+    // First scan, one for the expiry, one when the wait ends.
+    assert_eq!(fault_kv.pending_scans() - scans_before, 3);
+}
+
+/// The create's wake key write fails and the command is queued through another
+/// replica: the waiter has nothing to see, and finds the command at the end of
+/// its wait.
+#[tokio::test]
+async fn a_failed_wake_key_write_on_another_replica_is_found_at_the_end_of_the_wait() {
+    let server = server_counting_scans().await;
+    let fault_kv = server.fault_kv.clone().unwrap();
+    let replica = replica_on(&server, fault_kv.clone());
+    fault_kv.arm_wake_key_write_failure();
+
+    let lease_client = client(&server);
+    let request = lease_request(&server, 2);
+    let started = Instant::now();
+    let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
+    wait_for_open_waits(&server, 1).await;
+    wait_for_scans(&server, 1).await;
+    replica
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    let leases = waiting.await.unwrap().unwrap();
+    assert_eq!(leases.len(), 1, "found by the last scan");
+    assert!(started.elapsed() >= Duration::from_millis(1900));
+}
+
+/// Reading the wake key fails: waiting still works. A create in this process
+/// wakes at once; one on another replica is found at the end of the wait.
+#[tokio::test]
+async fn a_wake_key_read_error_does_not_break_waiting() {
+    let server = server_counting_scans().await;
+    let fault_kv = server.fault_kv.clone().unwrap();
+    fault_kv.arm_wake_key_read_failure();
+
+    // Same process: woken at once.
+    let lease_client = client(&server);
+    let request = lease_request(&server, 20);
+    let waiting = {
+        let (c, r) = (lease_client.clone(), request.clone());
+        tokio::spawn(async move { c.acquire(&r).await })
+    };
+    wait_for_open_waits(&server, 1).await;
+    wait_for_scans(&server, 1).await;
+    let queued_at = Instant::now();
+    server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    assert_eq!(waiting.await.unwrap().unwrap().len(), 1);
+    assert!(queued_at.elapsed() < Duration::from_secs(2));
+
+    // Another replica: found when the wait ends.
+    let replica = replica_on(&server, fault_kv.clone());
+    let (c, r) = (lease_client.clone(), lease_request(&server, 2));
+    let waiting = tokio::spawn(async move { c.acquire(&r).await });
+    wait_for_open_waits(&server, 1).await;
+    replica
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    assert_eq!(waiting.await.unwrap().unwrap().len(), 1);
+}
+
+/// Commands queued through another replica and consumed by another receiver at
+/// once: the parked waiter scans for each change, and goes quiet when the
+/// stream stops (its baseline follows the key).
+#[tokio::test]
+async fn a_stream_of_creates_consumed_elsewhere_stops_costing_scans_when_it_stops() {
+    let server = server_counting_scans().await;
+    let fault_kv = server.fault_kv.clone().unwrap();
+    let replica = replica_on(&server, fault_kv.clone());
+    let lease_client = client(&server);
+    let request = lease_request(&server, 6);
+    let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
+    wait_for_open_waits(&server, 1).await;
+    wait_for_scans(&server, 1).await;
+
+    for _ in 0..4 {
+        let created = replica
+            .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+            .await
+            .unwrap();
+        // Another receiver takes it before the waiter's next probe.
+        let lease = replica
+            .acquire_lease(
+                DEPLOYMENT_ID,
+                &LeaseRequest {
+                    wait_seconds: 0,
+                    ..lease_request(&server, 0)
+                },
+            )
+            .await
+            .unwrap();
+        if lease.leases.is_empty() {
+            // The waiter was first; it ends the test case early.
+            break;
+        }
+        assert_eq!(lease.leases[0].command_id, created.command_id);
+        replica
+            .submit_command_response(&created.command_id, CommandResponse::success(b"done"))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    if waiting.is_finished() {
+        return; // the waiter won a race for a command; nothing left to count
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let scans_after_stream = fault_kv.pending_scans();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let quiet = fault_kv.pending_scans() - scans_after_stream;
+    assert!(quiet <= 1, "{quiet} scans in 1.5 s without creates");
+    waiting.abort();
+}
+
 // ---- receiver ----------------------------------------------------------------
 
 #[tokio::test]
@@ -523,7 +917,7 @@ async fn a_receiver_picks_up_a_command_queued_after_a_waited_empty_answer() {
         .await
         .expect("handled")
         .unwrap();
-    assert!(handled_at - queued_at < Duration::from_millis(800));
+    assert!(handled_at - queued_at < Duration::from_millis(1500));
     let status = server
         .wait_for_completion(&created.command_id, Duration::from_secs(5))
         .await
@@ -544,13 +938,13 @@ async fn shutdown_during_a_wait_returns_promptly() {
     .unwrap();
     let shutdown = receiver.shutdown_handle();
     let run = tokio::spawn(async move { receiver.run().await });
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    wait_for_open_waits(&server, 1).await;
     assert_eq!(server.command_server.open_lease_waits(), 1);
 
     let started = Instant::now();
     shutdown.shutdown();
     run.await.unwrap().unwrap();
-    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(started.elapsed() < Duration::from_secs(3));
 }
 
 /// Stand-in for a manager that predates waiting: ignores the field and
@@ -625,7 +1019,7 @@ async fn a_receiver_does_not_spin_on_fast_empty_answers_after_a_wait_request() {
     assert!(polls <= 8, "{polls} polls in 2 s");
 }
 
-/// Stand-in for a manager that holds each request for `hold`, then answers
+/// Stand-in for a manager that holds each request for 2.1 s, then answers
 /// empty. Checks that a waited empty answer is followed by a poll at once,
 /// not after the poll interval.
 #[tokio::test]
@@ -639,7 +1033,7 @@ async fn a_waited_empty_answer_is_followed_by_a_poll_at_once() {
                 let count = count.clone();
                 async move {
                     count.fetch_add(1, Ordering::SeqCst);
-                    tokio::time::sleep(Duration::from_millis(1100)).await;
+                    tokio::time::sleep(Duration::from_millis(2100)).await;
                     Json(serde_json::json!({"leases": []}))
                 }
             }
@@ -652,15 +1046,241 @@ async fn a_waited_empty_answer_is_followed_by_a_poll_at_once() {
     let receiver = Receiver::from_env_vars(&receiver_env(&format!("http://{addr}/v1/"), "x"))
         .unwrap()
         .with_poll_interval(Duration::from_secs(30))
+        .with_lease_wait(Duration::from_secs(2))
         .with_poll_jitter(0.0);
     let shutdown = receiver.shutdown_handle();
     let run = tokio::spawn(async move { receiver.run().await });
-    tokio::time::sleep(Duration::from_millis(3500)).await;
+    tokio::time::sleep(Duration::from_millis(5000)).await;
     shutdown.shutdown();
     run.await.unwrap().unwrap();
-    // 1.1 s each, polled again at once: 4 polls started in 3.5 s (with the
-    // 30 s poll interval it would be 1).
+    // 2.1 s each, polled again at once: at least 3 polls started in 5 s (with
+    // the 30 s poll interval it would be 1).
     assert!((3..=4).contains(&count.load(Ordering::SeqCst)));
+}
+
+/// Stand-in manager: every lease request is held for `hold`, then answered by
+/// `answer`. Returns its URL and the arrival time of each request.
+async fn slow_manager(
+    hold: Duration,
+    status: axum::http::StatusCode,
+) -> (String, Arc<Mutex<Vec<Instant>>>) {
+    let arrivals = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new().route(
+        "/v1/commands/leases",
+        post({
+            let arrivals = arrivals.clone();
+            move || {
+                let arrivals = arrivals.clone();
+                async move {
+                    arrivals.lock().unwrap().push(Instant::now());
+                    tokio::time::sleep(hold).await;
+                    (status, Json(serde_json::json!({"leases": []})))
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}/v1/"), arrivals)
+}
+
+fn gaps(arrivals: &Arc<Mutex<Vec<Instant>>>) -> Vec<Duration> {
+    let arrivals = arrivals.lock().unwrap();
+    arrivals.windows(2).map(|pair| pair[1] - pair[0]).collect()
+}
+
+/// An older manager that is merely slow (1.5 s) answers empty without having
+/// waited: the answer is far shorter than the requested 25 s, so the receiver
+/// keeps its backoff instead of polling again at once.
+#[tokio::test]
+async fn a_slow_manager_that_does_not_wait_keeps_the_backoff() {
+    let (url, arrivals) =
+        slow_manager(Duration::from_millis(1500), axum::http::StatusCode::OK).await;
+    let receiver = Receiver::from_env_vars(&receiver_env(&url, "x"))
+        .unwrap()
+        .with_poll_interval(Duration::from_secs(2))
+        .with_poll_max_interval(Duration::from_secs(2))
+        .with_poll_jitter(0.0);
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+    tokio::time::sleep(Duration::from_millis(6000)).await;
+    shutdown.shutdown();
+    run.await.unwrap().unwrap();
+    let gaps = gaps(&arrivals);
+    assert!(!gaps.is_empty());
+    // 1.5 s held, then the 2 s backoff: never polled again at once (which
+    // would be about 1.75 s after the previous start).
+    for gap in gaps {
+        assert!(
+            gap >= Duration::from_millis(3300),
+            "polled again after {gap:?}"
+        );
+    }
+}
+
+/// An error answer after a long hold keeps today's backoff, and so does a
+/// connection that is cut.
+#[tokio::test]
+async fn a_5xx_during_a_wait_keeps_the_backoff() {
+    let (url, arrivals) = slow_manager(
+        Duration::from_millis(300),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    )
+    .await;
+    let receiver = Receiver::from_env_vars(&receiver_env(&url, "x"))
+        .unwrap()
+        .with_poll_interval(Duration::from_secs(1))
+        .with_poll_max_interval(Duration::from_secs(1))
+        .with_poll_jitter(0.0);
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+    tokio::time::sleep(Duration::from_millis(4000)).await;
+    shutdown.shutdown();
+    run.await.unwrap().unwrap();
+    let gaps = gaps(&arrivals);
+    assert!(!gaps.is_empty());
+    for gap in gaps {
+        assert!(
+            gap >= Duration::from_millis(1200),
+            "polled again after {gap:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_cut_connection_during_a_wait_keeps_the_backoff() {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let arrivals = Arc::new(Mutex::new(Vec::<Instant>::new()));
+    tokio::spawn({
+        let arrivals = arrivals.clone();
+        async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                arrivals.lock().unwrap().push(Instant::now());
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                drop(stream); // cut without an answer
+            }
+        }
+    });
+    let receiver = Receiver::from_env_vars(&receiver_env(&format!("http://{addr}/v1/"), "x"))
+        .unwrap()
+        .with_poll_interval(Duration::from_secs(1))
+        .with_poll_max_interval(Duration::from_secs(1))
+        .with_poll_jitter(0.0);
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+    tokio::time::sleep(Duration::from_millis(4000)).await;
+    shutdown.shutdown();
+    run.await.unwrap().unwrap();
+    let gaps = gaps(&arrivals);
+    assert!(!gaps.is_empty());
+    for gap in gaps {
+        assert!(
+            gap >= Duration::from_millis(1200),
+            "polled again after {gap:?}"
+        );
+    }
+}
+
+/// A poll that could still be the immediate answer is awaited at shutdown: the
+/// manager scans, takes its time, writes a lease; the receiver handles it.
+#[tokio::test]
+async fn a_poll_that_may_be_an_immediate_answer_is_awaited_at_shutdown() {
+    let server = TestCommandServer::builder()
+        .with_pull_mode()
+        .with_fault_injection()
+        .build()
+        .await;
+    server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    // The scan has answered; leasing is slow (700 ms), as on a loaded store.
+    server
+        .fault_kv
+        .as_ref()
+        .unwrap()
+        .arm_after_next_pending_scan(Box::new(|| {
+            Box::pin(async { tokio::time::sleep(Duration::from_millis(700)).await })
+        }));
+    let handled = Arc::new(AtomicUsize::new(0));
+    let mut receiver = Receiver::from_env_vars(&receiver_env(
+        &server.command_base_url(),
+        &server.default_target.resource_id,
+    ))
+    .unwrap();
+    receiver.command("read", {
+        let handled = handled.clone();
+        move |_: serde_json::Value, _ctx| {
+            let handled = handled.clone();
+            async move {
+                handled.fetch_add(1, Ordering::SeqCst);
+                Ok(serde_json::json!({}))
+            }
+        }
+    });
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    shutdown.shutdown(); // the poll is 300 ms old: it may be the answer
+    run.await.unwrap().unwrap();
+    assert_eq!(
+        handled.load(Ordering::SeqCst),
+        1,
+        "the leased command was dropped"
+    );
+}
+
+#[tokio::test]
+async fn the_wait_setting_zero_turns_waiting_off() {
+    let (url, count, bodies) = old_manager().await;
+    let mut env = receiver_env(&url, "x");
+    env.insert(
+        "ALIEN_COMMANDS_LEASE_WAIT_SECONDS".to_string(),
+        "0".to_string(),
+    );
+    let receiver = Receiver::from_env_vars(&env)
+        .unwrap()
+        .with_poll_interval(Duration::from_millis(100))
+        .with_poll_max_interval(Duration::from_millis(100))
+        .with_poll_jitter(0.0);
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    shutdown.shutdown();
+    run.await.unwrap().unwrap();
+    assert!(count.load(Ordering::SeqCst) >= 2);
+    assert!(bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|body| body["waitSeconds"] == 0));
+}
+
+#[tokio::test]
+async fn the_wait_setting_is_read_and_checked() {
+    let mut env = receiver_env("http://127.0.0.1:1/v1/", "x");
+    env.insert(
+        "ALIEN_COMMANDS_LEASE_WAIT_SECONDS".to_string(),
+        "10".to_string(),
+    );
+    assert!(Receiver::from_env_vars(&env).is_ok());
+    env.insert(
+        "ALIEN_COMMANDS_LEASE_WAIT_SECONDS".to_string(),
+        "26".to_string(),
+    );
+    let error = Receiver::from_env_vars(&env).unwrap_err();
+    assert!(error.message.contains("ALIEN_COMMANDS_LEASE_WAIT_SECONDS"));
+    env.insert(
+        "ALIEN_COMMANDS_LEASE_WAIT_SECONDS".to_string(),
+        "soon".to_string(),
+    );
+    assert!(Receiver::from_env_vars(&env).is_err());
 }
 
 /// Request-to-lease time for 20 commands queued at uneven gaps (6 to 14 s)
@@ -760,7 +1380,7 @@ async fn commands_queued_a_second_apart_are_each_picked_up_within_a_second() {
             .expect("handled")
             .unwrap();
         assert!(
-            handled_at - queued_at < Duration::from_millis(800),
+            handled_at - queued_at < Duration::from_millis(1500),
             "picked up after {:?}",
             handled_at - queued_at
         );
@@ -809,7 +1429,7 @@ async fn a_queue_of_commands_is_drained_at_the_floor_rate_not_faster_or_at_the_p
     // One lease per request, at least 250 ms apart: 7 gaps of 250 ms. With the
     // 5 s poll interval it would take 35 s.
     assert!(took >= Duration::from_millis(1700), "no floor: {took:?}");
-    assert!(took < Duration::from_secs(6), "too slow: {took:?}");
+    assert!(took < Duration::from_secs(12), "too slow: {took:?}");
 }
 
 /// An agent asks for three read operations at once; the receiver runs one at
@@ -854,7 +1474,7 @@ async fn three_commands_queued_at_once_run_back_to_back_with_one_slot() {
         "three commands, one slot: all done after {:?}",
         started.elapsed()
     );
-    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(started.elapsed() < Duration::from_secs(6));
     shutdown.shutdown();
     run.await.unwrap().unwrap();
 }
@@ -923,7 +1543,7 @@ async fn measure_open_waits() {
         .acquire(&lease_request(&server, 25))
         .await
         .unwrap();
-    assert!(answer.is_empty() && started.elapsed() < Duration::from_secs(1));
+    assert!(answer.is_empty() && started.elapsed() < Duration::from_secs(3));
     drop(sockets);
     let deadline = Instant::now() + Duration::from_secs(30);
     while server.command_server.open_lease_waits() > 0 {

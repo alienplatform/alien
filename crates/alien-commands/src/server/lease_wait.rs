@@ -13,20 +13,51 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
 /// Open waiting lease requests one manager process holds by default. Over the
 /// cap a request is answered at once, as if it had not asked to wait.
 pub const DEFAULT_MAX_OPEN_LEASE_WAITS: usize = 5_000;
 
-/// How often a waiting request reads the target's wake key. Covers commands
-/// queued through another manager replica, whose in-process signal never
-/// reaches this process.
+/// Open waiting lease requests one manager process holds for a single
+/// (deployment, target) by default. A receiver needs one; the rest leave room
+/// for a restart that overlaps its old connection. Over the cap a request is
+/// answered at once, so one credential cannot take every slot.
+pub const DEFAULT_MAX_OPEN_LEASE_WAITS_PER_TARGET: usize = 8;
+
+/// How often the waiters of one target read its wake key, all together. Covers
+/// commands queued through another manager replica, whose in-process signal
+/// never reaches this process.
 pub const DEFAULT_LEASE_WAIT_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 
 type Key = (String, String);
 
+/// What the waiters of one target share.
+pub(crate) struct Shared {
+    notify: Notify,
+    /// Held while a waiter scans after a wake-up, so waiters woken by one
+    /// command scan one after the other, not all at once.
+    scan: tokio::sync::Mutex<ScanMemo>,
+    /// The last wake key read, so waiters on one target read it once per
+    /// interval together.
+    wake_read: tokio::sync::Mutex<Option<WakeRead>>,
+    /// When the last in-process signal was sent.
+    last_signal: Mutex<Option<Instant>>,
+}
+
+#[derive(Default)]
+pub(crate) struct ScanMemo {
+    /// Start of the last scan that found nothing queued.
+    empty_since: Option<Instant>,
+}
+
+struct WakeRead {
+    started: Instant,
+    value: Option<Vec<u8>>,
+}
+
 struct Slot {
-    notify: Arc<Notify>,
+    shared: Arc<Shared>,
     waiters: usize,
 }
 
@@ -50,28 +81,45 @@ impl LeaseWaiters {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Register a waiter, or `None` when `max_open` waits are already open.
+    /// Register a waiter, or `None` when `max_open` waits are already open in
+    /// this process or `max_per_target` on this key.
     pub(crate) fn register(
         self: &Arc<Self>,
         deployment_id: &str,
         target_resource_id: &str,
         max_open: usize,
+        max_per_target: usize,
     ) -> Option<LeaseWait> {
         let mut state = self.lock();
         if state.open >= max_open {
             return None;
         }
-        state.open += 1;
         let key = (deployment_id.to_string(), target_resource_id.to_string());
+        if state
+            .slots
+            .get(&key)
+            .is_some_and(|slot| slot.waiters >= max_per_target)
+        {
+            return None;
+        }
+        if max_per_target == 0 {
+            return None;
+        }
+        state.open += 1;
         let slot = state.slots.entry(key.clone()).or_insert_with(|| Slot {
-            notify: Arc::new(Notify::new()),
+            shared: Arc::new(Shared {
+                notify: Notify::new(),
+                scan: tokio::sync::Mutex::new(ScanMemo::default()),
+                wake_read: tokio::sync::Mutex::new(None),
+                last_signal: Mutex::new(None),
+            }),
             waiters: 0,
         });
         slot.waiters += 1;
         Some(LeaseWait {
             registry: self.clone(),
             key,
-            notify: slot.notify.clone(),
+            shared: slot.shared.clone(),
         })
     }
 
@@ -79,7 +127,12 @@ impl LeaseWaiters {
     pub(crate) fn notify(&self, deployment_id: &str, target_resource_id: &str) {
         let key = (deployment_id.to_string(), target_resource_id.to_string());
         if let Some(slot) = self.lock().slots.get(&key) {
-            slot.notify.notify_waiters();
+            *slot
+                .shared
+                .last_signal
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+            slot.shared.notify.notify_waiters();
         }
     }
 
@@ -97,12 +150,79 @@ impl LeaseWaiters {
 pub(crate) struct LeaseWait {
     registry: Arc<LeaseWaiters>,
     key: Key,
-    notify: Arc<Notify>,
+    shared: Arc<Shared>,
 }
 
 impl LeaseWait {
     pub(crate) fn notified(&self) -> tokio::sync::futures::Notified<'_> {
-        self.notify.notified()
+        self.shared.notify.notified()
+    }
+
+    /// When the last in-process signal for this target was sent: what a waiter
+    /// woken by a signal is woken "at". Later than the queued command's index
+    /// write, so a scan that starts after it sees the command.
+    pub(crate) fn last_signal(&self) -> Instant {
+        self.shared
+            .last_signal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(Instant::now)
+    }
+
+    /// The wake key's value as read by a read that started at or after
+    /// `not_before`, and when that read started. Waiters on one target share the
+    /// read: one that finds a recent enough value uses it, so N waiters cost
+    /// about one read per probe interval, not N.
+    pub(crate) async fn wake_value<F, Fut>(
+        &self,
+        not_before: Instant,
+        read: F,
+    ) -> (Option<Vec<u8>>, Instant)
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Option<Vec<u8>>>,
+    {
+        let mut cached = self.shared.wake_read.lock().await;
+        if let Some(entry) = cached.as_ref() {
+            if entry.started >= not_before {
+                return (entry.value.clone(), entry.started);
+            }
+        }
+        let started = Instant::now();
+        let value = read().await;
+        *cached = Some(WakeRead {
+            started,
+            value: value.clone(),
+        });
+        (value, started)
+    }
+
+    /// Run `scan` while holding the target's scan turn. `woken_at` is when this
+    /// waiter was woken; when a scan that began after it already found the
+    /// queue empty, this waiter's wake-up is spent and `None` is returned
+    /// without scanning. A scan that finds nothing is remembered for the
+    /// waiters behind it.
+    pub(crate) async fn scan_in_turn<T, F, Fut>(
+        &self,
+        woken_at: Option<Instant>,
+        scan: F,
+    ) -> Option<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = (T, bool)>,
+    {
+        let mut memo = self.shared.scan.lock().await;
+        if let (Some(woken), Some(empty)) = (woken_at, memo.empty_since) {
+            if empty >= woken {
+                return None;
+            }
+        }
+        let started = Instant::now();
+        let (result, found_nothing) = scan().await;
+        if found_nothing {
+            memo.empty_since = Some(started);
+        }
+        Some(result)
     }
 }
 
@@ -126,9 +246,9 @@ mod tests {
     #[test]
     fn entry_is_removed_when_the_last_waiter_leaves() {
         let waiters = Arc::new(LeaseWaiters::default());
-        let a = waiters.register("dep", "queue", 10).unwrap();
-        let b = waiters.register("dep", "queue", 10).unwrap();
-        let other = waiters.register("dep", "other", 10).unwrap();
+        let a = waiters.register("dep", "queue", 10, 10).unwrap();
+        let b = waiters.register("dep", "queue", 10, 10).unwrap();
+        let other = waiters.register("dep", "other", 10, 10).unwrap();
         assert_eq!(waiters.open_keys(), 2);
         drop(a);
         assert_eq!(waiters.open_keys(), 2);
@@ -141,9 +261,23 @@ mod tests {
     #[test]
     fn registration_is_refused_over_the_cap() {
         let waiters = Arc::new(LeaseWaiters::default());
-        let first = waiters.register("dep", "queue", 1).unwrap();
-        assert!(waiters.register("dep", "other", 1).is_none());
+        let first = waiters.register("dep", "queue", 1, 1).unwrap();
+        assert!(waiters.register("dep", "other", 1, 1).is_none());
         drop(first);
-        assert!(waiters.register("dep", "other", 1).is_some());
+        assert!(waiters.register("dep", "other", 1, 1).is_some());
+    }
+
+    #[test]
+    fn registration_is_refused_over_the_per_target_cap() {
+        let waiters = Arc::new(LeaseWaiters::default());
+        let held: Vec<_> = (0..2)
+            .map(|_| waiters.register("dep", "queue", 100, 2).unwrap())
+            .collect();
+        assert!(waiters.register("dep", "queue", 100, 2).is_none());
+        // Another target and another deployment are unaffected.
+        assert!(waiters.register("dep", "other", 100, 2).is_some());
+        assert!(waiters.register("dep2", "queue", 100, 2).is_some());
+        drop(held);
+        assert!(waiters.register("dep", "queue", 100, 2).is_some());
     }
 }
