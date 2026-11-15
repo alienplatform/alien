@@ -230,6 +230,9 @@ struct Source {
     restart_count: i32,
     terminal: bool,
     initial_since: DateTime<Utc>,
+    /// Cluster scope: a saved cursor of this container instance wins over
+    /// `initial_since`, which only applies to a container read for the first time.
+    prefer_cursor: bool,
 }
 
 struct StreamTask {
@@ -502,6 +505,7 @@ fn selected_sources(
                 restart_count,
                 terminal: phase != Some("Running"),
                 initial_since: initial_since.clone(),
+                prefer_cursor: config.cluster.is_some(),
             }
         })
         .collect()
@@ -599,36 +603,51 @@ fn finished_since(pod: &Pod, since: DateTime<Utc>) -> bool {
         })
 }
 
-/// Pick the streams to run when more are eligible than allowed. Namespaces
-/// take turns, so one busy namespace does not crowd out the others, and the
-/// window moves with `slot`, so every container is read in turn.
-fn choose_streams(
-    mut eligible: Vec<(String, Source)>,
-    max_streams: usize,
-    slot: i64,
-) -> Vec<Source> {
+/// Pick the streams to run when more are eligible than allowed. Each namespace
+/// gets an equal share of the streams (a namespace with fewer containers gives
+/// its unused share to the others), so one busy namespace does not crowd out the
+/// rest. Inside a namespace the window moves with `slot` by the size of its
+/// share, so every container is read in turn.
+fn choose_streams(eligible: Vec<(String, Source)>, max_streams: usize, slot: i64) -> Vec<Source> {
     if eligible.len() <= max_streams {
         return eligible.into_iter().map(|(_, source)| source).collect();
     }
-    eligible.sort();
-    let mut by_namespace =
-        std::collections::BTreeMap::<String, std::collections::VecDeque<Source>>::new();
+    let mut by_namespace = std::collections::BTreeMap::<String, Vec<Source>>::new();
     for (namespace, source) in eligible {
-        by_namespace.entry(namespace).or_default().push_back(source);
+        by_namespace.entry(namespace).or_default().push(source);
     }
-    let mut order = Vec::new();
-    while !by_namespace.is_empty() {
-        by_namespace.retain(|_, queue| {
-            if let Some(source) = queue.pop_front() {
-                order.push(source);
+    for sources in by_namespace.values_mut() {
+        sources.sort();
+    }
+    // Hand out the streams one at a time, namespace by namespace.
+    let mut share: std::collections::BTreeMap<&String, usize> = by_namespace
+        .keys()
+        .map(|namespace| (namespace, 0))
+        .collect();
+    let mut given = 0;
+    while given < max_streams {
+        let mut progressed = false;
+        for (namespace, sources) in &by_namespace {
+            let taken = share
+                .get_mut(namespace)
+                .expect("every namespace has a share");
+            if given < max_streams && *taken < sources.len() {
+                *taken += 1;
+                given += 1;
+                progressed = true;
             }
-            !queue.is_empty()
-        });
+        }
+        if !progressed {
+            break;
+        }
     }
-    let start = (slot.unsigned_abs() as usize).wrapping_mul(max_streams) % order.len();
-    order.rotate_left(start);
-    order.truncate(max_streams);
-    order
+    let mut chosen = Vec::with_capacity(max_streams);
+    for (namespace, sources) in &by_namespace {
+        let quota = share[namespace];
+        let start = (slot.unsigned_abs() as usize).wrapping_mul(quota) % sources.len();
+        chosen.extend(sources.iter().cycle().skip(start).take(quota).cloned());
+    }
+    chosen
 }
 
 async fn reconcile_cluster(
@@ -648,7 +667,8 @@ async fn reconcile_cluster(
             return Ok(());
         }
     };
-    let pods = list_cluster_pods(client, &cluster.namespaces, cluster.pod_selector.as_deref()).await?;
+    let pods =
+        list_cluster_pods(client, &cluster.namespaces, cluster.pod_selector.as_deref()).await?;
     let mut eligible = Vec::new();
     let mut namespaces = HashMap::<String, String>::new();
     for pod in &pods {
@@ -844,11 +864,16 @@ async fn read_stream_once(
             message: "stored Pod log cursor has an invalid timestamp".to_string(),
         })?
         .map(|value| value.with_timezone(&Utc));
-    let replay_time = Some(
-        saved_time
+    // Cluster scope continues from the saved cursor of this container instance, so
+    // output written while no stream was open is not lost. The start time only
+    // applies to a container with no cursor. Namespace scope keeps its floor.
+    let replay_time = Some(match (saved_time, source.prefer_cursor) {
+        (Some(saved), true) => saved,
+        (saved, false) => saved
             .unwrap_or_else(|| source.initial_since.clone())
             .max(source.initial_since.clone()),
-    );
+        (None, true) => source.initial_since.clone(),
+    });
     let url = format!(
         "{}/api/v1/namespaces/{}/pods/{}/log",
         client.get_base_url().trim_end_matches('/'),
@@ -1200,6 +1225,7 @@ mod tests {
             initial_since: DateTime::parse_from_rfc3339("2026-09-27T08:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            prefer_cursor: false,
         };
         let cancel = CancellationToken::new();
         read_stream_once(&client, &db, "demo", "dep_test", &source, &cancel)
@@ -1333,6 +1359,7 @@ mod tests {
                 restart_count: 0,
                 terminal: false,
                 initial_since: Utc::now(),
+                prefer_cursor: false,
             },
         )
     }
@@ -1341,15 +1368,28 @@ mod tests {
     fn a_busy_namespace_does_not_crowd_out_the_others() {
         let mut eligible: Vec<_> = (0..30).map(|i| source("busy", i)).collect();
         eligible.extend((0..3).map(|i| source("quiet", i)));
-        let chosen = choose_streams(eligible, 10, 0);
-        assert_eq!(chosen.len(), 10);
-        assert_eq!(
-            chosen
-                .iter()
-                .filter(|s| s.pod_uid.starts_with("quiet"))
-                .count(),
-            3
-        );
+        // In every window, not only the first: the quiet namespace is always served,
+        // and a different slice of the busy one is read each time.
+        let mut busy_seen = HashSet::new();
+        for slot in 0..12 {
+            let chosen = choose_streams(eligible.clone(), 10, slot);
+            assert_eq!(chosen.len(), 10);
+            assert_eq!(
+                chosen
+                    .iter()
+                    .filter(|s| s.pod_uid.starts_with("quiet"))
+                    .count(),
+                3,
+                "slot {slot}"
+            );
+            busy_seen.extend(
+                chosen
+                    .into_iter()
+                    .filter(|s| s.pod_uid.starts_with("busy"))
+                    .map(|s| s.pod_uid),
+            );
+        }
+        assert_eq!(busy_seen.len(), 30);
     }
 
     #[test]
@@ -1432,6 +1472,7 @@ mod tests {
             restart_count: 0,
             terminal: false,
             initial_since: Utc::now(),
+            prefer_cursor: false,
         };
         let mut last_time = None;
         let mut ordinal = 0;
@@ -1483,9 +1524,7 @@ mod tests {
         assert_eq!(offset.expect("cursor").ordinal, 2);
     }
 
-    async fn fake_api(
-        app: Router,
-    ) -> (KubernetesClient, tokio::task::JoinHandle<()>) {
+    async fn fake_api(app: Router) -> (KubernetesClient, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
             .await
             .expect("bind fake Kubernetes API");
@@ -1537,32 +1576,123 @@ mod tests {
             }),
         );
         let (client, server) = fake_api(app).await;
-        let pods = list_cluster_pods(&client, &[], Some("app=web")).await.unwrap();
+        let pods = list_cluster_pods(&client, &[], Some("app=web"))
+            .await
+            .unwrap();
         server.abort();
-        let names: Vec<_> = pods.iter().filter_map(|p| p.metadata.name.clone()).collect();
+        let names: Vec<_> = pods
+            .iter()
+            .filter_map(|p| p.metadata.name.clone())
+            .collect();
         assert_eq!(names, ["a", "b", "c", "d"]);
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 3);
-        assert_eq!(requests[0].get("resourceVersion").map(String::as_str), Some("0"));
-        assert!(requests[1..].iter().all(|r| !r.contains_key("resourceVersion")));
-        assert!(requests.iter().all(|r| r.get("labelSelector").map(String::as_str) == Some("app=web")));
+        assert_eq!(
+            requests[0].get("resourceVersion").map(String::as_str),
+            Some("0")
+        );
+        assert!(requests[1..]
+            .iter()
+            .all(|r| !r.contains_key("resourceVersion")));
+        assert!(requests
+            .iter()
+            .all(|r| r.get("labelSelector").map(String::as_str) == Some("app=web")));
     }
 
     #[tokio::test]
     async fn named_namespaces_are_listed_one_by_one_never_cluster_wide() {
         let app = Router::new()
-            .route("/api/v1/namespaces/a/pods", get(|| async { pod_list(&["in-a"], None) }))
-            .route("/api/v1/namespaces/b/pods", get(|| async { pod_list(&["in-b"], None) }))
+            .route(
+                "/api/v1/namespaces/a/pods",
+                get(|| async { pod_list(&["in-a"], None) }),
+            )
+            .route(
+                "/api/v1/namespaces/b/pods",
+                get(|| async { pod_list(&["in-b"], None) }),
+            )
             .route(
                 "/api/v1/pods",
-                get(|| async { (StatusCode::FORBIDDEN, "cluster-wide listing must not be used") }),
+                get(|| async {
+                    (
+                        StatusCode::FORBIDDEN,
+                        "cluster-wide listing must not be used",
+                    )
+                }),
             );
         let (client, server) = fake_api(app).await;
         let pods = list_cluster_pods(&client, &["a".into(), "b".into()], None)
             .await
             .unwrap();
         server.abort();
-        let names: Vec<_> = pods.iter().filter_map(|p| p.metadata.name.clone()).collect();
+        let names: Vec<_> = pods
+            .iter()
+            .filter_map(|p| p.metadata.name.clone())
+            .collect();
         assert_eq!(names, ["in-a", "in-b"]);
+    }
+
+    #[tokio::test]
+    async fn cluster_scope_resumes_from_the_saved_cursor_and_namespace_scope_keeps_its_floor() {
+        let since = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = since.clone();
+        let app = Router::new().route(
+            "/api/v1/namespaces/demo/pods/app-1/log",
+            get(move |Query(query): Query<HashMap<String, String>>| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock()
+                        .unwrap()
+                        .push(query.get("sinceTime").cloned().unwrap_or_default());
+                    ""
+                }
+            }),
+        );
+        let (client, server) = fake_api(app).await;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(
+            data_dir.path().to_str().unwrap(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .unwrap();
+        // A cursor from before this operator process started.
+        let cursor = PodLogOffset {
+            timestamp: "2026-09-27T07:00:00Z".to_string(),
+            ordinal: 1,
+        };
+        db.store_pod_log_batch("uid-1", "app", 0, &cursor, &[])
+            .await
+            .unwrap();
+        let started = DateTime::parse_from_rfc3339("2026-09-27T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let source = |prefer_cursor| Source {
+            pod_uid: "uid-1".into(),
+            pod_name: "app-1".into(),
+            container: "app".into(),
+            restart_count: 0,
+            terminal: true,
+            initial_since: started,
+            prefer_cursor,
+        };
+        let cancel = CancellationToken::new();
+        read_stream_once(&client, &db, "demo", "dep", &source(true), &cancel)
+            .await
+            .unwrap();
+        read_stream_once(&client, &db, "demo", "dep", &source(false), &cancel)
+            .await
+            .unwrap();
+        server.abort();
+        let since = since.lock().unwrap();
+        assert!(
+            since[0].starts_with("2026-09-27T06:59:59"),
+            "cluster scope resumes at the cursor: {}",
+            since[0]
+        );
+        assert!(
+            since[1].starts_with("2026-09-27T07:59:59"),
+            "namespace scope keeps its floor: {}",
+            since[1]
+        );
     }
 }
