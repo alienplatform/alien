@@ -645,7 +645,7 @@ fn the_chart_works_as_a_dependency_under_an_alias_and_stays_unbranded_without_br
     write_chart(&parent.path().join("charts/operator"));
     std::fs::write(
         parent.path().join("Chart.yaml"),
-        "apiVersion: v2\nname: acme-platform\nversion: 1.0.0\ndependencies:\n  - name: operator\n    alias: acme-operator\n    version: 1.2.3\n",
+        "apiVersion: v2\nname: acme-suite\nversion: 1.0.0\ndependencies:\n  - name: operator\n    alias: acme-operator\n    version: 1.2.3\n",
     )
     .unwrap();
     std::fs::write(
