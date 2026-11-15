@@ -1665,6 +1665,107 @@ mod persistence_tests {
             .is_err());
     }
 
+    /// An identity store that holds the state in memory and can be told to
+    /// refuse writes, as the Kubernetes Secret store does.
+    struct TestStore {
+        state: std::sync::Mutex<Option<DailyIdentityState>>,
+        conflicts: std::sync::atomic::AtomicUsize,
+        blocked: std::sync::Mutex<Option<String>>,
+        writes: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::identity_store::IdentityStore for TestStore {
+        async fn read(&self) -> Result<Option<DailyIdentityState>> {
+            Ok(self.state.lock().unwrap().clone())
+        }
+        async fn write(&self, state: &DailyIdentityState) -> Result<()> {
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.conflicts.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                self.conflicts
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(AlienError::new(ErrorData::IdentityConflict));
+            }
+            *self.state.lock().unwrap() = Some(state.clone());
+            Ok(())
+        }
+        async fn persist_enrolled(&self, state: &DailyIdentityState) -> Result<()> {
+            self.write(state).await
+        }
+        async fn clear_unenrolled(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn check_enrolled(&self, _state: &DailyIdentityState) -> Result<()> {
+            Ok(())
+        }
+        fn rotation_blocked(&self) -> Option<String> {
+            self.blocked.lock().unwrap().clone()
+        }
+    }
+
+    async fn operator_on_store(
+        state: &DailyIdentityState,
+    ) -> (Arc<OperatorDb>, Arc<TestStore>, tempfile::TempDir) {
+        let store = Arc::new(TestStore {
+            state: std::sync::Mutex::new(Some(state.clone())),
+            conflicts: std::sync::atomic::AtomicUsize::new(0),
+            blocked: std::sync::Mutex::new(None),
+            writes: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+            .await
+            .unwrap()
+            .use_identity_store(store.clone())
+            .await
+            .unwrap();
+        (Arc::new(db), store, directory)
+    }
+
+    /// The identity cannot be saved (the Secret was deleted), so a rotation could
+    /// lose the successor key. The operator keeps its working key and does not rotate.
+    #[tokio::test]
+    async fn a_blocked_identity_store_keeps_the_working_key_and_does_not_rotate() {
+        let (_db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let (db, store, _directory) = operator_on_store(&state).await;
+        *store.blocked.lock().unwrap() = Some("the Secret was deleted".into());
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        let (_, token) = identity
+            .clone()
+            .connect(request(&state, "ax_enroll_original"))
+            .await
+            .expect("the current key still works");
+        assert_eq!(token, "ax_cap_v1_recovered");
+        assert_eq!(*manager.current.lock().await, key_hash(&state.current));
+        assert_eq!(store.writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Another operator saved first: the write is refused, and this one starts over
+    /// with what is saved and rotates.
+    #[tokio::test]
+    async fn a_conflicting_identity_write_is_retried_after_re_reading() {
+        let (_db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let (db, store, _directory) = operator_on_store(&state).await;
+        store
+            .conflicts
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        identity
+            .clone()
+            .connect(request(&state, "ax_enroll_original"))
+            .await
+            .expect("the rotation succeeds on the second try");
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_ne!(saved.current, state.current, "the key was rotated");
+        assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
+        assert!(store.writes.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+    }
+
     /// The manager cannot rotate for hours. The key still has six hours, so
     /// the operator keeps working with it and does not need a new code.
     #[tokio::test]

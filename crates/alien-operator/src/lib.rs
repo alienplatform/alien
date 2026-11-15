@@ -1760,8 +1760,25 @@ impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
 /// `OPERATOR_ACCESS_REQUESTS=false` stops the in-cluster approval loop. Unset
 /// or any other value keeps it running, as before.
 fn access_requests_enabled() -> bool {
-    !std::env::var("OPERATOR_ACCESS_REQUESTS")
-        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("false"))
+    access_requests_setting_enabled(std::env::var("OPERATOR_ACCESS_REQUESTS").ok().as_deref())
+}
+
+fn access_requests_setting_enabled(value: Option<&str>) -> bool {
+    !value.is_some_and(|value| value.trim().eq_ignore_ascii_case("false"))
+}
+
+#[cfg(test)]
+mod access_requests_switch_tests {
+    use super::access_requests_setting_enabled;
+
+    #[test]
+    fn only_an_explicit_false_stops_the_approval_loop() {
+        assert!(access_requests_setting_enabled(None));
+        assert!(access_requests_setting_enabled(Some("true")));
+        assert!(access_requests_setting_enabled(Some("")));
+        assert!(!access_requests_setting_enabled(Some("false")));
+        assert!(!access_requests_setting_enabled(Some(" FALSE ")));
+    }
 }
 
 mod daily_identity;
