@@ -1149,7 +1149,11 @@ impl StackExecutor {
     /// rollout then fails. A dependency this executor will not update (not in scope, held,
     /// or a setup-owned resource only setup changes) counts as rolled, so nothing waits
     /// for a change that never comes.
-    fn dependency_rolled(&self, dependency_id: &str, state: &StackState) -> Result<bool> {
+    pub(super) fn dependency_rolled(
+        &self,
+        dependency_id: &str,
+        state: &StackState,
+    ) -> Result<bool> {
         self.dependency_rolled_memo(dependency_id, state, &mut RolledWalk::default(), true)
     }
 
@@ -1224,9 +1228,10 @@ impl StackExecutor {
         controller.needs_update(&context)
     }
 
-    /// Asks the controller whether it wants an update with its config unchanged. A check that
-    /// fails is logged and reads as no request: a resource whose check cannot run must not stop
-    /// the rest of the stack from rolling.
+    /// Asks the controller whether it wants an update with its config unchanged, for a
+    /// dependent deciding whether to wait. A check that fails is logged and reads as no
+    /// request: the resource's own plan reports the failure, and its dependents must not wait
+    /// on a check that cannot run.
     fn controller_update_requested(
         &self,
         resource_id: &str,
@@ -1935,13 +1940,12 @@ impl StackExecutor {
                         if let Some(resource_controller) =
                             current_resource_state.get_internal_controller()?
                         {
-                            if self.controller_update_requested(
-                                resource_id,
+                            if self.controller_needs_update(
                                 resource_controller.as_ref(),
                                 desired_config,
                                 current_resource_state,
                                 state,
-                            ) {
+                            )? {
                                 debug!(
                                     "Scheduling UPDATE transition for '{}' due to deployment config drift",
                                     resource_id

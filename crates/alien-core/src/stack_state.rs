@@ -451,6 +451,30 @@ mod tests {
         assert!(round_trip.dependency_update_pending);
     }
 
+    /// State saved before `requestedUpdateRan` existed reads as no requested update having run,
+    /// and the field stays out of the saved form while it is false.
+    #[test]
+    fn a_resource_state_saved_without_the_requested_update_record_reads_as_none_ran() {
+        let saved = serde_json::json!({
+            "type": "storage",
+            "status": "running",
+            "config": { "type": "storage", "id": "data" },
+        });
+        let state: StackResourceState = serde_json::from_value(saved).unwrap();
+        assert!(!state.requested_update_ran);
+        assert!(serde_json::to_value(&state)
+            .unwrap()
+            .get("requestedUpdateRan")
+            .is_none());
+
+        let mut ran = state;
+        ran.requested_update_ran = true;
+        let saved_after = serde_json::to_value(&ran).unwrap();
+        assert_eq!(saved_after["requestedUpdateRan"], serde_json::json!(true));
+        let round_trip: StackResourceState = serde_json::from_value(saved_after).unwrap();
+        assert!(round_trip.requested_update_ran);
+    }
+
     #[test]
     fn resource_prefix_validation_accepts_canonical_prefixes() {
         for prefix in ["abc", "a-b", "acme-prod", "a1-b2-c3", "a1234567890"] {

@@ -1020,12 +1020,13 @@ mod rollout_order {
             .build()
     }
 
-    /// A dependency whose update check cannot run does not hold its dependents: they roll, and
-    /// the dependency itself stays as it was.
+    /// A dependency whose update check cannot run does not make its dependents wait, but the
+    /// failure is not hidden: the dependency's own plan still reports it, as it always did.
     #[tokio::test]
-    async fn dependents_roll_when_the_dependency_check_errors() -> Result<()> {
+    async fn a_failing_check_is_reported_by_its_own_plan_and_does_not_hold_dependents() -> Result<()>
+    {
         let (dep, app) = ("dep-check-errors", "app-check-errors");
-        let mut state = run_to_synced(
+        let state = run_to_synced(
             &new_executor(&requested_stack(dep, app, "r1", false))?,
             new_test_state(),
         )
@@ -1034,13 +1035,19 @@ mod rollout_order {
 
         crate::worker::fail_test_worker_update_check(dep, true);
         let executor = new_executor(&requested_stack(dep, app, "r2", false))?;
-        for _ in 0..40 {
-            state = executor.step(state).await?.next_state;
-        }
+        let plan = executor.plan(&state);
+        let rolled = executor.dependency_rolled(dep, &state);
         crate::worker::fail_test_worker_update_check(dep, false);
 
-        assert_eq!(image(&state, app), format!("{app}-r2"));
-        assert_all_running(&state, &[dep, app]);
+        let error = plan.expect_err("the failing check must be reported by the plan");
+        assert!(
+            format!("{error:?}").contains("the update check cannot run"),
+            "unexpected plan error: {error:?}"
+        );
+        assert!(
+            rolled?,
+            "the dependents must not wait on a check that cannot run"
+        );
         Ok(())
     }
 
