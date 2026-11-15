@@ -832,3 +832,102 @@ fn the_name_label_is_quoted_so_a_numeric_looking_brand_stays_a_string() {
     let rendered = render(&["--set", &format!("token={TOKEN}")]);
     assert!(rendered.contains("app.kubernetes.io/name: \"operator\""), "{rendered}");
 }
+
+/// Two copies of the chart under different aliases of one parent release, both
+/// without a brand: each Service must reach only its own Operator.
+#[test]
+fn two_aliased_copies_do_not_share_pod_labels() {
+    let parent = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(parent.path().join("charts")).unwrap();
+    write_chart(&parent.path().join("charts/operator"));
+    std::fs::write(
+        parent.path().join("Chart.yaml"),
+        "apiVersion: v2\nname: suite\nversion: 1.0.0\ndependencies:\n  - name: operator\n    alias: east\n    version: 1.2.3\n  - name: operator\n    alias: west\n    version: 1.2.3\n",
+    )
+    .unwrap();
+    std::fs::write(
+        parent.path().join("values.yaml"),
+        format!(
+            "east:\n  token: {TOKEN}\n  otlp: {{enabled: true}}\nwest:\n  token: {TOKEN}\n  otlp: {{enabled: true}}\n"
+        ),
+    )
+    .unwrap();
+    let output = helm(parent.path(), &[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let all = documents(&String::from_utf8(output.stdout).unwrap());
+    let selectors: Vec<_> = kind(&all, "Service")
+        .iter()
+        .map(|service| format!("{:?}", service["spec"]["selector"]))
+        .collect();
+    assert_eq!(selectors.len(), 2);
+    assert_ne!(selectors[0], selectors[1], "both Services select both Operators");
+    let pod_labels: Vec<_> = kind(&all, "Deployment")
+        .iter()
+        .map(|d| format!("{:?}", d["spec"]["template"]["metadata"]["labels"]))
+        .collect();
+    assert_ne!(pod_labels[0], pod_labels[1]);
+}
+
+/// The same long release name in two namespaces must give two cluster-wide
+/// names, and short names stay as they were.
+#[test]
+fn long_release_names_in_different_namespaces_keep_separate_cluster_role_names() {
+    let release = "r".repeat(53);
+    let role_name = |namespace: &str| {
+        let directory = tempfile::tempdir().unwrap();
+        write_chart(directory.path());
+        let output = Command::new("helm")
+            .args(["template", &release])
+            .arg(directory.path())
+            .args(["--namespace", namespace, "--set", &format!("token={TOKEN}")])
+            .output()
+            .expect("helm must be installed to run the chart tests");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let all = documents(&String::from_utf8(output.stdout).unwrap());
+        let name = kind(&all, "ClusterRole")[0]["metadata"]["name"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let binding = kind(&all, "ClusterRoleBinding")[0]["roleRef"]["name"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(name, binding);
+        name
+    };
+    let (east, west) = (role_name("production-east"), role_name("production-west"));
+    assert_ne!(east, west);
+    assert!(east.len() <= 63 && west.len() <= 63);
+    let all = documents(&render(&["--set", &format!("token={TOKEN}")]));
+    assert_eq!(
+        kind(&all, "ClusterRole")[0]["metadata"]["name"].as_str(),
+        Some("alien-shop")
+    );
+}
+
+#[test]
+fn a_second_release_can_leave_out_the_shared_approval_definition() {
+    let arguments = |extra: &[&'static str]| {
+        let mut all = vec!["--set".to_string(), format!("token={TOKEN}")];
+        all.extend(["--set".into(), "accessRequests.enabled=true".into()]);
+        all.extend(extra.iter().map(|s| s.to_string()));
+        all
+    };
+    let render_with = |extra: &[&'static str]| {
+        let arguments = arguments(extra);
+        let refs: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        render(&refs)
+    };
+    let first = documents(&render_with(&[]));
+    assert_eq!(kind(&first, "CustomResourceDefinition").len(), 1);
+    let second = render_with(&["--set", "accessRequests.installDefinition=false"]);
+    let second_docs = documents(&second);
+    assert!(kind(&second_docs, "CustomResourceDefinition").is_empty());
+    // The Operator still runs the approval loop and still has the rules for it.
+    assert!(second.contains("name: OPERATOR_ACCESS_REQUESTS\n              value: \"true\""));
+    assert_eq!(rules(kind(&second_docs, "ClusterRole")[0]).len(), 9);
+}

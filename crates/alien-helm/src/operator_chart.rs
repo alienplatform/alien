@@ -203,6 +203,11 @@ accessRequests:
   # The in-cluster approval flow (a custom resource). Off by default. The resource definition is
   # cluster-wide and kept when the release is removed, so approvals survive a reinstall.
   enabled: false
+  # Install the approval resource definition with this release. It is cluster-wide, shared by every
+  # release with the same brand, and kept when a release is removed. Set false for a second release
+  # in a cluster (or a reinstall under another name) and it uses the definition already there.
+  # Otherwise Helm stops with "exists and cannot be imported into the current release".
+  installDefinition: true
 
 # Ship the Operator under your own name, with no image of your own. All empty means the default
 # product name. They become the Operator's packaged configuration (a ConfigMap), so the approval
@@ -285,7 +290,10 @@ fn values_schema_json() -> serde_json::Result<String> {
             "accessRequests": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {"enabled": {"type": "boolean"}}
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "installDefinition": {"type": "boolean"}
+                }
             },
             "operations": {"type": "object"},
             "brand": {
@@ -497,7 +505,7 @@ fn access_request_crd_template(names: &AccessRequestCrdNames) -> String {
         "metadata:\n  annotations:\n    helm.sh/resource-policy: keep\n",
         1,
     );
-    format!("{{{{- if .Values.accessRequests.enabled }}}}\n{crd}{{{{- end }}}}\n")
+    format!("{{{{- if and .Values.accessRequests.enabled .Values.accessRequests.installDefinition }}}}\n{crd}{{{{- end }}}}\n")
 }
 
 fn yaml_string(value: &str) -> String {
@@ -513,8 +521,14 @@ const HELPERS: &str = r#"{{- /* The name every object derives from. Installed on
 {{- end -}}
 {{- end -}}
 
+{{- /* Cluster-wide names cannot repeat across namespaces. Up to 63 characters they are the release and namespace as they are; longer ones keep the start and end with a short hash of the whole name, so two long names that differ only at the end stay apart. */ -}}
 {{- define "operator.clusterRoleName" -}}
-{{- printf "%s-%s" (include "operator.name" .) .Release.Namespace | trunc 63 | trimSuffix "-" -}}
+{{- $full := printf "%s-%s" (include "operator.name" .) .Release.Namespace -}}
+{{- if le (len $full) 63 -}}
+{{- $full -}}
+{{- else -}}
+{{- printf "%s-%s" ($full | trunc 54 | trimSuffix "-") (sha256sum $full | trunc 8) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "operator.identitySecret" -}}
@@ -551,7 +565,7 @@ const HELPERS: &str = r#"{{- /* The name every object derives from. Installed on
 
 {{- define "operator.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "operator.brandName" . | quote }}
-app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/instance: {{ include "operator.name" . }}
 {{- end -}}
 
 {{- define "operator.labels" -}}
@@ -878,6 +892,13 @@ Applications can send OTLP over HTTP to:
   http://{{ include "operator.name" . }}.{{ .Release.Namespace }}.svc:4318
 {{- end }}
 
+{{- if .Values.accessRequests.enabled }}
+
+The approval resource definition is cluster-wide and kept when this release is removed. If Helm
+stopped with "exists and cannot be imported into the current release", another release already owns
+it: install again with `--set accessRequests.installDefinition=false`.
+{{- end }}
+
 About the enrollment token:
   * It works once, within an hour. The operator then keeps its identity in the Secret
     {{ include "operator.identitySecret" . }}; upgrades without a token leave it alone.
@@ -922,7 +943,7 @@ or `--set token=<enrollment token>`.
 
 `token`, `existingSecret`, `image.repository`, `image.digest`, `permission`
 (`diagnostics` or `remediation`), `logs.*`, `otlp.enabled`, `accessRequests.enabled`,
-`operations`, `resources`, `nodeSelector`, `tolerations`, `imagePullSecrets`, `extraEnv`, `brand.*`.
+`accessRequests.installDefinition`, `operations`, `resources`, `nodeSelector`, `tolerations`, `imagePullSecrets`, `extraEnv`, `brand.*`.
 See `values.yaml`. The `brand.*` values ship the Operator under your own name with no image of your
 own: they become the Operator's packaged configuration (a ConfigMap), so the release's labels, the
 approval resource group and the log lines use that name:
@@ -933,7 +954,10 @@ approval resource group and the log lines use that name:
 
 `brand.name` is in the Deployment's selector, so `helm upgrade` cannot change it. With
 `accessRequests.enabled` and any `brand.*` value, `brand.labelDomain` is required (the render fails
-without it). The approval resource definition is cluster-wide and kept on uninstall.
+without it). The approval resource definition is cluster-wide and kept on uninstall. A second release in the
+same cluster with the same brand (or a reinstall under another release name) sets
+`accessRequests.installDefinition=false` and uses the definition already there; without it Helm
+stops with `exists and cannot be imported into the current release: invalid ownership metadata`.
 
 There is no self-update: whoever installs the chart owns the image version.
 "#;
