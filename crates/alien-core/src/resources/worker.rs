@@ -233,9 +233,10 @@ pub struct Worker {
     /// Code for the worker, either a pre-built image or source code to be built.
     pub code: WorkerCode,
 
-    /// Kubernetes Pod Security profile. Absent means `restricted`; set
-    /// `profile: unrestricted` to opt out for an image that needs root.
-    /// Other platforms ignore it.
+    /// Kubernetes Pod Security profile. Absent means no pod security
+    /// settings are applied and the image runs as built; set
+    /// `profile: restricted` to apply the restricted profile. Other
+    /// platforms ignore it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security: Option<crate::ContainerSecurity>,
 
