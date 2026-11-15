@@ -1144,4 +1144,164 @@ mod rollout_order {
         );
         Ok(())
     }
+
+    /// `net` (Frozen, setup-owned) <- `mid` (unchanged) <- `app` (new release). Setup owns
+    /// `net`; the executor cannot change it, so its failure never holds a dependent back.
+    fn chain(app_release: &str) -> Stack {
+        Stack::new("rollout-setup-owned".to_owned())
+            .add(test_storage("net"), ResourceLifecycle::Frozen)
+            .add_with_dependencies(
+                worker("mid", "r1", false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Storage::RESOURCE_TYPE, "net")],
+            )
+            .add_with_dependencies(
+                worker("app", app_release, false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "mid")],
+            )
+            .build()
+    }
+
+    /// A setup-owned resource that cannot be refreshed (an old template, say) does not block
+    /// the resources above it, directly or further down the chain, when it is not changing.
+    #[tokio::test]
+    async fn a_failed_setup_owned_dependency_does_not_block_unchanged_dependents() -> Result<()> {
+        let mut state = run_to_synced(&new_executor(&chain("r1"))?, new_test_state()).await?;
+        assert_all_running(&state, &["net", "mid", "app"]);
+        state
+            .resources
+            .get_mut("net")
+            .expect("net is deployed")
+            .status = ResourceStatus::RefreshFailed;
+
+        // `app` is two steps above `net`; `mid` is directly above it.
+        let executor = new_executor(&chain("r2"))?;
+        assert!(executor.plan(&state)?.updates.contains_key("app"));
+
+        let direct = Stack::new("rollout-setup-owned".to_owned())
+            .add(test_storage("net"), ResourceLifecycle::Frozen)
+            .add_with_dependencies(
+                worker("mid", "r2", false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Storage::RESOURCE_TYPE, "net")],
+            )
+            .add_with_dependencies(
+                worker("app", "r1", false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "mid")],
+            )
+            .build();
+        assert!(new_executor(&direct)?
+            .plan(&state)?
+            .updates
+            .contains_key("mid"));
+        Ok(())
+    }
+
+    /// Further up the chain a failed resource that is not changing holds nothing back, but one
+    /// whose update is still to come does.
+    #[tokio::test]
+    async fn a_failed_dependency_with_a_change_still_to_come_holds_dependents_back() -> Result<()> {
+        let mut state = running_on_release_one().await?;
+        state
+            .resources
+            .get_mut("sandbox")
+            .expect("sandbox is deployed")
+            .status = ResourceStatus::UpdateFailed;
+        // `api` follows `sandbox`; `runner` changes. `sandbox` still has its change to come.
+        let desired = Stack::new("rollout-order".to_owned())
+            .add(worker("sandbox", "r2", false), ResourceLifecycle::Live)
+            .add_with_dependencies(
+                worker("api", "r1", false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "sandbox")],
+            )
+            .add_with_dependencies(
+                worker("runner", "r2", false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "api")],
+            )
+            .build();
+        assert!(!new_executor(&desired)?
+            .plan(&state)?
+            .updates
+            .contains_key("runner"));
+        Ok(())
+    }
+
+    /// A failed setup run leaves the marker on a setup-owned resource that the runtime
+    /// executor may not update. It must forget the marker, or the deployment never completes.
+    #[tokio::test]
+    async fn a_marker_left_by_a_failed_setup_run_is_cleared() -> Result<()> {
+        let stack = |release: &str, fail: bool| {
+            Stack::new("rollout-marker".to_owned())
+                .add(worker("func", release, fail), ResourceLifecycle::Live)
+                .add_with_dependencies(
+                    test_storage("store"),
+                    ResourceLifecycle::Frozen,
+                    vec![ResourceRef::new(Worker::RESOURCE_TYPE, "func")],
+                )
+                .build()
+        };
+        let setup = |stack: &Stack| {
+            crate::core::StackExecutor::builder(stack, alien_core::ClientConfig::Test)
+                .deployment_config(&default_deployment_config())
+                .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+                .build()
+        };
+        let mut state = run_to_synced(&setup(&stack("r1", false))?, new_test_state()).await?;
+        let failing = setup(&stack("r2", true))?;
+        for _ in 0..40 {
+            state = failing.step(state).await?.next_state;
+        }
+        assert_eq!(
+            get_status(&state, "func"),
+            Some(ResourceStatus::UpdateFailed)
+        );
+        assert!(
+            state.resources["store"].dependency_update_pending,
+            "the failed setup run should have left the marker"
+        );
+
+        let runtime = new_executor(&stack("r2", false))?;
+        let state = run_to_synced(&runtime, state).await?;
+        assert_all_running(&state, &["func", "store"]);
+        assert!(!state.resources["store"].dependency_update_pending);
+        Ok(())
+    }
+
+    /// A dependency cycle that planning meets is an error, not a stack overflow.
+    #[tokio::test]
+    async fn a_dependency_cycle_is_an_error_not_a_stack_overflow() -> Result<()> {
+        let stack = |release: &str, cyclic: bool| {
+            let a_deps = if cyclic {
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, "a")]
+            } else {
+                vec![]
+            };
+            Stack::new("rollout-cycle".to_owned())
+                .add_with_dependencies(worker("a", "r1", false), ResourceLifecycle::Live, a_deps)
+                .add_with_dependencies(
+                    worker("b", release, false),
+                    ResourceLifecycle::Live,
+                    vec![ResourceRef::new(Worker::RESOURCE_TYPE, "a")],
+                )
+                .build()
+        };
+        let mut state =
+            run_to_synced(&new_executor(&stack("r1", false))?, new_test_state()).await?;
+        // The recorded edges already match the cyclic desired ones, so `a` looks unchanged.
+        state
+            .resources
+            .get_mut("a")
+            .expect("a is deployed")
+            .dependencies = vec![ResourceRef::new(Worker::RESOURCE_TYPE, "a")];
+
+        let error = new_executor(&stack("r2", true))?
+            .plan(&state)
+            .expect_err("a cycle must be reported");
+        assert_eq!(error.code, "CIRCULAR_DEPENDENCY_DETECTED");
+        Ok(())
+    }
 }

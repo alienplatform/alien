@@ -193,6 +193,14 @@ fn status_halts_stepping(status: ResourceStatus) -> bool {
     status.is_terminal() && status != ResourceStatus::RefreshFailed
 }
 
+/// Bookkeeping for one `dependency_rolled` walk: finished resources and the path being walked,
+/// so a dependency cycle is reported instead of recursing forever.
+#[derive(Default)]
+struct RolledWalk {
+    done: HashMap<String, bool>,
+    visiting: HashSet<String>,
+}
+
 fn status_allows_update_planning(status: ResourceStatus) -> bool {
     matches!(
         status,
@@ -1137,24 +1145,54 @@ impl StackExecutor {
     /// rollout then fails. A dependency this executor will not update (not in scope, held,
     /// or a setup-owned resource only setup changes) counts as rolled, so nothing waits
     /// for a change that never comes.
-    fn dependency_rolled(&self, dependency_id: &str, state: &StackState) -> bool {
-        self.dependency_rolled_memo(dependency_id, state, &mut HashMap::new())
+    fn dependency_rolled(&self, dependency_id: &str, state: &StackState) -> Result<bool> {
+        self.dependency_rolled_memo(dependency_id, state, &mut RolledWalk::default(), true)
+    }
+
+    /// Whether this executor leaves the resource to someone else: it is outside this
+    /// executor's lifecycle scope, held, or a setup-owned resource only setup changes. Such a
+    /// resource counts as rolled whatever its status, so nothing waits for a change that never
+    /// comes from here.
+    fn left_to_others(&self, resource_id: &str, state: &StackState) -> bool {
+        // One that does not exist yet is not rolled: it has to be created first.
+        if !state.resources.contains_key(resource_id) {
+            return false;
+        }
+        if self.held_resources.contains(resource_id) {
+            return true;
+        }
+        match self.resources.get(resource_id) {
+            Some(desired) => self.setup_owns_writes(desired),
+            None => self
+                .desired_stack
+                .resources()
+                .any(|(id, _)| id == resource_id),
+        }
     }
 
     /// `dependency_rolled` with each resource evaluated once per call, so a dense graph with
-    /// many paths to the same dependency stays linear in its edges.
+    /// many paths to the same dependency stays linear in its edges. `direct` is true for the
+    /// dependency the dependent names and false further up the chain.
     fn dependency_rolled_memo(
         &self,
         dependency_id: &str,
         state: &StackState,
-        memo: &mut HashMap<String, bool>,
-    ) -> bool {
-        if let Some(rolled) = memo.get(dependency_id) {
-            return *rolled;
+        walk: &mut RolledWalk,
+        direct: bool,
+    ) -> Result<bool> {
+        if let Some(rolled) = walk.done.get(dependency_id) {
+            return Ok(*rolled);
         }
-        let rolled = self.dependency_rolled_uncached(dependency_id, state, memo);
-        memo.insert(dependency_id.to_string(), rolled);
-        rolled
+        if !walk.visiting.insert(dependency_id.to_string()) {
+            return Err(AlienError::new(ErrorData::CircularDependencyDetected {
+                resource_ids: walk.visiting.iter().cloned().collect(),
+            }));
+        }
+        let rolled = self.dependency_rolled_uncached(dependency_id, state, walk, direct);
+        walk.visiting.remove(dependency_id);
+        let rolled = rolled?;
+        walk.done.insert(dependency_id.to_string(), rolled);
+        Ok(rolled)
     }
 
     /// Whether the resource's controller asks for an update with its config unchanged, from
@@ -1206,22 +1244,28 @@ impl StackExecutor {
         &self,
         dependency_id: &str,
         state: &StackState,
-        memo: &mut HashMap<String, bool>,
-    ) -> bool {
-        if !self.dependency_settled(dependency_id, state) {
-            return false;
+        walk: &mut RolledWalk,
+        direct: bool,
+    ) -> Result<bool> {
+        if self.left_to_others(dependency_id, state) {
+            return Ok(true);
         }
         let (Some(desired), Some(current)) = (
             self.resources.get(dependency_id),
             state.resources.get(dependency_id),
         ) else {
-            return true;
+            return Ok(self.dependency_settled(dependency_id, state));
         };
-        if current.status != ResourceStatus::Running
-            || self.held_resources.contains(dependency_id)
-            || self.setup_owns_writes(desired)
-        {
-            return true;
+        // The dependency the dependent names must be Running. Further up the chain a failed
+        // resource that is not changing does not hold anything back: only a change that is
+        // still to come does.
+        let status_ok = if direct {
+            current.status == ResourceStatus::Running
+        } else {
+            status_allows_update_planning(current.status)
+        };
+        if !status_ok {
+            return Ok(false);
         }
         if current.dependency_update_pending
             || desired.resource != current.config
@@ -1232,13 +1276,15 @@ impl StackExecutor {
                 .unwrap_or(true)
             || self.needs_update_requested(desired, current, state)
         {
-            return false;
+            return Ok(false);
         }
         // Its update is also planned when one of its own dependencies changes.
-        desired
-            .dependencies
-            .iter()
-            .all(|dependency| self.dependency_rolled_memo(dependency.id(), state, memo))
+        for dependency in &desired.dependencies {
+            if !self.dependency_rolled_memo(dependency.id(), state, walk, false)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// Whether a dependent may update now against this dependency: the dependency has rolled
@@ -1252,8 +1298,10 @@ impl StackExecutor {
         dependency: &ResourceRef,
         state: &StackState,
     ) -> Result<bool> {
-        if self.dependency_settled(dependency.id(), state) {
-            return Ok(self.dependency_rolled(dependency.id(), state));
+        if self.left_to_others(dependency.id(), state)
+            || self.dependency_settled(dependency.id(), state)
+        {
+            return self.dependency_rolled(dependency.id(), state);
         }
         let Some(dependency_state) = state.resources.get(dependency.id()) else {
             return Ok(false);
@@ -1638,10 +1686,13 @@ impl StackExecutor {
                                     .is_some_and(|mut controller| {
                                         controller.transition_to_update().is_ok()
                                     });
-                                let dependencies_ready =
-                                    desired_config.dependencies.iter().all(|dependency| {
-                                        self.dependency_rolled(dependency.id(), state)
-                                    });
+                                let mut dependencies_ready = true;
+                                for dependency in &desired_config.dependencies {
+                                    if !self.dependency_rolled(dependency.id(), state)? {
+                                        dependencies_ready = false;
+                                        break;
+                                    }
+                                }
 
                                 if can_reconcile_in_place && dependencies_ready {
                                     current_resource_state
@@ -2620,6 +2671,20 @@ impl StackExecutor {
         for resource_id in &plan_result.dependency_update_pending {
             if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
                 resource_state.dependency_update_pending = true;
+            }
+        }
+
+        // A setup run that failed can leave the marker on a resource only setup may update.
+        // This executor will never run that update, so the marker would hold the deployment
+        // open for good.
+        for (resource_id, resource_state) in next_state.resources.iter_mut() {
+            if resource_state.dependency_update_pending
+                && self
+                    .resources
+                    .get(resource_id)
+                    .is_some_and(|desired| self.setup_owns_writes(desired))
+            {
+                resource_state.dependency_update_pending = false;
             }
         }
 
