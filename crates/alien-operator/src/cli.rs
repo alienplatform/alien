@@ -67,7 +67,9 @@ The Operator:
                   argv is visible in `ps` / `/proc/<pid>/cmdline`."
 )]
 pub struct Args {
-    #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
+    /// Where this operator runs. Unset means `local`: a machine or a Docker
+    /// host enrolled with only a token.
+    #[arg(long, env = "PLATFORM", value_parser = parse_platform, default_value = "local")]
     pub platform: Platform,
 
     #[arg(long, env = "OPERATOR_BASE_PLATFORM", value_parser = parse_platform)]
@@ -1089,6 +1091,7 @@ async fn run_operator_cli(
         identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
         runtime_deployment_scope: crate::runtime_deployment_scope_from_env()?,
         pod_log_collection: crate::pod_logs::config_from_env()?,
+        host_logs: crate::host_logs::config_from_env()?,
     };
     run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
@@ -1956,7 +1959,10 @@ async fn open_operator_db(
     data_persistent: Option<bool>,
 ) -> Result<(crate::db::OperatorDb, String)> {
     let Some(secret_name) = identity_secret else {
-        let key = load_encryption_key(encryption_key_file).await?;
+        let key = match local_key_file_to_generate(data_dir, encryption_key_file) {
+            Some(path) => load_or_create_local_key(&path).await?,
+            None => load_encryption_key(encryption_key_file).await?,
+        };
         return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
     };
     let namespace = match namespace {
@@ -2062,6 +2068,73 @@ fn join_token_for_saved_identity(
 }
 
 const IN_CLUSTER_NAMESPACE_FILE: &str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
+
+/// Where an operator installed with only an enrollment token keeps its local
+/// database key: `operator.key` beside the database. Used when no key was
+/// given, and either a token was or the key file is already there.
+fn local_key_file_to_generate(
+    data_dir: &str,
+    encryption_key_file: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    if encryption_key_file.is_some() || env_string("OPERATOR_ENCRYPTION_KEY").is_some() {
+        return None;
+    }
+    let path = PathBuf::from(data_dir).join(LOCAL_KEY_FILE_NAME);
+    let has_token = env_string("OPERATOR_ENROLLMENT_TOKEN").is_some()
+        || env_string("OPERATOR_ENROLLMENT_TOKEN_FILE").is_some();
+    (has_token || path.exists()).then_some(path)
+}
+
+const LOCAL_KEY_FILE_NAME: &str = "operator.key";
+
+/// Read the local key, or create it (64 hex characters, mode 0600, never
+/// replacing an existing file) on the first start.
+async fn load_or_create_local_key(path: &std::path::Path) -> Result<String> {
+    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+        return read_secret_file(path, "local encryption key").await;
+    }
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).map_err(|_| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "Cannot generate the local encryption key".into(),
+        })
+    })?;
+    let key: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Cannot create '{}'", parent.display()),
+            })?;
+    }
+    use tokio::io::AsyncWriteExt;
+    let created = {
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        options.open(path).await
+    };
+    match created {
+        Ok(mut file) => {
+            file.write_all(key.as_bytes())
+                .await
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: format!("Cannot write '{}'", path.display()),
+                })?;
+            Ok(key)
+        }
+        // Another start created it first.
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_secret_file(path, "local encryption key").await
+        }
+        Err(error) => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Cannot create '{}': {error}", path.display()),
+        })),
+    }
+}
 
 pub(crate) async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {
@@ -2190,9 +2263,9 @@ async fn resolve_join_token(
         }
     }
     match inline.map(str::trim) {
-        Some(value) if !value.is_empty() => {
-            Ok(Some(crate::enrollment_token::EnrollmentToken::parse(value)?))
-        }
+        Some(value) if !value.is_empty() => Ok(Some(
+            crate::enrollment_token::EnrollmentToken::parse(value)?,
+        )),
         _ => Ok(None),
     }
 }
@@ -2414,6 +2487,26 @@ mod tests {
                 "{persistent:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_generated_local_key_is_private_stable_and_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data").join("operator.key");
+        let first = super::load_or_create_local_key(&path).await.unwrap();
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|b| b.is_ascii_hexdigit()));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // Same key on the next start.
+        assert_eq!(super::load_or_create_local_key(&path).await.unwrap(), first);
+        // A key file that was given wins; nothing is generated beside it.
+        assert!(
+            super::local_key_file_to_generate(dir.path().to_str().unwrap(), Some(&path)).is_none()
+        );
+        // A key file that is too open is refused, not read.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(super::load_or_create_local_key(&path).await.is_err());
     }
 
     #[tokio::test]
