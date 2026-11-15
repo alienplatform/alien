@@ -1,0 +1,299 @@
+---
+source: crates/alien-helm/tests/operator_chart.rs
+expression: rendered
+---
+---
+# Source: operator/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alien
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+---
+# Source: operator/templates/enrollment-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alien-enrollment
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+type: Opaque
+stringData:
+  token: "ax_join_v1_eyJ1IjoiaHR0cHM6Ly9tLmV4YW1wbGUiLCJhIjoiYSIsImMiOiJjIn0"
+---
+# Source: operator/templates/identity-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alien-identity
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+type: Opaque
+---
+# Source: operator/templates/clusterrole.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alien-shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+rules:
+  # Required by the Operator runtime: Recent events of each observed workload.
+  - apiGroups: ['']
+    resources: ['events']
+    verbs: ['list']
+  # Required by kubernetes/get-pods: list pods
+  # Required by kubernetes/restart: restart a pod
+  # Required by the Operator runtime: Pod status of each observed workload; pod log discovery in podApi mode.
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['get', 'list']
+  # Required by the Operator runtime: Workload inventory reported on every sync; log collector discovery in podApi mode.
+  - apiGroups: ['apps']
+    resources: ['daemonsets']
+    verbs: ['list']
+  # Required by the Operator runtime: Workload inventory reported on every sync.
+  - apiGroups: ['apps']
+    resources: ['deployments']
+    verbs: ['list']
+  # Required by the Operator runtime: Workload inventory reported on every sync.
+  - apiGroups: ['apps']
+    resources: ['statefulsets']
+    verbs: ['list']
+  # Required by the Operator runtime: CPU and memory of each observed workload.
+  - apiGroups: ['metrics.k8s.io']
+    resources: ['pods']
+    verbs: ['list']
+  # Required by Pod log collection through the Kubernetes API.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+# Source: operator/templates/clusterrolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alien-shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: alien-shop
+subjects:
+  - kind: ServiceAccount
+    name: alien
+    namespace: shop
+---
+# Source: operator/templates/role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: alien
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+rules:
+  # Required by the Operator's saved identity and local key.
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get', 'patch', 'update']
+    resourceNames: ["alien-identity"]
+---
+# Source: operator/templates/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: alien
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: alien
+subjects:
+  - kind: ServiceAccount
+    name: alien
+    namespace: shop
+---
+# Source: operator/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: alien
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+  ports:
+    - name: otlp
+      port: 4318
+      targetPort: otlp
+---
+# Source: operator/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alien
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/instance: alien
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: operator
+      app.kubernetes.io/instance: alien
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: operator
+        app.kubernetes.io/instance: alien
+    spec:
+      serviceAccountName: alien
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          image: "registry.example/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PLATFORM
+              value: "kubernetes"
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPERATOR_SCOPE
+              value: "shop"
+            - name: OPERATOR_OBSERVE_ALL_NAMESPACES
+              value: "true"
+            - name: OPERATOR_PERMISSION
+              value: "diagnostics"
+            - name: OPERATOR_INITIAL_DESIRED_RELEASE
+              value: "none"
+            - name: OPERATOR_SETUP_METHOD
+              value: "manual"
+            - name: DATA_DIR
+              value: "/var/lib/operator"
+            - name: OPERATOR_DATA_PERSISTENT
+              value: "false"
+            - name: OPERATOR_IDENTITY_SECRET
+              value: "alien-identity"
+            - name: OPERATOR_ENROLLMENT_TOKEN_FILE
+              value: "/etc/alien/enrollment/token"
+            - name: OPERATOR_ACCESS_REQUESTS
+              value: "false"
+            - name: SYNC_INTERVAL
+              value: "30"
+            - name: OPERATOR_READINESS_PORT
+              value: "8081"
+            - name: OPERATOR_POD_LOG_SCOPE
+              value: "cluster"
+            - name: OPERATOR_POD_LOG_MAX_STREAMS
+              value: "200"
+            - name: OPERATOR_POD_LOG_EXCLUDE_NAMESPACES
+              value: "kube-system,kube-public,kube-node-lease"
+            - name: OTLP_HOST
+              value: "0.0.0.0"
+            - name: OTLP_PORT
+              value: "4318"
+          ports:
+            - name: readiness
+              containerPort: 8081
+            - name: otlp
+              containerPort: 4318
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: readiness
+            periodSeconds: 2
+            failureThreshold: 150
+          volumeMounts:
+            - name: enrollment
+              mountPath: /etc/alien/enrollment
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/operator
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+      volumes:
+        # Absent after the code was used and the release was upgraded without
+        # it: the identity in the Secret is then all the Operator needs.
+        - name: enrollment
+          secret:
+            secretName: alien-enrollment
+            optional: true
+            defaultMode: 288
+        # A cache. The identity and the key to this cache live in the Secret.
+        - name: data
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

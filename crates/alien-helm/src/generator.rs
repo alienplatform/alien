@@ -2919,7 +2919,7 @@ fn operator_rules(
 ///
 /// Appended to the operator manifest so `kubectl apply`/Helm registers the kind
 /// before any CR is created.
-fn access_request_crd_doc(names: &AccessRequestCrdNames) -> String {
+pub(crate) fn access_request_crd_doc(names: &AccessRequestCrdNames) -> String {
     format!(
         r#"apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition

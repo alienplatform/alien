@@ -1,0 +1,380 @@
+//! The generic Operator chart, rendered with `helm template`.
+//!
+//! These tests render the real chart with Helm and read the resulting
+//! documents, so a template mistake fails here and not on a cluster.
+
+use std::{
+    path::Path,
+    process::{Command, Output},
+};
+
+use alien_helm::{generate_operator_chart, OperatorChartOptions};
+use alien_operations_sdk::{
+    KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions, RiskTier,
+};
+use serde_yaml::Value;
+
+const DIGEST: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const TOKEN: &str = "ax_join_v1_eyJ1IjoiaHR0cHM6Ly9tLmV4YW1wbGUiLCJhIjoiYSIsImMiOiJjIn0";
+
+fn operations() -> Vec<KubernetesOperationPermissions> {
+    let rule = |resource: &str, verbs: &[&str], reason: &str| KubernetesPermissionRule {
+        api_group: "".into(),
+        resource: resource.into(),
+        verbs: verbs.iter().map(|verb| verb.to_string()).collect(),
+        resource_names: Vec::new(),
+        reason: reason.into(),
+    };
+    vec![
+        KubernetesOperationPermissions {
+            plugin: "kubernetes".into(),
+            operation: "get-pods".into(),
+            tier: RiskTier::ReadOnly,
+            permissions: KubernetesPermissions {
+                schema_version: 1,
+                rules: vec![rule("pods", &["get", "list"], "list pods")],
+            },
+        },
+        KubernetesOperationPermissions {
+            plugin: "kubernetes".into(),
+            operation: "restart".into(),
+            tier: RiskTier::Mutating,
+            permissions: KubernetesPermissions {
+                schema_version: 1,
+                rules: vec![rule("pods", &["get", "delete"], "restart a pod")],
+            },
+        },
+    ]
+}
+
+fn write_chart(directory: &Path) {
+    let operations = operations();
+    let chart = generate_operator_chart(OperatorChartOptions {
+        chart_version: "1.2.3",
+        app_version: "1.2.3",
+        image_repository: "registry.example/operator",
+        image_digest: DIGEST,
+        operations: &operations,
+        label_domain: None,
+    })
+    .unwrap();
+    for (path, content) in &chart.files {
+        let target = directory.join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, content).unwrap();
+    }
+}
+
+fn helm(directory: &Path, arguments: &[&str]) -> Output {
+    Command::new("helm")
+        .arg("template")
+        .arg("alien")
+        .arg(directory)
+        .args(["--namespace", "shop"])
+        .args(arguments)
+        .output()
+        .expect("helm must be installed to run the chart tests")
+}
+
+fn render(arguments: &[&str]) -> String {
+    let directory = tempfile::tempdir().unwrap();
+    write_chart(directory.path());
+    let output = helm(directory.path(), arguments);
+    assert!(
+        output.status.success(),
+        "helm template failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn refusal(arguments: &[&str]) -> String {
+    let directory = tempfile::tempdir().unwrap();
+    write_chart(directory.path());
+    let output = helm(directory.path(), arguments);
+    assert!(
+        !output.status.success(),
+        "helm unexpectedly accepted {arguments:?}"
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn documents(rendered: &str) -> Vec<Value> {
+    rendered
+        .split("\n---")
+        .filter_map(|part| serde_yaml::from_str::<Value>(part).ok())
+        .filter(|value| value.get("kind").is_some())
+        .collect()
+}
+
+fn kind<'a>(documents: &'a [Value], kind: &str) -> Vec<&'a Value> {
+    documents
+        .iter()
+        .filter(|document| document["kind"].as_str() == Some(kind))
+        .collect()
+}
+
+fn rules(document: &Value) -> Vec<(String, String, Vec<String>, Vec<String>)> {
+    let strings = |value: &Value| -> Vec<String> {
+        value
+            .as_sequence()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| item.as_str().unwrap().to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    document["rules"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|rule| {
+            (
+                strings(&rule["apiGroups"]).join(","),
+                strings(&rule["resources"]).join(","),
+                strings(&rule["verbs"]),
+                strings(&rule["resourceNames"]),
+            )
+        })
+        .collect()
+}
+
+fn rule(group: &str, resource: &str, verbs: &[&str]) -> (String, String, Vec<String>, Vec<String>) {
+    (
+        group.into(),
+        resource.into(),
+        verbs.iter().map(|verb| verb.to_string()).collect(),
+        Vec::new(),
+    )
+}
+
+#[test]
+fn the_default_install_has_no_volume_claim_no_hook_and_no_custom_resource_definition() {
+    let rendered = render(&["--set", &format!("token={TOKEN}")]);
+    insta::assert_snapshot!("default_chart", rendered);
+    let documents = documents(&rendered);
+    let mut kinds: Vec<_> = documents
+        .iter()
+        .map(|document| document["kind"].as_str().unwrap())
+        .collect();
+    kinds.sort();
+    assert_eq!(
+        kinds,
+        [
+            "ClusterRole",
+            "ClusterRoleBinding",
+            "Deployment",
+            "Role",
+            "RoleBinding",
+            "Secret",
+            "Secret",
+            "Service",
+            "ServiceAccount"
+        ]
+    );
+    assert!(!rendered.contains("PersistentVolumeClaim"));
+    assert!(!rendered.contains("persistentVolumeClaim"));
+    assert!(!rendered.contains("helm.sh/hook"));
+    assert!(!rendered.contains("CustomResourceDefinition"));
+    assert!(!rendered.contains("accessrequests"));
+
+    let deployment = kind(&documents, "Deployment")[0];
+    assert_eq!(deployment["spec"]["replicas"].as_i64(), Some(1));
+    assert_eq!(
+        deployment["spec"]["strategy"]["type"].as_str(),
+        Some("Recreate")
+    );
+    let volumes = deployment["spec"]["template"]["spec"]["volumes"]
+        .as_sequence()
+        .unwrap();
+    assert!(volumes
+        .iter()
+        .all(|volume| volume.get("persistentVolumeClaim").is_none()));
+    assert!(volumes
+        .iter()
+        .any(|volume| volume["name"].as_str() == Some("data") && volume.get("emptyDir").is_some()));
+    let service = kind(&documents, "Service")[0];
+    assert_eq!(service["spec"]["ports"][0]["port"].as_i64(), Some(4318));
+    assert_eq!(service["spec"]["type"].as_str(), Some("ClusterIP"));
+}
+
+#[test]
+fn the_identity_secret_is_created_empty_and_the_enrollment_secret_holds_the_token() {
+    let documents = documents(&render(&["--set", &format!("token={TOKEN}")]));
+    let secrets = kind(&documents, "Secret");
+    let identity = secrets
+        .iter()
+        .find(|secret| secret["metadata"]["name"].as_str() == Some("alien-identity"))
+        .unwrap();
+    assert!(identity.get("data").is_none() && identity.get("stringData").is_none());
+    let enrollment = secrets
+        .iter()
+        .find(|secret| secret["metadata"]["name"].as_str() == Some("alien-enrollment"))
+        .unwrap();
+    assert_eq!(enrollment["stringData"]["token"].as_str(), Some(TOKEN));
+}
+
+#[test]
+fn the_cluster_role_is_exactly_the_runtime_reads_log_access_and_read_only_operations() {
+    let documents = documents(&render(&["--set", &format!("token={TOKEN}")]));
+    let role = kind(&documents, "ClusterRole")[0];
+    let mut actual = rules(role);
+    actual.sort();
+    let mut expected = vec![
+        rule("apps", "daemonsets", &["list"]),
+        rule("apps", "deployments", &["list"]),
+        rule("apps", "statefulsets", &["list"]),
+        rule("", "events", &["list"]),
+        rule("", "pods", &["get", "list"]),
+        rule("", "pods/log", &["get"]),
+        rule("metrics.k8s.io", "pods", &["list"]),
+    ];
+    expected.sort();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn remediation_adds_the_write_verbs_of_operations_and_nothing_else() {
+    let documents = documents(&render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "permission=remediation",
+    ]));
+    let actual = rules(kind(&documents, "ClusterRole")[0]);
+    assert!(actual.contains(&rule("", "pods", &["delete"])));
+    assert!(actual.contains(&rule("", "pods", &["get", "list"])));
+    assert_eq!(actual.len(), 8);
+}
+
+#[test]
+fn the_only_secret_access_is_the_identity_secret_in_the_release_namespace() {
+    let documents = documents(&render(&["--set", &format!("token={TOKEN}")]));
+    let role = kind(&documents, "Role")[0];
+    assert_eq!(role["metadata"]["namespace"].as_str(), Some("shop"));
+    assert_eq!(
+        rules(role),
+        vec![(
+            "".to_string(),
+            "secrets".to_string(),
+            vec!["get".into(), "patch".into(), "update".into()],
+            vec!["alien-identity".to_string()],
+        )]
+    );
+    let cluster_role = rules(kind(&documents, "ClusterRole")[0]);
+    assert!(cluster_role.iter().all(|(_, resource, verbs, _)| {
+        !resource.contains("secrets")
+            && !resource.contains("exec")
+            && !verbs
+                .iter()
+                .any(|verb| ["create", "watch", "*"].contains(&verb.as_str()))
+    }));
+}
+
+#[test]
+fn access_requests_are_off_by_default_and_on_they_bring_the_kind_and_its_rules() {
+    let off = render(&["--set", &format!("token={TOKEN}")]);
+    assert!(off.contains("name: OPERATOR_ACCESS_REQUESTS\n              value: \"false\""));
+    let on = render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "accessRequests.enabled=true",
+    ]);
+    let documents = documents(&on);
+    let crd = kind(&documents, "CustomResourceDefinition");
+    assert_eq!(crd.len(), 1);
+    assert_eq!(
+        crd[0]["metadata"]["annotations"]["helm.sh/resource-policy"].as_str(),
+        Some("keep")
+    );
+    let actual = rules(kind(&documents, "ClusterRole")[0]);
+    assert_eq!(actual.len(), 9);
+    assert!(on.contains("name: OPERATOR_ACCESS_REQUESTS\n              value: \"true\""));
+}
+
+#[test]
+fn install_needs_a_token_or_an_existing_secret_and_upgrade_does_not() {
+    assert!(refusal(&[]).contains("token"));
+    assert!(refusal(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "existingSecret=mine"
+    ])
+    .contains("not both"));
+
+    let upgrade = render(&["--is-upgrade"]);
+    let documents = documents(&upgrade);
+    assert_eq!(
+        kind(&documents, "Secret").len(),
+        1,
+        "only the identity Secret remains"
+    );
+    assert_eq!(
+        kind(&documents, "Secret")[0]["metadata"]["name"].as_str(),
+        Some("alien-identity")
+    );
+
+    let existing = render(&["--set", "existingSecret=mine"]);
+    let documents = documents_of(&existing);
+    let deployment = kind(&documents, "Deployment")[0];
+    let volumes = deployment["spec"]["template"]["spec"]["volumes"]
+        .as_sequence()
+        .unwrap();
+    assert_eq!(volumes[0]["secret"]["secretName"].as_str(), Some("mine"));
+    assert_eq!(kind(&documents, "Secret").len(), 1);
+}
+
+fn documents_of(rendered: &str) -> Vec<Value> {
+    documents(rendered)
+}
+
+#[test]
+fn logs_settings_reach_the_operator_and_an_invalid_permission_is_refused() {
+    let rendered = render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "logs.namespaces={a,b}",
+        "--set",
+        "logs.podSelector=app=web",
+        "--set",
+        "logs.maxStreams=50",
+    ]);
+    for expected in [
+        "OPERATOR_POD_LOG_SCOPE\n              value: \"cluster\"",
+        "OPERATOR_POD_LOG_NAMESPACES\n              value: \"a,b\"",
+        "OPERATOR_POD_LOG_POD_SELECTOR\n              value: \"app=web\"",
+        "OPERATOR_POD_LOG_MAX_STREAMS\n              value: \"50\"",
+        "OPERATOR_POD_LOG_EXCLUDE_NAMESPACES\n              value: \"kube-system,kube-public,kube-node-lease\"",
+    ] {
+        assert!(rendered.contains(expected), "missing {expected}");
+    }
+    assert!(refusal(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "permission=root"
+    ])
+    .contains("permission"));
+}
+
+#[test]
+fn the_chart_passes_helm_lint() {
+    let directory = tempfile::tempdir().unwrap();
+    write_chart(directory.path());
+    let output = Command::new("helm")
+        .arg("lint")
+        .arg(directory.path())
+        .args(["--set", &format!("token={TOKEN}")])
+        .output()
+        .expect("helm must be installed to run the chart tests");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
