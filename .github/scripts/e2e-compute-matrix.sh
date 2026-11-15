@@ -5,8 +5,14 @@ set -euo pipefail
 # Determine whether tests should run at all based on event type
 SHOULD_RUN=false
 case "${MATRIX_EVENT_NAME}" in
-  workflow_dispatch|merge_group)
+  workflow_dispatch)
     SHOULD_RUN=true
+    ;;
+  schedule)
+    # The nightly run tests main only when it changed since the last green run.
+    if [ "${MATRIX_MAIN_CHANGED}" = "true" ]; then
+      SHOULD_RUN=true
+    fi
     ;;
   pull_request)
     IS_FORK="${MATRIX_IS_FORK}"

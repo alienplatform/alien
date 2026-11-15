@@ -1,5 +1,16 @@
 name: Tests
 
+# Two tiers share one required check, `All tests passed`:
+#
+# - Pull requests (every push, drafts included) run the fast tier: format, lint, typecheck,
+#   generated-file drift, `cargo check` of the whole workspace, and the tests of only the
+#   crates the pull request changed.
+# - The merge queue (`merge_group`) runs the full suites once per merge: the tests of every
+#   crate the merge can affect, Worker integration, the whole TypeScript suite and the Node
+#   addon portability builds. So do pushes of release commits.
+# - A pull request labeled `full-ci`, and `workflow_dispatch`, run the full tier on the whole
+#   workspace. The label is read when the run starts, so add it and re-run the workflow (or
+#   push); a re-run reads the labels again.
 on:
   pull_request:
   merge_group:
@@ -52,7 +63,14 @@ jobs:
     name: Detect test areas
     needs: pr-conventions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
+      # The merge queue, release pushes, `full-ci` pull requests and manual runs run the full tier.
+      full_tier: ${{ steps.tier.outputs.full_tier }}
+      # Manual runs and `full-ci` pull requests also ignore the path filters and test everything.
+      run_all: ${{ steps.tier.outputs.run_all }}
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
       worker_integration: ${{ steps.filter.outputs.worker_integration }}
@@ -66,26 +84,61 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Pull requests build and test only the packages their changes can affect: the changed
-      # packages and everything that depends on them. Any change outside the packages (other
-      # than docs) runs the whole workspace, as do pushes, merge groups and manual runs.
+      - name: Select the test tier
+        id: tier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          full_tier=true
+          run_all=false
+          case "$EVENT" in
+            pull_request)
+              # Read the labels now, not from the event, so a re-run after labeling sees them.
+              labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" --jq '.[].name')
+              if grep -qx 'full-ci' <<< "$labels"; then run_all=true; else full_tier=false; fi
+              ;;
+            workflow_dispatch) run_all=true ;;
+          esac
+          echo "full_tier=$full_tier" >> "$GITHUB_OUTPUT"
+          echo "run_all=$run_all" >> "$GITHUB_OUTPUT"
+          echo "Tier: full=$full_tier, whole workspace=$run_all ($EVENT)"
+
+      # Pull requests test only the crates they changed (and compile the whole workspace in
+      # `Rust check`). The merge queue tests the changed crates and everything that depends on
+      # them, against the queue's base. Any change outside the packages (other than docs) is
+      # checked on a pull request and fully tested in the merge queue. Pushes of release
+      # commits, `full-ci` pull requests and manual runs test the whole workspace.
       - name: Select Rust packages to test
         id: rust_selection
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          EVENT: ${{ github.event_name }}
+          RUN_ALL: ${{ steps.tier.outputs.run_all }}
+          FULL_TIER: ${{ steps.tier.outputs.full_tier }}
           # The repo pins a nightly; stable cargo reads the metadata without installing it.
           RUSTUP_TOOLCHAIN: stable
         run: |
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+          if [[ "$EVENT" != "pull_request" && "$EVENT" != "merge_group" ]] || [[ "$RUN_ALL" == "true" ]]; then
             echo "mode=full" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          flags=()
+          BASE_SHA="$QUEUE_BASE_SHA"
+          if [[ "$EVENT" == "pull_request" ]]; then
+            BASE_SHA="$PR_BASE_SHA"
+            flags+=(--own-only)
+          fi
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          python3 scripts/affected-rust-packages.py "$BASE_SHA" HEAD >> "$GITHUB_OUTPUT"
+          python3 scripts/affected-rust-packages.py "$BASE_SHA" HEAD "${flags[@]}" >> "$GITHUB_OUTPUT"
 
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # A merge group compares against the queue's base, as a pull request does.
+          base: ${{ github.event.merge_group.base_sha }}
           filters: |
             rust:
               - 'Cargo.toml'
@@ -180,10 +233,12 @@ jobs:
   rust:
     name: Rust crates
     needs: [pr-conventions, changes]
-    # Skipped when a pull request changed only documentation inside the Rust paths.
+    # A pull request that changed only documentation, or only files outside the crates (which
+    # `Rust check` still compiles), skips the tests.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode != 'none')
+      needs.changes.outputs.run_all == 'true' ||
+      (needs.changes.outputs.rust == 'true' &&
+      (needs.changes.outputs.rust_mode == 'affected' || needs.changes.outputs.rust_mode == 'full'))
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     env:
@@ -255,9 +310,11 @@ jobs:
           repo-token: ${{ github.token }}
 
       - name: Install CloudFormation linter
+        if: needs.changes.outputs.full_tier == 'true'
         run: pipx install cfn-lint==1.59.0
 
       - uses: hashicorp/setup-terraform@v4
+        if: needs.changes.outputs.full_tier == 'true'
         with:
           terraform_version: 1.15.3
           terraform_wrapper: false
@@ -286,8 +343,10 @@ jobs:
           echo "ALIEN_TERRAFORM_1_9_DIR=$RUNNER_TEMP/terraform-1.9" >> "$GITHUB_ENV"
 
       - uses: azure/setup-helm@v5
+        if: needs.changes.outputs.full_tier == 'true'
 
       - name: Install kubeconform
+        if: needs.changes.outputs.full_tier == 'true'
         run: |
           case "$(uname -m)" in
             x86_64) KUBECONFORM_ARCH=amd64 ;;
@@ -400,7 +459,7 @@ jobs:
       - name: Platform SDK full-api tests
         # The workspace builds the filtered client; tests that need operations outside it
         # (`#![cfg(feature = "full-api")]`) run here, when the SDK changes.
-        if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.platform_sdk == 'true'
+        if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.platform_sdk == 'true'
         run: cargo test --locked -p alien-platform-api --features full-api
 
       - name: Local Redis integration tests
@@ -469,7 +528,7 @@ jobs:
   typescript:
     name: TypeScript packages and CLIs
     needs: [pr-conventions, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.typescript == 'true'
+    if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     env:
@@ -571,6 +630,7 @@ jobs:
           sudo mv kubeconform /usr/local/bin/kubeconform
 
       - name: Install zig (needed by cargo-zigbuild for example builds)
+        if: needs.changes.outputs.full_tier == 'true'
         run: pip3 install ziglang
 
       - name: Configure git credentials for cargo
@@ -591,8 +651,9 @@ jobs:
       # `napi build --platform` would only add a generated index.js/index.d.ts, which this
       # crate does not use (see its .gitignore): packages/bindings loads the .node file.
       - name: Build bindings dev addon, CLIs and gateway
+        if: needs.changes.outputs.full_tier == 'true'
         env:
-          BUILD_CLIS: ${{ steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' }}
+          BUILD_CLIS: ${{ steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true' }}
         run: |
           packages=(-p alien-bindings-node)
           if [[ "$BUILD_CLIS" == "true" ]]; then
@@ -603,25 +664,28 @@ jobs:
             crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
 
       - name: Build package-layout dependencies
+        if: needs.changes.outputs.full_tier == 'true'
         run: pnpm --filter @alienplatform/sdk... build
 
       - name: Validate package layout
+        if: needs.changes.outputs.full_tier == 'true'
         run: pnpm validate:package-layout
 
       - name: TypeScript unit tests
+        if: needs.changes.outputs.full_tier == 'true'
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           pnpm --filter @alienplatform/core --filter @alienplatform/permissions --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
       - name: Build TypeScript packages
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
         env:
           NODE_OPTIONS: "--max-old-space-size=12288"
         run: pnpm build && pnpm -C packages/package-layout check
 
       - name: Rust and TypeScript command integration
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
         # Drives the TypeScript command sender/receiver against the Rust command
@@ -653,7 +717,7 @@ jobs:
           git diff --exit-code -- crates/alien-stack-toml/tests/fixtures
 
       - name: Bare-metal worker example tests
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
         # The example is a standalone Cargo workspace, so the repository's cargo commands skip it.
         working-directory: examples/bare-metal-worker
         run: cargo test --locked
@@ -661,8 +725,11 @@ jobs:
   rust-check:
     name: Rust check
     needs: [pr-conventions, changes]
-    # When a pull request tests only its affected packages, this keeps every package compiling.
-    if: needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode == 'affected'
+    # Whenever the tests cover only some packages (a pull request's changed crates, the merge
+    # queue's affected ones), this keeps every package compiling.
+    if: >-
+      needs.changes.outputs.rust == 'true' &&
+      (needs.changes.outputs.rust_mode == 'affected' || needs.changes.outputs.rust_mode == 'check-only')
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 45
     env:
@@ -761,10 +828,12 @@ jobs:
     needs: [pr-conventions, changes]
     # The tested packages, alien-test-app, the addon and the gateway depend on most workspace
     # crates, so any Rust change runs this job; worker_integration adds the JS inputs.
+    # Full tier only: the merge queue, `full-ci` pull requests and manual runs.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.full_tier == 'true' &&
+      (needs.changes.outputs.run_all == 'true' ||
       needs.changes.outputs.rust == 'true' ||
-      needs.changes.outputs.worker_integration == 'true'
+      needs.changes.outputs.worker_integration == 'true')
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 45
     env:
@@ -848,10 +917,12 @@ jobs:
   node-addon-portability:
     name: Node addon (${{ matrix.triple }}, older glibc)
     needs: [pr-conventions, changes]
+    # Full tier only: the merge queue, `full-ci` pull requests and manual runs.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.full_tier == 'true' &&
+      (needs.changes.outputs.run_all == 'true' ||
       needs.changes.outputs.rust == 'true' ||
-      needs.changes.outputs.node_addon == 'true'
+      needs.changes.outputs.node_addon == 'true')
     strategy:
       fail-fast: false
       matrix:

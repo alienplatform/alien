@@ -1,26 +1,14 @@
 name: TPM device key
 
 # The TPM device-key backend shells out to tpm2-tools, so its test needs a TPM.
-# This runs it against the swtpm simulator. It runs only when the backend or this
-# workflow changes.
+# This runs it against the swtpm simulator. It runs in the merge queue when a merge touches the
+# backend or this workflow, not on every pull request push. A pull request that changes this
+# workflow runs it, and so does a manual run.
 on:
   pull_request:
     paths:
-      - 'crates/alien-cli/src/signing/**'
-      - 'crates/alien-cli/src/commands/signing.rs'
-      - 'crates/alien-cli/tests/signing_flow.rs'
-      - 'crates/alien-manager/src/routes/signing.rs'
-      - 'crates/alien-signing/**'
       - '.github/workflows/tpm-device-key.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'crates/alien-cli/src/signing/**'
-      - 'crates/alien-cli/src/commands/signing.rs'
-      - 'crates/alien-cli/tests/signing_flow.rs'
-      - 'crates/alien-manager/src/routes/signing.rs'
-      - 'crates/alien-signing/**'
-      - '.github/workflows/tpm-device-key.yml'
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -31,8 +19,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Detect TPM backend changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tpm: ${{ steps.filter.outputs.tpm }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          base: ${{ github.event.merge_group.base_sha }}
+          filters: |
+            tpm:
+              - 'crates/alien-cli/src/signing/**'
+              - 'crates/alien-cli/src/commands/signing.rs'
+              - 'crates/alien-cli/tests/signing_flow.rs'
+              - 'crates/alien-manager/src/routes/signing.rs'
+              - 'crates/alien-signing/**'
+              - '.github/workflows/tpm-device-key.yml'
+
   tpm-device-key:
     name: TPM device key
+    needs: changes
+    if: github.event_name != 'merge_group' || needs.changes.outputs.tpm == 'true'
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 45
     env:
