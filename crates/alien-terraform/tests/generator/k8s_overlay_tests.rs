@@ -880,7 +880,7 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
         assert!(compact.contains("management_url = var.management_url"));
         let readme = module.get("README.md").expect("README.md");
         assert!(
-            readme.contains("wait until its status is `teardown-required` or `deleted`"),
+            readme.contains("wait until its status is `teardown-required`, `retention-required` or `deleted`"),
             "{mode} README names the erase-first order"
         );
         assert!(
@@ -1977,33 +1977,42 @@ fn assert_network_in_every_mode(module: &alien_terraform::ModuleFiles) {
     );
 }
 
-/// Whole-resource references (`type.name`) found in `text`, for resources of
-/// the module other than `own`.
-fn referenced_addresses(
-    text: &str,
-    own: &str,
-    all: &std::collections::BTreeSet<String>,
-) -> Vec<String> {
-    let bytes = text.as_bytes();
-    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
-    all.iter()
-        .filter(|address| address.as_str() != own)
-        .filter(|address| {
-            text.match_indices(address.as_str()).any(|(at, _)| {
-                let before_ok = at == 0 || !(is_ident(bytes[at - 1]) || bytes[at - 1] == b'.');
-                let end = at + address.len();
-                let after_ok = end >= bytes.len() || !is_ident(bytes[end]);
-                before_ok && after_ok
+/// Addresses in the `depends_on` of one rendered resource block (parsed HCL).
+fn guard_depends_on(block_text: &str) -> Vec<String> {
+    let body = hcl::parse(block_text).expect("guard block parses");
+    let block = body.blocks().next().expect("one resource block");
+    let attribute = block
+        .body()
+        .attributes()
+        .find(|attribute| attribute.key() == "depends_on")
+        .expect("guard has depends_on");
+    match attribute.expr() {
+        hcl::Expression::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                hcl::Expression::Traversal(traversal) => {
+                    let hcl::Expression::Variable(root) = &traversal.expr else {
+                        panic!("unexpected depends_on root: {item:?}");
+                    };
+                    let mut address = root.to_string();
+                    for operator in &traversal.operators {
+                        let hcl::TraversalOperator::GetAttr(name) = operator else {
+                            panic!("unexpected depends_on operator: {item:?}");
+                        };
+                        address = format!("{address}.{name}");
+                    }
+                    address
+                }
+                other => panic!("unexpected depends_on item: {other:?}"),
             })
-        })
-        .cloned()
-        .collect()
+            .collect(),
+        other => panic!("depends_on is not a list: {other:?}"),
+    }
 }
 
-/// The property that makes a refused `terraform destroy` remove nothing:
-/// every managed resource of the module is an ancestor of the destroy guard
-/// in the resource graph (depends_on plus references), so Terraform destroys
-/// the guard before any of them. Checked on the rendered HCL, not on a list.
+/// The property that makes a refused `terraform destroy` remove nothing: the
+/// destroy guard lists every other managed resource of the module (all .tf
+/// files) in its `depends_on`, so Terraform destroys the guard first.
 #[test]
 fn destroy_guard_is_destroyed_before_every_other_resource() {
     let registry = TfRegistry::built_in();
@@ -2091,28 +2100,17 @@ fn destroy_guard_is_destroyed_before_every_other_resource() {
                         "{label}: Remote Operator state latch present"
                     );
                 }
-                let all: std::collections::BTreeSet<String> = blocks.keys().cloned().collect();
-                let edges: std::collections::BTreeMap<&String, Vec<String>> = blocks
-                    .iter()
-                    .map(|(address, text)| (address, referenced_addresses(text, address, &all)))
+                // The guard lists every other managed resource directly.
+                let others: std::collections::BTreeSet<String> = blocks
+                    .keys()
+                    .filter(|address| address.as_str() != guard)
+                    .cloned()
                     .collect();
-
-                let mut ancestors = std::collections::BTreeSet::new();
-                let mut pending = vec![guard.to_string()];
-                while let Some(address) = pending.pop() {
-                    for dependency in &edges[&address] {
-                        if ancestors.insert(dependency.clone()) {
-                            pending.push(dependency.clone());
-                        }
-                    }
-                }
-                let missing: Vec<&String> = all
-                    .iter()
-                    .filter(|address| address.as_str() != guard && !ancestors.contains(*address))
-                    .collect();
-                assert!(
-                    missing.is_empty(),
-                    "{label}: resources Terraform may destroy before the guard: {missing:?}"
+                let listed: std::collections::BTreeSet<String> =
+                    guard_depends_on(&blocks[guard]).into_iter().collect();
+                assert_eq!(
+                    others, listed,
+                    "{label}: the guard's depends_on must be exactly every other resource"
                 );
             }
         }

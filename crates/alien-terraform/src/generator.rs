@@ -1073,7 +1073,8 @@ pub(crate) fn render_terraform_module(
         .as_ref()
         .filter(|registration| registration.destroy_guard && files.contains_key("helm.tf"))
     {
-        let guard_after = managed_resource_addresses(&files, "helm.tf")?;
+        let guard_address = format!("{}_destroy_guard.this", registration.provider_name);
+        let guard_after = managed_resource_addresses(&files, &guard_address)?;
         files.insert(
             "helm.tf".to_string(),
             render_body(helm_install_body(
@@ -5524,7 +5525,15 @@ fn helm_install_body(
                             "helm_release.runtime".to_string(),
                         ]
                         .into_iter()
-                        .chain(guard_after.iter().cloned())
+                        .chain(
+                            guard_after
+                                .iter()
+                                .filter(|address| {
+                                    **address != format!("{provider_resource}.this")
+                                        && *address != "helm_release.runtime"
+                                })
+                                .cloned(),
+                        )
                         .map(expr::raw)
                         .collect(),
                     ),
@@ -5536,14 +5545,14 @@ fn helm_install_body(
 }
 
 /// Addresses of every `resource` block in the module's `.tf` files except
-/// those in `skip_file`, sorted.
+/// `exclude`, sorted.
 fn managed_resource_addresses(
     files: &IndexMap<String, String>,
-    skip_file: &str,
+    exclude: &str,
 ) -> Result<Vec<String>> {
     let mut addresses = std::collections::BTreeSet::new();
     for (name, contents) in files {
-        if !name.ends_with(".tf") || name == skip_file {
+        if !name.ends_with(".tf") {
             continue;
         }
         let body = hcl::parse(contents).into_alien_error().map_err(|err| {
@@ -5561,6 +5570,7 @@ fn managed_resource_addresses(
             }
         }
     }
+    addresses.remove(exclude);
     Ok(addresses.into_iter().collect())
 }
 
@@ -6190,7 +6200,7 @@ fn readme_kubernetes_inputs(
         }
         _ => "",
     };
-    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow. First delete the deployment and wait until its status is `teardown-required` or `deleted`; this removes the data the runtime owns, erased or kept as you chose. Data this setup owns stays protected from `terraform destroy`: when this README has a section on retaining setup data during uninstall, detach that data as it describes, then run `terraform destroy` again, and erase the detached data afterwards by its recorded IDs if you chose to erase it. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, contact your vendor.";
+    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow. First delete the deployment and wait until its status is `teardown-required`, `retention-required` or `deleted`; this removes the data the runtime owns, erased or kept as you chose. Data this setup owns stays protected from `terraform destroy`: when this README has a section on retaining setup data during uninstall, detach that data as it describes, then run `terraform destroy` again, and erase the detached data afterwards by its recorded IDs if you chose to erase it. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, contact your vendor.";
     let helm = if has_registration && helm_install.is_some() {
         if product_remote_operator {
             let collector_token_requirement = if requires_remote_operator_collector_token {
