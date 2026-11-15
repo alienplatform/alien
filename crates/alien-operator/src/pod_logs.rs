@@ -532,8 +532,14 @@ fn selected_sources(
 
 /// Pods of the cluster, page by page. When the scope names namespaces, each is
 /// listed on its own, so the operator never asks for (or holds) the Pods of
-/// namespaces it will not read. The first request of a listing is served from
-/// the API server's cache (`resourceVersion=0`); a continuation must not carry it.
+/// namespaces it will not read.
+///
+/// Trade-off: `resourceVersion=0` is served from the API server's watch cache,
+/// which is cheap for the server, but older API servers then ignore `limit` and
+/// send every Pod in one body. The cluster-wide listing runs every 30 s against
+/// a small memory limit, so it uses consistent paged lists (no `resourceVersion`):
+/// more work for the server, bounded memory here. A listing of one named
+/// namespace is bounded by that namespace and keeps the cheap cached read.
 async fn list_cluster_pods(
     client: &KubernetesClient,
     namespaces: &[String],
@@ -541,7 +547,7 @@ async fn list_cluster_pods(
 ) -> Result<Vec<Pod>> {
     let base = client.get_base_url().trim_end_matches('/').to_string();
     if namespaces.is_empty() {
-        return list_pods_at(client, &format!("{base}/api/v1/pods"), selector).await;
+        return list_pods_at(client, &format!("{base}/api/v1/pods"), selector, false).await;
     }
     let mut pods = Vec::new();
     for namespace in namespaces {
@@ -550,6 +556,7 @@ async fn list_cluster_pods(
                 client,
                 &format!("{base}/api/v1/namespaces/{namespace}/pods"),
                 selector,
+                true,
             )
             .await?,
         );
@@ -561,6 +568,7 @@ async fn list_pods_at(
     client: &KubernetesClient,
     url: &str,
     selector: Option<&str>,
+    from_cache: bool,
 ) -> Result<Vec<Pod>> {
     let failed = |message: &str| ErrorData::PodLogReadFailed {
         message: message.to_string(),
@@ -577,7 +585,8 @@ async fn list_pods_at(
         }
         match &continue_token {
             Some(token) => request = request.query(&[("continue", token.as_str())]),
-            None => request = request.query(&[("resourceVersion", "0")]),
+            None if from_cache => request = request.query(&[("resourceVersion", "0")]),
+            None => {}
         }
         let response = request
             .sign_kubernetes_request(&client.auth_config())
@@ -688,6 +697,14 @@ async fn reconcile_cluster(
     };
     let pods =
         list_cluster_pods(client, &cluster.namespaces, cluster.pod_selector.as_deref()).await?;
+    // The whole listing arrived: cursors of Pods that are gone can be dropped.
+    let live: HashSet<String> = pods
+        .iter()
+        .filter_map(|pod| pod.metadata.uid.clone())
+        .collect();
+    if let Err(error) = state.db.prune_pod_log_offsets(&live).await {
+        warn!(error = %error, "Could not prune log cursors of Pods that no longer exist");
+    }
     let mut eligible = Vec::new();
     let mut namespaces = HashMap::<String, String>::new();
     for pod in &pods {
@@ -1577,7 +1594,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_cluster_listing_reads_every_page_and_asks_the_cache_first() {
+    async fn a_cluster_wide_listing_reads_every_page_with_consistent_lists() {
         let requests = Arc::new(std::sync::Mutex::new(Vec::<HashMap<String, String>>::new()));
         let seen = requests.clone();
         let app = Router::new().route(
@@ -1606,13 +1623,9 @@ mod tests {
         assert_eq!(names, ["a", "b", "c", "d"]);
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 3);
-        assert_eq!(
-            requests[0].get("resourceVersion").map(String::as_str),
-            Some("0")
-        );
-        assert!(requests[1..]
-            .iter()
-            .all(|r| !r.contains_key("resourceVersion")));
+        // `resourceVersion=0` would let an older API server ignore `limit`.
+        assert!(requests.iter().all(|r| !r.contains_key("resourceVersion")));
+        assert!(requests.iter().all(|r| r.contains_key("limit")));
         assert!(requests
             .iter()
             .all(|r| r.get("labelSelector").map(String::as_str) == Some("app=web")));

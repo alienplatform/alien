@@ -1595,6 +1595,47 @@ impl OperatorDb {
         *self.queued_telemetry_bytes.lock().expect("queue size") = None;
     }
 
+    /// Forget the log cursors of Pods that no longer exist, so the table does
+    /// not grow with every Pod the cluster ever ran. Returns how many Pods'
+    /// cursors were removed.
+    pub async fn prune_pod_log_offsets(
+        &self,
+        live_pod_uids: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT DISTINCT pod_uid FROM pod_log_offsets", ())
+            .await
+            .into_alien_error()
+            .context(database_error("Listing Pod log cursors"))?;
+        let mut gone = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(database_error("Reading Pod log cursors"))?
+        {
+            let uid: String = row
+                .get(0)
+                .into_alien_error()
+                .context(database_error("Decoding Pod log cursor"))?;
+            if !live_pod_uids.contains(&uid) {
+                gone.push(uid);
+            }
+        }
+        drop(rows);
+        for uid in &gone {
+            conn.execute(
+                "DELETE FROM pod_log_offsets WHERE pod_uid = ?",
+                (uid.clone(),),
+            )
+            .await
+            .into_alien_error()
+            .context(database_error("Removing Pod log cursors"))?;
+        }
+        Ok(gone.len())
+    }
+
     /// Return the cursor for one container incarnation. Pod UID prevents a
     /// replacement Pod with the same name from inheriting an old cursor.
     pub async fn get_pod_log_offset(
@@ -3261,6 +3302,27 @@ mod tests {
                 .unwrap(),
             later
         );
+    }
+
+    #[tokio::test]
+    async fn cursors_of_pods_that_no_longer_exist_are_pruned() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let db = OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        let offset = PodLogOffset {
+            timestamp: "2026-09-27T00:00:00.000000001Z".to_string(),
+            ordinal: 1,
+        };
+        for uid in ["live", "gone"] {
+            db.store_pod_log_batch(uid, "api", 0, &offset, b"line")
+                .await
+                .unwrap();
+        }
+        let live = ["live".to_string()].into();
+        assert_eq!(db.prune_pod_log_offsets(&live).await.unwrap(), 1);
+        assert!(db.get_pod_log_offset("live", "api", 0).await.unwrap().is_some());
+        assert!(db.get_pod_log_offset("gone", "api", 0).await.unwrap().is_none());
     }
 
     #[tokio::test]
