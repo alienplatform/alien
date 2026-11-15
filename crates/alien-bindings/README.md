@@ -72,8 +72,11 @@ Accepted limitations of this version:
   gateway down at a time. A running sandbox keeps its egress while one VM is down:
   the agent's proxy address is a loopback forwarder that dials each connection to
   the last good replica, then the other (`alien-sandbox-agent` `proxy_failover`).
-  Policy writes (create, update) need both replicas and are refused with a retryable
-  error while one is down; a delete reaches every replica that answers. The gateway
+  A new sandbox's first grant is accepted once one replica holds it (bounded to 20 s;
+  the replica that was away starts empty, refuses until it has synced from its peer, so
+  a missing grant only ever denies). `update_egress` needs both replicas and is refused
+  with a retryable error while one is down, because a replica that missed a narrowing would
+  keep serving the wider policy; a delete reaches every replica that answers. The gateway
   container image is pinned by setup and is updated only by a setup re-run.
 - **Gateway identity.** Each VM's managed identity reads only two Key Vault secrets
   (`sandbox-egress-gateway-config`, `sandbox-egress-replica-secret`), never the
