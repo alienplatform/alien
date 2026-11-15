@@ -307,6 +307,7 @@ fn cloud_config(image: &str, vault: &str, label: &str) -> Expression {
         "      AZURE_SUBSCRIPTION_ID=%s",
         "      AZURE_TENANT_ID=%s",
         "      ALIEN_SECRETS_BINDING=%s",
+        "      RUST_LOG=warn",
         "  - path: /etc/systemd/system/alien-egress-gateway.service",
         "    content: |",
         "      [Unit]",
@@ -372,6 +373,17 @@ mod tests {
             assert!(text.contains(needed), "{needed} missing:\n{text}");
         }
         assert!(!text.contains("--network host") && !text.contains("--privileged"));
+    }
+
+    #[test]
+    fn the_gateway_unit_logs_warnings_by_default() {
+        let text = rendered();
+        // The gateways used to log at error level only, which hid the refusals operators need.
+        let env = text.find("/etc/alien-egress-gateway.env").unwrap();
+        let unit = text.find("alien-egress-gateway.service").unwrap();
+        let line = text.find("RUST_LOG=warn").expect(&text);
+        assert!(env < line && line < unit, "RUST_LOG=warn is in the env file:\n{text}");
+        assert!(!text.contains("RUST_LOG=error") && !text.contains("RUST_LOG=info"));
     }
 
     #[test]
