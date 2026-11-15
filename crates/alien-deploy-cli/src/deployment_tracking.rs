@@ -109,6 +109,16 @@ impl DeploymentTracker {
         Ok(tracked)
     }
 
+    /// Drop the saved key of a tracked deployment, keeping the rest of its entry.
+    pub fn forget_token(&mut self, name: &str) -> Result<()> {
+        if let Some(tracked) = self.deployments.get_mut(name) {
+            if tracked.token.take().is_some() {
+                save_deployments(&self.file_path, &self.deployments)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Get a tracked deployment by name
     pub fn get(&self, name: &str) -> Option<&TrackedDeployment> {
         self.deployments.get(name)
@@ -204,6 +214,29 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn forgetting_a_token_keeps_the_rest_of_the_entry() {
+        let path = temp_tracking_path();
+        let mut tracker = DeploymentTracker::with_path(path.clone()).unwrap();
+        tracker
+            .track(
+                "prod".to_string(),
+                "dep_1".to_string(),
+                Some("saved".to_string()),
+                "https://m.example".to_string(),
+                "kubernetes".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
+        tracker.forget_token("prod").unwrap();
+        let reloaded = DeploymentTracker::with_path(path.clone()).unwrap();
+        let entry = reloaded.get("prod").unwrap();
+        assert_eq!(entry.token, None);
+        assert_eq!(entry.deployment_id, "dep_1");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

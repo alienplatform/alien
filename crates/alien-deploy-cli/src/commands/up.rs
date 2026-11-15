@@ -342,6 +342,20 @@ impl From<DeployConfigNetwork> for NetworkSettings {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_kubernetes_install_keeps_an_earlier_saved_key_and_saves_no_new_one() {
+        use super::token_to_save;
+        assert_eq!(
+            token_to_save(Platform::Kubernetes, Some("old"), "new").as_deref(),
+            Some("old")
+        );
+        assert_eq!(token_to_save(Platform::Kubernetes, None, "new"), None);
+        assert_eq!(
+            token_to_save(Platform::Machines, Some("old"), "new").as_deref(),
+            Some("new")
+        );
+    }
+
     use super::*;
     use clap::Parser;
     use httpmock::{
@@ -4346,7 +4360,25 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let in_cluster = InClusterUse::default();
     up_command_with(args, embedded_config, &in_cluster)
         .await
-        .map_err(|error| in_cluster.explain(error))
+        .map_err(|error| in_cluster.explain(error))?;
+    // A saved key stays until a rerun has worked with the Operator's own key:
+    // an Operator that never enrolled, or a run that stopped partway, still
+    // needs it.
+    if let Some(name) = in_cluster.in_cluster_name() {
+        DeploymentTracker::new()?.forget_token(&name)?;
+    }
+    Ok(())
+}
+
+/// The key the tracker saves. A Kubernetes install saves none of its own (its
+/// Operator enrolls and the key is retired), but keeps one an earlier run saved
+/// until a rerun has worked with the Operator's key; see `up_command`.
+fn token_to_save(platform: Platform, saved: Option<&str>, effective: &str) -> Option<String> {
+    if platform == Platform::Kubernetes {
+        saved.map(str::to_string)
+    } else {
+        Some(effective.to_string())
+    }
 }
 
 async fn up_command_with(
@@ -4593,6 +4625,13 @@ async fn up_command_with(
     // A Kubernetes install saves no key: its Operator enrolls and the key is
     // retired, so a rerun asks the Operator for a short-lived one. It saves the
     // release instead, to find that Operator.
+    let saved_token = token_to_save(
+        platform,
+        tracker
+            .get(&name)
+            .and_then(|tracked| tracked.token.as_deref()),
+        &effective_token,
+    );
     let tracked_helm = (platform == Platform::Kubernetes).then(|| {
         let release = kubernetes_helm_release(&args, &name);
         TrackedHelmRelease {
@@ -4603,7 +4642,7 @@ async fn up_command_with(
     tracker.track(
         name.clone(),
         deployment_id.clone(),
-        (platform != Platform::Kubernetes).then(|| effective_token.clone()),
+        saved_token,
         manager_url.clone(),
         platform_str.clone(),
         tracked_helm,
