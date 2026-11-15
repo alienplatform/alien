@@ -237,7 +237,7 @@ gwbinding=$(jq -c . "$WORK/gateway-binding.json")
 job=$(jq -n --arg env "$ENV_ID" --arg loc "$LOCATION" --arg reg "$REGISTRY" --arg user "$ACR_USER" --arg pass "$ACR_PASS" \
   --arg image "$REGISTRY/driver:1" --arg sub "$SUB" --arg tenant "$AZURE_TARGET_TENANT_ID" --arg cid "$AZURE_TARGET_CLIENT_ID" \
   --arg csecret "$AZURE_TARGET_CLIENT_SECRET" --arg rg "$RG" --arg vault "$vault" --arg binding "$binding" --arg gwbinding "$gwbinding" --arg ips "$ips" \
-  --arg vms "$vms" --arg probe "$private_probe" --arg region "$LOCATION" '
+  --arg only "${AZURE_INTERNET_ONLY:-}" --arg vms "$vms" --arg probe "$private_probe" --arg region "$LOCATION" '
   {location:$loc, properties:{environmentId:$env, workloadProfileName:"Consumption",
    configuration:{triggerType:"Manual", replicaTimeout:3000, replicaRetryLimit:0,
      manualTriggerConfig:{parallelism:1, replicaCompletionCount:1},
@@ -249,7 +249,7 @@ job=$(jq -n --arg env "$ENV_ID" --arg loc "$LOCATION" --arg reg "$REGISTRY" --ar
      {name:"AZURE_RESOURCE_GROUP",value:$rg},{name:"AZURE_SANDBOX_REGION",value:$region},
      {name:"AZURE_INTERNET_VAULT_NAME",value:$vault},{name:"AZURE_INTERNET_BINDING",value:$binding},{name:"AZURE_INTERNET_GATEWAY_BINDING",value:$gwbinding},
      {name:"AZURE_INTERNET_GATEWAY_IPS",value:$ips},{name:"AZURE_INTERNET_GATEWAY_VMS",value:$vms},
-     {name:"AZURE_INTERNET_PRIVATE_PROBES",value:$probe},{name:"AZURE_INTERNET_RESULT_SECRET",value:"azure-internet-proof-log"}]}]}}}')
+     {name:"AZURE_INTERNET_ONLY",value:$only},{name:"AZURE_INTERNET_PRIVATE_PROBES",value:$probe},{name:"AZURE_INTERNET_RESULT_SECRET",value:"azure-internet-proof-log"}]}]}}}')
 JOB_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs/$P-driver"
 arm PUT "$JOB_ID?api-version=2024-03-01" -d "$job" | jq -e '.id' >/dev/null
 arm POST "$JOB_ID/start?api-version=2024-03-01" -d '' >/dev/null
