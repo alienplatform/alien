@@ -794,7 +794,7 @@ mod tests {
                         image: "ubuntu".to_string(),
                         bundled_from: None,
                     })
-                    .egress(SandboxEgress::Internet)
+                    .egress(SandboxEgress::None)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
                         idle_pause_seconds: None,
@@ -946,5 +946,30 @@ mod tests {
 
         let undeclared = binding_with(SandboxEgress::Internet, None);
         assert!(!undeclared.contains("idlePauseSeconds"), "{undeclared}");
+    }
+    /// No identity is ever attached to the sandbox group. Azure answers a guest's token request
+    /// on its platform-injected identity endpoint from the group's identity, so a group with none
+    /// issues no token on any boot path: the guest can see the endpoint variables, and they open
+    /// nothing. A rendered identity would turn them into a live credential.
+    #[test]
+    fn the_sandbox_group_carries_no_managed_identity() {
+        let fragment = emit_for(ResourceLifecycle::Frozen);
+        let group = fragment
+            .resource_blocks
+            .iter()
+            .find(|block| {
+                block.labels().first().map(|l| l.as_str()) == Some("azapi_resource")
+                    && block.body().attributes().any(|a| {
+                        a.key() == "type"
+                            && a.expr().to_string().contains("Microsoft.App/sandboxGroups")
+                    })
+            })
+            .expect("the sandbox group resource is emitted");
+        let rendered = hcl::to_string(group).expect("the group renders");
+        assert!(!rendered.to_lowercase().contains("identity"), "{rendered}");
+        assert!(
+            group.body().blocks().all(|b| b.identifier() != "identity"),
+            "{rendered}"
+        );
     }
 }
