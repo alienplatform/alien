@@ -92,7 +92,7 @@ try:
 except Exception as e:
     print("DIRECT-NONE", type(e).__name__, round(time.time() - t, 1)); sys.exit(0)
 try:
-    s.settimeout(3)
+    s.settimeout(15)
     s.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
     data = s.recv(60)
     print("DIRECT-DATA", data[:60] if data else b"")
@@ -374,10 +374,14 @@ async fn live_internet_proof() {
             sandbox,
             &id,
             "sh",
-            &["-c", "env | grep -c -E '^(IDENTITY_ENDPOINT|IDENTITY_HEADER|MSI_ENDPOINT|AZURE_)' || true"],
+            &["-c", "env | grep -E '^(IDENTITY_ENDPOINT|IDENTITY_HEADER|MSI_ENDPOINT|AZURE_)' | cut -d= -f1 | tr '\\n' ' ' || true"],
         )
         .await;
-        proof.check(seen == "0", "i no cloud credential in the environment", &seen);
+        proof.check(
+            seen.is_empty(),
+            "i no cloud credential in the environment (names found)",
+            &seen,
+        );
 
         // (f) ten parallel creates all come up behind the gateway.
         let started = Instant::now();
