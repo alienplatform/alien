@@ -229,6 +229,9 @@ async fn arm_token(tenant: &str, client: &str, secret: &str) -> String {
 #[ignore = "runs inside the setup's VNet against live gateway VMs; see the module docs"]
 async fn live_internet_proof() {
     let region = env("AZURE_SANDBOX_REGION");
+    // AZURE_INTERNET_ONLY=a,c,g3 runs only those sections (empty: all). Create, a and c always run.
+    let only = std::env::var("AZURE_INTERNET_ONLY").unwrap_or_default();
+    let sel = |name: &str| only.is_empty() || only.split(',').any(|part| part.trim() == name);
     let tenant = env("AZURE_TARGET_TENANT_ID");
     let client_id = env("AZURE_TARGET_CLIENT_ID");
     let client_secret = env("AZURE_TARGET_CLIENT_SECRET");
@@ -313,6 +316,7 @@ async fn live_internet_proof() {
         let seen = proxy(sandbox, &id, ALLOWED, 8443, "").await;
         proof.check(refused(&seen), "a subject allowed host, wrong port", &seen);
 
+        if sel("b") {
         // (b) live rule writes.
         sandbox
             .update_egress(&id, allow(&[&format!("{ALLOWED}:443"), &format!("{OTHER}:443")]))
@@ -329,6 +333,7 @@ async fn live_internet_proof() {
         let seen = proxy(sandbox, &id, ALLOWED, 443, "").await;
         proof.check(connected(&seen), "b after narrowing, kept host", &seen);
 
+        }
         // (c) direct to a public IP: only the native interposer may answer, never an origin.
         for port in [443, 80] {
             let seen = direct(sandbox, &id, "1.1.1.1", port).await;
@@ -338,6 +343,7 @@ async fn live_internet_proof() {
                 &seen,
             );
         }
+        if sel("d") {
         // (d) any other port, and (d2) private addresses, never connect.
         let seen = direct(sandbox, &id, "1.1.1.1", 8443).await;
         proof.check(seen.starts_with("DIRECT-NONE"), "d direct 1.1.1.1:8443", &seen);
@@ -364,6 +370,8 @@ async fn live_internet_proof() {
             &seen,
         );
 
+        if sel("i") {
+        }
         // (i) no cloud credential in the guest.
         let seen = run(
             sandbox,
@@ -378,6 +386,8 @@ async fn live_internet_proof() {
             &seen,
         );
 
+        if sel("f") {
+        }
         // (f) ten parallel creates all come up behind the gateway.
         let started = Instant::now();
         let creates = futures::future::join_all((0..10).map(|_| {
@@ -408,9 +418,11 @@ async fn live_internet_proof() {
             proof.check(connected(&seen), &format!("f {parallel_id} through the gateway"), &seen);
         }
 
+        }
         // (g) restart a gateway VM: a write during the restart is not silently dropped, and the
         // restarted replica comes back holding the policy its peer holds.
         let token = arm_token(&tenant, &client_id, &client_secret).await;
+        if sel("g") {
         // (g2) a sandbox that is deleted while a replica is away leaves no grant on either replica.
         // Its own proxy credentials are read inside it (never logged), then replayed from the subject.
         let doomed = sandbox
@@ -533,6 +545,7 @@ async fn live_internet_proof() {
             let seen = proxy(sandbox, &id, OTHER, 443, &via).await;
             proof.check(refused(&seen), &format!("g replica {index} after the new write"), &seen);
         }
+        }
         // (g3) gateway VM 0 stopped: egress continues through the agent's loopback failover. A
         // running sandbox keeps reaching its allowed host through VM 1 (the proxy variables point
         // at the agent's forwarder, not at either VM), and a new sandbox is tried against the
@@ -573,6 +586,7 @@ async fn live_internet_proof() {
         let seen = proxy(sandbox, &id, OTHER, 443, "").await;
         proof.check(refused(&seen), "g3 running sandbox still denied the unlisted host", &seen);
         let started = Instant::now();
+        let mut g3_new: Option<String> = None;
         match sandbox
             .create(CreateSandboxRequest {
                 egress: Some(allow(&[&format!("{ALLOWED}:443")])),
@@ -582,6 +596,12 @@ async fn live_internet_proof() {
         {
             Ok(new) => {
                 created.push(new.sandbox_id.clone());
+                g3_new = Some(new.sandbox_id.clone());
+                proof.check(
+                    started.elapsed() < Duration::from_secs(150),
+                    "g3 create with VM 0 stopped is bounded",
+                    &format!("{:?}", started.elapsed()),
+                );
                 let seen = proxy(sandbox, &new.sandbox_id, ALLOWED, 443, "").await;
                 proof.check(
                     connected(&seen),
@@ -589,11 +609,15 @@ async fn live_internet_proof() {
                     &format!("{seen} created in {:?}", started.elapsed()),
                 );
             }
-            Err(error) => proof.note(format!(
-                "[g3] new sandbox create with VM 0 stopped: refused after {:?} (retryable={}): {error}",
-                started.elapsed(),
-                error.retryable
-            )),
+            Err(error) => proof.check(
+                false,
+                "g3 a new sandbox is created with VM 0 stopped",
+                &format!(
+                    "refused after {:?} (retryable={}): {error}",
+                    started.elapsed(),
+                    error.retryable
+                ),
+            ),
         }
         let response = reqwest::Client::new()
             .post(format!(
@@ -615,6 +639,18 @@ async fn live_internet_proof() {
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
         proof.check(connected(&back), "g3 VM 0 serves again after start", &back);
+        if let Some(new_id) = &g3_new {
+            // The replica that was away starts empty and takes the grant from its peer.
+            let mut seen = String::new();
+            for _ in 0..30 {
+                seen = proxy(sandbox, new_id, ALLOWED, 443, &via0).await;
+                if connected(&seen) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            proof.check(connected(&seen), "g3 replica 0 serves the grant created while it was away", &seen);
+        }
         Ok::<(), String>(())
     }
     .await;
