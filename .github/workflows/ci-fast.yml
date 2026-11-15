@@ -111,6 +111,7 @@ jobs:
             # A dependency bump can break the full client, which workspace builds don't compile.
             platform_sdk:
               - 'client-sdks/platform/rust/**'
+              - 'crates/alien-core/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
             # Build inputs of the Node addon (Rust changes trigger the job through `rust`).
