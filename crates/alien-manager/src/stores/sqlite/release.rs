@@ -441,19 +441,9 @@ mod tests {
         assert!(fetched.is_some());
     }
 
-    /// A release built before the security profile existed has no `security`
-    /// field. Storing and reading it back must not add one, or an Operator would
-    /// start restricting workloads the release never asked to restrict.
-    #[tokio::test]
-    async fn a_release_without_a_security_field_keeps_it_absent() {
-        let temp = tempfile::tempdir().expect("test directory");
-        let db = Arc::new(
-            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
-                .await
-                .expect("database"),
-        );
-        let store = SqliteReleaseStore::new(db.clone());
-        let container = Container::new("api".to_string())
+    fn security_stack(security: Option<alien_core::ContainerSecurity>) -> Stack {
+        use alien_core::{Daemon, DaemonCode, Worker, WorkerCode};
+        let mut container = Container::new("api".to_string())
             .code(ContainerCode::Image {
                 image: "example/api:1".to_string(),
             })
@@ -467,9 +457,38 @@ mod tests {
                 desired: "256Mi".into(),
             })
             .build();
-        let stack = Stack::new("app".to_string())
-            .add(container, ResourceLifecycle::Live)
+        let mut daemon = Daemon::new("agent".to_string())
+            .code(DaemonCode::Image {
+                image: "example/agent:1".to_string(),
+            })
+            .permissions("execution".to_string())
             .build();
+        let mut worker = Worker::new("fn".to_string())
+            .code(WorkerCode::Image {
+                image: "example/fn:1".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        container.security = security.clone();
+        daemon.security = security.clone();
+        worker.security = security;
+        Stack::new("app".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .add(daemon, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build()
+    }
+
+    /// Stores a release holding the stack and returns the stack as read back and
+    /// the JSON text saved in the row.
+    async fn store_and_read(stack: Stack) -> (Stack, String) {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let store = SqliteReleaseStore::new(db.clone());
         let record = store
             .create_release(
                 &Subject::system(),
@@ -485,16 +504,11 @@ mod tests {
             )
             .await
             .expect("create release");
-        let fetched = store
+        let mut fetched = store
             .get_release(&Subject::system(), &record.id)
             .await
             .expect("get release")
             .expect("release exists");
-        for (_, stack) in &fetched.stacks {
-            let json = serde_json::to_string(stack).unwrap();
-            assert!(json.contains("\"container\""), "{json}");
-            assert!(!json.contains("security"), "{json}");
-        }
         let conn = db.conn().lock().await;
         let mut rows = conn
             .query(
@@ -504,6 +518,50 @@ mod tests {
             .await
             .unwrap();
         let saved: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        let stack = fetched
+            .stacks
+            .remove(&Platform::Kubernetes)
+            .expect("kubernetes stack");
+        (stack, saved)
+    }
+
+    /// A release built before the security profile existed has no `security`
+    /// field on a container, a daemon or a worker. Storing and reading it back
+    /// must not add one, or an Operator would start restricting workloads the
+    /// release never asked to restrict.
+    #[tokio::test]
+    async fn a_release_without_a_security_field_keeps_it_absent() {
+        let (read, saved) = store_and_read(security_stack(None)).await;
+        let json = serde_json::to_string(&read).unwrap();
+        for kind in ["\"container\"", "\"daemon\"", "\"worker\""] {
+            assert!(json.contains(kind), "{kind} missing from {json}");
+        }
+        assert!(!json.contains("security"), "{json}");
         assert!(!saved.contains("security"), "{saved}");
+    }
+
+    /// A declared profile, restricted or the explicit opt-out, comes back as
+    /// written on every kind of workload.
+    #[tokio::test]
+    async fn a_declared_security_profile_survives_the_store_on_every_workload() {
+        use alien_core::{ContainerSecurity, ContainerSecurityProfile};
+        for profile in [
+            ContainerSecurityProfile::Restricted,
+            ContainerSecurityProfile::Unrestricted,
+        ] {
+            let declared = ContainerSecurity {
+                profile,
+                run_as_user: Some(1000),
+                run_as_group: Some(1000),
+                read_only_root_filesystem: None,
+                writable_paths: vec!["/cache".to_string()],
+            };
+            let (read, saved) = store_and_read(security_stack(Some(declared.clone()))).await;
+            assert_eq!(
+                serde_json::to_value(&read).unwrap(),
+                serde_json::to_value(security_stack(Some(declared.clone()))).unwrap()
+            );
+            assert_eq!(saved.matches("\"security\"").count(), 3, "{saved}");
+        }
     }
 }

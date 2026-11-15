@@ -262,17 +262,17 @@ impl WorkloadPriority {
 
 /// Security profile shared by container runtimes.
 ///
-/// Every workload the Operator creates runs under the Kubernetes Pod Security
-/// `restricted` profile unless its stack sets `security.profile` to
-/// `unrestricted`. The opt-out is per workload; use it only for an image that
-/// must run as root or write outside its declared writable paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// A workload without a `security` setting runs as its image was built. Setting
+/// `security.profile` to `restricted` applies the Kubernetes Pod Security
+/// `restricted` profile; `unrestricted` states that no profile is applied. A
+/// `security` object without a `profile` is a parse error: there is no default
+/// profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum ContainerSecurityProfile {
     /// Non-root, seccomp RuntimeDefault, all capabilities dropped, no
     /// privilege escalation, read-only root filesystem.
-    #[default]
     Restricted,
     /// Opt-out: no security context is applied and the image runs as built.
     Unrestricted,
@@ -1180,6 +1180,16 @@ mod tests {
         assert!(matches!(previous.profile, PreviousProfile::Restricted));
         let back: ContainerSecurity = serde_json::from_value(json).unwrap();
         assert_eq!(back, security);
+    }
+
+    /// There is no default profile: a `security` object that omits it must
+    /// not parse as restricted (or as anything else).
+    #[test]
+    fn security_without_a_profile_fails_to_parse() {
+        assert!(
+            serde_json::from_str::<ContainerSecurity>(r#"{"writablePaths":["/cache"]}"#).is_err()
+        );
+        assert!(serde_json::from_str::<ContainerSecurity>("{}").is_err());
     }
 
     #[test]

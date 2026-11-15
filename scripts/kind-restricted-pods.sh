@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Proves two Operator defaults on a real cluster:
+# Proves two Operator behaviours on a real cluster:
 #
 #   1. Restricted when declared: the Deployment and DaemonSet the Kubernetes controllers render
 #      for a workload that declares `security: { profile: restricted }` are admitted and run in a
@@ -129,7 +129,8 @@ esac
 # --- 3. every example stack that targets Kubernetes ---------------------------------------------
 # Each container and daemon an example declares is rendered by the Operator's controllers from
 # the example's own stack (security, ports, environment, persistent storage) and applied to its
-# own namespace that enforces `restricted`. Images:
+# own namespace, which enforces `restricted` only when the workload declares the restricted
+# profile. Images:
 #   - `image` code (the examples' postgres and redis): the real image, copied into the mirror,
 #     so the opt-out's user and writable paths are proven against the real image;
 #   - source code: stand-in for the image `alien build` produces, which runs as 65532:65532 on
@@ -246,6 +247,6 @@ print("\n".join(bad))
   sleep 5
 done
 kubectl get pods -A | grep '^ex-' || { echo "no example pods were created" >&2; exit 1; }
-echo "every example container and daemon runs in a restricted namespace"
+echo "every example container and daemon runs; those that declare the restricted profile run in a namespace that enforces it"
 printf 'images that run as root under their opt-out: %s\n' "${kube_images[*]:-none}"
 echo "restricted pods and mirror: ok"

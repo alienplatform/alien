@@ -4604,6 +4604,20 @@ mod tests {
         );
         assert!(restricted.containers[0].security_context.is_some());
         assert!(restricted.volumes.as_ref().is_some_and(|v| !v.is_empty()));
+
+        // The explicit opt-out renders no pod security, like an absent setting.
+        let unrestricted = render(Some(ContainerSecurity {
+            profile: ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        }))
+        .await;
+        assert!(unrestricted.security_context.is_none());
+        assert!(unrestricted.volumes.is_none());
+        assert!(unrestricted.containers[0].security_context.is_none());
+        assert!(unrestricted.containers[0].volume_mounts.is_none());
     }
 
     #[tokio::test]

@@ -1570,6 +1570,15 @@ mod tests {
             restricted.security_context.as_ref().unwrap().run_as_user,
             Some(1000)
         );
+        assert_eq!(
+            restricted.security_context.as_ref().unwrap().run_as_non_root,
+            Some(true)
+        );
+        let container_context = restricted.containers[0]
+            .security_context
+            .as_ref()
+            .expect("container security context");
+        assert_eq!(container_context.allow_privilege_escalation, Some(false));
         let mounts: Vec<_> = restricted.containers[0]
             .volume_mounts
             .as_ref()

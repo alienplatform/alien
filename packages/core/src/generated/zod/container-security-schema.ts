@@ -11,7 +11,7 @@ import { ContainerSecurityProfileSchema } from "./container-security-profile-sch
  */
 export const ContainerSecuritySchema = z.object({
     get "profile"(){
-                return ContainerSecurityProfileSchema.describe("Security profile shared by container runtimes.\n\nEvery workload the Operator creates runs under the Kubernetes Pod Security\n`restricted` profile unless its stack sets `security.profile` to\n`unrestricted`. The opt-out is per workload; use it only for an image that\nmust run as root or write outside its declared writable paths.")
+                return ContainerSecurityProfileSchema.describe("Security profile shared by container runtimes.\n\nA workload without a `security` setting runs as its image was built. Setting\n`security.profile` to `restricted` applies the Kubernetes Pod Security\n`restricted` profile; `unrestricted` states that no profile is applied. A\n`security` object without a `profile` is a parse error: there is no default\nprofile.")
               },
 "readOnlyRootFilesystem": z.boolean().describe("Mount the root filesystem read-only. Defaults to true under `restricted`.").nullish(),
 "runAsGroup": z.int().describe("Numeric GID for the container process. Defaults to the image's group.").nullish(),

@@ -436,7 +436,7 @@ export class Container extends ResourceBuilder {
    * with a writable /tmp). Use `writablePaths` for other directories the image
    * writes to. Container egress requires the restricted profile.
    *
-   * `.security({ profile: "unrestricted" })` states the default explicitly.
+   * `.security({ profile: "unrestricted" })` opts out of the restricted profile.
    *
    * Rolling the Operator back to a release without this setting applies the
    * restricted profile to an opted-out workload, so a root image stops starting

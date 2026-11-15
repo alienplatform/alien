@@ -110,7 +110,7 @@ enum ToolchainType {
 
 impl DedupeKey {
     /// The key a container builds under: containers whose images get different users (restricted
-    /// default, explicit `runAsUser`, opt-out) never share an image.
+    /// profile, explicit `runAsUser`, opt-out) never share an image.
     fn for_container(
         src: &str,
         toolchain: &ToolchainConfig,
