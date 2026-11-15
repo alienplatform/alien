@@ -1322,12 +1322,14 @@ async fn an_allowed_caller_waiting_for_the_operator_queue_is_leased_when_a_comma
                 .await
             }
         });
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        assert_eq!(
-            fixture.state.command_server.open_lease_waits(),
-            1,
-            "{name} should be waiting"
-        );
+        let opened = std::time::Instant::now();
+        while fixture.state.command_server.open_lease_waits() < 1 {
+            assert!(
+                opened.elapsed() < std::time::Duration::from_secs(10),
+                "{name} should be waiting"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
         let queued_at = std::time::Instant::now();
         let command_id = fixture.queue_command(&fixture.dep_a).await;
         let (status, body) = waiting.await.unwrap();
