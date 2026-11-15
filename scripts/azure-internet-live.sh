@@ -96,7 +96,8 @@ save_gateway_logs() { # save_gateway_logs <tag>
   local n=0 vm hdr loc body result
   for vm in ${vms//,/ }; do
     hdr=$(mktemp)
-    body='{"commandId":"RunShellScript","script":["echo == cloud-init; cloud-init status --long 2>&1 | head -20; echo == docker; systemctl is-active docker; docker version --format {{.Server.Version}} 2>&1; echo == unit; systemctl status alien-egress-gateway --no-pager 2>&1 | head -15; echo == gateway-log; docker logs gateway --tail 400 2>&1; echo == journal; journalctl -u alien-egress-gateway --no-pager -n 100 2>&1; echo == cloud-init-output; tail -60 /var/log/cloud-init-output.log"]}'
+    # Azure returns only about 4 KB of a run command's output, so each section is cut to its tail.
+    body='{"commandId":"RunShellScript","script":["echo == state; cloud-init status 2>&1 | head -3; systemctl is-active docker alien-egress-gateway 2>&1 | tr \"\\n\" \" \"; docker ps -a --format \"{{.Status}}\" 2>&1 | head -2; echo; echo == gateway-log; docker logs gateway 2>&1 | grep -iE \"warn|error|refus|fan-out|did not ack|sync\" | cut -c1-230 | tail -n 12; echo == gateway-tail; docker logs gateway --tail 4 2>&1 | cut -c1-230; echo == cloud-init-errors; grep -iE \"fail|error|retry\" /var/log/cloud-init-output.log | cut -c1-160 | tail -n 4"]}'
     curl -sS --max-time 120 -D "$hdr" -o /dev/null -X POST -H "Authorization: Bearer $(token https://management.azure.com/.default)" \
       -H 'content-type: application/json' "https://management.azure.com$vm/runCommand?api-version=2024-07-01" -d "$body" || true
     loc=$(tr -d '\r' < "$hdr" | awk 'tolower($1)=="location:"{print $2}' | tail -1); rm -f "$hdr"
