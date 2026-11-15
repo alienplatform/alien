@@ -46,7 +46,7 @@ pub struct AzureNetworkImportData {
     pub is_byo_vnet: bool,
 }
 
-/// Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.
+/// Setup-owned subnet coordinates consumed by the sandbox gateway VMs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
@@ -54,7 +54,7 @@ pub struct AzureNetworkImportData {
 pub struct AzureSandboxNetwork {
     /// Dedicated delegated subnets whose sandboxes use the gateway.
     pub sandbox_subnet_ids: Vec<String>,
-    /// Undelegated subnet reserved for the gateway load balancer's frontend.
+    /// Undelegated subnet reserved for the gateway replicas' static NICs.
     pub gateway_subnet_ids: Vec<String>,
     /// Sandbox source ranges allowed on the proxy listener.
     pub sandbox_cidrs: Vec<String>,

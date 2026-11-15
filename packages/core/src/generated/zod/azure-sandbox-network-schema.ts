@@ -6,11 +6,12 @@
 import * as z from "zod";
 
 /**
- * @description Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.
+ * @description Setup-owned subnet coordinates consumed by the sandbox gateway VMs.
  */
 export const AzureSandboxNetworkSchema = z.object({
     "gatewayCidrs": z.array(z.string()).describe("Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before\nthe admin port was removed from that rule also allow TCP 3129; both are accepted."),
-"gatewaySubnetIds": z.array(z.string()).describe("Undelegated subnet reserved for the gateway load balancer's frontend."),
+"gatewayIps": z.optional(z.array(z.string()).describe("Static private IPs of the setup-created gateway VMs (one per replica). Setup releases\nthat predate the VMs leave this empty, and Internet sandboxes then refuse to start.")),
+"gatewaySubnetIds": z.array(z.string()).describe("Undelegated subnet reserved for the gateway replicas' static NICs."),
 "sandboxCidrs": z.array(z.string()).describe("Sandbox source ranges allowed on the proxy listener."),
 "sandboxCidrsByResource": z.optional(z.object({
     
@@ -18,6 +19,6 @@ export const AzureSandboxNetworkSchema = z.object({
 "sandboxSubnetIds": z.array(z.string()).describe("Dedicated delegated subnets whose sandboxes use the gateway."),
 "vpcCidrs": z.array(z.string()).describe("Every VNet range excluded from gateway destinations."),
 "workloadCidrs": z.array(z.string()).describe("Workload source ranges allowed on the authenticated admin listener.")
-    }).describe("Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.")
+    }).describe("Setup-owned subnet coordinates consumed by the sandbox gateway VMs.")
 
 export type AzureSandboxNetwork = z.infer<typeof AzureSandboxNetworkSchema>
