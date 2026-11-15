@@ -118,6 +118,7 @@ async fn digest_in_region(
     image: &EcrImageRef,
     region: &str,
     resource_id: &str,
+    missing_repository_is_missing_image: bool,
 ) -> Result<Option<String>> {
     let response = match client
         .batch_get_image(BatchGetImageRequest {
@@ -129,6 +130,17 @@ async fn digest_in_region(
         .await
     {
         Ok(response) => response,
+        // In the target region the first replicated push may not have created the
+        // repository yet: that is an image that has not arrived, not a failure.
+        Err(err)
+            if missing_repository_is_missing_image
+                && matches!(
+                    err.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+        {
+            return Ok(None);
+        }
         Err(err) => {
             let detail = format!("{err:?}").to_ascii_lowercase();
             let message = if is_region_policy_denial(&detail) {
@@ -178,7 +190,7 @@ pub(crate) async fn ensure_image_in_region(
     }
     let wanted = match &image.digest {
         Some(digest) => digest.clone(),
-        None => digest_in_region(source_client, &image, &image.region, resource_id)
+        None => digest_in_region(source_client, &image, &image.region, resource_id, false)
             .await?
             .ok_or_else(|| {
                 not_replicated(
@@ -192,7 +204,7 @@ pub(crate) async fn ensure_image_in_region(
                 )
             })?,
     };
-    match digest_in_region(target_client, &image, target_region, resource_id).await? {
+    match digest_in_region(target_client, &image, target_region, resource_id, true).await? {
         Some(present) if present == wanted => Ok(ImageInRegion::Present),
         // The tag exists in the target region but points at another image: replication
         // will not fix that.
@@ -286,6 +298,82 @@ mod tests {
         assert!(
             text.contains("us-east-2") && text.contains(DIGEST),
             "{text}"
+        );
+    }
+
+    fn repository_not_found() -> alien_client_core::Error {
+        alien_client_core::Error::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+            resource_type: "ECR Repository".into(),
+            resource_name: "repo".into(),
+        })
+    }
+
+    #[tokio::test]
+    async fn a_target_repository_that_does_not_exist_yet_counts_as_missing_image() {
+        let source = MockEcrApi::new();
+        let mut target = MockEcrApi::new();
+        target
+            .expect_batch_get_image()
+            .times(1)
+            .returning(|_| Err(repository_not_found()));
+        let result = ensure_image_in_region(
+            &format!("{SRC}@{DIGEST}"),
+            "us-east-2",
+            &source,
+            &target,
+            "worker",
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, ImageInRegion::Missing(_)), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn once_the_repository_and_image_appear_the_check_passes() {
+        let source = MockEcrApi::new();
+        let mut target = MockEcrApi::new();
+        let mut seq = mockall::Sequence::new();
+        target
+            .expect_batch_get_image()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Err(repository_not_found()));
+        target
+            .expect_batch_get_image()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_| Ok(found(DIGEST)));
+        let image = format!("{SRC}@{DIGEST}");
+        let first = ensure_image_in_region(&image, "us-east-2", &source, &target, "worker")
+            .await
+            .unwrap();
+        assert!(matches!(first, ImageInRegion::Missing(_)));
+        let second = ensure_image_in_region(&image, "us-east-2", &source, &target, "worker")
+            .await
+            .unwrap();
+        assert_eq!(second, ImageInRegion::Present);
+    }
+
+    #[tokio::test]
+    async fn a_source_repository_that_does_not_exist_fails_at_once() {
+        let mut source = MockEcrApi::new();
+        source
+            .expect_batch_get_image()
+            .times(1)
+            .returning(|_| Err(repository_not_found()));
+        let target = MockEcrApi::new();
+        let err = ensure_image_in_region(
+            &format!("{SRC}:v1"),
+            "us-east-2",
+            &source,
+            &target,
+            "worker",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Cannot read image repository"),
+            "{err}"
         );
     }
 
