@@ -10,10 +10,10 @@
 //! ```
 //!
 //! Only three things can be declared: membership of a group from a fixed list,
-//! exact `sudo` command templates, and use of the Docker socket. A template
-//! holds literal words and at most one `{unit}` placeholder, which the installer
-//! fills with an operator-approved unit name. Wildcards, shell characters, paths
-//! outside `/usr/bin/` and every other group are rejected.
+//! exact `sudo` command templates, and use of the Docker socket. The only
+//! template accepted is `/usr/bin/systemctl restart {unit}.service`, where the
+//! installer fills `{unit}` with an operator-approved unit name. Everything else
+//! (wildcards, shell characters, other programs, other groups) is rejected.
 
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
@@ -22,9 +22,6 @@ use crate::{ErrorData, Result, RiskTier};
 
 /// Groups an operation may ask the installer to add the service user to.
 pub const ALLOWED_GROUPS: [&str; 2] = ["systemd-journal", "docker"];
-
-const SUDO_COMMAND_DIRECTORY: &str = "/usr/bin/";
-const UNIT_PLACEHOLDER: &str = "{unit}";
 
 /// Versioned requirements declared in an operation's `hostPermissions`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,60 +44,20 @@ fn invalid(reason: impl Into<String>) -> AlienError<ErrorData> {
     })
 }
 
-fn literal_word(word: &str) -> bool {
-    !word.is_empty()
-        && word.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
-        })
-}
+/// The one command an operation may ask to run through `sudo`: restart a service
+/// unit. Nothing else is accepted, so a manifest cannot ask the installer for a
+/// shell, a wildcard or another program.
+pub const ALLOWED_SUDO_COMMANDS: [&str; 1] = ["/usr/bin/systemctl restart {unit}.service"];
 
-/// A template is `/usr/bin/<program> <word>...` where a word is literal
-/// (`[a-z0-9._-]+`) or `{unit}` optionally followed by a literal suffix.
 fn validate_sudo_template(template: &str) -> Result<()> {
-    let mut words = template.split(' ');
-    let program = words.next().unwrap_or_default();
-    let Some(name) = program.strip_prefix(SUDO_COMMAND_DIRECTORY) else {
-        return Err(invalid(format!(
-            "sudo command '{template}' must start with {SUDO_COMMAND_DIRECTORY}"
-        )));
-    };
-    if !literal_word(name) {
-        return Err(invalid(format!(
-            "sudo command '{template}' names a program that is not a plain file name"
-        )));
+    if ALLOWED_SUDO_COMMANDS.contains(&template) {
+        Ok(())
+    } else {
+        Err(invalid(format!(
+            "sudo command '{template}' is not allowed; the only command is: {}",
+            ALLOWED_SUDO_COMMANDS.join(", ")
+        )))
     }
-    let mut placeholders = 0;
-    let mut count = 0;
-    for word in words {
-        count += 1;
-        match word.strip_prefix(UNIT_PLACEHOLDER) {
-            Some(suffix) => {
-                placeholders += 1;
-                if !suffix.is_empty() && !literal_word(suffix) {
-                    return Err(invalid(format!(
-                        "sudo command '{template}' has an invalid word '{word}'"
-                    )));
-                }
-            }
-            None if literal_word(word) => {}
-            None => {
-                return Err(invalid(format!(
-                    "sudo command '{template}' has the word '{word}'; only plain words and {UNIT_PLACEHOLDER} are allowed (no wildcards or shell characters)"
-                )));
-            }
-        }
-    }
-    if count == 0 {
-        return Err(invalid(format!(
-            "sudo command '{template}' needs an argument"
-        )));
-    }
-    if placeholders > 1 {
-        return Err(invalid(format!(
-            "sudo command '{template}' has more than one {UNIT_PLACEHOLDER}"
-        )));
-    }
-    Ok(())
 }
 
 impl HostPermissions {
@@ -180,12 +137,7 @@ mod tests {
             "/usr/bin/systemctl restart UPPER",
         ] {
             let result = with(&[], &[sudo], false).validate(RiskTier::Mutating);
-            // `/usr/bin/sh -c {unit}` is a plain template; the list of programs is the installer's.
-            if sudo == "/usr/bin/sh -c {unit}" {
-                assert!(result.is_ok());
-            } else {
-                assert!(result.is_err(), "{sudo}");
-            }
+            assert!(result.is_err(), "{sudo}");
         }
         for group in ["root", "wheel", "sudo", "adm", "*", ""] {
             assert!(

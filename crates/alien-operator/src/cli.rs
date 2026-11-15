@@ -769,7 +769,7 @@ async fn run_operator_cli(
         // A start from an empty cache has no deployment state yet; an
         // observe-only environment starts as running, as it does when it
         // registers itself.
-        if join_token.is_some()
+        if starts_observe_only(args.identity_secret.is_some(), join_token.is_some())
             && args.initial_desired_release == InitialDesiredReleaseArg::None
             && db.get_deployment_state().await?.is_none()
         {
@@ -2249,6 +2249,13 @@ fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<Operat
         .map(|()| Some(report))
 }
 
+/// Whether a start with no deployment state writes the observe-only one: with the
+/// Secret identity store (as before), and for an install enrolled by a join token,
+/// which has no Secret on a machine or a Docker host.
+fn starts_observe_only(identity_secret: bool, join_token: bool) -> bool {
+    identity_secret || join_token
+}
+
 /// The enrollment token from its file when that exists, else from the
 /// environment value. A blank value counts as no token.
 async fn resolve_join_token(
@@ -2487,6 +2494,17 @@ mod tests {
                 "{persistent:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_observe_only_start_state_is_kept_for_the_secret_store_and_added_for_join_tokens() {
+        // A Kubernetes install with the identity Secret, whatever it enrolls with.
+        assert!(super::starts_observe_only(true, false));
+        assert!(super::starts_observe_only(true, true));
+        // A machine or Docker host enrolled by a join token.
+        assert!(super::starts_observe_only(false, true));
+        // A local install with neither starts with no state, as before.
+        assert!(!super::starts_observe_only(false, false));
     }
 
     #[tokio::test]
