@@ -31,7 +31,8 @@
 //! the native interposer, never the origin; (d) a direct connection on any other port, and (d2) to
 //! a private address, times out; (neg) the admin port is unreachable from a sandbox; (f) ten
 //! parallel creates all come up behind the gateway; (g) restarting one gateway VM loses no policy
-//! (peer sync) and a write during the restart is not silently dropped; (i) no cloud credential is
+//! (peer sync) and a write during the restart is not silently dropped; (g3) with one gateway VM powered off, a running sandbox keeps
+//! reaching its allowed host through the agent's failover; (i) no cloud credential is
 //! in the guest environment.
 #![cfg(feature = "azure")]
 
@@ -532,6 +533,88 @@ async fn live_internet_proof() {
             let seen = proxy(sandbox, &id, OTHER, 443, &via).await;
             proof.check(refused(&seen), &format!("g replica {index} after the new write"), &seen);
         }
+        // (g3) gateway VM 0 stopped: egress continues through the agent's loopback failover. A
+        // running sandbox keeps reaching its allowed host through VM 1 (the proxy variables point
+        // at the agent's forwarder, not at either VM), and a new sandbox is tried against the
+        // gate. Writes need every replica, so the new sandbox's create may be refused with a
+        // retryable gateway error while VM 0 is down; that is recorded, not hidden.
+        let stopped = &gateway_vms[0];
+        let response = reqwest::Client::new()
+            .post(format!(
+                "https://management.azure.com{stopped}/powerOff?api-version=2024-07-01"
+            ))
+            .bearer_auth(&token)
+            .header("content-length", "0")
+            .send()
+            .await
+            .map_err(|error| format!("power off request: {error}"))?;
+        proof.check(
+            response.status().is_success(),
+            "g3 power off accepted",
+            &response.status().to_string(),
+        );
+        let via0 = format!("{}:3128", gateway_ips[0]);
+        let mut seen = String::new();
+        for _ in 0..60 {
+            seen = proxy(sandbox, &id, ALLOWED, 443, &via0).await;
+            if !connected(&seen) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        proof.check(!connected(&seen), "g3 VM 0 no longer serves direct", &seen);
+        let started = Instant::now();
+        let seen = proxy(sandbox, &id, ALLOWED, 443, "").await;
+        proof.check(
+            connected(&seen),
+            "g3 running sandbox reaches its allowed host with VM 0 stopped",
+            &format!("{seen} in {:?}", started.elapsed()),
+        );
+        let seen = proxy(sandbox, &id, OTHER, 443, "").await;
+        proof.check(refused(&seen), "g3 running sandbox still denied the unlisted host", &seen);
+        let started = Instant::now();
+        match sandbox
+            .create(CreateSandboxRequest {
+                egress: Some(allow(&[&format!("{ALLOWED}:443")])),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(new) => {
+                created.push(new.sandbox_id.clone());
+                let seen = proxy(sandbox, &new.sandbox_id, ALLOWED, 443, "").await;
+                proof.check(
+                    connected(&seen),
+                    "g3 a new sandbox passes its gate and reaches its allowed host with VM 0 stopped",
+                    &format!("{seen} created in {:?}", started.elapsed()),
+                );
+            }
+            Err(error) => proof.note(format!(
+                "[g3] new sandbox create with VM 0 stopped: refused after {:?} (retryable={}): {error}",
+                started.elapsed(),
+                error.retryable
+            )),
+        }
+        let response = reqwest::Client::new()
+            .post(format!(
+                "https://management.azure.com{stopped}/start?api-version=2024-07-01"
+            ))
+            .bearer_auth(&token)
+            .header("content-length", "0")
+            .send()
+            .await
+            .map_err(|error| format!("start request: {error}"))?;
+        proof.check(response.status().is_success(), "g3 start accepted", &response.status().to_string());
+        let deadline = Instant::now() + Duration::from_secs(900);
+        let mut back = String::new();
+        while Instant::now() < deadline {
+            back = proxy(sandbox, &id, ALLOWED, 443, &via0).await;
+            if connected(&back) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
+        proof.check(connected(&back), "g3 VM 0 serves again after start", &back);
         Ok::<(), String>(())
     }
     .await;

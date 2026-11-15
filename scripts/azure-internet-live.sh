@@ -89,13 +89,38 @@ sp_object_id() {
     "https://graph.microsoft.com/v1.0/servicePrincipals(appId='$AZURE_TARGET_CLIENT_ID')?\$select=id" | jq -r .id
 }
 
+# Save what each gateway VM says about itself (cloud-init, the unit, the container's own log) so a
+# failure in the proof can be tied to a replica. Best effort: a stopped VM answers nothing.
+save_gateway_logs() { # save_gateway_logs <tag>
+  [ -n "${vms:-}" ] || return 0
+  local n=0 vm hdr loc body result
+  for vm in ${vms//,/ }; do
+    hdr=$(mktemp)
+    body='{"commandId":"RunShellScript","script":["echo == cloud-init; cloud-init status --long 2>&1 | head -20; echo == docker; systemctl is-active docker; docker version --format {{.Server.Version}} 2>&1; echo == unit; systemctl status alien-egress-gateway --no-pager 2>&1 | head -15; echo == gateway-log; docker logs gateway --tail 400 2>&1; echo == journal; journalctl -u alien-egress-gateway --no-pager -n 100 2>&1; echo == cloud-init-output; tail -60 /var/log/cloud-init-output.log"]}'
+    curl -sS --max-time 120 -D "$hdr" -o /dev/null -X POST -H "Authorization: Bearer $(token https://management.azure.com/.default)" \
+      -H 'content-type: application/json' "https://management.azure.com$vm/runCommand?api-version=2024-07-01" -d "$body" || true
+    loc=$(tr -d '\r' < "$hdr" | awk 'tolower($1)=="location:"{print $2}' | tail -1); rm -f "$hdr"
+    result="$WORK/gateway-$1-vm$n.log"
+    if [ -n "$loc" ]; then
+      for _ in $(seq 1 40); do
+        out=$(curl -sS --max-time 60 -H "Authorization: Bearer $(token https://management.azure.com/.default)" "$loc" || true)
+        if jq -e '.value[0].message' <<<"$out" >/dev/null 2>&1; then jq -r '.value[0].message' <<<"$out" > "$result"; break; fi
+        sleep 6
+      done
+    fi
+    [ -s "$result" ] || echo "no run-command output for $vm (stopped or unreachable)" > "$result"
+    n=$((n+1))
+  done
+  echo "gateway logs saved: $WORK/gateway-$1-vm*.log"
+}
+
 if [ "$cmd" = teardown ]; then teardown; exit 0; fi
 : "${AGENT_BINARY:?}" "${GATEWAY_BINARY:?}"
 export PATH="$HOME/bin:$PATH"
 command -v terraform >/dev/null || { echo "terraform is required"; exit 1; }
 
 # Whatever happens next, tear everything down and prove it.
-[ -n "${AZURE_INTERNET_KEEP:-}" ] || trap 'status=$?; trap - EXIT; set +e; teardown; code=$?; [ "$status" -ne 0 ] && exit "$status"; exit "$code"' EXIT
+[ -n "${AZURE_INTERNET_KEEP:-}" ] || trap 'status=$?; trap - EXIT; set +e; save_gateway_logs final; teardown; code=$?; [ "$status" -ne 0 ] && exit "$status"; exit "$code"' EXIT
 
 # 1. The registry, in its own group so the module's group can be applied and destroyed freely.
 echo "== registry"
@@ -182,6 +207,8 @@ assign "/subscriptions/$SUB/resourceGroups/$RG" "Container Apps SandboxGroup Dat
 assign "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.KeyVault/vaults/$vault" "Key Vault Secrets Officer"
 sleep 90 # role assignments take a while to propagate
 
+save_gateway_logs after-apply
+
 # 6. The controllers publish through the real executor.
 echo "== publish"
 (cd "$REPO" && AZURE_INTERNET_STACK="$WORK/render/stack.json" AZURE_INTERNET_REGISTRATION="$WORK/registration.json" \
@@ -232,6 +259,7 @@ for _ in $(seq 1 240); do
   # Only a terminal status ends the wait; a just-started execution can report Unknown or none.
   case "$st" in Succeeded|Failed|Stopped|Degraded) break ;; esac
 done
+save_gateway_logs after-proof
 secret=$(curl -fsS -H "Authorization: Bearer $(token https://vault.azure.net/.default)" \
   "https://$vault.vault.azure.net/secrets/azure-internet-proof-log?api-version=7.4" | jq -r .value)
 echo "$secret" | tee "$WORK/proof.log"
