@@ -650,6 +650,8 @@ async fn update_status() {
         ("pend", "delete-pending"),
         ("del", "deleting"),
         ("gone", "deleted"),
+        ("tdreq", "teardown-required"),
+        ("tdfail", "teardown-failed"),
     ] {
         let dep = create_test_deployment(&store, &group_id, name, Platform::Aws).await;
         db.conn()

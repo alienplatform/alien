@@ -1514,6 +1514,8 @@ impl DeploymentStore for SqliteDeploymentStore {
                     "delete-pending",
                     "deleting",
                     "deleted",
+                    "teardown-required",
+                    "teardown-failed",
                 ]),
             )
             .to_string(SqliteQueryBuilder);

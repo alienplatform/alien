@@ -534,6 +534,16 @@ impl InClusterUse {
         self.0.lock().unwrap_or_else(|e| e.into_inner()).key.clone()
     }
 
+    /// The deployment this run reran with a key from the Operator, if any.
+    pub fn in_cluster_name(&self) -> Option<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .in_cluster
+            .as_ref()
+            .map(|(name, _)| name.clone())
+    }
+
     /// Whether this run authenticated with a key from the Operator.
     pub fn used_in_cluster_key(&self) -> bool {
         self.0
@@ -546,6 +556,16 @@ impl InClusterUse {
     /// Replace a refusal with what it means for this run.
     pub fn explain(&self, error: AlienError<ErrorData>) -> AlienError<ErrorData> {
         let state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((name, _)) = &state.missing {
+            // A removing deployment answers 409 too; say why, not "not found".
+            if has_code(&error, "DEPLOYMENT_REMOVING") {
+                return AlienError::new(ErrorData::SetupTokenRequired {
+                    message: format!(
+                        "Cannot update \"{name}\": it is being removed. Nothing was changed."
+                    ),
+                });
+            }
+        }
         if let Some((name, missing)) = &state.missing {
             if has_status(&error, 401) || has_status(&error, 409) {
                 return no_installation(name, missing);
@@ -607,6 +627,17 @@ fn no_installation(name: &str, missing: &MissingInstall) -> AlienError<ErrorData
             shell_single_quote(name)
         ),
     })
+}
+
+/// Whether `error` or a cause has this error code.
+fn has_code(error: &AlienError<ErrorData>, code: &str) -> bool {
+    let mut found = error.code == code;
+    let mut source = error.source.as_deref();
+    while let Some(cause) = source {
+        found |= cause.code == code;
+        source = cause.source.as_deref();
+    }
+    found
 }
 
 /// Whether `error` or a cause has this HTTP status.
@@ -1038,6 +1069,37 @@ mod tests {
         let shown = usage.explain(unauthorized).message;
         assert!(shown.contains("expired after 15 minutes"), "{shown}");
         assert!(!shown.contains("took over"));
+    }
+
+    #[test]
+    fn a_409_for_a_removing_deployment_is_not_reported_as_no_installation() {
+        let usage = InClusterUse::default();
+        usage.note(
+            "prod",
+            &RerunToken {
+                token: "saved".into(),
+                in_cluster: false,
+                asked_again: false,
+                expires_at: None,
+                missing_install: Some(MissingInstall {
+                    release: "alien-operator".into(),
+                    namespace: "alien-prod".into(),
+                    cli_name: "acme-deploy".into(),
+                    verb: "deploy".into(),
+                }),
+            },
+        );
+        let mut removing = AlienError::new(ErrorData::GenericError {
+            message: "Deployment 'dep' is being removed or retained".into(),
+        });
+        removing.code = "DEPLOYMENT_REMOVING".into();
+        removing.http_status_code = Some(409);
+        let shown = usage.explain(removing).to_string();
+        assert!(
+            shown.contains("it is being removed. Nothing was changed."),
+            "{shown}"
+        );
+        assert!(!shown.contains("no installation found"), "{shown}");
     }
 
     #[test]
