@@ -221,6 +221,14 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
                 attr("provision_vm_agent", Expression::Bool(true)),
                 attr("encryption_at_host_enabled", Expression::Bool(false)),
                 attr("tags", tags(ctx, "sandbox-gateway-vm")),
+                // First boot needs outbound access (apt, the image pull): wait for the subnet's
+                // NAT and NSG associations, which nothing else in the VM refers to.
+                attr(
+                    "depends_on",
+                    expr::raw(format!(
+                        "[azurerm_subnet_nat_gateway_association.{label}, azurerm_subnet_network_security_group_association.{label}]"
+                    )),
+                ),
                 nested(block(
                     "identity",
                     [
@@ -290,8 +298,6 @@ fn gateway_image(ctx: &EmitContext<'_>) -> Result<String> {
 fn cloud_config(image: &str, vault: &str, label: &str) -> Expression {
     let lines = [
         "#cloud-config",
-        "package_update: true",
-        "packages: [docker.io]",
         "write_files:",
         "  - path: /etc/alien-egress-gateway.env",
         "    permissions: '0600'",
@@ -315,6 +321,9 @@ fn cloud_config(image: &str, vault: &str, label: &str) -> Expression {
         "      [Install]",
         "      WantedBy=multi-user.target",
         "runcmd:",
+        // The first boot can run before the subnet's NAT association finishes, so apt may have no
+        // route yet: retry instead of giving up once.
+        "  - [bash, -c, 'for i in $(seq 1 30); do apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io && exit 0; sleep 10; done; exit 1']",
         "  - [systemctl, daemon-reload]",
         "  - [systemctl, enable, --now, alien-egress-gateway.service]",
         "",
@@ -363,6 +372,28 @@ mod tests {
             assert!(text.contains(needed), "{needed} missing:\n{text}");
         }
         assert!(!text.contains("--network host") && !text.contains("--privileged"));
+    }
+
+    #[test]
+    fn docker_is_installed_by_a_retried_command_not_a_single_package_attempt() {
+        let text = rendered();
+        // cloud-init's `packages` runs once; a VM that boots before its subnet has outbound
+        // access (the NAT association) would never get Docker and the gateway would never start.
+        assert!(!text.contains("packages:"), "{text}");
+        assert!(text.contains("apt-get install -y docker.io"), "{text}");
+        assert!(text.contains("seq 1 30") && text.contains("sleep 10"), "{text}");
+        let install = text.find("apt-get install").unwrap();
+        let enable = text.find("enable").unwrap();
+        assert!(install < enable, "Docker is installed before the unit starts:\n{text}");
+    }
+
+    #[test]
+    fn the_vms_wait_for_the_subnet_outbound_path() {
+        let src = include_str!("sandbox_gateway_vm.rs");
+        let code = &src[..src.find("#[cfg(test)]").unwrap()];
+        assert!(code.contains("azurerm_subnet_nat_gateway_association"), "the VM depends on the NAT association");
+        assert!(code.contains("azurerm_subnet_network_security_group_association"));
+        assert!(code.contains("\"depends_on\""));
     }
 
     #[test]
