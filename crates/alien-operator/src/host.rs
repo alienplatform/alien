@@ -302,6 +302,7 @@ async fn collect(config: HostLogsConfig) -> Option<ObservedInventoryBatch> {
     }
     if config.journald {
         let output = tokio::process::Command::new("systemctl")
+            .env_clear()
             .args([
                 "list-units",
                 "--type=service",

@@ -228,7 +228,9 @@ async fn read_journal_once(state: &OperatorState) -> Result<()> {
     })?;
     let saved = db.get_pod_log_offset(JOURNALD_KEY, "journal", 0).await?;
     let mut command = tokio::process::Command::new("journalctl");
+    // The child gets no environment: the operator's token and settings stay with the operator.
     command
+        .env_clear()
         .args(journalctl_args(
             saved.as_ref().map(|s| s.timestamp.as_str()),
         ))
