@@ -1609,6 +1609,7 @@ fn import_runtime_metadata(
     RuntimeMetadata {
         prepared_stack: Some(stack.clone()),
         persisted_gate_answers,
+        first_setup_machines_unselected: true,
         ..RuntimeMetadata::default()
     }
 }
@@ -3267,5 +3268,17 @@ mod root_cause_tests {
             message: "No cause".to_string(),
         });
         assert_eq!(root_cause_message(&alone), "No cause");
+    }
+}
+
+#[cfg(test)]
+mod first_setup_marker_tests {
+    use super::*;
+
+    #[test]
+    fn a_registered_import_is_marked_for_first_setup_machine_selection() {
+        let metadata =
+            import_runtime_metadata(&Stack::new("s".to_string()).build(), Default::default());
+        assert!(metadata.first_setup_machines_unselected);
     }
 }

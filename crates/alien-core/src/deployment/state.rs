@@ -152,6 +152,14 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub automatic_setup: bool,
 
+    /// An imported install whose machines have not been selected yet. Set when the setup
+    /// import registers the deployment; the first InitialSetup step picks machines from free
+    /// quota and clears it with the same result, so the pick happens once and a later step
+    /// never re-picks against quota that its own machines reduced. Deployments stored
+    /// without it deserialize as done.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub first_setup_machines_unselected: bool,
+
     /// Hash of the environment variables snapshot that was last synced to the vault
     /// Used to avoid redundant sync operations during incremental deployment
     #[serde(skip_serializing_if = "Option::is_none")]
