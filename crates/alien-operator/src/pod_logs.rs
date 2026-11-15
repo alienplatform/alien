@@ -259,6 +259,7 @@ pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig)
     let mut completed = HashSet::<Source>::new();
     let mut client = None;
     let mut legacy_was_running = false;
+    let mut coverage = None;
     info!(namespace, label_key = %config.label_key, label_value = %config.label_value,
         max_streams = config.max_streams, "Starting Kubernetes Pod log collection");
 
@@ -287,6 +288,7 @@ pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig)
                     &mut tasks,
                     &mut completed,
                     started_at,
+                    &mut coverage,
                 )
                 .await
             }
@@ -322,10 +324,13 @@ async fn reconcile(
     tasks: &mut HashMap<Source, StreamTask>,
     completed: &mut HashSet<Source>,
     started_at: DateTime<Utc>,
+    coverage: &mut Option<(usize, usize)>,
 ) -> Result<()> {
     if let Some(cluster) = &config.cluster {
-        return reconcile_cluster(state, client, config, cluster, tasks, completed, started_at)
-            .await;
+        return reconcile_cluster(
+            state, client, config, cluster, tasks, completed, started_at, coverage,
+        )
+        .await;
     }
     let selector = format!("{}={}", config.label_key, config.label_value);
     let daemonset_names: Vec<_> = [
@@ -607,6 +612,7 @@ async fn reconcile_cluster(
     tasks: &mut HashMap<Source, StreamTask>,
     completed: &mut HashSet<Source>,
     started_at: DateTime<Utc>,
+    coverage: &mut Option<(usize, usize)>,
 ) -> Result<()> {
     let deployment_id = match state.db.get_deployment_id().await? {
         Some(id) => id,
@@ -646,18 +652,24 @@ async fn reconcile_cluster(
     let desired: BTreeSet<_> = choose_streams(eligible, config.max_streams, slot)
         .into_iter()
         .collect();
-    info!(
-        collecting = desired.len() + completed.len(),
-        containers = total,
-        "Collecting {} of {} containers",
-        desired.len() + completed.len(),
-        total
-    );
-    if desired.len() + completed.len() < total {
-        warn!(
-            max_streams = config.max_streams,
-            "More containers than the Pod log stream limit; they are read in turn"
-        );
+    // Report the coverage once per change, so the count is not repeated every
+    // pass. A shortfall is a warning: those containers are read in turn.
+    let collecting = desired.len() + completed.len();
+    if coverage.replace((collecting, total)) != Some((collecting, total)) {
+        if collecting < total {
+            warn!(
+                collecting,
+                containers = total,
+                max_streams = config.max_streams,
+                "Collecting {collecting} of {total} containers; the rest are read in turn"
+            );
+        } else {
+            info!(
+                collecting,
+                containers = total,
+                "Collecting {collecting} of {total} containers"
+            );
+        }
     }
     let stale: Vec<_> = tasks
         .iter()
