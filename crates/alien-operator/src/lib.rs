@@ -531,6 +531,10 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
 
     let host_log_handle = match runtime_options.host_logs {
         Some(host_log_config) if !matches!(config.platform, Platform::Kubernetes) => {
+            tokio::spawn({
+                let state = state.clone();
+                async move { host::run_inventory_loop(state, host_log_config).await }
+            });
             Some(tokio::spawn({
                 let state = state.clone();
                 async move { host_logs::run_loop(state, host_log_config).await }
