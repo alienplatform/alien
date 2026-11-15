@@ -58,9 +58,10 @@
 //!
 //! [`Receiver::run`] returns after [`ShutdownHandle::shutdown`] is called.
 //! Worded precisely: no new lease poll *starts* once draining begins (this is
-//! checked at the top of each poll-loop iteration) — a poll already in
-//! flight when shutdown is raised still completes, and any leases it returns
-//! are dispatched like the rest of the batch. In-flight commands get the
+//! checked at the top of each poll-loop iteration), and a poll in flight when
+//! shutdown is raised is abandoned: it may be a waiting request held open by
+//! the manager for up to 25 s. A lease the manager wrote for an abandoned poll
+//! expires and the command is redelivered. In-flight commands get the
 //! configured drain timeout to finish; remaining handlers are cancelled and
 //! their leases released before `run` returns. No command created after
 //! shutdown is ever leased. Wire the handle to your
@@ -102,8 +103,10 @@ use crate::{
     },
     types::{
         CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest, TraceContext,
-        DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_LEASE_SECONDS, DEFAULT_MAX_LEASES,
+        DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_LEASE_SECONDS, DEFAULT_LEASE_WAIT_SECONDS,
+        DEFAULT_MAX_LEASES,
         DEFAULT_POLL_INTERVAL_SECS, DEFAULT_POLL_JITTER, DEFAULT_POLL_MAX_INTERVAL_MS,
+        LEASE_WAIT_HONORED_AFTER, LEASE_WAIT_REPOLL_FLOOR, MAX_LEASE_WAIT_SECONDS,
     },
 };
 
@@ -296,8 +299,7 @@ pub struct ShutdownHandle(CancellationToken);
 
 impl ShutdownHandle {
     /// Signal the receiver to stop: no new lease poll starts once draining
-    /// begins (a poll already in flight still completes and its leases are
-    /// processed), in-flight commands may finish during the configured drain
+    /// begins and a poll already in flight is abandoned, in-flight commands may finish during the configured drain
     /// timeout, then remaining handlers are cancelled and their leases are
     /// released before [`Receiver::run`] returns. See the module docs'
     /// "Shutdown" section for the precise semantics.
@@ -315,6 +317,7 @@ pub struct Receiver {
     poll_interval: Duration,
     max_leases: usize,
     lease_seconds: u64,
+    wait_seconds: u64,
     poll_max_interval: Duration,
     poll_jitter: f64,
     drain_timeout: Duration,
@@ -335,6 +338,7 @@ impl std::fmt::Debug for Receiver {
             .field("poll_jitter", &self.poll_jitter)
             .field("max_leases", &self.max_leases)
             .field("lease_seconds", &self.lease_seconds)
+            .field("wait_seconds", &self.wait_seconds)
             .field("drain_timeout", &self.drain_timeout)
             .field("handlers", &self.handlers.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
@@ -561,6 +565,7 @@ impl Receiver {
                 DEFAULT_LEASE_SECONDS,
                 |value| *value > 0,
             )?,
+            wait_seconds: DEFAULT_LEASE_WAIT_SECONDS,
             drain_timeout: Duration::from_millis(parse_env_number::<u64>(
                 env,
                 ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS,
@@ -591,6 +596,14 @@ impl Receiver {
     /// Override the fractional poll jitter (default 0.1, range 0..=1).
     pub fn with_poll_jitter(mut self, jitter: f64) -> Self {
         self.poll_jitter = jitter.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Override how long each lease request asks the manager to hold it open
+    /// when no command is queued (default 25 s, at most 25 s). 0 turns waiting
+    /// off: the receiver polls with backoff.
+    pub fn with_lease_wait(mut self, wait: Duration) -> Self {
+        self.wait_seconds = wait.as_secs().min(MAX_LEASE_WAIT_SECONDS);
         self
     }
 
@@ -660,15 +673,17 @@ impl Receiver {
 
     /// Drive the lease loop until shutdown.
     ///
-    /// Polls `POST {url}/commands/leases` every poll interval, dispatches
+    /// Polls `POST {url}/commands/leases`, asking the manager to hold an empty
+    /// request open until a command is queued (an empty waited answer is
+    /// followed by an immediate poll; an empty answer that came back at once
+    /// backs off up to the maximum poll interval), dispatches
     /// each leased command to its handler concurrently, and submits
     /// responses. Retryable lease errors are logged and retried on the next
     /// interval; non-retryable errors terminate the receiver. With a token
     /// file or a runtime credential, a missing, unreadable or rejected
     /// credential is retried with backoff. Returns after
     /// [`ShutdownHandle::shutdown`]: no new lease poll starts once draining
-    /// begins (a poll already in flight still completes and its leases are
-    /// processed). In-flight commands may finish during the configured drain
+    /// begins and a poll already in flight is abandoned. In-flight commands may finish during the configured drain
     /// timeout; after it expires, remaining handlers are cancelled and their
     /// leases are released. See the module docs' "Shutdown" section for the
     /// precise semantics.
@@ -699,22 +714,37 @@ impl Receiver {
 
             let mut sleep_for = next_poll;
             let available = available_lease_capacity(self.max_leases, active.len());
+            let polled_at = tokio::time::Instant::now();
             let leases = if available == 0 {
                 sleep_for = self.poll_interval;
                 next_poll = self.poll_interval;
                 Ok(Vec::new())
             } else {
-                self.acquire_leases(available).await
+                // A waiting request can stay open for `wait_seconds`; shutdown
+                // must not wait for it. A lease the manager wrote for an
+                // abandoned request expires and is redelivered.
+                tokio::select! {
+                    _ = self.shutdown.cancelled() => break None,
+                    leases = self.acquire_leases(available) => leases,
+                }
             };
             match leases {
                 Ok(leases) => {
                     next_poll = if available == 0 {
                         self.poll_interval
-                    } else if leases.is_empty() {
-                        self.next_backoff(next_poll)
-                    } else {
+                    } else if !leases.is_empty() {
                         sleep_for = self.poll_interval;
                         self.poll_interval
+                    } else if self.wait_seconds > 0 && polled_at.elapsed() >= LEASE_WAIT_HONORED_AFTER
+                    {
+                        // The manager held the request open and found nothing:
+                        // ask again at once. Nothing is idle between requests.
+                        sleep_for = LEASE_WAIT_REPOLL_FLOOR.saturating_sub(polled_at.elapsed());
+                        self.poll_interval
+                    } else {
+                        // Answered at once, empty: no wait support (an older
+                        // manager, or one at its limit of open waits). Back off.
+                        self.next_backoff(next_poll)
                     };
                     for lease in leases {
                         if active.contains_key(&lease.command_id) {
@@ -826,6 +856,7 @@ impl Receiver {
             target: self.target.clone(),
             max_leases,
             lease_seconds: self.lease_seconds,
+            wait_seconds: self.wait_seconds,
         }
     }
 
