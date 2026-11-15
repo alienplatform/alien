@@ -91,7 +91,7 @@ pub struct Args {
     pub enrollment_token_file: Option<PathBuf>,
 
     /// The same enrollment token given directly, for targets that cannot mount
-    /// a file (`docker run -e`, container platform secrets). The file wins when
+    /// a file (`docker run -e`, container service secrets). The file wins when
     /// both are set. The value is never logged.
     #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN", hide_env_values = true)]
     pub enrollment_token: Option<String>,
