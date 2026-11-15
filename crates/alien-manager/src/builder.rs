@@ -1225,8 +1225,8 @@ async fn finalize(
             config.commands_base_url(),
             config.response_signing_key.clone(),
         )
-        .with_lease_wait_rescan_interval(std::time::Duration::from_secs(
-            config.lease_wait_rescan_interval_secs.max(1),
+        .with_lease_wait_probe_interval(std::time::Duration::from_secs(
+            config.lease_wait_probe_interval_secs.max(1),
         )),
     );
 

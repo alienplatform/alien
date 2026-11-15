@@ -37,7 +37,22 @@ pub struct FaultInjectingKv {
     fail_pending_scan: AtomicBool,
     fail_next_response_store: AtomicBool,
     idempotency_get_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
+    fail_wake_key_writes: AtomicBool,
+    #[allow(clippy::type_complexity)]
+    after_pending_scan: HookSlot,
 }
+
+struct HookSlot(Mutex<Option<AfterScanHook>>);
+
+impl std::fmt::Debug for HookSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HookSlot")
+    }
+}
+
+/// Runs once, after a pending-index scan has returned its answer.
+pub type AfterScanHook =
+    Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
 impl FaultInjectingKv {
     fn new(inner: Arc<LocalKv>) -> Self {
@@ -46,7 +61,25 @@ impl FaultInjectingKv {
             fail_pending_scan: AtomicBool::new(false),
             fail_next_response_store: AtomicBool::new(false),
             idempotency_get_barrier: Mutex::new(None),
+            fail_wake_key_writes: AtomicBool::new(false),
+            after_pending_scan: HookSlot(Mutex::new(None)),
         }
+    }
+
+    /// Arm the fault: writes of a target's lease wake key fail.
+    pub fn arm_wake_key_write_failure(&self) {
+        self.fail_wake_key_writes.store(true, Ordering::SeqCst);
+    }
+
+    /// Run `hook` once, right after the next pending-index scan returned its
+    /// answer: the scan's result is already decided when the hook acts, so
+    /// whatever the hook queues lands between that scan and whatever follows.
+    pub fn arm_after_next_pending_scan(&self, hook: AfterScanHook) {
+        *self
+            .after_pending_scan
+            .0
+            .lock()
+            .expect("after-scan hook lock should not be poisoned") = Some(hook);
     }
 
     /// Arm the fault: subsequent `scan_prefix` calls over a `target:…` (pending
@@ -99,6 +132,13 @@ impl Kv for FaultInjectingKv {
         value: Vec<u8>,
         options: Option<PutOptions>,
     ) -> alien_bindings::Result<bool> {
+        if key.ends_with(":wake") && self.fail_wake_key_writes.load(Ordering::SeqCst) {
+            return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
+                operation: "put".to_string(),
+                key: key.to_string(),
+                reason: "injected fault: wake key write failure".to_string(),
+            }));
+        }
         if key.ends_with(":response") && self.fail_next_response_store.swap(false, Ordering::SeqCst)
         {
             return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
@@ -131,7 +171,19 @@ impl Kv for FaultInjectingKv {
                 reason: "injected fault: pending-index scan failure".to_string(),
             }));
         }
-        self.inner.scan_prefix(prefix, limit, cursor).await
+        let result = self.inner.scan_prefix(prefix, limit, cursor).await;
+        if prefix.contains(":pending:") {
+            let hook = self
+                .after_pending_scan
+                .0
+                .lock()
+                .expect("after-scan hook lock should not be poisoned")
+                .take();
+            if let Some(hook) = hook {
+                hook().await;
+            }
+        }
+        result
     }
 }
 
@@ -390,6 +442,8 @@ pub struct TestCommandServerBuilder {
     storage: Option<Arc<LocalStorage>>,
     dispatcher: Option<Arc<dyn CommandDispatcher>>,
     fault_injection: bool,
+    max_open_lease_waits: Option<usize>,
+    lease_wait_probe_interval: Option<std::time::Duration>,
 }
 
 impl TestCommandServerBuilder {
@@ -399,7 +453,21 @@ impl TestCommandServerBuilder {
             storage: None,
             dispatcher: None,
             fault_injection: false,
+            max_open_lease_waits: None,
+            lease_wait_probe_interval: None,
         }
+    }
+
+    /// Limit the lease requests the server holds open while waiting.
+    pub fn with_max_open_lease_waits(mut self, max: usize) -> Self {
+        self.max_open_lease_waits = Some(max);
+        self
+    }
+
+    /// How often a waiting lease request scans again without a wake-up.
+    pub fn with_lease_wait_probe_interval(mut self, interval: std::time::Duration) -> Self {
+        self.lease_wait_probe_interval = Some(interval);
+        self
     }
 
     /// Wrap the KV store in a [`FaultInjectingKv`] so tests can simulate a
@@ -517,14 +585,21 @@ impl TestCommandServerBuilder {
                 (kv.clone() as Arc<dyn Kv>, None)
             };
 
-        let command_server = Arc::new(CommandServer::new(
+        let mut command_server = CommandServer::new(
             kv_for_server,
             storage.clone() as Arc<dyn Storage>,
             dispatcher.clone(),
             registry.clone(),
             command_base_url,
             b"test-signing-key-for-commands".to_vec(),
-        ));
+        );
+        if let Some(max) = self.max_open_lease_waits {
+            command_server = command_server.with_max_open_lease_waits(max);
+        }
+        if let Some(interval) = self.lease_wait_probe_interval {
+            command_server = command_server.with_lease_wait_probe_interval(interval);
+        }
+        let command_server = Arc::new(command_server);
 
         let commands_router: Router<Arc<CommandServer>> = create_axum_router();
         let router = Router::new()

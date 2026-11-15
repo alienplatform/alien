@@ -26,7 +26,14 @@ use object_store::path::Path as StoragePath;
 use crate::error::{ErrorData, Result};
 use crate::types::*;
 use crate::INLINE_MAX_BYTES;
-use lease_wait::{LeaseWaiters, DEFAULT_LEASE_WAIT_RESCAN_INTERVAL, DEFAULT_MAX_OPEN_LEASE_WAITS};
+const WAIT_AUTHORITY_MARGIN: Duration = Duration::from_secs(3);
+
+/// Lifetime of a wake key. A waiter only compares two reads taken seconds
+/// apart, so an old value is never needed; the lifetime lets the key go away
+/// with its deployment.
+const WAKE_KEY_TTL: Duration = Duration::from_secs(3600);
+
+use lease_wait::{LeaseWaiters, DEFAULT_LEASE_WAIT_PROBE_INTERVAL, DEFAULT_MAX_OPEN_LEASE_WAITS};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -125,7 +132,7 @@ pub struct CommandServer {
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     lease_waiters: Arc<LeaseWaiters>,
     max_open_lease_waits: usize,
-    lease_wait_rescan_interval: Duration,
+    lease_wait_probe_interval: Duration,
 }
 
 impl CommandServer {
@@ -155,7 +162,7 @@ impl CommandServer {
             clock: Arc::new(Utc::now),
             lease_waiters: Arc::new(LeaseWaiters::default()),
             max_open_lease_waits: DEFAULT_MAX_OPEN_LEASE_WAITS,
-            lease_wait_rescan_interval: DEFAULT_LEASE_WAIT_RESCAN_INTERVAL,
+            lease_wait_probe_interval: DEFAULT_LEASE_WAIT_PROBE_INTERVAL,
         }
     }
 
@@ -180,7 +187,7 @@ impl CommandServer {
             clock: Arc::new(Utc::now),
             lease_waiters: Arc::new(LeaseWaiters::default()),
             max_open_lease_waits: DEFAULT_MAX_OPEN_LEASE_WAITS,
-            lease_wait_rescan_interval: DEFAULT_LEASE_WAIT_RESCAN_INTERVAL,
+            lease_wait_probe_interval: DEFAULT_LEASE_WAIT_PROBE_INTERVAL,
         }
     }
 
@@ -199,8 +206,8 @@ impl CommandServer {
 
     /// How often a waiting lease request scans again without a wake-up
     /// (default 10 s).
-    pub fn with_lease_wait_rescan_interval(mut self, interval: Duration) -> Self {
-        self.lease_wait_rescan_interval = interval;
+    pub fn with_lease_wait_probe_interval(mut self, interval: Duration) -> Self {
+        self.lease_wait_probe_interval = interval;
         self
     }
 
@@ -1040,31 +1047,100 @@ impl CommandServer {
         let mut window =
             Duration::from_secs(lease_request.wait_seconds.min(MAX_LEASE_WAIT_SECONDS));
         if let Some(deadline) = authority_deadline {
+            // End the wait before the credential does, with room for the last
+            // scan's own authority check: the request is then answered empty
+            // and the receiver's next request meets the normal checks.
             let left = (deadline - self.now()).to_std().unwrap_or(Duration::ZERO);
-            window = window.min(left);
+            window = window.min(left.saturating_sub(WAIT_AUTHORITY_MARGIN));
         }
         let end = tokio::time::Instant::now() + window;
         // A scan right after a wake-up reads consistently: the wake-up says a
         // key was just written, and a lagging read must not hide it.
         let mut woken = false;
         loop {
-            // Listen before scanning: a command queued between the scan and the
-            // wait must still wake this request.
+            // Listen, and read the wake key, before scanning: a command queued
+            // after the scan (here or through another replica) must still wake
+            // this request.
             let notified = wait.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
+            let seen = self
+                .read_wake_key(deployment_id, &lease_request.target.resource_id)
+                .await;
 
             let response = self
                 .acquire_lease_once(deployment_id, lease_request, authority_deadline, woken)
                 .await?;
-            let now = tokio::time::Instant::now();
-            if !response.leases.is_empty() || now >= end {
+            if !response.leases.is_empty() || tokio::time::Instant::now() >= end {
                 return Ok(response);
             }
-            let next_scan = end.min(now + self.lease_wait_rescan_interval);
-            tokio::select! {
-                _ = &mut notified => woken = true,
-                _ = tokio::time::sleep_until(next_scan) => woken = false,
+            woken = false;
+            loop {
+                let next_probe =
+                    end.min(tokio::time::Instant::now() + self.lease_wait_probe_interval);
+                tokio::select! {
+                    _ = &mut notified => {
+                        woken = true;
+                        break;
+                    }
+                    _ = tokio::time::sleep_until(next_probe) => {}
+                }
+                if tokio::time::Instant::now() >= end {
+                    break; // one last scan, then answer
+                }
+                if self
+                    .read_wake_key(deployment_id, &lease_request.target.resource_id)
+                    .await
+                    != seen
+                {
+                    woken = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The wake key of a target: one small KV item, overwritten with a fresh
+    /// value by every create. A waiter that sees it change scans for the command
+    /// even when the create went through another manager replica.
+    fn wake_key(deployment_id: &str, target_resource_id: &str) -> String {
+        format!("target:{deployment_id}:{target_resource_id}:wake")
+    }
+
+    /// Announce a queued command to waiters on every replica. Best effort: the
+    /// command is already queued, so a failure here only delays waiters on other
+    /// replicas until their next request.
+    async fn write_wake_key(&self, deployment_id: &str, target_resource_id: &str) {
+        let key = Self::wake_key(deployment_id, target_resource_id);
+        let result = self
+            .kv
+            .put(
+                &key,
+                Uuid::new_v4().as_bytes().to_vec(),
+                Some(PutOptions {
+                    ttl: Some(WAKE_KEY_TTL),
+                    condition: PutCondition::None,
+                }),
+            )
+            .await;
+        if let Err(error) = result {
+            warn!(%key, %error, "Failed to write the lease wake key; waiters on other replicas find the command at their next request");
+        }
+    }
+
+    /// Current wake key value; `None` when it is missing or cannot be read (a
+    /// changed answer then only costs one extra scan).
+    async fn read_wake_key(
+        &self,
+        deployment_id: &str,
+        target_resource_id: &str,
+    ) -> Option<Vec<u8>> {
+        let key = Self::wake_key(deployment_id, target_resource_id);
+        match self.kv.get(&key).await {
+            Ok(entry) => entry.map(|entry| entry.value),
+            Err(error) => {
+                debug!(%key, %error, "Failed to read the lease wake key");
+                None
             }
         }
     }
@@ -1930,6 +2006,7 @@ impl CommandServer {
             })?;
         // Only after the write: a waiter woken by this scans and finds the key.
         self.lease_waiters.notify(deployment_id, target_resource_id);
+        self.write_wake_key(deployment_id, target_resource_id).await;
         Ok(())
     }
 
