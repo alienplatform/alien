@@ -938,6 +938,7 @@ pub(crate) fn render_terraform_module(
                 options.registration.as_ref().expect("checked above"),
                 product_remote_operator,
                 requires_remote_operator_collector_token,
+                &[],
             ))?,
         );
     }
@@ -1059,6 +1060,28 @@ pub(crate) fn render_terraform_module(
                     ]),
                 )],
             ))]))?,
+        );
+    }
+
+    // The destroy guard must be destroyed before every other resource, so a
+    // refused destroy has removed nothing, not even state-only markers that
+    // depend on nothing. Terraform destroys a resource before what it depends
+    // on; list every other managed resource. Added after the reference audit
+    // above: these are whole-resource references, valid for gated resources.
+    if let Some(registration) = options
+        .registration
+        .as_ref()
+        .filter(|registration| registration.destroy_guard && files.contains_key("helm.tf"))
+    {
+        let guard_after = managed_resource_addresses(&files, "helm.tf")?;
+        files.insert(
+            "helm.tf".to_string(),
+            render_body(helm_install_body(
+                registration,
+                product_remote_operator,
+                requires_remote_operator_collector_token,
+                &guard_after,
+            ))?,
         );
     }
 
@@ -5100,6 +5123,7 @@ fn helm_install_body(
     registration: &TerraformRegistration,
     product_remote_operator: bool,
     requires_remote_operator_collector_token: bool,
+    guard_after: &[String],
 ) -> Body {
     let provider_resource = registration.provider_resource_type();
     let mut resources = Vec::new();
@@ -5494,15 +5518,50 @@ fn helm_install_body(
                 ),
                 attr(
                     "depends_on",
-                    Expression::Array(vec![
-                        expr::raw(format!("{provider_resource}.this")),
-                        expr::raw("helm_release.runtime"),
-                    ]),
+                    Expression::Array(
+                        [
+                            format!("{provider_resource}.this"),
+                            "helm_release.runtime".to_string(),
+                        ]
+                        .into_iter()
+                        .chain(guard_after.iter().cloned())
+                        .map(expr::raw)
+                        .collect(),
+                    ),
                 ),
             ],
         )));
     }
     Body::from(resources)
+}
+
+/// Addresses of every `resource` block in the module's `.tf` files except
+/// those in `skip_file`, sorted.
+fn managed_resource_addresses(
+    files: &IndexMap<String, String>,
+    skip_file: &str,
+) -> Result<Vec<String>> {
+    let mut addresses = std::collections::BTreeSet::new();
+    for (name, contents) in files {
+        if !name.ends_with(".tf") || name == skip_file {
+            continue;
+        }
+        let body = hcl::parse(contents).into_alien_error().map_err(|err| {
+            AlienError::new(ErrorData::TemplateSerializationFailed {
+                format: "Terraform HCL".to_string(),
+                reason: format!("{name} does not parse: {err}"),
+            })
+        })?;
+        for block in body
+            .blocks()
+            .filter(|block| block.identifier() == "resource")
+        {
+            if let [kind, label] = block.labels() {
+                addresses.insert(format!("{}.{}", kind.as_str(), label.as_str()));
+            }
+        }
+    }
+    Ok(addresses.into_iter().collect())
 }
 
 fn outputs_body(

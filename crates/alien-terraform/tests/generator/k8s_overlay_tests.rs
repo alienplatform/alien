@@ -873,9 +873,7 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
             "{mode}: {helm}"
         );
         assert!(
-            compact.contains("depends_on = [ acme_app_deployment.this, helm_release.runtime, ]")
-                || compact
-                    .contains("depends_on = [ acme_app_deployment.this, helm_release.runtime ]"),
+            compact.contains("depends_on = [ acme_app_deployment.this, helm_release.runtime,"),
             "{mode}: {helm}"
         );
         assert!(compact.contains("deployment_id = acme_app_deployment.this.deployment_id"));
@@ -1977,4 +1975,146 @@ fn assert_network_in_every_mode(module: &alien_terraform::ModuleFiles) {
         !network.contains("var.kubernetes_cluster_mode"),
         "{network}"
     );
+}
+
+/// Whole-resource references (`type.name`) found in `text`, for resources of
+/// the module other than `own`.
+fn referenced_addresses(
+    text: &str,
+    own: &str,
+    all: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+    all.iter()
+        .filter(|address| address.as_str() != own)
+        .filter(|address| {
+            text.match_indices(address.as_str()).any(|(at, _)| {
+                let before_ok = at == 0 || !(is_ident(bytes[at - 1]) || bytes[at - 1] == b'.');
+                let end = at + address.len();
+                let after_ok = end >= bytes.len() || !is_ident(bytes[end]);
+                before_ok && after_ok
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// The property that makes a refused `terraform destroy` remove nothing:
+/// every managed resource of the module is an ancestor of the destroy guard
+/// in the resource graph (depends_on plus references), so Terraform destroys
+/// the guard before any of them. Checked on the rendered HCL, not on a list.
+#[test]
+fn destroy_guard_is_destroyed_before_every_other_resource() {
+    let registry = TfRegistry::built_in();
+    for (target, provider) in [
+        (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
+        (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
+        (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
+    ] {
+        for retained_data in [false, true] {
+            for product in [false, true] {
+                let mut stack = Stack::new("guard-first".to_string()).add(
+                    KubernetesCluster::new("kubernetes".to_string())
+                        .provider(provider.clone())
+                        .ownership(KubernetesClusterOwnership::Managed)
+                        .namespace("production".to_string())
+                        .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                );
+                if retained_data {
+                    if target == TerraformTarget::Aks {
+                        stack = stack
+                            .add(
+                                AzureResourceGroup::new("default-resource-group".to_string())
+                                    .build(),
+                                ResourceLifecycle::Frozen,
+                            )
+                            .add(
+                                alien_core::AzureStorageAccount::new(
+                                    "default-storage-account".to_string(),
+                                )
+                                .build(),
+                                ResourceLifecycle::Frozen,
+                            );
+                    }
+                    stack = stack.add(
+                        Storage::new("data".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    );
+                }
+                let stack = stack.build();
+                let options = TerraformOptions {
+                    setup_identity: None,
+                    pins: alien_core::SetupPins::compiled_in(),
+                    display_name: None,
+                    registry: &registry,
+                    stack_settings: StackSettings::default(),
+                    registration: Some(TerraformRegistration {
+                        provider_name: "acme_app".to_string(),
+                        provider_source: "pkg.example.com/acme/app".to_string(),
+                        provider_version: "1.0.0".to_string(),
+                        resource_type: "deployment".to_string(),
+                        release_id: Some("rel-test".to_string()),
+                        setup_target: "kubernetes".to_string(),
+                        setup_fingerprint: "test".to_string(),
+                        setup_fingerprint_version: 1,
+                        destroy_guard: true,
+                    }),
+                    helm_install: Some(TerraformHelmInstall {
+                        chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                        release_name: "acme-operator".to_string(),
+                    }),
+                    supported_aws_regions: Vec::new(),
+                };
+                let module = if product {
+                    generate_product_terraform_module(&stack, target, options, false)
+                } else {
+                    generate_terraform_module(&stack, target, options)
+                }
+                .unwrap_or_else(|error| panic!("{target:?} module should render: {error}"));
+                let label = format!("{target:?} retained={retained_data} product={product}");
+
+                let blocks = resource_blocks(&module);
+                let guard = "acme_app_destroy_guard.this";
+                assert!(blocks.contains_key(guard), "{label}: guard emitted");
+                if retained_data {
+                    assert!(
+                        blocks.contains_key("terraform_data.retention_inventory"),
+                        "{label}: retention inventory present"
+                    );
+                }
+                if product {
+                    assert!(
+                        blocks.contains_key("terraform_data.remote_operator_ownership"),
+                        "{label}: Remote Operator state latch present"
+                    );
+                }
+                let all: std::collections::BTreeSet<String> = blocks.keys().cloned().collect();
+                let edges: std::collections::BTreeMap<&String, Vec<String>> = blocks
+                    .iter()
+                    .map(|(address, text)| (address, referenced_addresses(text, address, &all)))
+                    .collect();
+
+                let mut ancestors = std::collections::BTreeSet::new();
+                let mut pending = vec![guard.to_string()];
+                while let Some(address) = pending.pop() {
+                    for dependency in &edges[&address] {
+                        if ancestors.insert(dependency.clone()) {
+                            pending.push(dependency.clone());
+                        }
+                    }
+                }
+                let missing: Vec<&String> = all
+                    .iter()
+                    .filter(|address| address.as_str() != guard && !ancestors.contains(*address))
+                    .collect();
+                assert!(
+                    missing.is_empty(),
+                    "{label}: resources Terraform may destroy before the guard: {missing:?}"
+                );
+            }
+        }
+    }
 }
