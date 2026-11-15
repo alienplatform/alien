@@ -880,7 +880,9 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
         assert!(compact.contains("management_url = var.management_url"));
         let readme = module.get("README.md").expect("README.md");
         assert!(
-            readme.contains("wait until its status is `teardown-required`, `retention-required` or `deleted`"),
+            readme.contains(
+                "wait until its status is `teardown-required`, `retention-required` or `deleted`"
+            ),
             "{mode} README names the erase-first order"
         );
         assert!(
@@ -1212,13 +1214,13 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
 /// Renders the registered EKS module that installs the chart itself.
 fn embedded_helm_module(with_storage: bool) -> alien_terraform::ModuleFiles {
     let mut builder = Stack::new("eks-registered-setup-bindings".to_string()).add(
-            KubernetesCluster::new("kubernetes".to_string())
-                .provider(KubernetesClusterProvider::Eks)
-                .ownership(KubernetesClusterOwnership::Managed)
-                .namespace("production".to_string())
-                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
-                .build(),
-            ResourceLifecycle::Frozen,
+        KubernetesCluster::new("kubernetes".to_string())
+            .provider(KubernetesClusterProvider::Eks)
+            .ownership(KubernetesClusterOwnership::Managed)
+            .namespace("production".to_string())
+            .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+            .build(),
+        ResourceLifecycle::Frozen,
     );
     if with_storage {
         builder = builder.add(
@@ -1280,7 +1282,9 @@ fn embedded_helm_install_passes_the_module_created_bindings_to_the_chart() {
     // The values entry must come after the provider values so it wins in Helm's merge.
     assert!(
         compact.find("helm_values").expect("provider values")
-            < compact.find("yamlencode({ infrastructure").expect("infrastructure"),
+            < compact
+                .find("yamlencode({ infrastructure")
+                .expect("infrastructure"),
         "{helm}"
     );
     let outputs = module.get("outputs.tf").expect("outputs.tf");
@@ -1302,7 +1306,9 @@ fn embedded_helm_install_without_chart_bound_resources_is_unchanged() {
         "no infrastructure entry without chart-bound resources: {helm}"
     );
     assert!(
-        compact.contains("values = [ acme_app_deployment.this.helm_values, yamlencode({ remoteOperator = "),
+        compact.contains(
+            "values = [ acme_app_deployment.this.helm_values, yamlencode({ remoteOperator = "
+        ),
         "the values list keeps the provider values: {helm}"
     );
     let outputs = module.get("outputs.tf").expect("outputs.tf");
