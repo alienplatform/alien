@@ -28,8 +28,11 @@ fn default_deployment_interval() -> u64 {
 fn default_heartbeat_interval() -> u64 {
     60
 }
-fn default_lease_wait_rescan_interval() -> u64 {
-    3
+fn default_lease_wait_probe_interval() -> u64 {
+    1
+}
+fn default_max_open_lease_waits() -> usize {
+    5_000
 }
 fn default_state_dir() -> PathBuf {
     PathBuf::from("alien-data")
@@ -99,10 +102,15 @@ pub struct ServerConfig {
     pub deployment_interval_secs: u64,
     #[serde(default = "default_heartbeat_interval")]
     pub heartbeat_interval_secs: u64,
-    /// How often a waiting lease request scans for a command without a wake-up,
-    /// in seconds. Matters with several manager processes on one command KV.
-    #[serde(default = "default_lease_wait_rescan_interval")]
-    pub lease_wait_rescan_interval_secs: u64,
+    /// How often a waiting lease request checks the target's wake key, in
+    /// seconds (minimum 1). A command queued through another manager process
+    /// on the same command KV is picked up within this interval.
+    #[serde(default = "default_lease_wait_probe_interval")]
+    pub lease_wait_probe_interval_secs: u64,
+    /// Most lease requests this process holds open while they wait for a
+    /// command. Over the limit a request is answered at once.
+    #[serde(default = "default_max_open_lease_waits")]
+    pub max_open_lease_waits: usize,
     /// The AWS regions this manager serves. List the regions the AWS artifact registry has
     /// copies in: a setup import or a worker deployment in any other region is refused, since
     /// its workers could not pull their images. Empty means no restriction.
@@ -119,7 +127,8 @@ impl Default for ServerConfig {
             releases_url: None,
             deployment_interval_secs: default_deployment_interval(),
             heartbeat_interval_secs: default_heartbeat_interval(),
-            lease_wait_rescan_interval_secs: default_lease_wait_rescan_interval(),
+            lease_wait_probe_interval_secs: default_lease_wait_probe_interval(),
+            max_open_lease_waits: default_max_open_lease_waits(),
             supported_aws_regions: Vec::new(),
         }
     }
@@ -390,7 +399,8 @@ impl ManagerTomlConfig {
             deployment_interval_secs: self.server.deployment_interval_secs,
             heartbeat_interval_secs: self.server.heartbeat_interval_secs,
             self_heartbeat_interval_secs: 60,
-            lease_wait_rescan_interval_secs: self.server.lease_wait_rescan_interval_secs,
+            lease_wait_probe_interval_secs: self.server.lease_wait_probe_interval_secs,
+            max_open_lease_waits: self.server.max_open_lease_waits,
             otlp_endpoint: self.telemetry.otlp_endpoint.clone(),
             base_url: self.server.base_url.clone(),
             releases_url: self.server.releases_url.clone(),
@@ -425,9 +435,10 @@ impl ManagerTomlConfig {
 # base-url = "https://alien.example.com"
 # deployment-interval-secs = 3
 # heartbeat-interval-secs = 60
-# How often a waiting lease request scans for a command without a wake-up (matters with
-# several manager processes sharing one command KV).
-# lease-wait-rescan-interval-secs = 3
+# How often a waiting lease request checks for a command queued through another manager
+# process on the same command KV, and how many requests this process holds open while waiting.
+# lease-wait-probe-interval-secs = 1
+# max-open-lease-waits = 5000
 # AWS regions the AWS artifact registry has copies in. Deployments elsewhere are refused.
 # supported-aws-regions = ["us-east-1", "eu-west-1"]
 

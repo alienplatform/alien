@@ -2,10 +2,11 @@
 //!
 //! A lease request with `waitSeconds > 0` parks in the manager until a command
 //! for its (deployment, target resource) is queued. The command server signals
-//! the key after the pending index write succeeds. The signal is only a hint:
-//! a woken waiter repeats the normal scan and the normal atomic lease write, so
-//! a lost wake-up (another manager replica queued the command, or the signal
-//! raced the scan) costs at most the re-scan interval.
+//! the key after the pending index write succeeds. The signal reaches waiters
+//! in the same process only; a command queued through another manager replica
+//! is seen by the waiter's probe of the target's wake key in the command KV.
+//! Either way the signal is only a hint: a woken waiter repeats the scan and
+//! the atomic lease write that every lease request does.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -17,9 +18,10 @@ use tokio::sync::Notify;
 /// cap a request is answered at once, as if it had not asked to wait.
 pub const DEFAULT_MAX_OPEN_LEASE_WAITS: usize = 5_000;
 
-/// How often a waiting request scans again without a wake-up. Covers commands
-/// queued through another manager replica and lost wake-ups.
-pub const DEFAULT_LEASE_WAIT_RESCAN_INTERVAL: Duration = Duration::from_secs(3);
+/// How often a waiting request reads the target's wake key. Covers commands
+/// queued through another manager replica, whose in-process signal never
+/// reaches this process.
+pub const DEFAULT_LEASE_WAIT_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 
 type Key = (String, String);
 
