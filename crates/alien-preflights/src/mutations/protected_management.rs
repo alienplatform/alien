@@ -21,8 +21,8 @@ use crate::{
     StackMutation,
 };
 use alien_core::{
-    DeploymentConfig, ManagementPermissions, PermissionSet, PermissionSetReference, Platform, Queue, ResourceLifecycle,
-    SetupManagement, Stack, StackState,
+    DeploymentConfig, ManagementPermissions, PermissionSet, PermissionSetReference, Platform,
+    Queue, ResourceLifecycle, SetupManagement, Stack, StackState,
 };
 use alien_error::AlienError;
 use alien_permissions::generators::{aws_family, aws_passed_to_services, azure_family, gcp_family};
@@ -373,19 +373,37 @@ mod tests {
     async fn a_queue_ending_in_rq_is_refused_on_protected_gcp_only() {
         let stack = || {
             Stack::new("shop".to_string())
-                .add(Queue::new("jobs-rq".to_string()).build(), ResourceLifecycle::Live)
+                .add(
+                    Queue::new("jobs-rq".to_string()).build(),
+                    ResourceLifecycle::Live,
+                )
                 .build()
         };
-        let error = prepared(stack(), Platform::Gcp, config(true, SetupManagement::Manual))
-            .await
-            .expect_err("the queue falls under management's publisher grant");
-        assert!(error.contains("jobs-rq") && error.contains("-rq"), "{error}");
-        prepared(stack(), Platform::Gcp, config(false, SetupManagement::Manual))
-            .await
-            .expect("an unprotected install is unaffected");
-        prepared(stack(), Platform::Aws, config(true, SetupManagement::Manual))
-            .await
-            .expect("the grant is GCP's");
+        let error = prepared(
+            stack(),
+            Platform::Gcp,
+            config(true, SetupManagement::Manual),
+        )
+        .await
+        .expect_err("the queue falls under management's publisher grant");
+        assert!(
+            error.contains("jobs-rq") && error.contains("-rq"),
+            "{error}"
+        );
+        prepared(
+            stack(),
+            Platform::Gcp,
+            config(false, SetupManagement::Manual),
+        )
+        .await
+        .expect("an unprotected install is unaffected");
+        prepared(
+            stack(),
+            Platform::Aws,
+            config(true, SetupManagement::Manual),
+        )
+        .await
+        .expect("the grant is GCP's");
     }
 
     #[tokio::test]

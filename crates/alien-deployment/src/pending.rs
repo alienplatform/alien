@@ -606,6 +606,49 @@ pub fn enforce_frozen_gate_fixity(
     Ok(new_declines)
 }
 
+/// Declines for frozen gates nobody answered that resolve false by their declared default.
+///
+/// A release can add a setup-created resource behind a new input that defaults to false. An
+/// update that does not mention the input never records an answer, so the resource would stay
+/// in the target and the executor would plan to create it. With nothing behind the gate
+/// installed and no recorded answer, the default is the answer: it is returned as a decline for
+/// the caller to record, as for an explicit "no" in [`enforce_frozen_gate_fixity`]. A gate with
+/// an installed resource, a recorded answer, a provided value (that function handles it), or no
+/// boolean default is left to the compatibility check.
+pub fn default_frozen_gate_declines(
+    check: FrozenGateFixityCheck<'_>,
+    platform: Platform,
+) -> alien_core::GateAnswers {
+    let mut declines = alien_core::GateAnswers::new();
+    for input_id in check.still_frozen_gating {
+        if check.input_values.contains_key(input_id) || check.persisted.contains_key(input_id) {
+            continue;
+        }
+        let behind: Vec<&String> = frozen_gated(check.stack)
+            .filter(|(_, gate)| *gate == input_id)
+            .map(|(resource_id, _)| resource_id)
+            .collect();
+        let Some(first) = behind.first() else {
+            continue;
+        };
+        let installed = behind
+            .iter()
+            .any(|resource_id| check.existing_resource_ids.contains(resource_id.as_str()));
+        if !installed
+            && alien_core::gate_resolves_true(
+                &check.stack.inputs,
+                input_id,
+                check.input_values,
+                first,
+                platform,
+            ) == Ok(false)
+        {
+            declines.insert(input_id.clone(), false);
+        }
+    }
+    declines
+}
+
 /// Audit the gate-driven transitions this update requests: a live decline
 /// that will delete an existing resource (data included) and a live
 /// acceptance that will recreate a previously declined one.
@@ -1619,6 +1662,74 @@ mod tests {
                 "analyticsEnabled",
             )
             .build()
+    }
+
+    fn default_false_stack() -> Stack {
+        Stack::new("s".to_string())
+            .inputs(vec![StackInputDefinition::deployer_boolean(
+                "analyticsEnabled",
+                "Enable analytics",
+                "Whether to create analytics.",
+                Some(false),
+            )])
+            .add_enabled_when(
+                Kv::new("analytics".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "analyticsEnabled",
+            )
+            .build()
+    }
+
+    /// A new frozen resource behind a gate that defaults to false, with no answer given, is
+    /// declined by default and leaves the target (nothing plans to create it).
+    #[test]
+    fn an_unanswered_gate_defaulting_false_is_declined_and_stripped() {
+        let stack = default_false_stack();
+        let still_frozen = std::collections::HashSet::from(["analyticsEnabled".to_string()]);
+        let none = alien_core::GateAnswers::new();
+        let empty_ids = std::collections::HashSet::new();
+        let empty_values = std::collections::HashMap::new();
+        let check =
+            |persisted: &alien_core::GateAnswers,
+             existing: &std::collections::HashSet<String>,
+             values: &std::collections::HashMap<String, serde_json::Value>| {
+                default_frozen_gate_declines(
+                    FrozenGateFixityCheck {
+                        persisted,
+                        stack: &stack,
+                        still_frozen_gating: &still_frozen,
+                        existing_resource_ids: existing,
+                        input_values: values,
+                    },
+                    Platform::Aws,
+                )
+            };
+        let declines = check(&none, &empty_ids, &empty_values);
+        assert_eq!(declines.get("analyticsEnabled"), Some(&false));
+
+        let stripped = strip_declined_frozen_resources(stack.clone(), &declines);
+        assert!(!stripped.resources.contains_key("analytics"));
+
+        // Installed, recorded, or answered: not this function's decision.
+        let installed = std::collections::HashSet::from(["analytics".to_string()]);
+        assert!(check(&none, &installed, &empty_values).is_empty());
+        let recorded = alien_core::GateAnswers::from_iter([("analyticsEnabled".to_string(), true)]);
+        assert!(check(&recorded, &empty_ids, &empty_values).is_empty());
+        assert!(check(&none, &empty_ids, &requested(true)).is_empty());
+        // A gate that defaults true is not declined by default.
+        let mut yes = default_false_stack();
+        yes.inputs[0].default = Some(alien_core::StackInputDefaultValue::Boolean(true));
+        let declines = default_frozen_gate_declines(
+            FrozenGateFixityCheck {
+                persisted: &none,
+                stack: &yes,
+                still_frozen_gating: &still_frozen,
+                existing_resource_ids: &Default::default(),
+                input_values: &Default::default(),
+            },
+            Platform::Aws,
+        );
+        assert!(declines.is_empty());
     }
 
     fn requested(value: bool) -> std::collections::HashMap<String, serde_json::Value> {

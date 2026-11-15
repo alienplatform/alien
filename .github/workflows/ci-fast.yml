@@ -171,6 +171,10 @@ jobs:
               - 'crates/alien-bindings-node/**'
               - 'crates/alien-bindings/**'
               - 'crates/alien-build/**'
+              # packages/permissions/generated is compiled from this crate. The
+              # check that the generated files are committed runs in the
+              # TypeScript job, so a Rust-only change here has to select it.
+              - 'crates/alien-permissions/**'
 
   rust:
     name: Rust crates
