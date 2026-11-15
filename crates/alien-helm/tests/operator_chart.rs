@@ -106,6 +106,23 @@ fn documents(rendered: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The rendered documents as parsed YAML, sorted by kind and name. A snapshot of this does not
+/// depend on the Helm version's text formatting or document order.
+fn canonical(rendered: &str) -> String {
+    let mut documents = documents(rendered);
+    documents.sort_by_key(|document| {
+        (
+            document["kind"].as_str().unwrap_or_default().to_string(),
+            document["metadata"]["name"].as_str().unwrap_or_default().to_string(),
+        )
+    });
+    documents
+        .iter()
+        .map(|document| serde_yaml::to_string(document).unwrap())
+        .collect::<Vec<_>>()
+        .join("---\n")
+}
+
 fn kind<'a>(documents: &'a [Value], kind: &str) -> Vec<&'a Value> {
     documents
         .iter()
@@ -152,7 +169,7 @@ fn rule(group: &str, resource: &str, verbs: &[&str]) -> (String, String, Vec<Str
 #[test]
 fn the_default_install_has_no_volume_claim_no_hook_and_no_custom_resource_definition() {
     let rendered = render(&["--set", &format!("token={TOKEN}")]);
-    insta::assert_snapshot!("default_chart", rendered);
+    insta::assert_snapshot!("default_chart", canonical(&rendered));
     let documents = documents(&rendered);
     let mut kinds: Vec<_> = documents
         .iter()
@@ -542,7 +559,7 @@ fn a_branded_render_has_no_product_name_in_any_resource_name_label_or_group() {
             .collect::<Vec<_>>()
             .join("\n")
     );
-    insta::assert_snapshot!("branded_chart", rendered);
+    insta::assert_snapshot!("branded_chart", canonical(&rendered));
 
     // The packaged configuration reaches the Operator through the file it already reads.
     let documents = documents(&rendered);
