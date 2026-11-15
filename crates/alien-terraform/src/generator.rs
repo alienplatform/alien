@@ -617,6 +617,8 @@ pub(crate) fn render_terraform_module(
         }
     }
 
+    let chart_infrastructure_value = chart_infrastructure_value(chart_infrastructure);
+
     let gcp_iam_propagation_dependencies = if matches!(platform, alien_core::Platform::Gcp) {
         gcp_iam_resource_addresses(&per_resource)
     } else {
@@ -939,6 +941,7 @@ pub(crate) fn render_terraform_module(
                 product_remote_operator,
                 requires_remote_operator_collector_token,
                 &[],
+                chart_infrastructure_value.as_ref(),
             ))?,
         );
     }
@@ -953,7 +956,9 @@ pub(crate) fn render_terraform_module(
             &stack_inputs,
             deployer_secret_outputs(stack, target, deployer_secrets_vault_binding.as_ref())?
                 .into_iter()
-                .chain(chart_infrastructure_output(chart_infrastructure))
+                .chain(chart_infrastructure_output(
+                    chart_infrastructure_value.clone(),
+                ))
                 .chain(installer_bindings_output(&installer_bindings))
                 .chain(chart_service_accounts_output(has_chart_service_accounts))
                 .collect(),
@@ -1082,6 +1087,7 @@ pub(crate) fn render_terraform_module(
                 product_remote_operator,
                 requires_remote_operator_collector_token,
                 &guard_after,
+                chart_infrastructure_value.as_ref(),
             ))?,
         );
     }
@@ -2512,19 +2518,23 @@ const CHART_BOUND_TYPES: &[&str] = &["storage", "queue", "kv", "artifact-registr
 /// `infrastructure` value, or store it in the Secret named by
 /// `infrastructureExistingSecret` (key `external-bindings.json`) when a GitOps
 /// tool installs the chart. Absent when the module creates none of them.
-fn chart_infrastructure_output(
+fn chart_infrastructure_value(
     bindings: Vec<(Option<String>, String, Expression)>,
-) -> Option<(String, Expression, String)> {
+) -> Option<Expression> {
     if bindings.is_empty() {
         return None;
     }
     // A resource gated on an input only has a binding while its gate is true: the
     // entry is left out otherwise, so the output never reads a resource that wasn't created.
-    let value = if bindings.iter().all(|(gate, _, _)| gate.is_none()) {
+    Some(if bindings.iter().all(|(gate, _, _)| gate.is_none()) {
         expr::object(bindings.into_iter().map(|(_, id, binding)| (id, binding)))
     } else {
         crate::emitters::enabled::gated_object(bindings)
-    };
+    })
+}
+
+fn chart_infrastructure_output(value: Option<Expression>) -> Option<(String, Expression, String)> {
+    let value = value?;
     Some((
         "chart_infrastructure_json".to_string(),
         expr::jsonencode(value),
@@ -5125,6 +5135,7 @@ fn helm_install_body(
     product_remote_operator: bool,
     requires_remote_operator_collector_token: bool,
     guard_after: &[String],
+    chart_infrastructure: Option<&Expression>,
 ) -> Body {
     let provider_resource = registration.provider_resource_type();
     let mut resources = Vec::new();
@@ -5438,23 +5449,29 @@ fn helm_install_body(
         )));
     }
 
-    let values = if product_remote_operator {
+    // The provider-rendered values carry `infrastructure: null`. When this module installs the
+    // chart it also created the storage, queue and vault resources the chart binds, so it hands
+    // the chart their bindings; otherwise the Operator finds none and fails on its first step.
+    // Later entries win in Helm's merge.
+    let mut values = vec![expr::raw(format!("{provider_resource}.this.helm_values"))];
+    if let Some(infrastructure) = chart_infrastructure {
+        values.push(Expression::FuncCall(Box::new(
+            hcl::expr::FuncCall::builder(Identifier::sanitized("yamlencode"))
+                .arg(expr::object([("infrastructure", infrastructure.clone())]))
+                .build(),
+        )));
+    }
+    if product_remote_operator {
         // Carry the setup-created Secret UID into the pod template. Besides
         // making a Secret recreation restart the Operator, the computed value
         // keeps Helm planning deferred until the Secret exists. That is
         // required because the chart's server-side `lookup` checks cannot
         // validate a Secret that Terraform has only planned to create.
-        Expression::Array(vec![
-            expr::raw(format!("{provider_resource}.this.helm_values")),
-            expr::raw(
-                "yamlencode({ remoteOperator = { enabled = var.remote_operator_enabled, existingSecret = { name = \"${var.helm_release_name}-remote\", encryptionKeySha256 = var.remote_operator_encryption_key != null ? sha256(var.remote_operator_encryption_key) : \"\" }, bootstrapIdentity = var.remote_operator_bootstrap_identity, syncTokenRevision = var.remote_operator_sync_token_revision, collectorTokenRevision = var.remote_operator_collector_token != null ? sha256(var.remote_operator_collector_token) : \"\", serviceAccountAnnotations = {}, podLabels = var.remote_operator_enabled ? { \"alien.dev/credentials-secret-uid\" = kubernetes_secret_v1.remote_operator_credentials[0].metadata[0].uid } : {} } })",
-            ),
-        ])
-    } else {
-        Expression::Array(vec![expr::raw(format!(
-            "{provider_resource}.this.helm_values"
-        ))])
-    };
+        values.push(expr::raw(
+"yamlencode({ remoteOperator = { enabled = var.remote_operator_enabled, existingSecret = { name = \"${var.helm_release_name}-remote\", encryptionKeySha256 = var.remote_operator_encryption_key != null ? sha256(var.remote_operator_encryption_key) : \"\" }, bootstrapIdentity = var.remote_operator_bootstrap_identity, syncTokenRevision = var.remote_operator_sync_token_revision, collectorTokenRevision = var.remote_operator_collector_token != null ? sha256(var.remote_operator_collector_token) : \"\", serviceAccountAnnotations = {}, podLabels = var.remote_operator_enabled ? { \"alien.dev/credentials-secret-uid\" = kubernetes_secret_v1.remote_operator_credentials[0].metadata[0].uid } : {} } })"
+        ));
+    }
+    let values = Expression::Array(values);
     let mut helm_body = vec![
         attr("count", expr::raw("var.helm_install_enabled ? 1 : 0")),
         attr("name", expr::raw("var.helm_release_name")),

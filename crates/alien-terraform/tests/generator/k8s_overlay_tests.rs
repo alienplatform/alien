@@ -880,7 +880,9 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
         assert!(compact.contains("management_url = var.management_url"));
         let readme = module.get("README.md").expect("README.md");
         assert!(
-            readme.contains("wait until its status is `teardown-required`, `retention-required` or `deleted`"),
+            readme.contains(
+                "wait until its status is `teardown-required`, `retention-required` or `deleted`"
+            ),
             "{mode} README names the erase-first order"
         );
         assert!(
@@ -1272,7 +1274,10 @@ fn embedded_helm_install_passes_the_module_created_bindings_to_the_chart() {
     );
     // The chart value and the published output must be the same bindings.
     let outputs = module.get("outputs.tf").expect("outputs.tf");
-    assert!(outputs.contains("output \"chart_infrastructure_json\""), "{outputs}");
+    assert!(
+        outputs.contains("output \"chart_infrastructure_json\""),
+        "{outputs}"
+    );
 }
 
 #[test]
