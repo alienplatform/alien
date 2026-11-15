@@ -1479,7 +1479,17 @@ mod tests {
         let mut config = match std::env::var("ALIEN_KIND_CONFIG") {
             Ok(path) => serde_json::from_str(&std::fs::read_to_string(path).expect("config"))
                 .expect("daemon config"),
-            Err(_) => manifest_test_daemon(&[]),
+            Err(_) => {
+                let mut config = manifest_test_daemon(&[]);
+                config.security = Some(alien_core::ContainerSecurity {
+                    profile: alien_core::ContainerSecurityProfile::Restricted,
+                    run_as_user: None,
+                    run_as_group: None,
+                    read_only_root_filesystem: None,
+                    writable_paths: Vec::new(),
+                });
+                config
+            }
         };
         let name = std::env::var("ALIEN_KIND_NAME").unwrap_or_else(|_| "agent".to_string());
         let out = std::env::var("ALIEN_KIND_OUT").unwrap_or_else(|_| "daemon.yaml".to_string());
@@ -1513,6 +1523,61 @@ mod tests {
             serde_json::to_string_pretty(&value).expect("json"),
         )
         .expect("write manifest");
+    }
+
+    /// A release without a `security` field renders no pod security; only an
+    /// explicit `restricted` profile restricts the DaemonSet's pod.
+    #[tokio::test]
+    async fn daemon_pod_is_restricted_only_when_the_release_says_so() {
+        let render = |security: Option<alien_core::ContainerSecurity>| async move {
+            let mut config = manifest_test_daemon(&[]);
+            config.security = security;
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            manifest_test_controller()
+                .build_daemonset(
+                    &config,
+                    "agent",
+                    "test-ns",
+                    None,
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("daemonset manifest")
+                .spec
+                .unwrap()
+                .template
+                .spec
+                .unwrap()
+        };
+        let old = render(None).await;
+        assert!(old.security_context.is_none());
+        assert!(old.volumes.is_none());
+        assert!(old.containers[0].security_context.is_none());
+        assert!(old.containers[0].volume_mounts.is_none());
+
+        let restricted = render(Some(alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            run_as_group: Some(1000),
+            read_only_root_filesystem: None,
+            writable_paths: vec!["/cache".to_string()],
+        }))
+        .await;
+        assert_eq!(
+            restricted.security_context.as_ref().unwrap().run_as_user,
+            Some(1000)
+        );
+        let mounts: Vec<_> = restricted.containers[0]
+            .volume_mounts
+            .as_ref()
+            .expect("mounts")
+            .iter()
+            .map(|mount| mount.mount_path.as_str())
+            .collect();
+        assert!(mounts.contains(&"/tmp") && mounts.contains(&"/cache"), "{mounts:?}");
     }
 
     #[tokio::test]

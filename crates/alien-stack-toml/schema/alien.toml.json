@@ -1188,7 +1188,7 @@
         },
         "security": {
           "$ref": "#/definitions/ContainerSecurity",
-          "description": "Security settings shared by supported container runtimes."
+          "description": "Security settings shared by supported container runtimes. Absent means\nthe workload runs as its image was built; set `profile: restricted` for\nthe Kubernetes Pod Security `restricted` profile."
         },
         "stop-grace-period": {
           "anyOf": [
@@ -1303,7 +1303,7 @@
     },
     "ContainerSecurity": {
       "additionalProperties": false,
-      "description": "Container process identity and filesystem security.\n\nAbsent means `restricted` with the image's own non-root user.\n\nOn the wire every field a previous Operator requires is always written with\na concrete value (`runAsUser`/`runAsGroup` as 65532 and `readOnlyRootFilesystem`\nas the profile's default when unset) and `profile` is written as `restricted`\n(the only value a previous release knows), so state and bundles written by\nthis version stay readable after an Operator rollback. The `*Unset` and\n`unrestricted` markers, which previous releases ignore, record what was\nreally set, so reading restores the exact value and never treats a real `0`\nor `false` as unset. A previous Operator applies `restricted` to an opted-out\nworkload, so an image that needs root must not be rolled back to it.",
+      "description": "Container process identity and filesystem security.\n\nAbsent means no pod security settings are applied: the workload runs as\nits image was built. Setting `profile: restricted` applies the restricted\nprofile (with the image's own non-root user unless `runAsUser` is set).\n\nOn the wire every field a previous Operator requires is always written with\na concrete value (`runAsUser`/`runAsGroup` as 65532 and `readOnlyRootFilesystem`\nas the profile's default when unset) and `profile` is written as `restricted`\n(the only value a previous release knows), so state and bundles written by\nthis version stay readable after an Operator rollback. The `*Unset` and\n`unrestricted` markers, which previous releases ignore, record what was\nreally set, so reading restores the exact value and never treats a real `0`\nor `false` as unset. A previous Operator applies `restricted` to an opted-out\nworkload, so an image that needs root must not be rolled back to it.",
       "properties": {
         "profile": {
           "$ref": "#/definitions/ContainerSecurityProfile",
@@ -1681,7 +1681,7 @@
         },
         "security": {
           "$ref": "#/definitions/ContainerSecurity",
-          "description": "Pod Security profile. Absent means `restricted`; set\n`profile: unrestricted` to opt out for an image that needs root."
+          "description": "Pod Security profile. Absent means no pod security settings are\napplied and the image runs as built; set `profile: restricted` to\napply the restricted profile."
         },
         "stop-grace-period": {
           "anyOf": [
@@ -3592,7 +3592,7 @@
         },
         "security": {
           "$ref": "#/definitions/ContainerSecurity",
-          "description": "Kubernetes Pod Security profile. Absent means `restricted`; set\n`profile: unrestricted` to opt out for an image that needs root.\nOther platforms ignore it."
+          "description": "Kubernetes Pod Security profile. Absent means no pod security\nsettings are applied and the image runs as built; set\n`profile: restricted` to apply the restricted profile. Other\nplatforms ignore it."
         },
         "timeout": {
           "anyOf": [

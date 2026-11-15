@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Proves two Operator defaults on a real cluster:
 #
-#   1. Restricted by default: the Deployment and DaemonSet the Kubernetes controllers render
-#      for a workload that declares no `security` are admitted and run in a namespace that
-#      enforces the Pod Security `restricted` profile. An image that runs as root is refused
+#   1. Restricted when declared: the Deployment and DaemonSet the Kubernetes controllers render
+#      for a workload that declares `security: { profile: restricted }` are admitted and run in a
+#      namespace that enforces the Pod Security `restricted` profile. An image that runs as root is refused
 #      by the kubelet, so the controller can name the opt-out.
 #   2. One mirror: with a site registry configured (`global.imageRegistry`, the Operator's
 #      IMAGE_REGISTRY) every pod runs an image pulled from that registry by digest. The
@@ -90,7 +90,7 @@ enforce() { # <namespace>
     pod-security.kubernetes.io/enforce-version=latest
 }
 
-# --- 1. restricted by default, from the mirror, by digest ---------------------------------------
+# --- 1. restricted profile declared, from the mirror, by digest ---------------------------------------
 enforce restricted-ok
 kubectl -n restricted-ok apply -f "$work/nonroot/container.yaml" -f "$work/nonroot/daemon.yaml"
 kubectl -n restricted-ok rollout status deployment/web --timeout=180s
@@ -204,7 +204,13 @@ for config in "${configs[@]}"; do
     ALIEN_KIND_CONFIG="$config" ALIEN_KIND_NAME="$resource" ALIEN_KIND_OUT=workload.json \
     cargo test -p alien-infra --features all-platforms,test-utils --lib "${crate_path}::kubernetes::tests::${test_name}" -- --ignored >"$work/cargo.out" 2>&1) \
     || { grep -A6 panicked "$work/cargo.out" >&2; echo "could not render $example/$resource" >&2; exit 1; }
-  enforce "$ns"
+  # A workload that declares no restricted profile runs as built, so its namespace does not
+  # enforce one; a workload that declares it must be admitted under enforcement.
+  if python3 -c 'import json,sys; s=json.load(open(sys.argv[1])).get("security") or {}; sys.exit(0 if s.get("profile")=="restricted" else 1)' "$config"; then
+    enforce "$ns"
+  else
+    kubectl create namespace "$ns"
+  fi
   kubectl -n "$ns" apply -f "$dir/workload.json"
   echo "applied $example/$resource ($kind) to $ns"
 done

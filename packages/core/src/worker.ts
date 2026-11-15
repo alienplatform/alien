@@ -163,13 +163,12 @@ export class Worker extends ResourceBuilder {
   }
 
   /**
-   * Adjusts the Kubernetes Pod Security profile. Workers run under the "restricted"
-   * profile by default (non-root, seccomp RuntimeDefault, all capabilities
-   * dropped, read-only root filesystem with a writable /tmp). Use
-   * `writablePaths` for other directories the image writes to.
-   *
-   * Opt out only for an image that must run as root:
-   * `.security({ profile: "unrestricted" })`. Other platforms ignore it.
+   * Adjusts the Kubernetes Pod Security profile. Without this setting the
+   * workload runs as its image was built. `.security({ profile: "restricted" })`
+   * applies the "restricted" profile (non-root, seccomp RuntimeDefault, all
+   * capabilities dropped, read-only root filesystem with a writable /tmp). Use
+   * `writablePaths` for other directories the image writes to. Other platforms
+   * ignore it.
    *
    * Rolling the Operator back to a release without this setting applies the
    * restricted profile to an opted-out workload, so a root image stops starting

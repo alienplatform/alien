@@ -280,7 +280,9 @@ pub enum ContainerSecurityProfile {
 
 /// Container process identity and filesystem security.
 ///
-/// Absent means `restricted` with the image's own non-root user.
+/// Absent means no pod security settings are applied: the workload runs as
+/// its image was built. Setting `profile: restricted` applies the restricted
+/// profile (with the image's own non-root user unless `runAsUser` is set).
 ///
 /// On the wire every field a previous Operator requires is always written with
 /// a concrete value (`runAsUser`/`runAsGroup` as 65532 and `readOnlyRootFilesystem`
@@ -381,8 +383,9 @@ impl From<ContainerSecurityWire> for ContainerSecurity {
 
 impl ContainerSecurity {
     /// Whether a workload with this (possibly absent) setting runs restricted.
+    /// Absent is not restricted: only an explicit `restricted` profile is.
     pub fn is_restricted(security: Option<&ContainerSecurity>) -> bool {
-        security.is_none_or(|security| security.profile == ContainerSecurityProfile::Restricted)
+        security.is_some_and(|security| security.profile == ContainerSecurityProfile::Restricted)
     }
 }
 
@@ -576,7 +579,9 @@ pub struct Container {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kubernetes_readiness_probe: Option<KubernetesHttpProbe>,
 
-    /// Security settings shared by supported container runtimes.
+    /// Security settings shared by supported container runtimes. Absent means
+    /// the workload runs as its image was built; set `profile: restricted` for
+    /// the Kubernetes Pod Security `restricted` profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<ContainerSecurity>,
 
@@ -1244,10 +1249,10 @@ mod tests {
             .unwrap()
             .get("egress")
             .is_none());
-        // Containers are restricted unless they opt out, so egress needs no
-        // explicit security setting.
+        // Egress needs the restricted profile written explicitly: an absent
+        // setting means the workload runs as built.
         container.egress = Some(ContainerEgress::Internet);
-        container.validate_update(&container).unwrap();
+        assert!(container.validate_update(&container).is_err());
         container.security = Some(ContainerSecurity {
             profile: ContainerSecurityProfile::Unrestricted,
             run_as_user: None,

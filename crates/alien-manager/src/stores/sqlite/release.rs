@@ -440,4 +440,70 @@ mod tests {
             .expect("get_release reads the old row");
         assert!(fetched.is_some());
     }
+
+    /// A release built before the security profile existed has no `security`
+    /// field. Storing and reading it back must not add one, or an Operator would
+    /// start restricting workloads the release never asked to restrict.
+    #[tokio::test]
+    async fn a_release_without_a_security_field_keeps_it_absent() {
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let store = SqliteReleaseStore::new(db.clone());
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example/api:1".to_string(),
+            })
+            .permissions("execution".to_string())
+            .cpu(ResourceSpec {
+                min: "0.5".into(),
+                desired: "0.5".into(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".into(),
+                desired: "256Mi".into(),
+            })
+            .build();
+        let stack = Stack::new("app".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let record = store
+            .create_release(
+                &Subject::system(),
+                CreateReleaseParams {
+                    project_id: "project".to_string(),
+                    stacks: HashMap::from([(Platform::Kubernetes, stack)]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                    setup_templates: Default::default(),
+                    signed_stacks: Default::default(),
+                },
+            )
+            .await
+            .expect("create release");
+        let fetched = store
+            .get_release(&Subject::system(), &record.id)
+            .await
+            .expect("get release")
+            .expect("release exists");
+        for (_, stack) in &fetched.stacks {
+            let json = serde_json::to_string(stack).unwrap();
+            assert!(json.contains("\"container\""), "{json}");
+            assert!(!json.contains("security"), "{json}");
+        }
+        let conn = db.conn().lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT stack FROM releases WHERE id = ?1",
+                (record.id.as_str(),),
+            )
+            .await
+            .unwrap();
+        let saved: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert!(!saved.contains("security"), "{saved}");
+    }
 }

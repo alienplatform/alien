@@ -3223,11 +3223,21 @@ mod tests {
         let dir = std::env::var("ALIEN_KIND_MANIFEST_DIR").expect("ALIEN_KIND_MANIFEST_DIR");
         let image = std::env::var("ALIEN_KIND_IMAGE").expect("ALIEN_KIND_IMAGE");
         // ALIEN_KIND_CONFIG names a container from an example stack; the default is the
-        // controller test fixture, which declares no `security`.
+        // controller test fixture with the restricted profile written explicitly.
         let mut config = match std::env::var("ALIEN_KIND_CONFIG") {
             Ok(path) => serde_json::from_str(&std::fs::read_to_string(path).expect("config"))
                 .expect("container config"),
-            Err(_) => manifest_test_container(&[], false),
+            Err(_) => {
+                let mut config = manifest_test_container(&[], false);
+                config.security = Some(ContainerSecurity {
+                    profile: ContainerSecurityProfile::Restricted,
+                    run_as_user: None,
+                    run_as_group: None,
+                    read_only_root_filesystem: None,
+                    writable_paths: Vec::new(),
+                });
+                config
+            }
         };
         let name = std::env::var("ALIEN_KIND_NAME").unwrap_or_else(|_| "web".to_string());
         let out = std::env::var("ALIEN_KIND_OUT").unwrap_or_else(|_| "container.yaml".to_string());
@@ -4545,6 +4555,55 @@ mod tests {
             ["3000", "3129", "5000", "6000", "7000", "8080", "8443", "9090"],
             "internal URLs render sorted by port"
         );
+    }
+
+    /// A release without a `security` field renders no pod security; only an
+    /// explicit `restricted` profile restricts the Deployment's pod.
+    #[tokio::test]
+    async fn container_pod_is_restricted_only_when_the_release_says_so() {
+        let render = |security: Option<ContainerSecurity>| async move {
+            let mut config = manifest_test_container(&[], false);
+            config.security = security;
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            manifest_test_controller()
+                .build_deployment(
+                    &config,
+                    "web",
+                    "test-ns",
+                    "web-sa",
+                    None,
+                    None,
+                    &harness.ctx(),
+                )
+                .await
+                .expect("deployment manifest")
+                .spec
+                .expect("deployment spec")
+                .template
+                .spec
+                .expect("pod spec")
+        };
+        let old = render(None).await;
+        assert!(old.security_context.is_none());
+        assert!(old.volumes.is_none());
+        assert!(old.containers[0].security_context.is_none());
+        assert!(old.containers[0].volume_mounts.is_none());
+
+        let restricted = render(Some(ContainerSecurity {
+            profile: ContainerSecurityProfile::Restricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        }))
+        .await;
+        assert_eq!(
+            restricted.security_context.as_ref().unwrap().run_as_non_root,
+            Some(true)
+        );
+        assert!(restricted.containers[0].security_context.is_some());
+        assert!(restricted.volumes.as_ref().is_some_and(|v| !v.is_empty()));
     }
 
     #[tokio::test]

@@ -429,13 +429,14 @@ export class Container extends ResourceBuilder {
   }
 
   /**
-   * Adjusts the container's security profile. Containers run under the Pod
-   * Security "restricted" profile by default (non-root, seccomp RuntimeDefault,
-   * all capabilities dropped, read-only root filesystem with a writable /tmp).
-   * Use `writablePaths` for other directories the image writes to.
+   * Adjusts the container's security profile. Without this setting the
+   * container runs as its image was built. `.security({ profile: "restricted" })`
+   * applies the Pod Security "restricted" profile on Kubernetes (non-root,
+   * seccomp RuntimeDefault, all capabilities dropped, read-only root filesystem
+   * with a writable /tmp). Use `writablePaths` for other directories the image
+   * writes to. Container egress requires the restricted profile.
    *
-   * Opt out only for an image that must run as root:
-   * `.security({ profile: "unrestricted" })`.
+   * `.security({ profile: "unrestricted" })` states the default explicitly.
    *
    * Rolling the Operator back to a release without this setting applies the
    * restricted profile to an opted-out workload, so a root image stops starting
