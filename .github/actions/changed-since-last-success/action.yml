@@ -1,7 +1,7 @@
 name: Changed since the last successful run
 description: >-
   For scheduled workflows: reports whether the default branch has a commit that this workflow
-  has not yet run successfully on. A scheduled job skips when nothing changed since its last
+  has not yet run successfully on in a scheduled run (manual runs may cover less). A scheduled job skips when nothing changed since its last
   green run. Manual runs always report a change.
 
 outputs:
@@ -28,7 +28,7 @@ runs:
         # `owner/repo/.github/workflows/file.yml@refs/heads/main` -> `file.yml`
         workflow_file=$(basename "${WORKFLOW_REF%%@*}")
         # A failed API call must not read as "nothing ran before": let it fail the job.
-        last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_file/runs?branch=$DEFAULT_BRANCH&status=success&per_page=1" \
+        last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_file/runs?branch=$DEFAULT_BRANCH&status=success&event=schedule&per_page=1" \
           --jq '.workflow_runs[0].head_sha // ""')
         if [[ "$last" == "$SHA" ]]; then
           echo "changed=false" >> "$GITHUB_OUTPUT"

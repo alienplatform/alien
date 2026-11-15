@@ -12,8 +12,9 @@ Prints GitHub Actions outputs (key=value lines):
   count      number of selected packages
 
 With --own-only (the pull request tier) the outputs describe the changed packages alone,
-without their dependents, and a change outside the packages reports mode "check-only": the
-caller compiles everything but tests nothing. The merge queue runs without the flag and tests
+without their dependents. A change outside the packages (Cargo.lock, say) does not drop the
+changed packages' tests; with no changed package it reports mode "check-only": the caller
+compiles everything but tests nothing. The merge queue runs without the flag and tests
 the dependents too.
 
 A package is affected when one of its files changed, or when it depends (normally, as a
@@ -77,8 +78,8 @@ def main() -> None:
         if path.startswith(IGNORED_PREFIXES) or path.endswith(IGNORED_SUFFIXES):
             continue
         if path.startswith(FIXTURE_PREFIXES):
-            full_reason = path
-            break
+            full_reason = full_reason or path
+            continue
         owner = next(
             (name for name, directory in by_depth if PurePosixPath(path).is_relative_to(directory)),
             None,
@@ -86,8 +87,7 @@ def main() -> None:
         if owner is not None:
             changed.add(owner)
         else:
-            full_reason = path
-            break
+            full_reason = full_reason or path
 
     if full_reason is not None:
         selected = set(packages)
@@ -104,8 +104,9 @@ def main() -> None:
         mode = "affected" if selected else "none"
 
     if own_only:
-        selected = set() if full_reason is not None else set(changed)
-        mode = "check-only" if full_reason is not None else ("affected" if selected else "none")
+        # Changed crates keep their own tests even when another file needs a workspace compile check.
+        selected = set(changed)
+        mode = "affected" if selected else ("check-only" if full_reason is not None else "none")
     if selected:
         # Cargo takes a feature only of a selected package or of one's direct dependency, and
         # most packages reach alien-client-core through others.
