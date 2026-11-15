@@ -733,7 +733,15 @@ impl Receiver {
                     next_poll = if available == 0 {
                         self.poll_interval
                     } else if !leases.is_empty() {
-                        sleep_for = self.poll_interval;
+                        // With a waiting manager the next request is cheap: ask
+                        // again soon (an agent usually sends several operations
+                        // in a row). The floor and the capacity bound the rate.
+                        // Without waiting, keep the poll interval.
+                        sleep_for = if self.wait_seconds > 0 {
+                            LEASE_WAIT_REPOLL_FLOOR.saturating_sub(polled_at.elapsed())
+                        } else {
+                            self.poll_interval
+                        };
                         self.poll_interval
                     } else if self.wait_seconds > 0
                         && polled_at.elapsed() >= LEASE_WAIT_HONORED_AFTER
@@ -810,9 +818,18 @@ impl Receiver {
                 }
             }
 
+            // With every slot busy, a finished command frees one: poll again
+            // then instead of at the end of the interval (only with a waiting
+            // manager, where that request is cheap).
+            let capacity_busy = available == 0 && self.wait_seconds > 0 && !in_flight.is_empty();
             tokio::select! {
                 _ = self.shutdown.cancelled() => break None,
                 _ = tokio::time::sleep(self.with_jitter(sleep_for)) => {}
+                finished = in_flight.join_next(), if capacity_busy => {
+                    if let Some(Ok((command_id, lease_id))) = finished {
+                        remove_active_lease(&mut active, &command_id, &lease_id);
+                    }
+                }
             }
         };
 
