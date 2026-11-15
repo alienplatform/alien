@@ -26,6 +26,15 @@ pub const ENV_PROXY_LISTEN: &str = "ALIEN_SANDBOX_PROXY_LISTEN";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 const PASSES: usize = 2;
 
+/// Failover is by TCP connect only, on purpose. A replica that is up but has not synchronized a
+/// grant yet (a restarted one, or one a new sandbox's grant has not reached) answers `407`/`403`
+/// and refuses, which is the fail-closed answer, never a wider one: both replicas enforce the same
+/// signed policy and a missing grant only ever denies. Retrying a refused CONNECT on the other
+/// replica would mean reading and replaying the guest's request, and the proxy credentials would
+/// then be handled outside the relay that today passes bytes unchanged. The sticky preference
+/// keeps traffic on the replica that last worked, and the startup gate (which passes when either
+/// replica connects) then does not hold the workload back for a replica that is still syncing.
+///
 /// Replicas in dial order with a sticky preference for the last good one.
 pub struct Replicas {
     addresses: Vec<String>,
