@@ -656,6 +656,7 @@ mod tests {
                     target: CommandTarget::new("operator", CommandTargetType::Daemon),
                     max_leases: 1,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await
@@ -702,6 +703,7 @@ mod tests {
                     target: server.default_target.clone(),
                     max_leases: 10,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await
@@ -722,6 +724,7 @@ mod tests {
                     target: second_target.clone(),
                     max_leases: 10,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await
@@ -750,6 +753,7 @@ mod tests {
             target: server.default_target.clone(),
             max_leases: 1,
             lease_seconds: 1,
+            wait_seconds: 0,
         };
 
         // First lease: attempt 1. No response is ever submitted.
@@ -815,6 +819,7 @@ mod tests {
                     target: server.default_target.clone(),
                     max_leases: 1,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await
@@ -870,6 +875,7 @@ mod tests {
                     target: server.default_target.clone(),
                     max_leases: 1,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await;
@@ -1022,6 +1028,7 @@ mod tests {
                     target: daemon_target.clone(),
                     max_leases: 10,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await
@@ -1044,6 +1051,7 @@ mod tests {
                     target: server.default_target.clone(),
                     max_leases: 10,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await
@@ -1204,6 +1212,7 @@ mod tests {
             target: server.default_target.clone(),
             max_leases: 1,
             lease_seconds: 60,
+            wait_seconds: 0,
         };
         let empty_response = server
             .acquire_lease("nonexistent-agent", empty_lease_request)
@@ -1236,6 +1245,7 @@ mod tests {
                     target: server.default_target.clone(),
                     max_leases: 1,
                     lease_seconds: 3660,
+                    wait_seconds: 0,
                 },
             )
             .await

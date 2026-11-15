@@ -274,6 +274,7 @@ impl TestCommandServer {
             target: self.default_target.clone(),
             max_leases: 1,
             lease_seconds: 60,
+            wait_seconds: 0,
         };
         let response = self.acquire_lease(deployment_id, lease_request).await?;
         Ok(response.leases.into_iter().next())

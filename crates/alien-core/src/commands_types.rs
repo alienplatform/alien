@@ -582,7 +582,17 @@ pub struct LeaseRequest {
     /// Lease duration in seconds
     #[serde(default = "default_lease_seconds")]
     pub lease_seconds: u64,
+    /// How long the server may hold this request open when no command is
+    /// queued yet, in seconds (0 to 25, default 0). A waiting request is
+    /// answered as soon as a command for the target is queued. The server
+    /// caps the value at 25 and at the caller's credential lifetime; a server
+    /// that does not support waiting answers at once.
+    #[serde(default)]
+    pub wait_seconds: u64,
 }
+
+/// Longest time a lease request may ask the server to wait, in seconds.
+pub const MAX_LEASE_WAIT_SECONDS: u64 = 25;
 
 fn default_max_leases() -> usize {
     1
@@ -991,6 +1001,7 @@ mod tests {
         );
         assert_eq!(request.max_leases, 1);
         assert_eq!(request.lease_seconds, 60);
+        assert_eq!(request.wait_seconds, 0);
     }
 
     #[test]
