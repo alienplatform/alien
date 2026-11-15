@@ -227,8 +227,12 @@ impl SandboxEgressManager {
         }
         let issuer = self.issuer().await?;
         let version = self.next_version()?;
-        let record =
-            issuer.mint_record(&self.config.audience, id, (version, &WRITER_ID), Some(policy))?;
+        let record = issuer.mint_record(
+            &self.config.audience,
+            id,
+            (version, &WRITER_ID),
+            Some(policy),
+        )?;
         let body = serde_json::json!({"record":record});
         let deadline = tokio::time::Instant::now() + GRANT_BUDGET;
         let mut failure = unavailable("no gateway replica acknowledged the new grant");
@@ -286,10 +290,22 @@ impl SandboxEgressManager {
                         {
                             Err(gateway_error(response).await)
                         }
-                        // A gateway applies a write before it fans it out to its peer, so while
-                        // the peer is away it answers 503 (or the request times out) even though
-                        // it holds the grant. Count that replica only if it serves exactly this
-                        // record when asked; otherwise it is simply not an acknowledgement.
+                        // A 503 with the gateway's own code (store full) is a refusal, not a
+                        // missing acknowledgement: surface it as `gateway_error` does.
+                        Ok(response) => {
+                            let answer = bounded_body(response, 4096).await.unwrap_or_default();
+                            let code = serde_json::from_slice::<serde_json::Value>(&answer)
+                                .ok()
+                                .and_then(|value| value["code"].as_str().map(str::to_owned));
+                            if code.as_deref() == Some("SANDBOX_EGRESS_POLICY_STORE_FULL") {
+                                return Err(AlienError::new(ErrorData::SandboxEgressPolicyStoreFull));
+                            }
+                            // A gateway applies a write before it fans it out to its peer, so
+                            // while the peer is away it answers 503 even though it holds the
+                            // grant. Count that replica only if it serves exactly this record.
+                            Ok(self.holds_record(target, id, &body["record"]).await.then_some(true))
+                        }
+                        // A timeout or connection failure: same read-back.
                         _ => Ok(self.holds_record(target, id, &body["record"]).await.then_some(true)),
                     }
                 }
@@ -420,7 +436,11 @@ impl SandboxEgressManager {
         };
         // A replicated write counts only once every ready replica holds it. Rolling
         // updates briefly change the ready set, so those writes retry for longer.
-        let attempts = if self.config.replicas.is_some() { 10 } else { 3 };
+        let attempts = if self.config.replicas.is_some() {
+            10
+        } else {
+            3
+        };
         let backoff = |attempt: u64| std::time::Duration::from_millis(100 * (attempt + 1));
         if policy.is_none() && self.config.replicas.is_some() {
             self.revoke(&body, &method, id, &issuer, attempts, backoff)
@@ -583,7 +603,11 @@ impl SandboxEgressManager {
     /// write, so no replica keeps serving a policy the caller believes was replaced.
     async fn write_targets(&self) -> Result<Vec<String>> {
         let targets = self.resolved_targets().await?;
-        let expected = self.config.replicas.as_ref().map_or(1, |r| r.count as usize);
+        let expected = self
+            .config
+            .replicas
+            .as_ref()
+            .map_or(1, |r| r.count as usize);
         if targets.len() < expected {
             return Err(unavailable(&format!(
                 "{} of {} gateway replicas are ready; a policy write must reach every replica",

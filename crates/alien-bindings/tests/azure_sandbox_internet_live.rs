@@ -370,8 +370,8 @@ async fn live_internet_proof() {
             &seen,
         );
 
-        if sel("i") {
         }
+        if sel("i") {
         // (i) no cloud credential in the guest.
         let seen = run(
             sandbox,
@@ -386,8 +386,8 @@ async fn live_internet_proof() {
             &seen,
         );
 
-        if sel("f") {
         }
+        if sel("f") {
         // (f) ten parallel creates all come up behind the gateway.
         let started = Instant::now();
         let creates = futures::future::join_all((0..10).map(|_| {
@@ -546,6 +546,7 @@ async fn live_internet_proof() {
             proof.check(refused(&seen), &format!("g replica {index} after the new write"), &seen);
         }
         }
+        if sel("g3") {
         // (g3) gateway VM 0 stopped: egress continues through the agent's loopback failover. A
         // running sandbox keeps reaching its allowed host through VM 1 (the proxy variables point
         // at the agent's forwarder, not at either VM), and a new sandbox is tried against the
@@ -650,6 +651,7 @@ async fn live_internet_proof() {
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
             proof.check(connected(&seen), "g3 replica 0 serves the grant created while it was away", &seen);
+        }
         }
         Ok::<(), String>(())
     }

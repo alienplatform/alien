@@ -158,7 +158,10 @@ async fn an_agent_sandbox_with_two_gateway_replicas_proxies_through_a_loopback_f
         assert!(env[name].starts_with("http://alien:"), "{name}");
         assert!(env[name].ends_with("@127.0.0.1:18128"), "{}", env[name]);
     }
-    assert_eq!(env["ALIEN_SANDBOX_PROXY_REPLICAS"], "10.0.6.4:3128,10.0.6.5:3128");
+    assert_eq!(
+        env["ALIEN_SANDBOX_PROXY_REPLICAS"],
+        "10.0.6.4:3128,10.0.6.5:3128"
+    );
     assert_eq!(env["ALIEN_SANDBOX_PROXY_LISTEN"], "127.0.0.1:18128");
     // Either replica proves the path at startup.
     assert_eq!(
@@ -471,7 +474,10 @@ async fn a_failed_publish_keeps_its_cause_and_retryability_when_the_revocation_a
         .await
         .expect_err("publish refused");
     assert!(record.lock().unwrap().is_none(), "the sandbox is discarded");
-    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE", "{error:?}");
+    assert_eq!(
+        error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE",
+        "{error:?}"
+    );
     assert!(error.source.is_none(), "no revocation wrapper: {error:?}");
     assert!(
         error.retryable,

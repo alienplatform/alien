@@ -21,6 +21,7 @@ struct AdminState {
         StdMutex<std::collections::BTreeMap<String, ((u64, String), Option<EgressPolicy>, String)>>,
     writes: StdMutex<Vec<String>>,
     refuse: AtomicBool,
+    store_full: AtomicBool,
     transient_failures: AtomicUsize,
     records: StdMutex<Vec<String>>,
     record_response: StdMutex<Option<String>>,
@@ -93,7 +94,8 @@ async fn policy_request(
     method: Method,
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
-) -> StatusCode {
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
     let grant = verify_admin(&state, &headers, method.as_str());
     let record = body["record"].as_str().unwrap();
     let claims = verify_record(&state, record);
@@ -113,8 +115,15 @@ async fn policy_request(
         None
     };
     state.records.lock().unwrap().push(record.into());
+    if state.store_full.load(Ordering::SeqCst) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"code":"SANDBOX_EGRESS_POLICY_STORE_FULL"})),
+        )
+            .into_response();
+    }
     if state.refuse.load(Ordering::SeqCst) {
-        return StatusCode::SERVICE_UNAVAILABLE;
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
     let key = claims["sub"].as_str().unwrap().to_string();
     state.writes.lock().unwrap().push(method.to_string());
@@ -128,9 +137,9 @@ async fn policy_request(
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
         .is_ok()
     {
-        return StatusCode::SERVICE_UNAVAILABLE;
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    StatusCode::NO_CONTENT
+    StatusCode::NO_CONTENT.into_response()
 }
 pub(crate) struct Harness {
     manager: SandboxEgressManager,
@@ -203,6 +212,7 @@ impl Harness {
             policies: StdMutex::new(Default::default()),
             writes: StdMutex::new(Vec::new()),
             refuse: AtomicBool::new(false),
+            store_full: AtomicBool::new(false),
             transient_failures: AtomicUsize::new(0),
             records: StdMutex::new(Vec::new()),
             record_response: StdMutex::new(None),
@@ -723,6 +733,7 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
         policies: StdMutex::new(Default::default()),
         writes: StdMutex::new(Vec::new()),
         refuse: AtomicBool::new(false),
+        store_full: AtomicBool::new(false),
         transient_failures: AtomicUsize::new(0),
         records: StdMutex::new(Vec::new()),
         record_response: StdMutex::new(None),
@@ -855,13 +866,18 @@ async fn a_gateway_older_than_the_binding_needs_is_refused_with_a_rerun_setup_me
 async fn two_replicas(
     h: &Harness,
     delay: Option<std::time::Duration>,
-) -> (SandboxEgressManager, Arc<AdminState>, tokio::task::JoinHandle<()>) {
+) -> (
+    SandboxEgressManager,
+    Arc<AdminState>,
+    tokio::task::JoinHandle<()>,
+) {
     let port = h.manager.admin_url.port().unwrap();
     let second = Arc::new(AdminState {
         public: h.state.public,
         policies: StdMutex::new(Default::default()),
         writes: StdMutex::new(Vec::new()),
         refuse: AtomicBool::new(false),
+        store_full: AtomicBool::new(false),
         transient_failures: AtomicUsize::new(0),
         records: StdMutex::new(Vec::new()),
         record_response: StdMutex::new(None),
@@ -979,8 +995,14 @@ async fn a_new_grant_succeeds_while_one_replica_is_away() {
         started.elapsed()
     );
     assert!(!delivery.policy.is_empty());
-    assert!(holds_grant(&h.state), "the reachable replica serves the grant");
-    assert!(!holds_grant(&second), "the absent replica holds nothing yet");
+    assert!(
+        holds_grant(&h.state),
+        "the reachable replica serves the grant"
+    );
+    assert!(
+        !holds_grant(&second),
+        "the absent replica holds nothing yet"
+    );
     away.abort();
 }
 
@@ -1017,6 +1039,37 @@ async fn a_new_grant_with_every_replica_away_fails_fast_and_retryable() {
     assert!(error.retryable, "{error}");
     assert!(started.elapsed() < std::time::Duration::from_secs(30));
     away.abort();
+}
+
+/// A replica whose policy store is full answers 503 too, but with its own code: the create must
+/// return that code (not the generic gateway error, and not a read-back success).
+#[tokio::test]
+async fn a_new_grant_refused_because_the_store_is_full_keeps_that_code() {
+    let h = Harness::new().await;
+    let port = h.manager.admin_url.port().unwrap();
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: String::new(),
+        addresses: vec!["127.0.0.1".into()],
+        port,
+        count: 1,
+        min_protocol: 0,
+    });
+    let manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        h.manager.admin_url.to_string(),
+    )
+    .unwrap();
+    h.state.store_full.store(true, Ordering::SeqCst);
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+    let error = manager
+        .create("box-1", &policy, now_unix().unwrap() + 600)
+        .await
+        .expect_err("the store is full");
+    assert_eq!(error.code, "SANDBOX_EGRESS_POLICY_STORE_FULL", "{error}");
 }
 
 /// An update (which may narrow) still needs every replica, so a replica that missed it can
@@ -1077,7 +1130,10 @@ async fn a_create_with_a_stopped_real_replica_succeeds_and_the_replica_catches_u
                 .await
                 .map_or(true, |r| !r.status().is_success())
             {
-                assert!(tokio::time::Instant::now() < deadline, "gateway {me} not ready");
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "gateway {me} not ready"
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
         }
@@ -1096,7 +1152,11 @@ async fn a_create_with_a_stopped_real_replica_succeeds_and_the_replica_catches_u
                 BufReader::new(connection).read_line(&mut status),
             )
             .await;
-            status.split_whitespace().nth(1).unwrap_or("none").to_string()
+            status
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("none")
+                .to_string()
         }
     };
 
@@ -1180,7 +1240,10 @@ async fn a_replica_that_commits_then_answers_503_because_its_peer_is_away_still_
     // A replica that refuses before committing is not an acknowledgement.
     clear_grant(&h.state);
     h.state.refuse.store(true, Ordering::SeqCst);
-    let error = manager.publish_new_grant("box-1", &policy).await.unwrap_err();
+    let error = manager
+        .publish_new_grant("box-1", &policy)
+        .await
+        .unwrap_err();
     assert!(error.retryable, "{error}");
     away.abort();
 }
