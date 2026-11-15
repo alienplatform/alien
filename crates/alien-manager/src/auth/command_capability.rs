@@ -699,7 +699,19 @@ mod tests {
         ));
         assert!(!receiver_context_allowed(&own, &access_context(stack)));
 
-        // Ownership still has to match.
+        // Ownership still has to match: deployment, workspace and project.
+        let mut other_project_deployment = deployment_record();
+        other_project_deployment.project_id = "project-2".to_string();
+        assert_eq!(
+            receiver_deployment_decision(&own, &other_project_deployment, &operator),
+            Some(false)
+        );
+        let mut other_workspace_deployment = deployment_record();
+        other_workspace_deployment.workspace_id = "workspace-2".to_string();
+        assert_eq!(
+            receiver_deployment_decision(&own, &other_workspace_deployment, &operator),
+            Some(false)
+        );
         assert_eq!(
             receiver_request_decision(&own, "deployment-2", &operator),
             Some(false)
@@ -709,6 +721,9 @@ mod tests {
         assert!(!receiver_context_allowed(&own, &other));
         other.deployment_id = "deployment-1".to_string();
         other.workspace_id = "workspace-2".to_string();
+        assert!(!receiver_context_allowed(&own, &other));
+        other.workspace_id = "workspace-1".to_string();
+        other.project_id = "project-2".to_string();
         assert!(!receiver_context_allowed(&own, &other));
     }
 }

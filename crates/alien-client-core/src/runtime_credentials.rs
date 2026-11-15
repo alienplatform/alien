@@ -90,6 +90,18 @@ pub struct RuntimeCredentials {
     state: Mutex<CredentialState>,
 }
 
+impl RuntimeCredentials {
+    /// The deployment these credentials are for.
+    pub fn deployment_id(&self) -> &str {
+        &self.deployment_id
+    }
+
+    /// The purpose these credentials are for, as sent to the manager.
+    pub fn purpose(&self) -> &Value {
+        &self.purpose
+    }
+}
+
 impl fmt::Debug for RuntimeCredentials {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

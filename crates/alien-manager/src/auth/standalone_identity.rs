@@ -760,6 +760,11 @@ mod tests {
                 aws_request("dep-1", RuntimePurpose::RegistryPull, valid.clone()),
                 AUDIENCE,
             ),
+            // The Operator's own purposes belong to its daily key alone.
+            (
+                aws_request("dep-1", RuntimePurpose::OperatorOperations, valid.clone()),
+                AUDIENCE,
+            ),
         ] {
             let error = verifier.verify(&request, audience).await.err().unwrap();
             assert!(!error.retryable);

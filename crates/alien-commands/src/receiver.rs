@@ -430,10 +430,42 @@ impl Receiver {
     /// operations credential. Stored tokens in the environment are ignored.
     /// The manager origin comes from the credentials; the commands URL must
     /// share it.
+    ///
+    /// The deployment and target in `env` must be the ones the credentials are
+    /// for: a receiver never leases a queue its credentials were not issued for.
     pub fn from_env_vars_with_credentials(
         env: &HashMap<String, String>,
         credentials: Arc<RuntimeCredentials>,
     ) -> Result<Self> {
+        let mismatch = |message: &str, env_var: &str| {
+            AlienError::new(ErrorData::CommandReceiverConfigInvalid {
+                message: message.to_string(),
+                env_var: env_var.to_string(),
+            })
+        };
+        if require_env(env, ENV_ALIEN_DEPLOYMENT_ID)? != credentials.deployment_id() {
+            return Err(mismatch(
+                "The deployment does not match the one the credentials are for",
+                ENV_ALIEN_DEPLOYMENT_ID,
+            ));
+        }
+        let target_id = require_env(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)?;
+        let target_type = require_env(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE)?;
+        let purpose = credentials.purpose();
+        let target_matches = match purpose.get("type").and_then(serde_json::Value::as_str) {
+            Some("operatorOperations") => target_id == "operator" && target_type == "daemon",
+            Some("receiveCommands") => {
+                purpose["target"]["resourceId"].as_str() == Some(target_id.as_str())
+                    && purpose["target"]["resourceType"].as_str() == Some(target_type.as_str())
+            }
+            _ => false,
+        };
+        if !target_matches {
+            return Err(mismatch(
+                "The target does not match the purpose of the credentials",
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+            ));
+        }
         Self::from_env_and_source(env, Some(TokenSource::Runtime(credentials)))
     }
 
@@ -2208,6 +2240,47 @@ mod identity_lifecycle_tests {
             ["Bearer held-credential".to_string()],
             "the stored token must never be sent"
         );
+
+        // A deployment or target other than the credentials' own is refused at
+        // build, as is a purpose that is not a command receiver's.
+        let mut other_deployment = env.clone();
+        other_deployment.insert(
+            ENV_ALIEN_DEPLOYMENT_ID.to_string(),
+            "deployment-two".to_string(),
+        );
+        assert!(
+            Receiver::from_env_vars_with_credentials(&other_deployment, credentials.clone())
+                .is_err()
+        );
+        for (id, kind) in [("operator", "container"), ("daemon-a", "daemon")] {
+            let mut other_target = env.clone();
+            other_target.insert(
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                id.to_string(),
+            );
+            other_target.insert(
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE.to_string(),
+                kind.to_string(),
+            );
+            assert!(
+                Receiver::from_env_vars_with_credentials(&other_target, credentials.clone())
+                    .is_err(),
+                "{id}/{kind}"
+            );
+        }
+        let telemetry = Arc::new(
+            RuntimeCredentials::new(
+                RuntimeCredentialConfig {
+                    manager_url: manager_url.clone(),
+                    audience: "trusted-manager".into(),
+                    deployment_id: "deployment-one".into(),
+                    purpose: json!({"type":"telemetry"}),
+                },
+                Arc::new(FixtureProof),
+            )
+            .unwrap(),
+        );
+        assert!(Receiver::from_env_vars_with_credentials(&env, telemetry).is_err());
 
         env.insert(
             ENV_ALIEN_COMMANDS_URL.to_string(),

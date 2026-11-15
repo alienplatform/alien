@@ -21,9 +21,13 @@ use alien_core::{
     CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::AlienError;
+use alien_manager::auth::identity_exchange::{
+    IdentityEnrollmentRequest, IdentityRotationRequest, RuntimeIdentityVerifier,
+};
 use alien_manager::auth::runtime_capability::{
     RuntimeAuthValidator, RuntimeCredentials, RuntimeGrant, RuntimePurpose,
 };
+use alien_manager::auth::standalone_identity::StandaloneRuntimeIdentity;
 use alien_manager::auth::{CommandCapability, Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
 use alien_manager::providers::OssAuthz;
@@ -32,7 +36,8 @@ use alien_manager::routes::registry_proxy::{
 };
 use alien_manager::routes::AppState;
 use alien_manager::stores::sqlite::{
-    SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
+    SqliteCommandRegistry, SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore,
+    SqliteRuntimeIdentityStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams, CredentialResolver,
@@ -46,6 +51,9 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const WORKSPACE: &str = "default";
+/// What a deployment-scoped viewer may do on the Operator queue today; the
+/// policy for existing roles is not part of this change.
+const DEPLOYMENT_VIEWER_TODAY: bool = true;
 const AUDIENCE: &str = "https://manager.example.test";
 
 struct TokenValidator(HashMap<String, Subject>);
@@ -98,6 +106,25 @@ fn legacy(workspace: &str, scope: Scope, role: Role, user: bool) -> Subject {
     }
 }
 
+fn confused_targets() -> Vec<(&'static str, CommandTargetType)> {
+    vec![
+        (OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Container),
+        (OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Worker),
+        (
+            OPERATIONS_WORKER_COMMAND_TARGET_ID,
+            CommandTargetType::Worker,
+        ),
+        (
+            OPERATIONS_WORKER_COMMAND_TARGET_ID,
+            CommandTargetType::Daemon,
+        ),
+    ]
+}
+
+fn confused_name(id: &str, resource_type: CommandTargetType) -> String {
+    format!("confused-{id}-{resource_type:?}")
+}
+
 fn operator_queue() -> CommandTarget {
     CommandTarget::new(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon)
 }
@@ -108,10 +135,22 @@ struct Fixture {
     dep_b: String,
     project: String,
     credentials: Arc<RuntimeCredentials>,
+    identity: Arc<StandaloneRuntimeIdentity>,
     _tmp: tempfile::TempDir,
 }
 
+/// A manager whose commands live in the real SQLite stores, so the owner
+/// lookup behind answer and release is the production one.
 async fn fixture() -> Fixture {
+    fixture_with(true).await
+}
+
+/// The same manager with an in-memory registry that knows a stack target.
+async fn memory_fixture() -> Fixture {
+    fixture_with(false).await
+}
+
+async fn fixture_with(sqlite_registry: bool) -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let db = Arc::new(
         SqliteDatabase::new(&tmp.path().join("manager.db").to_string_lossy())
@@ -251,6 +290,15 @@ async fn fixture() -> Fixture {
         ),
     );
     add(
+        "deployment-a-viewer",
+        legacy(
+            WORKSPACE,
+            deployment_scope(&dep_a.id),
+            Role::DeploymentViewer,
+            false,
+        ),
+    );
+    add(
         "commands-key",
         legacy(
             WORKSPACE,
@@ -279,6 +327,27 @@ async fn fixture() -> Fixture {
         ),
     );
 
+    // Capabilities that agree with the request on a reserved id but not on
+    // the Operator queue's type. The issuer refuses to sign these; the
+    // policy must refuse them on its own.
+    for (id, resource_type) in confused_targets() {
+        add(
+            &confused_name(id, resource_type),
+            legacy(
+                WORKSPACE,
+                Scope::Commands {
+                    project_id: project.clone(),
+                    deployment_id: dep_a.id.clone(),
+                    capability: CommandCapability::Receive {
+                        target: CommandTarget::new(id, resource_type),
+                    },
+                },
+                Role::CommandCapability,
+                false,
+            ),
+        );
+    }
+
     let credentials = Arc::new(RuntimeCredentials::new(AUDIENCE.to_owned(), [7u8; 32]).unwrap());
 
     let kv: Arc<dyn alien_bindings::traits::Kv> =
@@ -286,16 +355,33 @@ async fn fixture() -> Fixture {
     let storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
         LocalStorage::new(tmp.path().join("storage").to_string_lossy().to_string()).unwrap(),
     );
-    let registry = Arc::new(InMemoryCommandRegistry::new());
-    registry
-        .register_target(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon)
-        .await
-        .unwrap();
-    registry
-        .register_target("daemon-a", CommandTargetType::Daemon)
-        .await
-        .unwrap();
-    let registry: Arc<dyn CommandRegistry> = registry;
+    let registry: Arc<dyn CommandRegistry> = if sqlite_registry {
+        Arc::new(SqliteCommandRegistry::new(
+            db.clone(),
+            deployment_store.clone(),
+            release_store.clone(),
+        ))
+    } else {
+        let registry = Arc::new(InMemoryCommandRegistry::new());
+        registry
+            .register_target(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        registry
+            .register_target("daemon-a", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        registry
+    };
+
+    let identity = Arc::new(
+        StandaloneRuntimeIdentity::new(
+            Arc::new(SqliteRuntimeIdentityStore::new(db.clone())),
+            deployment_store.clone(),
+            Arc::new(NoCredentials),
+        )
+        .unwrap(),
+    );
 
     let state = AppState {
         deployment_store,
@@ -343,17 +429,28 @@ async fn fixture() -> Fixture {
         dep_b: dep_b.id,
         project,
         credentials,
+        identity,
         _tmp: tmp,
     }
 }
 
 impl Fixture {
     fn runtime(&self, workspace: &str, deployment: &str, purpose: RuntimePurpose) -> String {
+        self.runtime_in_project(workspace, &self.project, deployment, purpose)
+    }
+
+    fn runtime_in_project(
+        &self,
+        workspace: &str,
+        project: &str,
+        deployment: &str,
+        purpose: RuntimePurpose,
+    ) -> String {
         self.credentials
             .issue(
                 RuntimeGrant {
                     workspace_id: workspace.to_owned(),
-                    project_id: self.project.clone(),
+                    project_id: project.to_owned(),
                     deployment_id: deployment.to_owned(),
                     component_id: "component-1".to_owned(),
                     purpose,
@@ -389,9 +486,14 @@ impl Fixture {
                 legacy("deployment-b-token"),
                 false,
             ),
+            (
+                "deployment viewer, own deployment",
+                legacy("deployment-a-viewer"),
+                DEPLOYMENT_VIEWER_TODAY,
+            ),
             ("commands-only key", legacy("commands-key"), false),
             // The standalone manager serves one workspace and does not compare the
-            // workspace of a workspace-scoped key; a manager that serves several workspaces compares them.
+            // workspace of a workspace-scoped key.
             ("other workspace key", legacy("other-workspace-key"), true),
             (
                 "sender operations capability",
@@ -443,6 +545,16 @@ impl Fixture {
             (
                 "operatorOperations, other deployment",
                 self.runtime(WORKSPACE, &self.dep_b, RuntimePurpose::OperatorOperations),
+                false,
+            ),
+            (
+                "operatorOperations, other project",
+                self.runtime_in_project(
+                    WORKSPACE,
+                    "prj_other",
+                    &self.dep_a,
+                    RuntimePurpose::OperatorOperations,
+                ),
                 false,
             ),
             (
@@ -556,7 +668,9 @@ async fn leasing_the_operator_queue_is_limited_to_its_own_credential_and_the_exi
         // stack receivers as well. Credentials are minted from the deployment's
         // recorded owner, so a workspace that does not match cannot be issued;
         // answering and releasing, which carry the command, compare it.
-        if name == "operatorOperations, other workspace" {
+        if name == "operatorOperations, other workspace"
+            || name == "operatorOperations, other project"
+        {
             continue;
         }
         let router = fixture.router();
@@ -702,7 +816,7 @@ async fn the_operator_credential_reaches_only_its_own_deployments_queue() {
 
 #[tokio::test]
 async fn the_operator_credential_never_reaches_another_reserved_or_stack_target() {
-    let fixture = fixture().await;
+    let fixture = memory_fixture().await;
     let router = fixture.router();
     let own = fixture.runtime(
         WORKSPACE,
@@ -743,7 +857,7 @@ async fn the_operator_credential_never_reaches_another_reserved_or_stack_target(
 
 #[tokio::test]
 async fn a_stack_receiver_credential_still_leases_its_own_stack_target() {
-    let fixture = fixture().await;
+    let fixture = memory_fixture().await;
     let router = fixture.router();
     let target = CommandTarget::new("daemon-a", CommandTargetType::Daemon);
     let bearer = fixture.runtime(
@@ -766,7 +880,7 @@ async fn a_stack_receiver_credential_still_leases_its_own_stack_target() {
 
 #[tokio::test]
 async fn the_operator_credential_cannot_answer_or_release_a_stack_targets_lease() {
-    let fixture = fixture().await;
+    let fixture = memory_fixture().await;
     let router = fixture.router();
     let own = fixture.runtime(
         WORKSPACE,
@@ -833,4 +947,312 @@ async fn the_operator_credential_cannot_answer_or_release_a_stack_targets_lease(
         .await
         .unwrap()
         .is_some());
+}
+
+#[tokio::test]
+async fn the_operator_credential_completes_a_command_it_leased() {
+    let fixture = fixture().await;
+    let router = fixture.router();
+    let own = fixture.runtime(
+        WORKSPACE,
+        &fixture.dep_a,
+        RuntimePurpose::OperatorOperations,
+    );
+    let command_id = fixture.queue_command(&fixture.dep_a).await;
+
+    let (status, body) = send(
+        &router,
+        &own,
+        "POST",
+        "/v1/commands/leases",
+        lease_body(&fixture.dep_a, &operator_queue()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let lease_id = body["leases"][0]["leaseId"].as_str().unwrap().to_owned();
+    assert_eq!(body["leases"][0]["commandId"], command_id.as_str());
+
+    // A long response asks for its upload target again; that must work.
+    let (status, body) = send(
+        &router,
+        &own,
+        "GET",
+        &format!("/v1/commands/{command_id}/response-context?leaseId={lease_id}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, _) = send(
+        &router,
+        &own,
+        "PUT",
+        &format!("/v1/commands/{command_id}/response?lease_id={lease_id}"),
+        serde_json::to_value(alien_core::SubmitResponseRequest {
+            response: alien_core::CommandResponse::success(b"operator-result"),
+        })
+        .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        fixture.state_of(&command_id).await,
+        alien_core::CommandState::Succeeded
+    );
+    let stored = fixture
+        .state
+        .command_server
+        .get_command_status(&command_id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        stored.response,
+        Some(alien_core::CommandResponse::Success { .. })
+    ));
+    // The lease is spent: releasing it afterwards finds nothing to release.
+    let (status, _) = send(
+        &router,
+        &own,
+        "POST",
+        &format!("/v1/commands/leases/{lease_id}/release"),
+        json!({}),
+    )
+    .await;
+    assert_ne!(status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+/// The credential is a receiver's: it does not read, create, upload or store
+/// anything on the commands API beyond leasing, answering and releasing.
+#[tokio::test]
+async fn the_operator_credential_reaches_no_other_command_route() {
+    let fixture = fixture().await;
+    let router = fixture.router();
+    let own = fixture.runtime(
+        WORKSPACE,
+        &fixture.dep_a,
+        RuntimePurpose::OperatorOperations,
+    );
+    let command_id = fixture.queue_command(&fixture.dep_a).await;
+    let before = fixture.state_of(&command_id).await;
+
+    let create = json!({
+        "deploymentId": fixture.dep_a,
+        "command": "echo",
+        "params": {"mode": "inline", "inlineBase64": "aGVsbG8="},
+        "targetResourceId": OPERATOR_COMMAND_TARGET_ID,
+    });
+    for (method, path, body) in [
+        ("POST", "/v1/commands".to_owned(), create),
+        ("GET", format!("/v1/commands/{command_id}"), json!({})),
+        (
+            "GET",
+            format!("/v1/commands/{command_id}/payload"),
+            json!({}),
+        ),
+        (
+            "PUT",
+            format!("/v1/commands/{command_id}/payload"),
+            serde_json::to_value(alien_commands::server::StorePayloadRequest {
+                params: None,
+                response: Some(alien_core::CommandResponse::success(b"stored-directly")),
+            })
+            .unwrap(),
+        ),
+        (
+            "POST",
+            format!("/v1/commands/{command_id}/upload-complete"),
+            json!({"size": 1}),
+        ),
+    ] {
+        let (status, body) = send(&router, &own, method, &path, body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}: {body}");
+    }
+    assert_eq!(fixture.state_of(&command_id).await, before);
+}
+
+/// A signed capability that agrees with the request on a reserved id, but not
+/// on the Operator queue's resource type, is refused by the policy itself: the
+/// issuer would not sign it, so these subjects are placed directly.
+#[tokio::test]
+async fn a_capability_for_a_reserved_id_with_another_resource_type_is_refused() {
+    for (id, resource_type) in confused_targets() {
+        let name = confused_name(id, resource_type);
+        let fixture = fixture().await;
+        let router = fixture.router();
+        let command_id = fixture.queue_command(&fixture.dep_a).await;
+        let before = fixture.state_of(&command_id).await;
+
+        let (status, body) = send(
+            &router,
+            &name,
+            "POST",
+            "/v1/commands/leases",
+            lease_body(&fixture.dep_a, &CommandTarget::new(id, resource_type)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name} lease: {body}");
+        assert_eq!(fixture.state_of(&command_id).await, before);
+
+        let lease = fixture.lease_directly(&fixture.dep_a).await;
+        let (status, body) = send(
+            &router,
+            &name,
+            "POST",
+            &format!("/v1/commands/leases/{}/release", lease.lease_id),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name} release: {body}");
+        let (status, body) = send(
+            &router,
+            &name,
+            "PUT",
+            &format!(
+                "/v1/commands/{command_id}/response?lease_id={}",
+                lease.lease_id
+            ),
+            serde_json::to_value(alien_core::SubmitResponseRequest {
+                response: alien_core::CommandResponse::success(b"done"),
+            })
+            .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{name} respond: {body}");
+        assert!(fixture
+            .state
+            .command_server
+            .get_lease_owner(&lease.lease_id)
+            .await
+            .unwrap()
+            .is_some());
+    }
+}
+
+fn key_hash(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(key.as_bytes()))
+}
+
+/// Enroll `key` as the Operator key of `deployment` through the manager's own
+/// enrollment path, the way a code install does.
+async fn enroll_operator(fixture: &Fixture, deployment: &str, key: &str) {
+    let record = fixture
+        .state
+        .deployment_store
+        .get_deployment(&Subject::system(), deployment)
+        .await
+        .unwrap()
+        .unwrap();
+    let (code, _) = fixture
+        .identity
+        .issue_enrollment_code(&record)
+        .await
+        .unwrap();
+    fixture
+        .identity
+        .enroll(&IdentityEnrollmentRequest {
+            code,
+            initial_key_hash: key_hash(key),
+        })
+        .await
+        .unwrap();
+}
+
+async fn exchange(
+    fixture: &Fixture,
+    deployment: &str,
+    purpose: Value,
+    proof: Value,
+) -> (StatusCode, Value) {
+    let router = alien_manager::auth::identity_exchange::router(
+        fixture.credentials.clone(),
+        fixture.identity.clone(),
+    )
+    .with_state(fixture.state.clone());
+    send(
+        &router,
+        "unused",
+        "POST",
+        "/v1/identity/exchange",
+        json!({"deploymentId": deployment, "purpose": purpose, "proof": proof}),
+    )
+    .await
+}
+
+const OPERATOR_KEY: &str =
+    "ax_day_v1_1111111111111111111111111111111111111111111111111111111111111111";
+
+/// Through the exchange endpoint: a daily key gets the operations credential
+/// for its own deployment and uses it on the queue; the same request with a
+/// cloud proof, a session proof, a key of another deployment or a rotated-away
+/// key gets nothing.
+#[tokio::test]
+async fn only_an_operators_daily_key_is_issued_the_operations_credential() {
+    let fixture = fixture().await;
+    enroll_operator(&fixture, &fixture.dep_a, OPERATOR_KEY).await;
+    let purpose = json!({"type": "operatorOperations"});
+    let daily = |key: &str| json!({"type": "dailyKey", "key": key});
+
+    let (status, body) = exchange(
+        &fixture,
+        &fixture.dep_a,
+        purpose.clone(),
+        daily(OPERATOR_KEY),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let issued = body["token"].as_str().unwrap().to_owned();
+    let command_id = fixture.queue_command(&fixture.dep_a).await;
+    let (status, leased) = send(
+        &fixture.router(),
+        &issued,
+        "POST",
+        "/v1/commands/leases",
+        lease_body(&fixture.dep_a, &operator_queue()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{leased}");
+    assert_eq!(leased["leases"][0]["commandId"], command_id.as_str());
+
+    // The key belongs to deployment A. Naming B, with the same key, fails.
+    let (status, _) = exchange(
+        &fixture,
+        &fixture.dep_b,
+        purpose.clone(),
+        daily(OPERATOR_KEY),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Neither a cloud proof nor a session proof is an Operator key.
+    for proof in [
+        json!({"type": "aws", "presignedUrl": "https://sts.amazonaws.com/?Action=GetCallerIdentity"}),
+        json!({"type": "gcp", "idToken": "token"}),
+        json!({"type": "session", "token": "session"}),
+    ] {
+        let (status, body) =
+            exchange(&fixture, &fixture.dep_a, purpose.clone(), proof.clone()).await;
+        assert_ne!(status, StatusCode::OK, "{proof}: {body}");
+        assert!(body.get("token").is_none(), "{proof}: {body}");
+    }
+    // A key that was rotated away is no longer an Operator key.
+    let successor = "ax_day_v1_2222222222222222222222222222222222222222222222222222222222222222";
+    fixture
+        .identity
+        .rotate(&IdentityRotationRequest {
+            deployment_id: fixture.dep_a.clone(),
+            key: OPERATOR_KEY.to_owned(),
+            successor_hash: key_hash(successor),
+        })
+        .await
+        .unwrap();
+    let (status, _) = exchange(
+        &fixture,
+        &fixture.dep_a,
+        purpose.clone(),
+        daily(OPERATOR_KEY),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = exchange(&fixture, &fixture.dep_a, purpose, daily(successor)).await;
+    assert_eq!(status, StatusCode::OK);
 }
