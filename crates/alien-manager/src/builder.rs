@@ -1228,7 +1228,8 @@ async fn finalize(
         .with_lease_wait_probe_interval(std::time::Duration::from_secs(
             config.lease_wait_probe_interval_secs.max(1),
         ))
-        .with_max_open_lease_waits(config.max_open_lease_waits),
+        .with_max_open_lease_waits(config.max_open_lease_waits)
+        .with_max_open_lease_waits_per_target(config.max_open_lease_waits_per_target),
     );
 
     // --- AppState ---

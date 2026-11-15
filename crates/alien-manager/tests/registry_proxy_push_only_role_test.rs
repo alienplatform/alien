@@ -239,6 +239,7 @@ async fn a_push_only_credential_pushes_but_cannot_pull_or_cross_projects() {
         self_heartbeat_interval_secs: 999,
         lease_wait_probe_interval_secs: 1,
         max_open_lease_waits: 5_000,
+        max_open_lease_waits_per_target: 8,
         otlp_endpoint: None,
         base_url: Some(manager_url.clone()),
         releases_url: None,

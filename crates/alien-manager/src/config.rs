@@ -33,6 +33,10 @@ pub struct ManagerConfig {
     /// Most lease requests this process holds open while they wait for a
     /// command (default 5,000). Over the limit a request is answered at once.
     pub max_open_lease_waits: usize,
+    /// Most lease requests this process holds open for one (deployment,
+    /// target) while they wait (default 8). Over the limit a request is
+    /// answered at once.
+    pub max_open_lease_waits_per_target: usize,
     /// OTLP endpoint for telemetry forwarding.
     pub otlp_endpoint: Option<String>,
     /// Public base URL for this manager instance (used for command response URLs, OAuth callbacks, etc.).
@@ -157,6 +161,7 @@ impl Default for ManagerConfig {
             self_heartbeat_interval_secs: 60,
             lease_wait_probe_interval_secs: 1,
             max_open_lease_waits: 5_000,
+            max_open_lease_waits_per_target: 8,
             otlp_endpoint: None,
             base_url: None,
             releases_url: None,
