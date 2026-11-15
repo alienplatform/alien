@@ -575,7 +575,7 @@ impl Sandbox for AzureSandbox {
             if let (Some(manager), Some(identity), Some(policy)) =
                 (&self.egress_manager, &identity, &policy)
             {
-                manager.update(identity, policy).await?;
+                manager.publish_new_grant(identity, policy).await?;
             }
             if self.agent {
                 if !self.session_uses_agent(CREATE, &sandbox.id).await? {

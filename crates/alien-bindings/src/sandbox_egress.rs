@@ -173,6 +173,15 @@ impl SandboxEgressManager {
         let policy = self.write_grant(id, policy).await?;
         Ok(EgressDelivery { token, policy })
     }
+    /// Publish the policy of a sandbox whose identity was minted earlier (Azure learns its
+    /// sandbox id only after the platform create). It is a first write, so it follows the
+    /// new-grant rule: one acknowledging replica is enough.
+    pub async fn publish_new_grant(&self, id: &str, policy: &EgressPolicy) -> Result<()> {
+        policy
+            .validate()
+            .map_err(crate::providers::sandbox::egress::policy_error)?;
+        self.write_grant(id, policy).await.map(|_| ())
+    }
     /// Update new connections without changing the token or the sandbox's lifecycle state.
     pub async fn update(&self, id: &str, policy: &EgressPolicy) -> Result<()> {
         policy

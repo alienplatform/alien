@@ -1144,3 +1144,20 @@ async fn a_create_with_a_stopped_real_replica_succeeds_and_the_replica_catches_u
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 }
+
+/// Azure publishes a new sandbox's grant under an identity minted before the platform create; that
+/// first write follows the same one-replica rule as `create`.
+#[tokio::test]
+async fn publishing_a_new_azure_grant_succeeds_while_one_replica_is_away() {
+    let h = Harness::new().await;
+    let (manager, second, away) = two_replicas(&h, None).await;
+    clear_grant(&h.state);
+    clear_grant(&second);
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+    let started = std::time::Instant::now();
+    manager.publish_new_grant("box-1", &policy).await.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    assert!(holds_grant(&h.state) && !holds_grant(&second));
+    away.abort();
+}
