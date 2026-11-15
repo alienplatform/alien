@@ -507,27 +507,54 @@ fn selected_sources(
         .collect()
 }
 
-/// Pods of every namespace, page by page.
-async fn list_cluster_pods(client: &KubernetesClient, selector: Option<&str>) -> Result<Vec<Pod>> {
+/// Pods of the cluster, page by page. When the scope names namespaces, each is
+/// listed on its own, so the operator never asks for (or holds) the Pods of
+/// namespaces it will not read. The first request of a listing is served from
+/// the API server's cache (`resourceVersion=0`); a continuation must not carry it.
+async fn list_cluster_pods(
+    client: &KubernetesClient,
+    namespaces: &[String],
+    selector: Option<&str>,
+) -> Result<Vec<Pod>> {
+    let base = client.get_base_url().trim_end_matches('/').to_string();
+    if namespaces.is_empty() {
+        return list_pods_at(client, &format!("{base}/api/v1/pods"), selector).await;
+    }
+    let mut pods = Vec::new();
+    for namespace in namespaces {
+        pods.extend(
+            list_pods_at(
+                client,
+                &format!("{base}/api/v1/namespaces/{namespace}/pods"),
+                selector,
+            )
+            .await?,
+        );
+    }
+    Ok(pods)
+}
+
+async fn list_pods_at(
+    client: &KubernetesClient,
+    url: &str,
+    selector: Option<&str>,
+) -> Result<Vec<Pod>> {
     let failed = |message: &str| ErrorData::PodLogReadFailed {
         message: message.to_string(),
     };
-    let url = format!(
-        "{}/api/v1/pods",
-        client.get_base_url().trim_end_matches('/')
-    );
     let mut pods = Vec::new();
     let mut continue_token: Option<String> = None;
     loop {
         let mut request = client
             .client()
-            .get(&url)
+            .get(url)
             .query(&[("limit", CLUSTER_PAGE_SIZE)]);
         if let Some(selector) = selector {
             request = request.query(&[("labelSelector", selector)]);
         }
-        if let Some(token) = &continue_token {
-            request = request.query(&[("continue", token.as_str())]);
+        match &continue_token {
+            Some(token) => request = request.query(&[("continue", token.as_str())]),
+            None => request = request.query(&[("resourceVersion", "0")]),
         }
         let response = request
             .sign_kubernetes_request(&client.auth_config())
@@ -538,7 +565,7 @@ async fn list_cluster_pods(client: &KubernetesClient, selector: Option<&str>) ->
             .context(failed("could not list Pods in the cluster"))?;
         if !response.status().is_success() {
             return Err(AlienError::new(failed(&format!(
-                "listing Pods in the cluster returned HTTP {}",
+                "listing Pods returned HTTP {}",
                 response.status()
             ))));
         }
@@ -621,7 +648,7 @@ async fn reconcile_cluster(
             return Ok(());
         }
     };
-    let pods = list_cluster_pods(client, cluster.pod_selector.as_deref()).await?;
+    let pods = list_cluster_pods(client, &cluster.namespaces, cluster.pod_selector.as_deref()).await?;
     let mut eligible = Vec::new();
     let mut namespaces = HashMap::<String, String>::new();
     for pod in &pods {
@@ -1454,5 +1481,88 @@ mod tests {
         .expect("second same-timestamp line");
         assert_eq!(next.body, "second");
         assert_eq!(offset.expect("cursor").ordinal, 2);
+    }
+
+    async fn fake_api(
+        app: Router,
+    ) -> (KubernetesClient, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind fake Kubernetes API");
+        let address = listener.local_addr().expect("fake Kubernetes address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve fake API");
+        });
+        let client = KubernetesClient::new(KubernetesClientConfig::Manual {
+            server_url: format!("http://{address}"),
+            certificate_authority_data: None,
+            insecure_skip_tls_verify: None,
+            client_certificate_data: None,
+            client_key_data: None,
+            token: Some("test-token".to_string()),
+            username: None,
+            password: None,
+            namespace: Some("demo".to_string()),
+            additional_headers: HashMap::new(),
+        })
+        .await
+        .expect("create fake Kubernetes client");
+        (client, server)
+    }
+
+    fn pod_list(names: &[&str], next: Option<&str>) -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "apiVersion": "v1", "kind": "PodList",
+            "metadata": next.map(|token| serde_json::json!({"continue": token})).unwrap_or_else(|| serde_json::json!({})),
+            "items": names.iter().map(|name| serde_json::json!({"metadata": {"name": name, "namespace": "x"}})).collect::<Vec<_>>()
+        }))
+    }
+
+    #[tokio::test]
+    async fn a_cluster_listing_reads_every_page_and_asks_the_cache_first() {
+        let requests = Arc::new(std::sync::Mutex::new(Vec::<HashMap<String, String>>::new()));
+        let seen = requests.clone();
+        let app = Router::new().route(
+            "/api/v1/pods",
+            get(move |Query(query): Query<HashMap<String, String>>| {
+                let seen = seen.clone();
+                async move {
+                    seen.lock().unwrap().push(query.clone());
+                    match query.get("continue").map(String::as_str) {
+                        None => pod_list(&["a", "b"], Some("page-2")),
+                        Some("page-2") => pod_list(&["c"], Some("page-3")),
+                        _ => pod_list(&["d"], None),
+                    }
+                }
+            }),
+        );
+        let (client, server) = fake_api(app).await;
+        let pods = list_cluster_pods(&client, &[], Some("app=web")).await.unwrap();
+        server.abort();
+        let names: Vec<_> = pods.iter().filter_map(|p| p.metadata.name.clone()).collect();
+        assert_eq!(names, ["a", "b", "c", "d"]);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].get("resourceVersion").map(String::as_str), Some("0"));
+        assert!(requests[1..].iter().all(|r| !r.contains_key("resourceVersion")));
+        assert!(requests.iter().all(|r| r.get("labelSelector").map(String::as_str) == Some("app=web")));
+    }
+
+    #[tokio::test]
+    async fn named_namespaces_are_listed_one_by_one_never_cluster_wide() {
+        let app = Router::new()
+            .route("/api/v1/namespaces/a/pods", get(|| async { pod_list(&["in-a"], None) }))
+            .route("/api/v1/namespaces/b/pods", get(|| async { pod_list(&["in-b"], None) }))
+            .route(
+                "/api/v1/pods",
+                get(|| async { (StatusCode::FORBIDDEN, "cluster-wide listing must not be used") }),
+            );
+        let (client, server) = fake_api(app).await;
+        let pods = list_cluster_pods(&client, &["a".into(), "b".into()], None)
+            .await
+            .unwrap();
+        server.abort();
+        let names: Vec<_> = pods.iter().filter_map(|p| p.metadata.name.clone()).collect();
+        assert_eq!(names, ["in-a", "in-b"]);
     }
 }
