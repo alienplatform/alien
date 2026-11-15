@@ -18,6 +18,7 @@ pub(crate) struct EnrollmentToken {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Payload {
     u: String,
     a: String,
@@ -39,8 +40,9 @@ impl EnrollmentToken {
         let bytes = URL_SAFE_NO_PAD
             .decode(body.trim_end_matches('='))
             .map_err(|_| invalid("it is not valid base64url"))?;
-        let payload: Payload =
-            serde_json::from_slice(&bytes).map_err(|_| invalid("its content is not readable"))?;
+        let payload: Payload = serde_json::from_slice(&bytes).map_err(|_| {
+            invalid("its content is not readable or has fields this operator does not know")
+        })?;
         if payload.u.is_empty() || payload.a.is_empty() || payload.c.is_empty() {
             return Err(invalid("it is missing the manager, audience or code"));
         }
@@ -48,6 +50,15 @@ impl EnrollmentToken {
         // address for local development), as for any other enrollment.
         let url =
             reqwest::Url::parse(&payload.u).map_err(|_| invalid("the manager URL is not valid"))?;
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(invalid(
+                "the manager URL must not contain a user name, password, query or fragment",
+            ));
+        }
         let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
         if !(url.scheme() == "https" || (url.scheme() == "http" && loopback)) {
             return Err(invalid("the manager URL must use HTTPS"));
@@ -89,6 +100,33 @@ mod tests {
             EnrollmentToken::parse(&token(r#"{"u":"http://localhost:8080","a":"a","c":"c"}"#))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn unknown_fields_and_urls_with_credentials_or_queries_are_refused() {
+        for (json, expected) in [
+            (
+                r#"{"u":"https://m.example","a":"a","c":"c","x":1}"#,
+                "does not know",
+            ),
+            (
+                r#"{"u":"https://user:pw@m.example","a":"a","c":"c"}"#,
+                "user name",
+            ),
+            (
+                r#"{"u":"https://m.example/?next=1","a":"a","c":"c"}"#,
+                "query",
+            ),
+            (
+                r#"{"u":"https://m.example/#f","a":"a","c":"c"}"#,
+                "fragment",
+            ),
+        ] {
+            let error = EnrollmentToken::parse(&token(json))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{json}: {error}");
+        }
     }
 
     #[test]

@@ -22,7 +22,8 @@ use crate::{
 /// so an operator survives a manager outage longer than a day.
 pub const ROTATION_GRACE: chrono::Duration = chrono::Duration::days(7);
 
-/// Stored only in the encrypted local database; intentionally not Debug.
+/// Stored in the encrypted local database, or in the Kubernetes Secret named by
+/// `OPERATOR_IDENTITY_SECRET`; intentionally not Debug.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DailyIdentityState {
@@ -137,7 +138,18 @@ impl DailyIdentity {
                 return Err(failed("Saved operator belongs to another deployment"));
             }
         }
-        let state = match self.db.read_daily_identity().await? {
+        let mut saved = self.db.read_daily_identity().await?;
+        // A key saved for a refused first token belongs to nobody yet. A corrected
+        // token for another manager starts over, as it does for a Helm install.
+        if saved.as_ref().is_some_and(|state| {
+            state.deployment_id.is_empty()
+                && !(same_endpoint(&state.manager_url, manager_url)
+                    && same_endpoint(&state.audience, audience))
+        }) {
+            self.db.clear_unenrolled_daily_identity().await?;
+            saved = None;
+        }
+        let state = match saved {
             Some(state) => {
                 check_saved_identity(&state, manager_url, audience, deployment_id)?;
                 if !state.deployment_id.is_empty() {
@@ -416,7 +428,7 @@ impl DailyIdentity {
         if !state.deployment_id.is_empty() {
             return Ok(false);
         }
-        if state.manager_url != manager_url {
+        if !same_endpoint(&state.manager_url, manager_url) {
             self.db.clear_unenrolled_daily_identity().await?;
             return Ok(false);
         }
@@ -744,13 +756,26 @@ impl RuntimeProofProvider for DailyIdentity {
     }
 }
 
+/// Whether two manager URLs (or audiences) name the same endpoint, ignoring a
+/// trailing slash and the case of the scheme and host.
+pub(crate) fn same_endpoint(a: &str, b: &str) -> bool {
+    fn normal(value: &str) -> String {
+        match reqwest::Url::parse(value) {
+            Ok(url) => url.as_str().trim_end_matches('/').to_owned(),
+            Err(_) => value.trim_end_matches('/').to_owned(),
+        }
+    }
+    normal(a) == normal(b)
+}
+
 fn check_saved_identity(
     state: &DailyIdentityState,
     manager_url: &str,
     audience: &str,
     deployment_id: Option<&str>,
 ) -> Result<()> {
-    if state.manager_url != manager_url || state.audience != audience {
+    if !same_endpoint(&state.manager_url, manager_url) || !same_endpoint(&state.audience, audience)
+    {
         return Err(failed(
             "Saved component identity belongs to another manager",
         ));
@@ -1492,6 +1517,91 @@ mod persistence_tests {
 
     /// A code that the enroll step refuses leaves no saved key, so the
     /// Operator still starts in token mode.
+    fn saved(manager_url: &str, deployment_id: &str) -> DailyIdentityState {
+        DailyIdentityState {
+            manager_url: manager_url.into(),
+            audience: "manager-one".into(),
+            deployment_id: deployment_id.into(),
+            current: "ax_day_v1_current".into(),
+            pending: None,
+            pending_started_at: None,
+            expires_at: Utc::now() + chrono::Duration::hours(20),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+            previous: None,
+        }
+    }
+
+    #[test]
+    fn a_trailing_slash_or_host_case_does_not_make_another_manager() {
+        assert!(same_endpoint("https://m.example", "https://m.example/"));
+        assert!(same_endpoint("https://M.Example/", "https://m.example"));
+        assert!(!same_endpoint("https://m.example", "https://n.example"));
+        assert!(same_endpoint("manager-one", "manager-one"));
+        assert!(!same_endpoint("manager-one", "manager-two"));
+    }
+
+    #[tokio::test]
+    async fn an_enrolled_operator_accepts_its_manager_url_with_a_trailing_slash() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        db.persist_enrolled_identity(&saved("https://m.example", "dep_1"))
+            .await
+            .unwrap();
+        let identity = DailyIdentity::new(db).unwrap();
+        let deployment = identity
+            .enroll(EnrollmentRequest {
+                manager_url: "https://m.example/",
+                audience: "manager-one",
+                code: "ax_enroll_unused",
+                deployment_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(deployment, "dep_1");
+    }
+
+    #[tokio::test]
+    async fn a_corrected_token_replaces_the_candidate_of_a_refused_first_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/v1/identity/enroll",
+            axum::routing::post(|| async { axum::http::StatusCode::UNAUTHORIZED }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        // The first token named a manager that refused its code: an unenrolled candidate.
+        db.write_daily_identity(&saved("http://127.0.0.1:9", ""))
+            .await
+            .unwrap();
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        identity
+            .enroll(EnrollmentRequest {
+                manager_url: &url,
+                audience: "manager-one",
+                code: "ax_enroll_corrected",
+                deployment_id: None,
+            })
+            .await
+            .expect_err("this manager refuses the code too");
+        let candidate = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!(
+            candidate.manager_url, url,
+            "the old candidate was discarded"
+        );
+        assert!(candidate.deployment_id.is_empty());
+    }
+
     #[tokio::test]
     async fn a_refused_token_enrollment_leaves_no_identity() {
         let directory = tempfile::tempdir().unwrap();

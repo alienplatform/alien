@@ -589,11 +589,15 @@ async fn run_operator_cli(
                 args.identity_secret.as_deref(),
                 args.namespace.clone(),
                 args.encryption_key_file.as_deref(),
+                args.data_persistent,
             )
             .await?
         }
     };
     let db = std::sync::Arc::new(db);
+    // A token for another manager never overrides an enrolled operator.
+    let join_token =
+        join_token_for_saved_identity(join_token, db.read_daily_identity().await?.as_ref());
 
     let cli_sync_token = load_sync_token(args.sync_token_file.as_deref()).await?;
     let collector_token = match owned_values.get("collector-token") {
@@ -747,7 +751,8 @@ async fn run_operator_cli(
         // A start from an empty cache has no deployment state yet; an
         // observe-only environment starts as running, as it does when it
         // registers itself.
-        if args.initial_desired_release == InitialDesiredReleaseArg::None
+        if args.identity_secret.is_some()
+            && args.initial_desired_release == InitialDesiredReleaseArg::None
             && db.get_deployment_state().await?.is_none()
         {
             db.set_deployment_state(&observe_only_initial_state(
@@ -1908,6 +1913,7 @@ async fn open_operator_db(
     identity_secret: Option<&str>,
     namespace: Option<String>,
     encryption_key_file: Option<&std::path::Path>,
+    data_persistent: Option<bool>,
 ) -> Result<(crate::db::OperatorDb, String)> {
     let Some(secret_name) = identity_secret else {
         let key = load_encryption_key(encryption_key_file).await?;
@@ -1932,10 +1938,45 @@ async fn open_operator_db(
         std::sync::Arc::new(backend),
         secret_name,
     ));
-    let key = store.encryption_key().await?;
-    let db = match crate::db::OperatorDb::new(data_dir, &key).await {
-        Ok(db) => db,
-        Err(error) => {
+    let key = identity_secret_key(&store).await?;
+    let db = open_cache(data_dir, &key, data_persistent).await?;
+    Ok((db.use_identity_store(store).await?, key))
+}
+
+/// The local key from the identity Secret. While the API server cannot be asked
+/// the operator waits and tries again, rather than start with a key that would
+/// orphan its cache or an identity it does not know it has.
+async fn identity_secret_key(store: &crate::identity_store::SecretIdentityStore) -> Result<String> {
+    const ATTEMPTS: u32 = 8;
+    let mut delay = std::time::Duration::from_secs(1);
+    let mut attempt = 1;
+    loop {
+        match store.encryption_key().await {
+            Ok(key) => return Ok(key),
+            Err(error) if attempt < ATTEMPTS => {
+                warn!(error = %error, attempt, "Cannot read the identity Secret yet; trying again");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(std::time::Duration::from_secs(30));
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Open the local database in the data directory. The directory is a cache only
+/// when `OPERATOR_DATA_PERSISTENT=false`; then a database that cannot be opened
+/// with the key (the Secret was recreated) is emptied and opened again. On a
+/// persistent volume the database may hold the only copy of an identity, so it
+/// is never deleted: the operator stops with a message instead.
+async fn open_cache(
+    data_dir: &str,
+    key: &str,
+    data_persistent: Option<bool>,
+) -> Result<crate::db::OperatorDb> {
+    match crate::db::OperatorDb::new(data_dir, key).await {
+        Ok(db) => Ok(db),
+        Err(error) if data_persistent == Some(false) => {
             warn!(error = %error, "Cannot open the local cache; starting with an empty one");
             let mut entries = tokio::fs::read_dir(data_dir).await.ok();
             while let Some(entry) = match entries.as_mut() {
@@ -1950,10 +1991,36 @@ async fn open_operator_db(
                     let _ = tokio::fs::remove_file(entry.path()).await;
                 }
             }
-            crate::db::OperatorDb::new(data_dir, &key).await?
+            crate::db::OperatorDb::new(data_dir, key).await
         }
+        Err(error) => Err(error).context(ErrorData::ConfigurationError {
+            message: "The operator's local database cannot be opened with the key in the identity Secret, and the data directory is persistent, so it is kept. Remove the database files by hand if the identity is safe in the Secret, or set OPERATOR_DATA_PERSISTENT=false for a cache directory.".into(),
+        }),
+    }
+}
+
+/// An enrolled operator keeps its identity when it is given a token for another
+/// manager (a token is a trust root, and an operator that works does not move).
+/// It says so once and goes on; it never fails to start for it.
+fn join_token_for_saved_identity(
+    token: Option<crate::enrollment_token::EnrollmentToken>,
+    saved: Option<&crate::daily_identity::DailyIdentityState>,
+) -> Option<crate::enrollment_token::EnrollmentToken> {
+    let token = token?;
+    let Some(saved) = saved.filter(|saved| !saved.deployment_id.is_empty()) else {
+        return Some(token);
     };
-    Ok((db.use_identity_store(store).await?, key))
+    if crate::daily_identity::same_endpoint(&saved.manager_url, &token.manager_url)
+        && crate::daily_identity::same_endpoint(&saved.audience, &token.audience)
+    {
+        return Some(token);
+    }
+    warn!(
+        saved_manager = %saved.manager_url,
+        "The enrollment token names another manager than the one this operator is enrolled with; \
+         ignoring it. To move the operator, uninstall the release (which deletes its identity Secret) and install again."
+    );
+    None
 }
 
 const IN_CLUSTER_NAMESPACE_FILE: &str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
@@ -2104,6 +2171,92 @@ mod tests {
     use alien_core::{sync::OperatorImageSource, DeploymentStatus, Platform};
     use clap::Parser;
     use std::os::unix::fs::PermissionsExt;
+
+    fn join_token(manager: &str) -> crate::enrollment_token::EnrollmentToken {
+        crate::enrollment_token::EnrollmentToken {
+            manager_url: manager.into(),
+            audience: manager.into(),
+            code: "ax_enroll_v1_x".into(),
+        }
+    }
+
+    fn saved_identity(
+        manager: &str,
+        deployment: &str,
+    ) -> crate::daily_identity::DailyIdentityState {
+        crate::daily_identity::DailyIdentityState {
+            manager_url: manager.into(),
+            audience: manager.into(),
+            deployment_id: deployment.into(),
+            current: "ax_day_v1_k".into(),
+            pending: None,
+            pending_started_at: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(20),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+            previous: None,
+        }
+    }
+
+    #[test]
+    fn an_enrolled_operator_ignores_a_token_for_another_manager() {
+        let saved = saved_identity("https://a.example", "dep_1");
+        // Another manager: ignored, and the operator keeps running on its identity.
+        assert!(super::join_token_for_saved_identity(
+            Some(join_token("https://b.example")),
+            Some(&saved)
+        )
+        .is_none());
+        // The same manager, even with a trailing slash: the token is used.
+        assert!(super::join_token_for_saved_identity(
+            Some(join_token("https://a.example/")),
+            Some(&saved)
+        )
+        .is_some());
+        // Nothing enrolled yet (or only a candidate): the token is used.
+        let candidate = saved_identity("https://a.example", "");
+        assert!(super::join_token_for_saved_identity(
+            Some(join_token("https://b.example")),
+            Some(&candidate)
+        )
+        .is_some());
+        assert!(
+            super::join_token_for_saved_identity(Some(join_token("https://b.example")), None)
+                .is_some()
+        );
+        assert!(super::join_token_for_saved_identity(None, Some(&saved)).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_persistent_data_directory_is_never_emptied_but_a_cache_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_str().unwrap();
+        // A database written with another key, as after the Secret was recreated.
+        crate::db::OperatorDb::new(path, &"a".repeat(64))
+            .await
+            .unwrap();
+        let files = |dir: &std::path::Path| {
+            std::fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("operator.db"))
+                .count()
+        };
+        let before = files(directory.path());
+        assert!(before > 0);
+
+        for persistent in [None, Some(true)] {
+            let error = super::open_cache(path, &"b".repeat(64), persistent)
+                .await
+                .err()
+                .expect("a persistent directory is not emptied");
+            assert!(error.to_string().contains("persistent"));
+            assert_eq!(files(directory.path()), before);
+        }
+        super::open_cache(path, &"b".repeat(64), Some(false))
+            .await
+            .expect("a cache directory is emptied and opened again");
+    }
 
     /// Counts the enrollment-code requests an Operator makes with its token.
     async fn manager_counting_code_requests(
