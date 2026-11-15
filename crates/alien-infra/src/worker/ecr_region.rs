@@ -1,10 +1,12 @@
 //! Lambda pulls its image from ECR in its own region. When the image lives in
 //! another region, the copy there comes from ECR replication. Before Lambda is
 //! created or updated, check that the exact image is present in the Lambda's
-//! region, and fail with a clear error if it is not.
+//! region. An image that has not arrived yet is reported as `Missing`, so the
+//! caller can wait for replication; a tag that resolves to another image there is
+//! an error.
 
 use alien_aws_clients::ecr::{BatchGetImageRequest, EcrApi, ImageIdentifier};
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, ContextError};
 
 use crate::error::{ErrorData, Result};
 
@@ -49,6 +51,39 @@ pub(crate) fn parse_ecr_image_ref(image_uri: &str) -> Option<EcrImageRef> {
         tag,
         digest,
     })
+}
+
+/// Result of the region check that is not an error.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ImageInRegion {
+    /// The exact image is in the function's region (or needs no check).
+    Present,
+    /// The image is not in the function's region (yet).
+    Missing(MissingImage),
+}
+
+/// An image that has not reached the function's region.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct MissingImage {
+    digest: String,
+    repository: String,
+    region: String,
+}
+
+impl MissingImage {
+    /// The error for an image that did not arrive in time.
+    pub(crate) fn into_error(self, resource_id: &str) -> AlienError<ErrorData> {
+        not_replicated(
+            format!(
+                "Image {} of repository '{}' is not in {}, so Lambda cannot pull it. \
+                 The instance must replicate its registry to {} (declare {} \
+                 as a deployment region of the instance). Images pushed before the replication rule \
+                 existed are copied by releasing again.",
+                self.digest, self.repository, self.region, self.region, self.region
+            ),
+            resource_id,
+        )
+    }
 }
 
 fn not_replicated(message: String, resource_id: &str) -> AlienError<ErrorData> {
@@ -123,21 +158,23 @@ async fn digest_in_region(
         .and_then(|found| found.image_id.image_digest))
 }
 
-/// Fails unless the exact image `source` is present in `target_region`.
+/// Checks that the exact image `source` is present in `target_region`.
 /// `source_client` reads the source region, `target_client` the target region.
-/// Does nothing when the image is not in ECR or already in the target region.
+/// Returns `Present` when the image is not in ECR or already in the target region,
+/// `Missing` when the target region does not have it yet, and an error when the target
+/// region has another image behind the same tag or ECR cannot be read.
 pub(crate) async fn ensure_image_in_region(
     source: &str,
     target_region: &str,
     source_client: &dyn EcrApi,
     target_client: &dyn EcrApi,
     resource_id: &str,
-) -> Result<()> {
+) -> Result<ImageInRegion> {
     let Some(image) = parse_ecr_image_ref(source) else {
-        return Ok(());
+        return Ok(ImageInRegion::Present);
     };
     if image.region == target_region {
-        return Ok(());
+        return Ok(ImageInRegion::Present);
     }
     let wanted = match &image.digest {
         Some(digest) => digest.clone(),
@@ -155,20 +192,27 @@ pub(crate) async fn ensure_image_in_region(
                 )
             })?,
     };
-    let present = digest_in_region(target_client, &image, target_region, resource_id).await?;
-    if present.as_deref() == Some(wanted.as_str()) {
-        return Ok(());
+    match digest_in_region(target_client, &image, target_region, resource_id).await? {
+        Some(present) if present == wanted => Ok(ImageInRegion::Present),
+        // The tag exists in the target region but points at another image: replication
+        // will not fix that.
+        Some(other) => Err(not_replicated(
+            format!(
+                "Image tag '{}' of repository '{}' points to {other} in {target_region} but to \
+                 {wanted} in {}, so Lambda would run a different image. Release again so the \
+                 tag is replicated.",
+                image.tag.as_deref().unwrap_or_default(),
+                image.repository,
+                image.region
+            ),
+            resource_id,
+        )),
+        None => Ok(ImageInRegion::Missing(MissingImage {
+            digest: wanted,
+            repository: image.repository,
+            region: target_region.to_string(),
+        })),
     }
-    Err(not_replicated(
-        format!(
-            "Image {wanted} of repository '{}' is not in {target_region}, so Lambda cannot pull it. \
-             The instance must replicate its registry to {target_region} (declare {target_region} \
-             as a deployment region of the instance). Images pushed before the replication rule \
-             existed are copied by releasing again.",
-            image.repository
-        ),
-        resource_id,
-    ))
 }
 
 #[cfg(test)]
@@ -218,14 +262,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_digest_in_target_region_fails_with_a_clear_error() {
+    async fn missing_digest_in_target_region_is_reported_with_a_clear_error_text() {
         let source = MockEcrApi::new();
         let mut target = MockEcrApi::new();
         target
             .expect_batch_get_image()
             .times(1)
             .returning(|_| Ok(missing()));
-        let err = ensure_image_in_region(
+        let missing = ensure_image_in_region(
             &format!("{SRC}@{DIGEST}"),
             "us-east-2",
             &source,
@@ -233,7 +277,11 @@ mod tests {
             "worker",
         )
         .await
-        .unwrap_err();
+        .unwrap();
+        let ImageInRegion::Missing(missing) = missing else {
+            panic!("expected Missing");
+        };
+        let err = missing.into_error("worker");
         let text = err.to_string();
         assert!(
             text.contains("us-east-2") && text.contains(DIGEST),
@@ -308,7 +356,7 @@ mod tests {
         target
             .expect_batch_get_image()
             .returning(|_| Ok(found(DIGEST)));
-        ensure_image_in_region(
+        let result = ensure_image_in_region(
             &format!("{SRC}@{DIGEST}"),
             "us-east-2",
             &source,
@@ -317,6 +365,7 @@ mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(result, ImageInRegion::Present);
     }
 
     #[tokio::test]
