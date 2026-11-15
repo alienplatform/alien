@@ -225,6 +225,11 @@ impl DailyIdentity {
                 if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
                     self.mark_enrollment_uncertain();
                 }
+                if status.is_client_error() && !matches!(status.as_u16(), 408 | 429) {
+                    return Err(AlienError::new(ErrorData::EnrollmentCodeRefused {
+                        status: status.as_u16(),
+                    }));
+                }
                 return Err(refused(status));
             }
             Err(error) => {
@@ -474,7 +479,25 @@ impl DailyIdentity {
         })
     }
 
+    /// The key to prove identity with, rotating it when due. When another
+    /// operator saved to a shared identity store first, the write is refused:
+    /// start over with what it saved, which a pending key leads through the
+    /// usual recovery.
     async fn current_key(&self, audience: &str) -> Result<String> {
+        let mut attempts = 0;
+        loop {
+            match self.current_key_once(audience).await {
+                Err(error)
+                    if attempts < 3 && matches!(error.error, Some(ErrorData::IdentityConflict)) =>
+                {
+                    attempts += 1;
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    async fn current_key_once(&self, audience: &str) -> Result<String> {
         let _operation = self.operation.lock().await;
         let mut state = self
             .db
@@ -500,6 +523,11 @@ impl DailyIdentity {
                 Err(error)
             }
         };
+        // An identity store that cannot be written would lose the successor
+        // key if the process died after the manager accepted it.
+        if let Some(reason) = self.db.rotation_blocked() {
+            return keep_current(&state, failed(&reason));
+        }
         let had_pending = state.pending.is_some();
         if let Some(pending) = &state.pending {
             let probe = self.client.post(format!("{}/v1/identity/exchange", state.manager_url.trim_end_matches('/')))

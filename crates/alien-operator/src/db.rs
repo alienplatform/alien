@@ -165,9 +165,35 @@ pub struct OperatorDb {
     /// holding the Operator's own credential. Kept in memory: the refresh
     /// runs again on the first sync after a restart.
     pull_secret_refreshed: std::sync::atomic::AtomicBool,
+    /// Where the enrolled identity lives when it is not in this database.
+    /// `None` keeps it here.
+    identity_store: Option<Arc<dyn crate::identity_store::IdentityStore>>,
 }
 
 impl OperatorDb {
+    /// Keep the enrolled identity in `store` instead of this database, which
+    /// is then a cache. Its canonical deployment ID is restored from the store.
+    pub(crate) async fn use_identity_store(
+        mut self,
+        store: Arc<dyn crate::identity_store::IdentityStore>,
+    ) -> Result<Self> {
+        if let Some(identity) = store.read().await? {
+            if !identity.deployment_id.is_empty() {
+                self.set_deployment_id(&identity.deployment_id).await?;
+            }
+        }
+        self.identity_store = Some(store);
+        Ok(self)
+    }
+
+    /// Why the identity cannot be saved right now, when it is kept outside
+    /// the database and that store is unavailable.
+    pub(crate) fn rotation_blocked(&self) -> Option<String> {
+        self.identity_store
+            .as_ref()
+            .and_then(|store| store.rotation_blocked())
+    }
+
     pub(crate) fn pull_secret_refreshed(&self) -> bool {
         self.pull_secret_refreshed
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -181,6 +207,9 @@ impl OperatorDb {
     pub(crate) async fn read_daily_identity(
         &self,
     ) -> Result<Option<crate::daily_identity::DailyIdentityState>> {
+        if let Some(store) = &self.identity_store {
+            return store.read().await;
+        }
         let conn = self.conn.lock().await;
         read_json(&conn, "daily_identity").await
     }
@@ -202,6 +231,9 @@ impl OperatorDb {
         &self,
         state: &crate::daily_identity::DailyIdentityState,
     ) -> Result<()> {
+        if let Some(store) = &self.identity_store {
+            return store.write(state).await;
+        }
         let conn = self.conn.lock().await;
         // A successful save must survive process loss before the server CAS.
         conn.execute("PRAGMA synchronous = FULL", ())
@@ -214,6 +246,9 @@ impl OperatorDb {
     /// Drop a saved key that never finished enrolling. An enrolled identity
     /// is kept.
     pub(crate) async fn clear_unenrolled_daily_identity(&self) -> Result<()> {
+        if let Some(store) = &self.identity_store {
+            return store.clear_unenrolled().await;
+        }
         let conn = self.conn.lock().await;
         conn.execute(
             "DELETE FROM state WHERE key = 'daily_identity'
@@ -232,6 +267,9 @@ impl OperatorDb {
         &self,
         state: &crate::daily_identity::DailyIdentityState,
     ) -> Result<()> {
+        if let Some(store) = &self.identity_store {
+            return store.check_enrolled(state).await;
+        }
         let conn = self.conn.lock().await;
         conn.execute("PRAGMA synchronous = FULL", ())
             .await
@@ -281,6 +319,10 @@ impl OperatorDb {
                     message: "Enrolled identity requires a deployment ID".into(),
                 },
             ));
+        }
+        if let Some(store) = &self.identity_store {
+            store.persist_enrolled(state).await?;
+            return self.set_deployment_id(&state.deployment_id).await;
         }
         let serialized = serde_json::to_string(state)
             .into_alien_error()
@@ -370,6 +412,7 @@ impl OperatorDb {
             published_runtime_credentials: Mutex::new(std::collections::HashMap::new()),
             runtime_credentials: Mutex::new(std::collections::HashMap::new()),
             pull_secret_refreshed: std::sync::atomic::AtomicBool::new(false),
+            identity_store: None,
         })
     }
 

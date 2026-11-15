@@ -50,6 +50,28 @@ pub enum ErrorData {
     )]
     ConfigurationError { message: String },
 
+    /// The identity Secret changed since it was last read, so the write was
+    /// refused. Another operator or an earlier run saved first.
+    #[error(
+        code = "IDENTITY_CONFLICT",
+        message = "The operator identity was changed by another writer",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    IdentityConflict,
+
+    /// The manager refused an enrollment code outright: it was already used,
+    /// it expired, or it is not valid.
+    #[error(
+        code = "ENROLLMENT_CODE_REFUSED",
+        message = "Component identity request refused (HTTP {status})",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    EnrollmentCodeRefused { status: u16 },
+
     #[error(
         code = "DATABASE_ERROR",
         message = "Database error: {message}",

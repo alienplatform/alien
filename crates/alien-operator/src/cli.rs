@@ -83,6 +83,18 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_ENROLLMENT_CODE_FILE")]
     pub identity_enrollment_code_file: Option<PathBuf>,
 
+    /// File holding a single enrollment token (`ax_join_v1_...`) that carries
+    /// the manager URL, the audience and a one-use code. Replaces the separate
+    /// URL, audience and code settings.
+    #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN_FILE")]
+    pub enrollment_token_file: Option<PathBuf>,
+
+    /// Name of a Kubernetes Secret, in the operator's namespace, that holds the
+    /// enrolled identity and the local database key. The data directory is then
+    /// only a cache. Unset, the identity stays in the local database.
+    #[arg(long, env = "OPERATOR_IDENTITY_SECRET")]
+    pub identity_secret: Option<String>,
+
     /// Exact manager audience supplied by installation configuration.
     #[arg(long, env = "ALIEN_MANAGER_AUDIENCE")]
     pub manager_audience: Option<String>,
@@ -548,6 +560,12 @@ async fn run_operator_cli(
     info!("   Platform: {}", args.platform);
     info!("   Data directory: {}", data_dir);
 
+    let join_token = match args.enrollment_token_file.as_deref() {
+        Some(path) => Some(crate::enrollment_token::EnrollmentToken::parse(
+            &read_secret_file(path, "enrollment token").await?,
+        )?),
+        None => None,
+    };
     let owned_values = load_owned_secret(
         args.owned_secret.as_deref(),
         &args.owned_secret_keys,
@@ -556,11 +574,22 @@ async fn run_operator_cli(
         &data_dir_path,
     )
     .await?;
-    let encryption_key = match owned_values.get("encryption-key") {
-        Some(key) => key.clone(),
-        None => load_encryption_key(args.encryption_key_file.as_deref()).await?,
+    let (db, encryption_key) = match owned_values.get("encryption-key") {
+        Some(key) => (
+            crate::db::OperatorDb::new(&data_dir, key).await?,
+            key.clone(),
+        ),
+        None => {
+            open_operator_db(
+                &data_dir,
+                args.identity_secret.as_deref(),
+                args.namespace.clone(),
+                args.encryption_key_file.as_deref(),
+            )
+            .await?
+        }
     };
-    let db = std::sync::Arc::new(crate::db::OperatorDb::new(&data_dir, &encryption_key).await?);
+    let db = std::sync::Arc::new(db);
 
     let cli_sync_token = load_sync_token(args.sync_token_file.as_deref()).await?;
     let collector_token = match owned_values.get("collector-token") {
@@ -568,8 +597,10 @@ async fn run_operator_cli(
         None => load_collector_token(args.collector_token_file.as_deref()).await?,
     };
 
-    let effective_sync_url = args
-        .sync_url
+    let effective_sync_url = join_token
+        .as_ref()
+        .map(|token| token.manager_url.clone())
+        .or(args.sync_url)
         .or_else(|| packaged_config.as_ref().and_then(|c| c.manager_url.clone()));
     if let Some(url) = effective_sync_url.as_deref() {
         if let Some(warning) = plain_http_url_warning(url) {
@@ -624,7 +655,10 @@ async fn run_operator_cli(
         })
         .transpose()?;
 
-    if args.identity_enrollment_code_file.is_none() && args.manager_audience.is_none() {
+    if args.identity_enrollment_code_file.is_none()
+        && args.manager_audience.is_none()
+        && join_token.is_none()
+    {
         enroll_with_deployment_token(
             &db,
             args.platform,
@@ -638,6 +672,7 @@ async fn run_operator_cli(
     let stored_identity = db.read_daily_identity().await?;
     // A key saved before its enrollment finished is no identity yet.
     let sync_config = if args.identity_enrollment_code_file.is_some()
+        || join_token.is_some()
         || stored_identity
             .as_ref()
             .is_some_and(|identity| !identity.deployment_id.is_empty())
@@ -654,8 +689,10 @@ async fn run_operator_cli(
                     message: "Component enrollment requires a manager URL".into(),
                 })
             })?;
-        let audience = args
-            .manager_audience
+        let audience = join_token
+            .as_ref()
+            .map(|token| token.audience.clone())
+            .or(args.manager_audience)
             .or_else(|| {
                 stored_identity
                     .as_ref()
@@ -666,9 +703,15 @@ async fn run_operator_cli(
                     message: "Component enrollment requires the configured manager audience".into(),
                 })
             })?;
-        let code = load_sync_token(args.identity_enrollment_code_file.as_deref())
-            .await?
-            .unwrap_or_default();
+        let code = match &join_token {
+            Some(token) => token.code.clone(),
+            None => load_sync_token(args.identity_enrollment_code_file.as_deref())
+                .await?
+                .unwrap_or_default(),
+        };
+        let enrolled_before = stored_identity
+            .as_ref()
+            .is_some_and(|identity| !identity.deployment_id.is_empty());
         let (deployment_id, token) =
             std::sync::Arc::new(crate::daily_identity::DailyIdentity::new(db.clone())?)
                 .connect(crate::daily_identity::EnrollmentRequest {
@@ -677,7 +720,30 @@ async fn run_operator_cli(
                     code: &code,
                     deployment_id: configured_deployment_id.as_deref(),
                 })
-                .await?;
+                .await
+                .map_err(|error| {
+                    if join_token.is_some()
+                        && !enrolled_before
+                        && matches!(error.error, Some(ErrorData::EnrollmentCodeRefused { .. }))
+                    {
+                        return AlienError::new(ErrorData::ConfigurationError {
+                            message: "The enrollment token was already used, has expired or is not valid, and this operator has no saved identity. Issue a new enrollment token and install again with it.".into(),
+                        });
+                    }
+                    error
+                })?;
+        // A start from an empty cache has no deployment state yet; an
+        // observe-only environment starts as running, as it does when it
+        // registers itself.
+        if args.initial_desired_release == InitialDesiredReleaseArg::None
+            && db.get_deployment_state().await?.is_none()
+        {
+            db.set_deployment_state(&observe_only_initial_state(
+                args.platform,
+                args.base_platform,
+            ))
+            .await?;
+        }
         if configured_deployment_id
             .as_ref()
             .is_some_and(|expected| expected != &deployment_id)
@@ -1820,6 +1886,65 @@ async fn load_owned_secret(
     crate::owned_secret::report(&owned, &ensured);
     Ok(ensured.values)
 }
+
+/// Open the local database. With an identity Secret the database key and the
+/// enrolled identity live in the Secret and the data directory is a cache: a
+/// cache that cannot be opened with the key (the Secret was recreated) is
+/// emptied and opened again.
+async fn open_operator_db(
+    data_dir: &str,
+    identity_secret: Option<&str>,
+    namespace: Option<String>,
+    encryption_key_file: Option<&std::path::Path>,
+) -> Result<(crate::db::OperatorDb, String)> {
+    let Some(secret_name) = identity_secret else {
+        let key = load_encryption_key(encryption_key_file).await?;
+        return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
+    };
+    let namespace = match namespace {
+        Some(namespace) => namespace,
+        None => tokio::fs::read_to_string(IN_CLUSTER_NAMESPACE_FILE)
+            .await
+            .map(|namespace| namespace.trim().to_string())
+            .ok()
+            .filter(|namespace| !namespace.is_empty())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "OPERATOR_IDENTITY_SECRET needs the operator's namespace".into(),
+                })
+            })?,
+    };
+    let backend =
+        crate::identity_store::KubernetesSecret::in_cluster(&namespace, secret_name).await?;
+    let store = std::sync::Arc::new(crate::identity_store::SecretIdentityStore::new(
+        std::sync::Arc::new(backend),
+        secret_name,
+    ));
+    let key = store.encryption_key().await?;
+    let db = match crate::db::OperatorDb::new(data_dir, &key).await {
+        Ok(db) => db,
+        Err(error) => {
+            warn!(error = %error, "Cannot open the local cache; starting with an empty one");
+            let mut entries = tokio::fs::read_dir(data_dir).await.ok();
+            while let Some(entry) = match entries.as_mut() {
+                Some(entries) => entries.next_entry().await.ok().flatten(),
+                None => None,
+            } {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("operator.db")
+                {
+                    let _ = tokio::fs::remove_file(entry.path()).await;
+                }
+            }
+            crate::db::OperatorDb::new(data_dir, &key).await?
+        }
+    };
+    Ok((db.use_identity_store(store).await?, key))
+}
+
+const IN_CLUSTER_NAMESPACE_FILE: &str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
 
 pub(crate) async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {

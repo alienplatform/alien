@@ -1757,6 +1757,8 @@ impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
 }
 
 mod daily_identity;
+mod enrollment_token;
+mod identity_store;
 
 /// Whether this Operator has finished enrolling and so holds a daily key.
 ///
