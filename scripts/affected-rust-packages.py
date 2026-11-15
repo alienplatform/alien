@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Select the Rust packages a pull request can affect, for ci-fast.yml.
 
-Usage: affected-rust-packages.py <base-sha> <head-sha>
+Usage: affected-rust-packages.py <base-sha> <head-sha> [--own-only]
 
 Prints GitHub Actions outputs (key=value lines):
   mode       "affected", "full", or "none" (only documentation changed)
@@ -10,6 +10,11 @@ Prints GitHub Actions outputs (key=value lines):
   core       "true" when alien-core is selected (the image contract test)
   agent      "true" when alien-sandbox-agent is selected (the privileged tests)
   count      number of selected packages
+
+With --own-only (the pull request tier) the outputs describe the changed packages alone,
+without their dependents, and a change outside the packages reports mode "check-only": the
+caller compiles everything but tests nothing. The merge queue runs without the flag and tests
+the dependents too.
 
 A package is affected when one of its files changed, or when it depends (normally, as a
 dev-dependency or as a build-dependency) on an affected package. A change to any file
@@ -48,6 +53,7 @@ def run(*args: str) -> str:
 
 def main() -> None:
     base, head = sys.argv[1], sys.argv[2]
+    own_only = "--own-only" in sys.argv[3:]
     metadata = json.loads(run("cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"))
     root = PurePosixPath(metadata["workspace_root"])
     packages = {
@@ -97,6 +103,9 @@ def main() -> None:
             pending.extend(dependents[name] - selected)
         mode = "affected" if selected else "none"
 
+    if own_only:
+        selected = set() if full_reason is not None else set(changed)
+        mode = "check-only" if full_reason is not None else ("affected" if selected else "none")
     if selected:
         # Cargo takes a feature only of a selected package or of one's direct dependency, and
         # most packages reach alien-client-core through others.
