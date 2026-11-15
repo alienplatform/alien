@@ -4,17 +4,17 @@ name: Tests
 #
 # - Draft pull requests (every push) run the fast tier: format, lint, typecheck,
 #   generated-file drift, `cargo check` of the whole workspace, and the tests of only the
-#   crates the pull request changed.
-# - Pull requests that are ready for review run the full tier: the tests of every crate the
-#   change can affect (changed crates and what depends on them), Worker integration, the whole
-#   TypeScript suite and the Node addon portability builds. Marking a draft ready starts a new
-#   run that replaces the draft's, so a draft's fast-tier result never satisfies the check.
-#   `merge_group` and pushes of release commits run the full tier too.
-# - A pull request labeled `full-ci`, and `workflow_dispatch`, run the full tier on the whole
-#   workspace, drafts included.
+#   crates the pull request changed. `All tests passed` fails on a draft on purpose ("full tier
+#   not run: draft PR"): a draft cannot merge, and its result can never satisfy the check later.
+# - Pull requests that are ready for review run the fast and full tiers: the tests of every
+#   crate the change can affect (changed crates and what depends on them), Worker integration,
+#   the whole TypeScript suite and the Node addon portability builds. Marking a draft ready
+#   (`ready_for_review`) starts a new run that replaces the draft's. `merge_group` and pushes of
+#   release commits run both tiers too.
+# - `workflow_dispatch` runs both tiers on the whole workspace, for an on-demand full run.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   push:
     branches: [main]
@@ -69,10 +69,10 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      # Ready (non-draft) pull requests, the merge queue, release pushes, `full-ci` pull requests and
-      # manual runs run the full tier. Draft pull requests run the fast tier.
+      # Ready (non-draft) pull requests, the merge queue, release pushes and manual runs run the
+      # full tier. Draft pull requests run the fast tier only.
       full_tier: ${{ steps.tier.outputs.full_tier }}
-      # Manual runs and `full-ci` pull requests also ignore the path filters and test everything.
+      # Manual runs also ignore the path filters and test everything.
       run_all: ${{ steps.tier.outputs.run_all }}
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
@@ -100,13 +100,10 @@ jobs:
           run_all=false
           case "$EVENT" in
             pull_request)
-              # Read the draft state and labels now, not from the event, so a re-run after
-              # marking the PR ready or labeling it sees them.
+              # Read the draft state now, not from the event, so a re-run after marking
+              # the PR ready sees it.
               draft=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.draft')
-              labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" --jq '.[].name')
-              if grep -qx 'full-ci' <<< "$labels"; then
-                run_all=true
-              elif [[ "$draft" == "true" ]]; then
+              if [[ "$draft" == "true" ]]; then
                 full_tier=false
               fi
               ;;
@@ -120,7 +117,7 @@ jobs:
       # in `Rust check`). Ready pull requests and the merge queue test the changed crates and
       # everything that depends on them, against the base. Any change outside the packages
       # (other than docs) is only checked on a draft and fully tested on a ready pull request. Pushes of release
-      # commits, `full-ci` pull requests and manual runs test the whole workspace.
+      # commits and manual runs test the whole workspace.
       - name: Select Rust packages to test
         id: rust_selection
         env:
@@ -855,7 +852,7 @@ jobs:
     needs: [pr-conventions, changes]
     # The tested packages, alien-test-app, the addon and the gateway depend on most workspace
     # crates, so any Rust change runs this job; worker_integration adds the JS inputs.
-    # Full tier only: ready pull requests, the merge queue, `full-ci` pull requests and manual runs.
+    # Full tier only: ready pull requests, the merge queue, release pushes and manual runs.
     if: >-
       needs.changes.outputs.full_tier == 'true' &&
       (needs.changes.outputs.run_all == 'true' ||
@@ -944,7 +941,7 @@ jobs:
   node-addon-portability:
     name: Node addon (${{ matrix.triple }}, older glibc)
     needs: [pr-conventions, changes]
-    # Full tier only: ready pull requests, the merge queue, `full-ci` pull requests and manual runs.
+    # Full tier only: ready pull requests, the merge queue, release pushes and manual runs.
     if: >-
       needs.changes.outputs.full_tier == 'true' &&
       (needs.changes.outputs.run_all == 'true' ||
@@ -1076,7 +1073,12 @@ jobs:
           # Without this, a failed or skipped `Detect test areas` run, or a draft's fast tier,
           # would pass as if the full suites had run.
           [[ "$CHANGES" == "success" ]] || { echo "::error::Detect test areas did not succeed"; exit 1; }
-          [[ "$FULL_TIER" == "true" ]] || exit 0
+          # A draft pull request runs the fast tier only. Red on purpose: a draft cannot merge, and a
+          # draft's result must never satisfy the required check.
+          if [[ "$FULL_TIER" != "true" ]]; then
+            echo "::error::full tier not run: draft PR"
+            exit 1
+          fi
           need() {
             if [[ "$2" != "success" ]]; then
               echo "::error::$1 was required by the full tier but its result is '$2'"

@@ -131,7 +131,7 @@ on:
         options:
           - azure-target-1
   # Nightly, and only when main changed since the last green run. These tests create real
-  # cloud resources and take long, so the merge queue does not run them; a pull request opts in
+  # cloud resources and take long, so pull requests do not run them; a pull request opts in
   # with the `run-e2e` label.
   schedule:
     - cron: "47 0 * * *"

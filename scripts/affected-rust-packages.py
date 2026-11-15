@@ -14,7 +14,7 @@ Prints GitHub Actions outputs (key=value lines):
 With --own-only (the pull request tier) the outputs describe the changed packages alone,
 without their dependents. A change outside the packages (Cargo.lock, say) does not drop the
 changed packages' tests; with no changed package it reports mode "check-only": the caller
-compiles everything but tests nothing. The merge queue runs without the flag and tests
+compiles everything but tests nothing. Ready pull requests run without the flag and tests
 the dependents too.
 
 A package is affected when one of its files changed, or when it depends (normally, as a
