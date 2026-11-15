@@ -22,6 +22,8 @@ use std::{
 const GRANT_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
 /// One request to one replica; a replica that is powered off must not hold a write for long.
 const REPLICA_REQUEST: std::time::Duration = std::time::Duration::from_secs(3);
+/// A write may wait on the gateway's own fan-out to a peer that is away (its timeout is 5 s).
+const REPLICA_WRITE: std::time::Duration = std::time::Duration::from_secs(8);
 static WRITER_ID: LazyLock<String> = LazyLock::new(|| {
     ed25519_compact::Seed::generate()[..16]
         .iter()
@@ -270,7 +272,7 @@ impl SandboxEgressManager {
                     let response = self
                         .admin
                         .put(format!("{target}/v1/policies"))
-                        .timeout(REPLICA_REQUEST)
+                        .timeout(REPLICA_WRITE)
                         .bearer_auth(authorization)
                         .json(body)
                         .send()
@@ -280,12 +282,15 @@ impl SandboxEgressManager {
                             Ok(Some(true))
                         }
                         Ok(response)
-                            if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE =>
+                            if response.status() != reqwest::StatusCode::SERVICE_UNAVAILABLE =>
                         {
-                            Ok(None)
+                            Err(gateway_error(response).await)
                         }
-                        Ok(response) => Err(gateway_error(response).await),
-                        Err(_) => Ok(None),
+                        // A gateway applies a write before it fans it out to its peer, so while
+                        // the peer is away it answers 503 (or the request times out) even though
+                        // it holds the grant. Count that replica only if it serves exactly this
+                        // record when asked; otherwise it is simply not an acknowledgement.
+                        _ => Ok(self.holds_record(target, id, &body["record"]).await.then_some(true)),
                     }
                 }
             });
@@ -306,6 +311,41 @@ impl SandboxEgressManager {
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
+    }
+
+    /// Whether this replica serves exactly `record` for `id` (read with a Read-scoped token).
+    async fn holds_record(&self, target: &str, id: &str, record: &serde_json::Value) -> bool {
+        #[derive(Deserialize)]
+        struct Held {
+            record: String,
+        }
+        let Ok(issuer) = self.issuer().await else {
+            return false;
+        };
+        let Ok(authorization) = now_unix().and_then(|now| {
+            issuer.mint_admin(&self.config.audience, id, EgressAdminOperation::Read, now)
+        }) else {
+            return false;
+        };
+        let Ok(response) = self
+            .admin
+            .get(format!("{target}/v1/policies/record"))
+            .query(&[("aud", self.config.audience.as_str()), ("sub", id)])
+            .timeout(REPLICA_REQUEST)
+            .bearer_auth(authorization)
+            .send()
+            .await
+        else {
+            return false;
+        };
+        if response.status() != reqwest::StatusCode::OK {
+            return false;
+        }
+        let Ok(body) = bounded_body(response, 360 * 1024).await else {
+            return false;
+        };
+        serde_json::from_slice::<Held>(&body)
+            .is_ok_and(|held| record.as_str() == Some(held.record.as_str()))
     }
 
     /// The admin protocol a replica serves; an error means it could not be reached or answered.

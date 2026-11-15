@@ -1161,3 +1161,26 @@ async fn publishing_a_new_azure_grant_succeeds_while_one_replica_is_away() {
     assert!(holds_grant(&h.state) && !holds_grant(&second));
     away.abort();
 }
+
+/// A live gateway applies a write before it fans it out, so with its peer away it answers 503 while
+/// holding the grant (the harness's `transient_failures` is that "committed, then 503"). That
+/// replica is an acknowledgement only because it serves the exact record when read back.
+#[tokio::test]
+async fn a_replica_that_commits_then_answers_503_because_its_peer_is_away_still_acknowledges() {
+    let h = Harness::new().await;
+    let (manager, second, away) = two_replicas(&h, None).await;
+    clear_grant(&h.state);
+    clear_grant(&second);
+    h.state.transient_failures.store(1000, Ordering::SeqCst);
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+    manager.publish_new_grant("box-1", &policy).await.unwrap();
+    assert!(holds_grant(&h.state));
+
+    // A replica that refuses before committing is not an acknowledgement.
+    clear_grant(&h.state);
+    h.state.refuse.store(true, Ordering::SeqCst);
+    let error = manager.publish_new_grant("box-1", &policy).await.unwrap_err();
+    assert!(error.retryable, "{error}");
+    away.abort();
+}
