@@ -104,9 +104,9 @@ use crate::{
     types::{
         CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest, TraceContext,
         DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_LEASE_SECONDS, DEFAULT_LEASE_WAIT_SECONDS,
-        DEFAULT_MAX_LEASES,
-        DEFAULT_POLL_INTERVAL_SECS, DEFAULT_POLL_JITTER, DEFAULT_POLL_MAX_INTERVAL_MS,
-        LEASE_WAIT_HONORED_AFTER, LEASE_WAIT_REPOLL_FLOOR, MAX_LEASE_WAIT_SECONDS,
+        DEFAULT_MAX_LEASES, DEFAULT_POLL_INTERVAL_SECS, DEFAULT_POLL_JITTER,
+        DEFAULT_POLL_MAX_INTERVAL_MS, LEASE_WAIT_HONORED_AFTER, LEASE_WAIT_REPOLL_FLOOR,
+        MAX_LEASE_WAIT_SECONDS,
     },
 };
 
@@ -735,7 +735,8 @@ impl Receiver {
                     } else if !leases.is_empty() {
                         sleep_for = self.poll_interval;
                         self.poll_interval
-                    } else if self.wait_seconds > 0 && polled_at.elapsed() >= LEASE_WAIT_HONORED_AFTER
+                    } else if self.wait_seconds > 0
+                        && polled_at.elapsed() >= LEASE_WAIT_HONORED_AFTER
                     {
                         // The manager held the request open and found nothing:
                         // ask again at once. Nothing is idle between requests.

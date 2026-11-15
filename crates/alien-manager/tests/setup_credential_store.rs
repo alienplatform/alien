@@ -147,6 +147,7 @@ async fn the_setup_key_goes_into_the_token_store_the_manager_was_built_with() {
         deployment_interval_secs: 999,
         heartbeat_interval_secs: 999,
         self_heartbeat_interval_secs: 999,
+        lease_wait_rescan_interval_secs: 3,
         otlp_endpoint: None,
         base_url: Some(url.clone()),
         releases_url: None,
