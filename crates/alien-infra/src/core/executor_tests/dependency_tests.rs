@@ -1074,7 +1074,7 @@ mod rollout_order {
             if image(&before, app) != image(&state, app) {
                 app_rolled_after_update = dep_updated
                     && get_status(&before, dep) == Some(ResourceStatus::Running)
-                    && state.resources[dep].requested_update_ran;
+                    && state.resources[dep].requested_update_ran.is_some();
             }
         }
         crate::worker::request_test_worker_update(dep, false);
@@ -1083,6 +1083,65 @@ mod rollout_order {
         assert!(
             app_rolled_after_update,
             "the dependent must start only after the dependency's update completed"
+        );
+        Ok(())
+    }
+
+    /// The executor of one rollout (release) of `requested_stack`.
+    fn rollout_executor(stack: &Stack, rollout: &str) -> Result<StackExecutor> {
+        StackExecutor::builder(stack, ClientConfig::Test)
+            .deployment_config(&default_deployment_config())
+            .rollout_id(rollout.to_string())
+            .build()
+    }
+
+    /// An update the dependency asked for in release A, whose check never settled, is not what
+    /// release B waits for: B's request is new, and its dependents wait for it again.
+    #[tokio::test]
+    async fn a_new_rollout_waits_again_for_a_dependency_that_keeps_asking() -> Result<()> {
+        let (dep, app) = ("dep-two-rollouts", "app-two-rollouts");
+        let mut state = run_to_synced(
+            &new_executor(&requested_stack(dep, app, "r1", false))?,
+            new_test_state(),
+        )
+        .await?;
+
+        crate::worker::request_test_worker_update(dep, true);
+        let release_a = rollout_executor(&requested_stack(dep, app, "r2", false), "rel_a")?;
+        for _ in 0..80 {
+            state = release_a.step(state).await?.next_state;
+        }
+        assert_eq!(image(&state, app), format!("{app}-r2"));
+        assert_eq!(
+            state.resources[dep].requested_update_ran.as_deref(),
+            Some("rel_a"),
+            "the update ran in release A and the check never settled, so the record stays"
+        );
+
+        let release_b = rollout_executor(&requested_stack(dep, app, "r3", false), "rel_b")?;
+        let waits = !release_b.dependency_rolled(dep, &state)?;
+        let mut dep_updated_first = false;
+        for _ in 0..80 {
+            let before = state.clone();
+            state = release_b.step(state).await?.next_state;
+            dep_updated_first |= get_status(&state, dep) == Some(ResourceStatus::Updating);
+            if image(&before, app) != image(&state, app) {
+                assert!(
+                    dep_updated_first,
+                    "the dependent moved before the dependency's update of release B"
+                );
+            }
+        }
+        crate::worker::request_test_worker_update(dep, false);
+
+        assert!(
+            waits,
+            "release B must wait for the dependency's new request"
+        );
+        assert_eq!(image(&state, app), format!("{app}-r3"));
+        assert_eq!(
+            state.resources[dep].requested_update_ran.as_deref(),
+            Some("rel_b")
         );
         Ok(())
     }

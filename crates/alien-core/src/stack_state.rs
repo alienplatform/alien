@@ -354,13 +354,32 @@ pub struct StackResourceState {
     #[builder(default)]
     pub dependency_update_pending: bool,
 
-    /// Whether an update already ran because the controller asked for one while the config was
-    /// unchanged. While the controller keeps asking after that, its dependents no longer wait
-    /// for it, so a check that never settles cannot hold them back for good. Cleared once the
-    /// controller stops asking. State written before this field existed reads as false.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    #[builder(default)]
-    pub requested_update_ran: bool,
+    /// The rollout in which an update ran because the controller asked for one while the
+    /// config was unchanged. While the controller keeps asking in that same rollout, its
+    /// dependents no longer wait for it, so a check that never settles cannot hold them back
+    /// for good. A later rollout is a new request and is waited for again. Cleared once the
+    /// controller stops asking. State written before this field existed (it was a flag then)
+    /// reads as none.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_requested_update_rollout"
+    )]
+    pub requested_update_ran: Option<String>,
+}
+
+/// Reads the rollout identity, treating anything else (the flag older state held) as none.
+fn deserialize_requested_update_rollout<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(rollout)) => Some(rollout),
+        _ => None,
+    })
 }
 
 impl StackResourceState {
@@ -390,7 +409,7 @@ impl StackResourceState {
             remote_binding_params: None,
             external_binding: false,
             dependency_update_pending: false,
-            requested_update_ran: false,
+            requested_update_ran: None,
         }
     }
 
@@ -451,8 +470,8 @@ mod tests {
         assert!(round_trip.dependency_update_pending);
     }
 
-    /// State saved before `requestedUpdateRan` existed reads as no requested update having run,
-    /// and the field stays out of the saved form while it is false.
+    /// State saved before `requestedUpdateRan` existed, or while it was a flag, reads as no
+    /// rollout having run it, and the field stays out of the saved form while it is none.
     #[test]
     fn a_resource_state_saved_without_the_requested_update_record_reads_as_none_ran() {
         let saved = serde_json::json!({
@@ -461,18 +480,32 @@ mod tests {
             "config": { "type": "storage", "id": "data" },
         });
         let state: StackResourceState = serde_json::from_value(saved).unwrap();
-        assert!(!state.requested_update_ran);
+        assert!(state.requested_update_ran.is_none());
         assert!(serde_json::to_value(&state)
             .unwrap()
             .get("requestedUpdateRan")
             .is_none());
 
+        for flag in [true, false] {
+            let saved_flag = serde_json::json!({
+                "type": "storage",
+                "status": "running",
+                "config": { "type": "storage", "id": "data" },
+                "requestedUpdateRan": flag,
+            });
+            let state: StackResourceState = serde_json::from_value(saved_flag).unwrap();
+            assert!(state.requested_update_ran.is_none());
+        }
+
         let mut ran = state;
-        ran.requested_update_ran = true;
+        ran.requested_update_ran = Some("rel_a".to_string());
         let saved_after = serde_json::to_value(&ran).unwrap();
-        assert_eq!(saved_after["requestedUpdateRan"], serde_json::json!(true));
+        assert_eq!(
+            saved_after["requestedUpdateRan"],
+            serde_json::json!("rel_a")
+        );
         let round_trip: StackResourceState = serde_json::from_value(saved_after).unwrap();
-        assert!(round_trip.requested_update_ran);
+        assert_eq!(round_trip.requested_update_ran.as_deref(), Some("rel_a"));
     }
 
     #[test]
@@ -736,7 +769,7 @@ mod tests {
             controller_platform: None,
             external_binding: false,
             dependency_update_pending: false,
-            requested_update_ran: false,
+            requested_update_ran: None,
         };
 
         stack_state

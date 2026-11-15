@@ -178,6 +178,8 @@ pub struct StackExecutor {
     service_provider: Arc<dyn PlatformServiceProvider>,
     deployment_config: alien_core::DeploymentConfig,
     initial_setup_authority: InitialSetupAuthority,
+    /// The rollout this executor works for (the release being applied); empty when unknown.
+    rollout_id: String,
 }
 
 const MAX_RETRIES: u32 = 10;
@@ -515,6 +517,11 @@ pub struct StackExecutorConfig<'a> {
     /// secret is missing, so only the resources that read it wait.
     #[builder(default)]
     held_resources: HashSet<String>,
+
+    /// Identifies the rollout (the release being applied). A resource that keeps asking for
+    /// an update after the one it asked for ran in this rollout stops holding its dependents;
+    /// a later rollout is a new request. Callers without a release leave it unset.
+    rollout_id: Option<String>,
 }
 
 /// Extension trait to add `build()` method to the builder that returns `Result<StackExecutor>`.
@@ -604,6 +611,7 @@ impl StackExecutor {
         let resume_unchanged_failed_resources = config.resume_unchanged_failed_resources;
         let initial_setup_authority = config.initial_setup_authority;
         let held_resources = config.held_resources;
+        let rollout_id = config.rollout_id;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
         crate::setup_scaffolding::validate_setup_support(stack, platform, initial_setup_authority)?;
@@ -747,6 +755,7 @@ impl StackExecutor {
             service_provider,
             deployment_config,
             initial_setup_authority,
+            rollout_id: rollout_id.unwrap_or_default(),
         })
     }
 
@@ -1277,10 +1286,12 @@ impl StackExecutor {
                     current,
                     state,
                 );
-                if requested && current.requested_update_ran {
+                if requested
+                    && current.requested_update_ran.as_deref() == Some(self.rollout_id.as_str())
+                {
                     warn!(
                         resource_id,
-                        "A resource keeps asking for an update after the one it asked for ran; its dependents no longer wait for it"
+                        "A resource keeps asking for an update after the one it asked for ran in this rollout; its dependents no longer wait for it"
                     );
                     return false;
                 }
@@ -1953,7 +1964,7 @@ impl StackExecutor {
                                 plan_result
                                     .updates
                                     .insert(resource_id.clone(), desired_config.resource.clone());
-                            } else if current_resource_state.requested_update_ran {
+                            } else if current_resource_state.requested_update_ran.is_some() {
                                 plan_result
                                     .requested_update_settled
                                     .push(resource_id.clone());
@@ -2731,7 +2742,7 @@ impl StackExecutor {
 
         for resource_id in &plan_result.requested_update_settled {
             if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
-                resource_state.requested_update_ran = false;
+                resource_state.requested_update_ran = None;
             }
         }
 
@@ -2802,7 +2813,8 @@ impl StackExecutor {
                                     && current_state.dependencies == desired_config.dependencies;
                                 let updated_state = update_state.with_updates(|state| {
                                     state.dependency_update_pending = false;
-                                    state.requested_update_ran = requested_only;
+                                    state.requested_update_ran =
+                                        requested_only.then(|| self.rollout_id.clone());
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config =
                                         previous_config_for_update(current_state);

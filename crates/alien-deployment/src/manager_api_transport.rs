@@ -1453,7 +1453,7 @@ mod tests {
                 remote_binding_params: None,
                 external_binding: false,
                 dependency_update_pending: false,
-                requested_update_ran: false,
+                requested_update_ran: None,
             },
         );
         state.stack_state = Some(stack);

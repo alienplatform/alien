@@ -770,6 +770,12 @@ pub async fn handle_updating(
 
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
+        .maybe_rollout_id(
+            current
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone()),
+        )
         .resume_unchanged_failed_resources(true)
         .running_resource_policy(RunningResourcePolicy::OptIn)
         .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
