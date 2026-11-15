@@ -1,0 +1,398 @@
+---
+source: crates/alien-helm/tests/operator_chart.rs
+expression: rendered
+---
+---
+# Source: operator/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: acme
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+---
+# Source: operator/templates/enrollment-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: acme-enrollment
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+type: Opaque
+stringData:
+  token: "ax_join_v1_eyJ1IjoiaHR0cHM6Ly9tLmV4YW1wbGUiLCJhIjoiYSIsImMiOiJjIn0"
+---
+# Source: operator/templates/identity-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: acme-identity
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+type: Opaque
+---
+# Source: operator/templates/config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acme-config
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+data:
+  operator-config.json: "{\"brand\":\"acme\",\"displayName\":\"Acme Operator\",\"envPrefix\":\"ACME\",\"labelDomain\":\"acme.dev\",\"name\":\"acme-operator\",\"syncIntervalSecs\":30}"
+---
+# Source: operator/templates/access-request-crd.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+  name: acmeaccessrequests.accessrequests.acme
+spec:
+  group: accessrequests.acme
+  scope: Namespaced
+  names:
+    plural: acmeaccessrequests
+    singular: acmeaccessrequest
+    kind: AcmeAccessRequest
+    shortNames: ["acmear"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: Commands
+          type: integer
+          jsonPath: .status.commandCount
+        - name: Approved-Until
+          type: date
+          jsonPath: .status.approvedUntil
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: ["requestId", "commands"]
+              properties:
+                requestId:
+                  type: string
+                  description: Control-plane access-request id this CR mirrors.
+                title:
+                  type: string
+                  description: Human-readable title (e.g. the remediation plan title).
+                reason:
+                  type: string
+                  description: Why access is being requested.
+                commands:
+                  type: array
+                  description: The commands this grant covers.
+                  items:
+                    type: object
+                    required: ["command"]
+                    properties:
+                      command:
+                        type: string
+                        description: Command name, <plugin>/<operation>.
+                      summary:
+                        type: string
+                        description: One-line human summary for display.
+                      params:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                        description: Exact operation parameters covered by the grant.
+                approvedForMinutes:
+                  type: integer
+                  minimum: 1
+                  description: >-
+                    Set by the customer to approve the grant for this many
+                    minutes. The operator computes status.approvedUntil from it.
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  description: PENDING_APPROVAL | APPROVED | EXPIRED | REVOKED
+                commandCount:
+                  type: integer
+                  description: Number of commands this grant covers.
+                approvedAt:
+                  type: string
+                  description: When the customer approved (RFC3339).
+                approvedUntil:
+                  type: string
+                  description: >-
+                    Instant the grant is authorized until (RFC3339), computed as
+                    approvedAt + approvedForMinutes. After this the control plane
+                    must not dispatch the grant's commands.
+---
+# Source: operator/templates/clusterrole.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: acme-shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+rules:
+  # Required by the Operator runtime: Recent events of each observed workload.
+  - apiGroups: ['']
+    resources: ['events']
+    verbs: ['list']
+  # Required by operation kubernetes/get-pods: list pods
+  # Required by the Operator runtime: Pod status of each observed workload; pod log discovery in podApi mode.
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['get', 'list']
+  # Required by the Operator runtime: Workload inventory reported on every sync; log collector discovery in podApi mode.
+  - apiGroups: ['apps']
+    resources: ['daemonsets']
+    verbs: ['list']
+  # Required by the Operator runtime: Workload inventory reported on every sync.
+  - apiGroups: ['apps']
+    resources: ['deployments']
+    verbs: ['list']
+  # Required by the Operator runtime: Workload inventory reported on every sync.
+  - apiGroups: ['apps']
+    resources: ['statefulsets']
+    verbs: ['list']
+  # Required by the Operator runtime: CPU and memory of each observed workload.
+  - apiGroups: ['metrics.k8s.io']
+    resources: ['pods']
+    verbs: ['list']
+  # Required by Pod log collection through the Kubernetes API.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Required by access-request materialization and approval observation.
+  - apiGroups: ['accessrequests.acme']
+    resources: ['acmeaccessrequests']
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # Required by access-request status reporting.
+  - apiGroups: ['accessrequests.acme']
+    resources: ['acmeaccessrequests/status']
+    verbs: ["get", "update", "patch"]
+---
+# Source: operator/templates/clusterrolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: acme-shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: acme-shop
+subjects:
+  - kind: ServiceAccount
+    name: acme
+    namespace: shop
+---
+# Source: operator/templates/role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: acme
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+rules:
+  # Required by the Operator's saved identity and local key.
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get', 'patch', 'update']
+    resourceNames: ["acme-identity"]
+---
+# Source: operator/templates/rolebinding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: acme
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: acme
+subjects:
+  - kind: ServiceAccount
+    name: acme
+    namespace: shop
+---
+# Source: operator/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acme
+  namespace: shop
+  labels:
+    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/instance: acme
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/version: "1.2.3"
+    helm.sh/chart: "operator-1.2.3"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: acme-operator
+      app.kubernetes.io/instance: acme
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: acme-operator
+        app.kubernetes.io/instance: acme
+      annotations:
+        # A new token on upgrade restarts the pod, which then uses it.
+        checksum/enrollment: 36997ef9c1713fc3ce0a28cdce364a1cdda1544e7c225647a45d7f031f0f624b
+        checksum/config: 347ce9315469113a8cde28756fed59ed997a0fd869fd7ada897909a41ef80ca5
+    spec:
+      serviceAccountName: acme
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          image: "registry.example/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PLATFORM
+              value: "kubernetes"
+            - name: KUBERNETES_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OPERATOR_SCOPE
+              value: "shop"
+            - name: OPERATOR_OBSERVE_ALL_NAMESPACES
+              value: "true"
+            - name: OPERATOR_PERMISSION
+              value: "diagnostics"
+            - name: OPERATOR_INITIAL_DESIRED_RELEASE
+              value: "none"
+            - name: OPERATOR_SETUP_METHOD
+              value: "manual"
+            - name: DATA_DIR
+              value: "/var/lib/operator"
+            - name: OPERATOR_DATA_PERSISTENT
+              value: "false"
+            - name: OPERATOR_IDENTITY_SECRET
+              value: "acme-identity"
+            - name: OPERATOR_ENROLLMENT_TOKEN_FILE
+              value: "/etc/operator/enrollment/token"
+            - name: OPERATOR_CONFIG_FILE
+              value: "/etc/operator/config/operator-config.json"
+            - name: OPERATOR_ACCESS_REQUESTS
+              value: "true"
+            - name: OPERATOR_OTLP_MAX_QUEUED_BYTES
+              value: "268435456"
+            - name: SYNC_INTERVAL
+              value: "30"
+            - name: OPERATOR_READINESS_PORT
+              value: "8081"
+            - name: OPERATOR_POD_LOG_SCOPE
+              value: "cluster"
+            - name: OPERATOR_POD_LOG_MAX_STREAMS
+              value: "200"
+          ports:
+            - name: readiness
+              containerPort: 8081
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: readiness
+            periodSeconds: 2
+            failureThreshold: 150
+          volumeMounts:
+            - name: enrollment
+              mountPath: /etc/operator/enrollment
+              readOnly: true
+            - name: config
+              mountPath: /etc/operator/config
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/operator
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+      volumes:
+        # Absent after the code was used and the release was upgraded without
+        # it: the identity in the Secret is then all the Operator needs.
+        - name: enrollment
+          secret:
+            secretName: acme-enrollment
+            optional: true
+            defaultMode: 288
+        - name: config
+          configMap:
+            name: acme-config
+        # A cache. The identity and the key to this cache live in the Secret.
+        - name: data
+          emptyDir:
+            sizeLimit: 1Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

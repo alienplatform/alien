@@ -55,7 +55,6 @@ fn write_chart(directory: &Path) {
         image_repository: "registry.example/operator",
         image_digest: DIGEST,
         operations: &operations,
-        label_domain: None,
     })
     .unwrap();
     for (path, content) in &chart.files {
@@ -481,7 +480,6 @@ fn operations_that_could_read_secrets_or_exec_are_refused_at_generation() {
             image_repository: "registry.example/operator",
             image_digest: DIGEST,
             operations: &operations,
-            label_domain: None,
         })
     };
     assert!(bad("secrets", &["get"]).is_err());
@@ -492,4 +490,185 @@ fn operations_that_could_read_secrets_or_exec_are_refused_at_generation() {
         "a read-only operation cannot delete"
     );
     assert!(bad("pods", &["get"]).is_ok());
+}
+
+fn render_release(release: &str, arguments: &[&str]) -> String {
+    let directory = tempfile::tempdir().unwrap();
+    write_chart(directory.path());
+    let output = Command::new("helm")
+        .args(["template", release])
+        .arg(directory.path())
+        .args(["--namespace", "shop"])
+        .args(arguments)
+        .output()
+        .expect("helm must be installed to run the chart tests");
+    assert!(
+        output.status.success(),
+        "helm template failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+const BRAND: [&str; 10] = [
+    "--set",
+    "brand.name=acme-operator",
+    "--set",
+    "brand.brand=acme",
+    "--set",
+    "brand.displayName=Acme Operator",
+    "--set",
+    "brand.envPrefix=ACME",
+    "--set",
+    "brand.labelDomain=acme.dev",
+];
+
+#[test]
+fn a_branded_render_has_no_product_name_in_any_resource_name_label_or_group() {
+    let mut arguments = vec!["--set".to_string(), format!("token={TOKEN}")];
+    arguments.extend(BRAND.iter().map(|argument| argument.to_string()));
+    arguments.extend([
+        "--set".to_string(),
+        "accessRequests.enabled=true".to_string(),
+    ]);
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let rendered = render_release("acme", &arguments);
+    assert!(
+        !rendered.to_lowercase().contains("alien"),
+        "a branded render must not name the product:\n{}",
+        rendered
+            .lines()
+            .filter(|line| line.to_lowercase().contains("alien"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    insta::assert_snapshot!("branded_chart", rendered);
+
+    // The packaged configuration reaches the Operator through the file it already reads.
+    let documents = documents(&rendered);
+    let config = kind(&documents, "ConfigMap")[0];
+    let json: serde_json::Value =
+        serde_json::from_str(config["data"]["operator-config.json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "syncIntervalSecs": 30, "name": "acme-operator", "brand": "acme",
+            "displayName": "Acme Operator", "envPrefix": "ACME", "labelDomain": "acme.dev"
+        })
+    );
+    let deployment = kind(&documents, "Deployment")[0];
+    let container = &deployment["spec"]["template"]["spec"]["containers"][0];
+    assert!(container["env"].as_sequence().unwrap().iter().any(|entry| {
+        entry["name"].as_str() == Some("OPERATOR_CONFIG_FILE")
+            && entry["value"].as_str() == Some("/etc/operator/config/operator-config.json")
+    }));
+    assert_eq!(
+        deployment["metadata"]["labels"]["app.kubernetes.io/name"].as_str(),
+        Some("acme-operator")
+    );
+}
+
+#[test]
+fn the_approval_kind_is_named_the_way_the_operator_names_it() {
+    for domain in ["acme.dev", "My Cool App", "my-startup.io", "Globex Corp"] {
+        let rendered = render_release(
+            "acme",
+            &[
+                "--set",
+                &format!("token={TOKEN}"),
+                "--set",
+                &format!("brand.labelDomain={domain}"),
+                "--set",
+                "accessRequests.enabled=true",
+            ],
+        );
+        let expected = alien_core::access_request_crd::access_request_crd_names(Some(domain));
+        let documents = documents(&rendered);
+        let crd = kind(&documents, "CustomResourceDefinition")[0];
+        assert_eq!(
+            crd["metadata"]["name"].as_str(),
+            Some(expected.crd_name.as_str()),
+            "{domain}"
+        );
+        assert_eq!(
+            crd["spec"]["group"].as_str(),
+            Some(expected.group.as_str()),
+            "{domain}"
+        );
+        assert_eq!(
+            crd["spec"]["names"]["kind"].as_str(),
+            Some(expected.kind.as_str()),
+            "{domain}"
+        );
+        assert_eq!(
+            crd["spec"]["names"]["plural"].as_str(),
+            Some(expected.plural.as_str()),
+            "{domain}"
+        );
+        assert_eq!(
+            crd["spec"]["names"]["singular"].as_str(),
+            Some(expected.singular.as_str()),
+            "{domain}"
+        );
+        assert_eq!(
+            crd["spec"]["names"]["shortNames"][0].as_str(),
+            Some(expected.short_name.as_str()),
+            "{domain}"
+        );
+        let role_rules = rules(kind(&documents, "ClusterRole")[0]);
+        assert!(
+            role_rules.contains(&rule(
+                &expected.group,
+                &expected.plural,
+                &["get", "list", "watch", "create", "update", "patch"]
+            )),
+            "{domain}"
+        );
+    }
+    // Unbranded keeps the default names.
+    let default = render_release(
+        "acme",
+        &[
+            "--set",
+            &format!("token={TOKEN}"),
+            "--set",
+            "accessRequests.enabled=true",
+        ],
+    );
+    assert!(default.contains("group: accessrequests.alien"));
+}
+
+#[test]
+fn the_chart_works_as_a_dependency_under_an_alias_and_stays_unbranded_without_brand_values() {
+    let parent = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(parent.path().join("charts")).unwrap();
+    write_chart(&parent.path().join("charts/operator"));
+    std::fs::write(
+        parent.path().join("Chart.yaml"),
+        "apiVersion: v2\nname: acme-platform\nversion: 1.0.0\ndependencies:\n  - name: operator\n    alias: acme-operator\n    version: 1.2.3\n",
+    )
+    .unwrap();
+    std::fs::write(
+        parent.path().join("values.yaml"),
+        format!(
+            "global: {{team: acme}}\nacme-operator:\n  token: {TOKEN}\n  brand:\n    name: acme-operator\n    brand: acme\n    displayName: Acme Operator\n    labelDomain: acme.dev\n"
+        ),
+    )
+    .unwrap();
+    let output = Command::new("helm")
+        .args(["template", "acme"])
+        .arg(parent.path())
+        .args(["--namespace", "shop"])
+        .output()
+        .expect("helm must be installed to run the chart tests");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    assert!(!rendered.to_lowercase().contains("alien"), "{rendered}");
+    let documents = documents(&rendered);
+    assert_eq!(kind(&documents, "Deployment").len(), 1);
+    assert_eq!(kind(&documents, "ConfigMap").len(), 1);
 }

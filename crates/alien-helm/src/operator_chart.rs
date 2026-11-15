@@ -38,8 +38,6 @@ pub struct OperatorChartOptions<'a> {
     /// The built-in operations the Operator can run. Their Kubernetes
     /// requirements become RBAC at the chosen `permission` tier.
     pub operations: &'a [KubernetesOperationPermissions],
-    /// Brand for the approval custom resource; `None` is the default brand.
-    pub label_domain: Option<&'a str>,
 }
 
 /// Render the generic Operator chart.
@@ -58,7 +56,9 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
             )
         })?;
     }
-    let crd_names = access_request_crd_names(options.label_domain);
+    // The approval kind's names come from the brand values at install time, so the generator
+    // writes placeholders that Helm fills in (see `operator.crdBrand`).
+    let crd_names = placeholder_crd_names();
     let mut files = IndexMap::new();
     files.insert("Chart.yaml".to_string(), chart_yaml(&options));
     files.insert("values.yaml".to_string(), values_yaml(&options));
@@ -73,7 +73,7 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
     );
     files.insert(
         "templates/clusterrole.yaml".to_string(),
-        cluster_role_template(options.operations, &crd_names),
+        fill_crd_placeholders(&cluster_role_template(options.operations, &crd_names)),
     );
     files.insert(
         "templates/clusterrolebinding.yaml".to_string(),
@@ -99,14 +99,47 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
     files.insert("templates/service.yaml".to_string(), SERVICE.to_string());
     files.insert(
         "templates/access-request-crd.yaml".to_string(),
-        access_request_crd_template(&crd_names),
+        fill_crd_placeholders(&access_request_crd_template(&crd_names)),
     );
+    files.insert("templates/config.yaml".to_string(), CONFIG_MAP.to_string());
     files.insert("templates/NOTES.txt".to_string(), NOTES.to_string());
     files.insert("README.md".to_string(), README.to_string());
     Ok(HelmChart {
         name: "operator".to_string(),
         files,
     })
+}
+
+const CRD_GROUP: &str = "@@GROUP@@";
+const CRD_KIND: &str = "@@KIND@@";
+const CRD_PLURAL: &str = "@@PLURAL@@";
+const CRD_SINGULAR: &str = "@@SINGULAR@@";
+const CRD_SHORT: &str = "@@SHORT@@";
+const CRD_NAME: &str = "@@CRD_NAME@@";
+
+fn placeholder_crd_names() -> AccessRequestCrdNames {
+    AccessRequestCrdNames {
+        group: CRD_GROUP.into(),
+        kind: CRD_KIND.into(),
+        plural: CRD_PLURAL.into(),
+        singular: CRD_SINGULAR.into(),
+        short_name: CRD_SHORT.into(),
+        api_version: format!("{CRD_GROUP}/v1alpha1"),
+        crd_name: CRD_NAME.into(),
+    }
+}
+
+/// Replace the placeholders with the Helm expressions that compute the brand's names.
+fn fill_crd_placeholders(text: &str) -> String {
+    text.replace(
+        CRD_NAME,
+        r#"{{ include "operator.crdPlural" . }}.{{ include "operator.crdGroup" . }}"#,
+    )
+    .replace(CRD_GROUP, r#"{{ include "operator.crdGroup" . }}"#)
+    .replace(CRD_KIND, r#"{{ include "operator.crdKind" . }}"#)
+    .replace(CRD_PLURAL, r#"{{ include "operator.crdPlural" . }}"#)
+    .replace(CRD_SINGULAR, r#"{{ include "operator.crdSingular" . }}"#)
+    .replace(CRD_SHORT, r#"{{ include "operator.crdShortName" . }}"#)
 }
 
 fn validate_digest(digest: &str) -> Result<(), String> {
@@ -169,6 +202,21 @@ otlp:
 accessRequests:
   # The in-cluster approval flow (a custom resource). Off by default.
   enabled: false
+
+# Ship the Operator under your own name, with no image of your own. All empty means the default
+# product name. They become the Operator's packaged configuration (a ConfigMap), so the approval
+# resource group, labels and log lines use your name.
+brand:
+  # The Operator's name, for example "acme-operator". Also the `app.kubernetes.io/name` label.
+  name: ""
+  # Short slug for generated resource names, for example "acme".
+  brand: ""
+  # Shown in logs and startup messages, for example "Acme Operator".
+  displayName: ""
+  # Prefix of the branded environment variables, for example "ACME".
+  envPrefix: ""
+  # Label and approval-resource domain, for example "acme.dev"; its first label names the approval kind.
+  labelDomain: ""
 
 # Operation approval settings passed to the Operator, for example
 # {{"kubernetes": {{"approval": {{"get-pods": "auto"}}}}}}.
@@ -237,6 +285,17 @@ fn values_schema_json() -> serde_json::Result<String> {
                 "properties": {"enabled": {"type": "boolean"}}
             },
             "operations": {"type": "object"},
+            "brand": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": {"type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"},
+                    "brand": {"type": "string", "pattern": "^[a-z0-9]{0,30}$"},
+                    "displayName": {"type": "string", "maxLength": 100},
+                    "envPrefix": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,30}$|^$"},
+                    "labelDomain": {"type": "string", "maxLength": 100}
+                }
+            },
             "resources": {"type": "object"},
             "nodeSelector": {"type": "object", "additionalProperties": {"type": "string"}},
             "tolerations": {"type": "array", "items": {"type": "object"}},
@@ -458,8 +517,28 @@ const HELPERS: &str = r#"{{- define "operator.name" -}}
 {{- default (printf "%s-enrollment" .Release.Name) .Values.existingSecret -}}
 {{- end -}}
 
+{{- define "operator.brandName" -}}
+{{- default "operator" .Values.brand.name -}}
+{{- end -}}
+
+{{- define "operator.branded" -}}
+{{- if or .Values.brand.name .Values.brand.brand .Values.brand.displayName .Values.brand.envPrefix .Values.brand.labelDomain -}}true{{- end -}}
+{{- end -}}
+
+{{- /* The approval kind's brand: the label domain's first label, else the brand slug, else the default. Mirrors the Operator's own rule. */ -}}
+{{- define "operator.crdBrand" -}}
+{{- $source := default (default "alien" .Values.brand.brand) (trim .Values.brand.labelDomain) -}}
+{{- $slug := regexReplaceAll "[^a-z0-9]" (lower (index (splitList "." $source) 0)) "" -}}
+{{- default "alien" $slug -}}
+{{- end -}}
+{{- define "operator.crdGroup" -}}accessrequests.{{ include "operator.crdBrand" . }}{{- end -}}
+{{- define "operator.crdPlural" -}}{{ include "operator.crdBrand" . }}accessrequests{{- end -}}
+{{- define "operator.crdSingular" -}}{{ include "operator.crdBrand" . }}accessrequest{{- end -}}
+{{- define "operator.crdShortName" -}}{{ include "operator.crdBrand" . }}ar{{- end -}}
+{{- define "operator.crdKind" -}}{{ $b := include "operator.crdBrand" . }}{{ upper (substr 0 1 $b) }}{{ substr 1 (len $b) $b }}AccessRequest{{- end -}}
+
 {{- define "operator.selectorLabels" -}}
-app.kubernetes.io/name: operator
+app.kubernetes.io/name: {{ include "operator.brandName" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
@@ -581,6 +660,9 @@ spec:
       annotations:
         # A new token on upgrade restarts the pod, which then uses it.
         checksum/enrollment: {{ include (print $.Template.BasePath "/enrollment-secret.yaml") . | sha256sum }}
+        {{- if include "operator.branded" . }}
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
+        {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -636,7 +718,11 @@ spec:
             - name: OPERATOR_IDENTITY_SECRET
               value: {{ include "operator.identitySecret" . | quote }}
             - name: OPERATOR_ENROLLMENT_TOKEN_FILE
-              value: "/etc/alien/enrollment/token"
+              value: "/etc/operator/enrollment/token"
+            {{- if include "operator.branded" . }}
+            - name: OPERATOR_CONFIG_FILE
+              value: "/etc/operator/config/operator-config.json"
+            {{- end }}
             - name: OPERATOR_ACCESS_REQUESTS
               value: {{ .Values.accessRequests.enabled | quote }}
             - name: OPERATOR_OTLP_MAX_QUEUED_BYTES
@@ -695,8 +781,13 @@ spec:
             failureThreshold: 150
           volumeMounts:
             - name: enrollment
-              mountPath: /etc/alien/enrollment
+              mountPath: /etc/operator/enrollment
               readOnly: true
+            {{- if include "operator.branded" . }}
+            - name: config
+              mountPath: /etc/operator/config
+              readOnly: true
+            {{- end }}
             - name: data
               mountPath: /var/lib/operator
             - name: tmp
@@ -711,6 +802,11 @@ spec:
             secretName: {{ include "operator.enrollmentSecret" . }}
             optional: true
             defaultMode: 288
+        {{- if include "operator.branded" . }}
+        - name: config
+          configMap:
+            name: {{ printf "%s-config" .Release.Name }}
+        {{- end }}
         # A cache. The identity and the key to this cache live in the Secret.
         - name: data
           emptyDir:
@@ -718,6 +814,25 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 64Mi
+"#;
+
+/// The Operator's packaged configuration, as the per-project image carries it, so a vendor can ship
+/// the Operator under its own name from values alone.
+const CONFIG_MAP: &str = r#"{{- if include "operator.branded" . }}
+{{- $config := dict "syncIntervalSecs" 30 }}
+{{- range $key, $value := dict "name" .Values.brand.name "brand" .Values.brand.brand "displayName" .Values.brand.displayName "envPrefix" .Values.brand.envPrefix "labelDomain" .Values.brand.labelDomain }}
+{{- if $value }}{{- $_ := set $config $key $value }}{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-config" .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "operator.labels" . | nindent 4 }}
+data:
+  operator-config.json: {{ toJson $config | quote }}
+{{- end }}
 "#;
 
 const SERVICE: &str = r#"{{- if .Values.otlp.enabled }}
@@ -784,6 +899,8 @@ or `--set token=<enrollment token>`.
 
 `token`, `existingSecret`, `image.repository`, `image.digest`, `permission`
 (`diagnostics` or `remediation`), `logs.*`, `otlp.enabled`, `accessRequests.enabled`,
-`operations`, `resources`, `nodeSelector`, `tolerations`, `imagePullSecrets`, `extraEnv`.
-See `values.yaml`. There is no self-update: whoever installs the chart owns the image version.
+`operations`, `resources`, `nodeSelector`, `tolerations`, `imagePullSecrets`, `extraEnv`, `brand.*`.
+See `values.yaml`. The `brand.*` values ship the Operator under your own name with no image of your
+own: they become the Operator's packaged configuration (a ConfigMap), so the release's labels, the
+approval resource group and the log lines use that name. There is no self-update: whoever installs the chart owns the image version.
 "#;
