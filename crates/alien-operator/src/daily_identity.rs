@@ -1566,6 +1566,48 @@ mod persistence_tests {
     }
 
     #[tokio::test]
+    async fn enrollment_works_when_the_managers_own_base_url_differs_from_the_url_in_the_token() {
+        // The manager answers on a custom domain while its own configured base
+        // URL (its audience) is another name. The operator never sends or checks
+        // an audience when it enrolls: the token's manager URL is the only
+        // address it needs and is stored as the audience.
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/v1/identity/enroll",
+            axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
+                assert!(body.get("audience").is_none() && body.get("managerAudience").is_none());
+                axum::Json(json!({
+                    "deploymentId": "dep_1",
+                    "componentId": "component_1",
+                    "revision": 1,
+                    "expiresAt": Utc::now() + chrono::Duration::hours(23),
+                }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        let deployment = identity
+            .enroll(EnrollmentRequest {
+                manager_url: &url,
+                audience: &url,
+                code: "ax_enroll_v1_x",
+                deployment_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(deployment, "dep_1");
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!((saved.manager_url, saved.audience), (url.clone(), url));
+    }
+
+    #[tokio::test]
     async fn a_corrected_token_replaces_the_candidate_of_a_refused_first_token() {
         let directory = tempfile::tempdir().unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -84,8 +84,7 @@ pub struct Args {
     pub identity_enrollment_code_file: Option<PathBuf>,
 
     /// File holding a single enrollment token (`ax_join_v1_...`) that carries
-    /// the manager URL, the audience and a one-use code. Replaces the separate
-    /// URL, audience and code settings.
+    /// the manager URL and a one-use code. The audience is the manager URL.
     #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN_FILE")]
     pub enrollment_token_file: Option<PathBuf>,
 
@@ -715,7 +714,7 @@ async fn run_operator_cli(
             })?;
         let audience = join_token
             .as_ref()
-            .map(|token| token.audience.clone())
+            .map(|token| token.manager_url.clone())
             .or(args.manager_audience)
             .or_else(|| {
                 stored_identity
@@ -2016,9 +2015,7 @@ fn join_token_for_saved_identity(
     let Some(saved) = saved.filter(|saved| !saved.deployment_id.is_empty()) else {
         return Some(token);
     };
-    if crate::daily_identity::same_endpoint(&saved.manager_url, &token.manager_url)
-        && crate::daily_identity::same_endpoint(&saved.audience, &token.audience)
-    {
+    if crate::daily_identity::same_endpoint(&saved.manager_url, &token.manager_url) {
         return Some(token);
     }
     warn!(
@@ -2181,7 +2178,6 @@ mod tests {
     fn join_token(manager: &str) -> crate::enrollment_token::EnrollmentToken {
         crate::enrollment_token::EnrollmentToken {
             manager_url: manager.into(),
-            audience: manager.into(),
             code: "ax_enroll_v1_x".into(),
         }
     }

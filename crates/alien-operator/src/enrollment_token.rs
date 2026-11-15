@@ -1,5 +1,5 @@
 //! The single-string enrollment token an installer hands to the operator:
-//! `ax_join_v1_<base64url JSON {u: managerUrl, a: audience, c: code}>`.
+//! `ax_join_v1_<base64url JSON {u: managerUrl, c: code}>`.
 
 use alien_error::AlienError;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -13,7 +13,6 @@ const PREFIX: &str = "ax_join_v1_";
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct EnrollmentToken {
     pub manager_url: String,
-    pub audience: String,
     pub code: String,
 }
 
@@ -21,7 +20,6 @@ pub(crate) struct EnrollmentToken {
 #[serde(deny_unknown_fields)]
 struct Payload {
     u: String,
-    a: String,
     c: String,
 }
 
@@ -41,10 +39,10 @@ impl EnrollmentToken {
             .decode(body.trim_end_matches('='))
             .map_err(|_| invalid("it is not valid base64url"))?;
         let payload: Payload = serde_json::from_slice(&bytes).map_err(|_| {
-            invalid("its content is not readable or has fields this operator does not know")
+            invalid("its content is not readable or has fields this operator does not know (a token issued in an older format must be issued again)")
         })?;
-        if payload.u.is_empty() || payload.a.is_empty() || payload.c.is_empty() {
-            return Err(invalid("it is missing the manager, audience or code"));
+        if payload.u.is_empty() || payload.c.is_empty() {
+            return Err(invalid("it is missing the manager or the code"));
         }
         // The code is sent to this URL, so it must be HTTPS (or a loopback
         // address for local development), as for any other enrollment.
@@ -65,7 +63,6 @@ impl EnrollmentToken {
         }
         Ok(Self {
             manager_url: payload.u,
-            audience: payload.a,
             code: payload.c,
         })
     }
@@ -80,47 +77,43 @@ mod tests {
     }
 
     #[test]
-    fn a_token_yields_the_manager_audience_and_code() {
+    fn a_token_yields_the_manager_and_code() {
         let parsed = EnrollmentToken::parse(&token(
-            r#"{"u":"https://manager.example","a":"aud","c":"ax_enroll_v1_ab"}"#,
+            r#"{"u":"https://manager.example","c":"ax_enroll_v1_ab"}"#,
         ))
         .unwrap();
         assert_eq!(parsed.manager_url, "https://manager.example");
-        assert_eq!(parsed.audience, "aud");
         assert_eq!(parsed.code, "ax_enroll_v1_ab");
     }
 
     #[test]
+    fn a_token_in_the_older_format_with_an_audience_is_refused_with_a_clear_message() {
+        let error = EnrollmentToken::parse(&token(
+            r#"{"u":"https://m.example","a":"aud","c":"ax_enroll_v1_ab"}"#,
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("issued again"), "{error}");
+    }
+
+    #[test]
     fn plain_http_to_a_remote_manager_is_refused() {
-        let error =
-            EnrollmentToken::parse(&token(r#"{"u":"http://manager.example","a":"a","c":"c"}"#))
-                .unwrap_err();
+        let error = EnrollmentToken::parse(&token(r#"{"u":"http://manager.example","c":"c"}"#))
+            .unwrap_err();
         assert!(error.to_string().contains("HTTPS"));
-        assert!(
-            EnrollmentToken::parse(&token(r#"{"u":"http://localhost:8080","a":"a","c":"c"}"#))
-                .is_ok()
-        );
+        assert!(EnrollmentToken::parse(&token(r#"{"u":"http://localhost:8080","c":"c"}"#)).is_ok());
     }
 
     #[test]
     fn unknown_fields_and_urls_with_credentials_or_queries_are_refused() {
         for (json, expected) in [
             (
-                r#"{"u":"https://m.example","a":"a","c":"c","x":1}"#,
+                r#"{"u":"https://m.example","c":"c","x":1}"#,
                 "does not know",
             ),
-            (
-                r#"{"u":"https://user:pw@m.example","a":"a","c":"c"}"#,
-                "user name",
-            ),
-            (
-                r#"{"u":"https://m.example/?next=1","a":"a","c":"c"}"#,
-                "query",
-            ),
-            (
-                r#"{"u":"https://m.example/#f","a":"a","c":"c"}"#,
-                "fragment",
-            ),
+            (r#"{"u":"https://user:pw@m.example","c":"c"}"#, "user name"),
+            (r#"{"u":"https://m.example/?next=1","c":"c"}"#, "query"),
+            (r#"{"u":"https://m.example/#f","c":"c"}"#, "fragment"),
         ] {
             let error = EnrollmentToken::parse(&token(json))
                 .unwrap_err()
@@ -136,7 +129,7 @@ mod tests {
             "ax_enroll_v1_abc",
             "ax_join_v1_!!",
             &token("{}"),
-            &token(r#"{"u":"https://m","a":"","c":"c"}"#),
+            &token(r#"{"u":"https://m","c":""}"#),
         ] {
             let error = EnrollmentToken::parse(bad).unwrap_err().to_string();
             assert!(error.contains("Invalid enrollment token"));
