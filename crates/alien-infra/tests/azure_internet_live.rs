@@ -12,7 +12,7 @@
 //! Env: `AZURE_TARGET_SUBSCRIPTION_ID`, `AZURE_TARGET_TENANT_ID`, `AZURE_TARGET_CLIENT_ID`,
 //! `AZURE_TARGET_CLIENT_SECRET` (a principal with the setup's management roles),
 //! `AZURE_INTERNET_STACK` (the render test's `stack.json`), `AZURE_INTERNET_REGISTRATION` (the
-//! `deployment_registration` input, as JSON), `AZURE_INTERNET_BINDING_OUT` (where the sandbox
+//! `deployment_registration` input, as JSON), `AZURE_INTERNET_GATEWAY_BINDING_OUT` (the gateway Container binding), `AZURE_INTERNET_BINDING_OUT` (where the sandbox
 //! binding is written).
 //!
 //! ```text
@@ -217,4 +217,19 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
         serde_json::to_vec_pretty(&binding).expect("binding serializes"),
     )
     .expect("binding file");
+    // The gateway Container's binding as its own controller published it: the driver loads the
+    // sandbox with this exact value, so nothing here is hand-built.
+    let gateway = &state.resources["sandbox-egress-gateway"];
+    let gateway_binding = gateway
+        .get_internal_controller()
+        .expect("controller state")
+        .expect("the gateway has a controller")
+        .get_binding_params()
+        .expect("binding params")
+        .expect("the gateway Container publishes a binding");
+    std::fs::write(
+        env("AZURE_INTERNET_GATEWAY_BINDING_OUT"),
+        serde_json::to_vec_pretty(&gateway_binding).expect("binding serializes"),
+    )
+    .expect("gateway binding file");
 }

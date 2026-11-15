@@ -185,7 +185,7 @@ sleep 90 # role assignments take a while to propagate
 # 6. The controllers publish through the real executor.
 echo "== publish"
 (cd "$REPO" && AZURE_INTERNET_STACK="$WORK/render/stack.json" AZURE_INTERNET_REGISTRATION="$WORK/registration.json" \
-  AZURE_INTERNET_BINDING_OUT="$WORK/binding.json" \
+  AZURE_INTERNET_BINDING_OUT="$WORK/binding.json" AZURE_INTERNET_GATEWAY_BINDING_OUT="$WORK/gateway-binding.json" \
   cargo test -p alien-infra --features all-platforms,test-utils --test azure_internet_live -- --ignored --nocapture) | tee "$WORK/publish.log"
 
 # 7. The driver, as a Container Apps job inside the VNet.
@@ -205,9 +205,10 @@ for _ in $(seq 1 80); do
 done
 [ "$state" = Succeeded ] || { echo "container apps environment: $state"; exit 1; }
 binding=$(jq -c . "$WORK/binding.json")
+gwbinding=$(jq -c . "$WORK/gateway-binding.json")
 job=$(jq -n --arg env "$ENV_ID" --arg loc "$LOCATION" --arg reg "$REGISTRY" --arg user "$ACR_USER" --arg pass "$ACR_PASS" \
   --arg image "$REGISTRY/driver:1" --arg sub "$SUB" --arg tenant "$AZURE_TARGET_TENANT_ID" --arg cid "$AZURE_TARGET_CLIENT_ID" \
-  --arg csecret "$AZURE_TARGET_CLIENT_SECRET" --arg rg "$RG" --arg vault "$vault" --arg binding "$binding" --arg ips "$ips" \
+  --arg csecret "$AZURE_TARGET_CLIENT_SECRET" --arg rg "$RG" --arg vault "$vault" --arg binding "$binding" --arg gwbinding "$gwbinding" --arg ips "$ips" \
   --arg vms "$vms" --arg probe "$private_probe" --arg region "$LOCATION" '
   {location:$loc, properties:{environmentId:$env, workloadProfileName:"Consumption",
    configuration:{triggerType:"Manual", replicaTimeout:3000, replicaRetryLimit:0,
@@ -218,7 +219,7 @@ job=$(jq -n --arg env "$ENV_ID" --arg loc "$LOCATION" --arg reg "$REGISTRY" --ar
      {name:"AZURE_TARGET_SUBSCRIPTION_ID",value:$sub},{name:"AZURE_TARGET_TENANT_ID",value:$tenant},
      {name:"AZURE_TARGET_CLIENT_ID",value:$cid},{name:"AZURE_TARGET_CLIENT_SECRET",secretRef:"client-secret"},
      {name:"AZURE_RESOURCE_GROUP",value:$rg},{name:"AZURE_SANDBOX_REGION",value:$region},
-     {name:"AZURE_INTERNET_VAULT_NAME",value:$vault},{name:"AZURE_INTERNET_BINDING",value:$binding},
+     {name:"AZURE_INTERNET_VAULT_NAME",value:$vault},{name:"AZURE_INTERNET_BINDING",value:$binding},{name:"AZURE_INTERNET_GATEWAY_BINDING",value:$gwbinding},
      {name:"AZURE_INTERNET_GATEWAY_IPS",value:$ips},{name:"AZURE_INTERNET_GATEWAY_VMS",value:$vms},
      {name:"AZURE_INTERNET_PRIVATE_PROBES",value:$probe},{name:"AZURE_INTERNET_RESULT_SECRET",value:"azure-internet-proof-log"}]}]}}}')
 JOB_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs/$P-driver"

@@ -11,6 +11,7 @@
 //!   `AZURE_TARGET_CLIENT_SECRET`: the identity holding the sandbox-group data-plane role and
 //!   Key Vault secret read on the deployment vault.
 //! - `AZURE_RESOURCE_GROUP`, `AZURE_SANDBOX_REGION`, `AZURE_INTERNET_VAULT_NAME`.
+//! - `AZURE_INTERNET_GATEWAY_BINDING`: the `sandbox-egress-gateway` Container binding its own controller published.
 //! - `AZURE_INTERNET_BINDING`: the sandbox binding JSON the owner controller published (its
 //!   `egress` carries the gateway handoff, kid, audience and replica addresses).
 //! - `AZURE_INTERNET_GATEWAY_IPS`: comma separated gateway replica addresses (proxy 3128, admin 3129).
@@ -246,15 +247,8 @@ async fn live_internet_proof() {
         ),
         (
             "sandbox-egress-gateway".to_string(),
-            serde_json::json!({
-                "service": "horizon",
-                "containerName": "sandbox-egress-gateway",
-                "internalUrl": format!("http://{}:3128", gateway_ips[0]),
-                "internalUrls": {
-                    "3128": format!("http://{}:3128", gateway_ips[0]),
-                    "3129": format!("http://{}:3129", gateway_ips[0]),
-                },
-            }),
+            serde_json::from_str(&env("AZURE_INTERNET_GATEWAY_BINDING"))
+                .expect("gateway binding JSON"),
         ),
     ]);
     let config = ClientConfig::Azure(Box::new(AzureClientConfig {
