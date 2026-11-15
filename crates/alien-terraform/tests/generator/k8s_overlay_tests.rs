@@ -2914,3 +2914,173 @@ fn a_gke_cluster_with_its_own_name_has_its_network_looked_up_under_that_name() {
     assert!(!text.contains("kubernetes_existing"), "{text}");
     assert_terraform_valid(&module, "gke_named_cluster_with_database");
 }
+
+/// A registered module that installs the chart, for the chart's `infrastructure` values.
+fn render_registered_with_helm(
+    stack: &Stack,
+    target: TerraformTarget,
+    product: bool,
+) -> alien_terraform::ModuleFiles {
+    let registry = TfRegistry::built_in();
+    let options = TerraformOptions {
+        setup_identity: None,
+        pins: alien_core::SetupPins::compiled_in(),
+        display_name: None,
+        registry: &registry,
+        stack_settings: StackSettings::default(),
+        registration: Some(TerraformRegistration {
+            provider_name: "acme_app".to_string(),
+            provider_source: "pkg.example.com/acme/app".to_string(),
+            provider_version: "1.0.0".to_string(),
+            resource_type: "deployment".to_string(),
+            release_id: Some("rel-test".to_string()),
+            setup_target: "kubernetes".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
+            destroy_guard: true,
+        }),
+        helm_install: Some(TerraformHelmInstall {
+            chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+            release_name: "acme-operator".to_string(),
+        }),
+        supported_aws_regions: Vec::new(),
+    };
+    if product {
+        generate_product_terraform_module(stack, target, options, false)
+    } else {
+        generate_terraform_module(stack, target, options)
+    }
+    .expect("module should render")
+}
+
+fn chart_bound_stack(id: &str, provider: KubernetesClusterProvider, gated_extra: bool) -> Stack {
+    let mut stack = Stack::new(id.to_string());
+    if gated_extra {
+        stack = stack.inputs(vec![gate_input(
+            "extraStore",
+            "Extra store",
+            "Create the extra store.",
+        )]);
+    }
+    let stack = stack
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(provider)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+    if gated_extra {
+        stack
+            .add_enabled_when(
+                Storage::new("extra".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "extraStore",
+            )
+            .build()
+    } else {
+        stack.build()
+    }
+}
+
+/// The release the module installs gets the same `infrastructure` bindings as the
+/// `chart_infrastructure_json` output, after the provider's values that render `null`.
+#[test]
+fn the_installed_chart_gets_the_bindings_of_the_resources_the_module_created() {
+    for (target, provider, bucket) in [
+        (
+            TerraformTarget::Eks,
+            KubernetesClusterProvider::Eks,
+            "aws_s3_bucket.data",
+        ),
+        (
+            TerraformTarget::Gke,
+            KubernetesClusterProvider::Gke,
+            "google_storage_bucket.data",
+        ),
+    ] {
+        let stack = chart_bound_stack("chart-helm-bindings", provider, false);
+        for product in [false, true] {
+            let module = render_registered_with_helm(&stack, target, product);
+            let helm = module.get("helm.tf").expect("helm.tf");
+            let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+            let values = compact
+                .split("values = [")
+                .nth(1)
+                .and_then(|rest| rest.split(" ]").next())
+                .unwrap_or_else(|| panic!("no values list: {helm}"));
+            let provider_at = values.find("acme_app_deployment.this.helm_values");
+            let infrastructure_at = values.find("yamlencode({ infrastructure = {");
+            assert!(
+                provider_at.is_some() && infrastructure_at.is_some(),
+                "{target:?} product={product}: {values}"
+            );
+            assert!(
+                provider_at < infrastructure_at,
+                "the bindings come after the provider's null: {values}"
+            );
+            assert!(
+                values.contains("type = \"storage\"") && values.contains(bucket),
+                "{target:?} product={product}: {values}"
+            );
+            if product {
+                assert!(
+                    values.find("infrastructure = {") < values.find("remoteOperator"),
+                    "{values}"
+                );
+            }
+            // The output carries the same object.
+            let outputs = module.get("outputs.tf").expect("outputs.tf");
+            assert!(outputs.contains("chart_infrastructure_json"), "{outputs}");
+        }
+    }
+}
+
+/// A module that creates nothing the chart binds leaves the release's values as they were.
+#[test]
+fn the_installed_chart_values_are_unchanged_without_chart_bound_resources() {
+    let stack = Stack::new("chart-no-bindings".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    for product in [false, true] {
+        let module = render_registered_with_helm(&stack, TerraformTarget::Eks, product);
+        let helm = module.get("helm.tf").expect("helm.tf");
+        assert!(
+            !helm.contains("infrastructure"),
+            "product={product}: {helm}"
+        );
+        assert!(!module
+            .get("outputs.tf")
+            .expect("outputs.tf")
+            .contains("chart_infrastructure_json"));
+    }
+}
+
+/// A resource gated on an input has a binding in the release only while its gate is true.
+#[test]
+fn the_installed_chart_bindings_follow_the_resource_gates() {
+    let stack = chart_bound_stack("chart-helm-gated", KubernetesClusterProvider::Eks, true);
+    let module = render_registered_with_helm(&stack, TerraformTarget::Eks, false);
+    let helm = module.get("helm.tf").expect("helm.tf");
+    let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("var.input_extra_store ?"), "{helm}");
+    assert!(compact.contains("merge("), "{helm}");
+    assert!(
+        !compact.contains("aws_s3_bucket.extra.bucket"),
+        "a gated bucket needs its count index: {helm}"
+    );
+}
