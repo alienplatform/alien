@@ -543,6 +543,7 @@ async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Result<V
     Ok(body)
 }
 async fn gateway_error(response: reqwest::Response) -> AlienError<ErrorData> {
+    let status = response.status().as_u16();
     let body = match bounded_body(response, 4096).await {
         Ok(body) => body,
         Err(error) => return error,
@@ -557,7 +558,11 @@ async fn gateway_error(response: reqwest::Response) -> AlienError<ErrorData> {
         Some("SANDBOX_EGRESS_POLICY_STORE_FULL") => {
             AlienError::new(ErrorData::SandboxEgressPolicyStoreFull)
         }
-        _ => unavailable("gateway refused the policy record"),
+        // The status and the gateway's own error code say which replica refused and why.
+        other => unavailable(&format!(
+            "gateway refused the policy record (HTTP {status}{})",
+            other.map(|code| format!(", {code}")).unwrap_or_default()
+        )),
     }
 }
 #[cfg(all(test, feature = "local"))]

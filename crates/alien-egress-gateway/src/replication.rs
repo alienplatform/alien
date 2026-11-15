@@ -296,10 +296,18 @@ impl Replication {
         .into_alien_error()
         .context(unavailable("encode replica record"))?;
         for peer in self.peers().await? {
-            let (status, _) = self
+            let (status, _) = match self
                 .request(peer, "/v1/replicas/write", body.clone())
-                .await?;
+                .await
+            {
+                Ok(answer) => answer,
+                Err(error) => {
+                    tracing::warn!(%peer, code = %error.code, "fan-out to a peer failed");
+                    return Err(error);
+                }
+            };
             if status != 204 {
+                tracing::warn!(%peer, status, "a peer did not acknowledge a fanned-out policy record");
                 return Err(AlienError::new(unavailable(
                     "replica did not acknowledge policy",
                 )));

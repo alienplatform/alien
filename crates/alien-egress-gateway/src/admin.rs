@@ -85,6 +85,7 @@ async fn remove(
     mutate(live, headers, mutation, "DELETE").await
 }
 fn failure(error: alien_error::AlienError<crate::error::ErrorData>) -> Response {
+    tracing::warn!(code = %error.code, message = %error.message, "admin request refused");
     let status = match error.code.as_str() {
         "SANDBOX_EGRESS_POLICY_STORE_FULL" | "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE" => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -149,6 +150,7 @@ async fn publish(gateway: &Gateway, record: Record) -> Response {
         return StatusCode::NO_CONTENT.into_response();
     }
     if let Err(error) = gateway.policies.apply(record.clone(), false) {
+        tracing::warn!(code = %error.code, "policy record not applied");
         return failure(error);
     }
     match gateway.replication.fanout(&record).await {
