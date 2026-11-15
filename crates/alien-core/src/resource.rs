@@ -133,6 +133,31 @@ pub trait ResourceDefinition: Debug + Send + Sync + 'static {
 
     /// Serialize this resource to a JSON value (without the "type" tag - that's added by Resource)
     fn to_json_value(&self) -> serde_json::Result<serde_json::Value>;
+
+    /// Resolves the fields of this config that point at a deployer stack input.
+    ///
+    /// A config can name an input instead of holding a value (for example the artifact
+    /// registry's `replicationRegionsInput`). The value is known only when a deployment is
+    /// prepared, so an update that adds such a reference can compare equal to the recorded,
+    /// reference-free config once the answer is empty. Return `None` when there is nothing to
+    /// resolve, or when the resolution cannot be made equal to a config without references (the
+    /// input is undeclared or answered with a value). Return the config with the references
+    /// that resolve to "no value" removed when it can. The frozen-resource check uses only
+    /// that last case, for a recorded config that lacks the reference.
+    ///
+    /// The next input-backed field implements this method instead of special-casing the check.
+    fn with_empty_input_references_removed(
+        &self,
+        _inputs: &crate::InputAnswers<'_>,
+    ) -> Option<Box<dyn ResourceDefinition>> {
+        None
+    }
+
+    /// The `(config field, input id)` pairs this config reads from deployer inputs. Names the
+    /// field in the message when a setup update is needed because an input now has a value.
+    fn input_references(&self) -> Vec<(&'static str, String)> {
+        Vec::new()
+    }
 }
 
 /// Clone implementation for boxed ResourceDefinition trait objects
@@ -386,6 +411,21 @@ impl Resource {
     /// [`ResourceDefinition::replace_after_failed_create_is_safe`].
     pub fn replace_after_failed_create_is_safe(&self) -> bool {
         self.inner.replace_after_failed_create_is_safe()
+    }
+
+    /// See [`ResourceDefinition::with_empty_input_references_removed`].
+    pub fn with_empty_input_references_removed(
+        &self,
+        inputs: &crate::InputAnswers<'_>,
+    ) -> Option<Resource> {
+        self.inner
+            .with_empty_input_references_removed(inputs)
+            .map(Resource::from_boxed)
+    }
+
+    /// See [`ResourceDefinition::input_references`].
+    pub fn input_references(&self) -> Vec<(&'static str, String)> {
+        self.inner.input_references()
     }
 
     /// Provides access to the underlying ResourceDefinition trait object

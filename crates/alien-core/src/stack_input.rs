@@ -744,3 +744,52 @@ mod environment_variable_applies_tests {
         }
     }
 }
+
+/// The answers a deployment gives to a stack's inputs, with each input's declared default
+/// behind them. Resources that name an input read their value through this.
+#[derive(Debug, Clone, Copy)]
+pub struct InputAnswers<'a> {
+    definitions: &'a [StackInputDefinition],
+    values: &'a std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl<'a> InputAnswers<'a> {
+    pub fn new(
+        definitions: &'a [StackInputDefinition],
+        values: &'a std::collections::HashMap<String, serde_json::Value>,
+    ) -> Self {
+        Self {
+            definitions,
+            values,
+        }
+    }
+
+    /// The string list a deployment resolves for input `id`: its answer (a list, or a
+    /// comma-separated string), else the declared default, else empty. Entries are trimmed
+    /// and blanks dropped. `None` when the stack declares no input `id`.
+    pub fn string_list(&self, id: &str) -> Option<Vec<String>> {
+        let definition = self.definitions.iter().find(|input| input.id == id)?;
+        let entries: Vec<String> = match self.values.get(id) {
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect(),
+            Some(serde_json::Value::String(text)) => text.split(',').map(str::to_string).collect(),
+            Some(serde_json::Value::Null) | None => match &definition.default {
+                Some(StackInputDefaultValue::StringList(items)) => items.clone(),
+                Some(StackInputDefaultValue::String(text)) => {
+                    text.split(',').map(str::to_string).collect()
+                }
+                _ => Vec::new(),
+            },
+            Some(_) => Vec::new(),
+        };
+        Some(
+            entries
+                .into_iter()
+                .map(|entry| entry.trim().to_string())
+                .filter(|entry| !entry.is_empty())
+                .collect(),
+        )
+    }
+}

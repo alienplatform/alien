@@ -1,0 +1,85 @@
+{
+  "id": "example-stack",
+  "inputs": [
+    {
+      "default": {
+        "type": "boolean",
+        "value": true
+      },
+      "description": "Encrypt the secret values of the deployments this stack manages with a key in your own cloud account.",
+      "env": [],
+      "id": "valuesKey",
+      "kind": "boolean",
+      "label": "Keep deployment values in your account",
+      "providedBy": ["deployer"],
+      "required": false
+    }
+  ],
+  "permissions": {
+    "profiles": {
+      "app": {
+        "artifact-registry": [
+          "artifact-registry/pull",
+          "artifact-registry/push",
+          "artifact-registry/provision"
+        ],
+        "command-storage": ["storage/data-read", "storage/data-write"],
+        "kv": ["kv/data-read", "kv/data-write"],
+        "telemetry-storage": ["storage/data-read", "storage/data-write"],
+        "values-key": ["key/remote-cryptography"]
+      }
+    }
+  },
+  "resources": {
+    "artifact-registry": {
+      "config": {
+        "id": "artifact-registry",
+        "type": "artifact-registry"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "command-storage": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "command-storage",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "kv": {
+      "config": {
+        "id": "kv",
+        "type": "kv"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "telemetry-storage": {
+      "config": {
+        "corsAllowedOrigins": [],
+        "id": "telemetry-storage",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "values-key": {
+      "config": {
+        "id": "values-key",
+        "type": "key"
+      },
+      "dependencies": [],
+      "enabledWhen": "valuesKey",
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": ["aws", "gcp", "azure"]
+}
