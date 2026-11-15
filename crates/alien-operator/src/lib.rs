@@ -63,6 +63,7 @@ struct OperatorRuntimeOptions {
     runtime_deployment_scope: Option<(String, String)>,
     pod_log_collection: Option<pod_logs::PodLogCollectionConfig>,
     host_logs: Option<host_logs::HostLogsConfig>,
+    host_inventory: Option<host_logs::HostLogsConfig>,
 }
 
 impl OperatorRuntimeOptions {
@@ -72,7 +73,8 @@ impl OperatorRuntimeOptions {
             identity_initialized_config_map: identity_initialized_config_map_from_env()?,
             runtime_deployment_scope: runtime_deployment_scope_from_env()?,
             pod_log_collection: pod_logs::config_from_env()?,
-            host_logs: host_logs::config_from_env()?,
+            host_logs: host_logs::config_from_env(false)?,
+            host_inventory: None,
         })
     }
 }
@@ -529,12 +531,15 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         None
     };
 
+    if let Some(inventory_config) = runtime_options
+        .host_inventory
+        .filter(|_| !matches!(config.platform, Platform::Kubernetes))
+    {
+        let state = state.clone();
+        tokio::spawn(async move { host::run_inventory_loop(state, inventory_config).await });
+    }
     let host_log_handle = match runtime_options.host_logs {
         Some(host_log_config) if !matches!(config.platform, Platform::Kubernetes) => {
-            tokio::spawn({
-                let state = state.clone();
-                async move { host::run_inventory_loop(state, host_log_config).await }
-            });
             Some(tokio::spawn({
                 let state = state.clone();
                 async move { host_logs::run_loop(state, host_log_config).await }
@@ -1162,6 +1167,7 @@ mod tests {
                 runtime_deployment_scope: None,
                 pod_log_collection: None,
                 host_logs: None,
+                host_inventory: None,
             },
             None,
         ));
@@ -1310,6 +1316,7 @@ mod tests {
                     runtime_deployment_scope: None,
                     pod_log_collection: None,
                     host_logs: None,
+                    host_inventory: None,
                 },
                 None,
             ),

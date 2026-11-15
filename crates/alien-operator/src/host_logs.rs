@@ -87,25 +87,27 @@ pub fn parse_sources(
     Ok(Some(config))
 }
 
-pub fn config_from_env() -> Result<Option<HostLogsConfig>> {
+/// `enrolled_by_token` is whether this start was given an enrollment token by
+/// any route (flag, file or environment), as resolved by the command line.
+pub fn config_from_env(enrolled_by_token: bool) -> Result<Option<HostLogsConfig>> {
     let value = std::env::var("OPERATOR_HOST_LOGS").ok();
     log_units_from_env()?;
-    let enrolled_by_token = [
-        "OPERATOR_ENROLLMENT_TOKEN",
-        "OPERATOR_ENROLLMENT_TOKEN_FILE",
-    ]
-    .iter()
-    .any(|name| {
-        std::env::var(name)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-    });
     parse_sources(
         value.as_deref(),
         Path::new("/.dockerenv").exists(),
         Path::new(&crate::host::docker_socket_path()).exists(),
         enrolled_by_token,
     )
+}
+
+/// What the inventory reports. The collectors that log sources turned on decide
+/// the containers and units; a machine enrolled by token reports the host
+/// itself even with no log source.
+pub fn inventory_config(
+    logs: Option<HostLogsConfig>,
+    enrolled_by_token: bool,
+) -> Option<HostLogsConfig> {
+    logs.or_else(|| enrolled_by_token.then_some(HostLogsConfig::default()))
 }
 
 /// `OPERATOR_HOST_LOG_UNITS`: ship the journal of these units only. Unset ships
@@ -426,14 +428,29 @@ fn oversize_entry(prefix: &str) -> Option<JournalEntry> {
     })
 }
 
+/// The journalctl errors already logged. It outlives each reader, so a
+/// persistent failure is logged once, not on every restart of the reader.
+static LOGGED_JOURNALCTL_ERRORS: std::sync::Mutex<Option<HashSet<String>>> =
+    std::sync::Mutex::new(None);
+
+/// True when this line is a new kind of error and should be logged.
+fn first_time_seen(seen: &mut HashSet<String>, line: &str) -> bool {
+    seen.len() < MAX_LOGGED_STDERR_KINDS && seen.insert(line.to_string())
+}
+
 /// Log each distinct journalctl error once, so a persistent failure does not
 /// fill the log.
 async fn log_journalctl_stderr(stderr: tokio::process::ChildStderr) {
     let mut lines = tokio::io::BufReader::new(stderr).lines();
-    let mut seen: HashSet<String> = HashSet::new();
     while let Ok(Some(line)) = lines.next_line().await {
         let line: String = line.chars().take(300).collect();
-        if seen.len() < MAX_LOGGED_STDERR_KINDS && seen.insert(line.clone()) {
+        let new = {
+            let mut guard = LOGGED_JOURNALCTL_ERRORS
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            first_time_seen(guard.get_or_insert_with(HashSet::new), &line)
+        };
+        if new {
             warn!(message = %line, "journalctl reported");
         }
     }
@@ -844,6 +861,29 @@ async fn flush_docker_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_journalctl_error_is_new_once_across_reader_restarts() {
+        let mut seen = HashSet::new();
+        assert!(first_time_seen(&mut seen, "Permission denied"));
+        assert!(!first_time_seen(&mut seen, "Permission denied"));
+        assert!(first_time_seen(&mut seen, "No journal files"));
+    }
+
+    #[test]
+    fn a_token_enrolled_machine_reports_the_host_without_a_log_source() {
+        assert_eq!(inventory_config(None, false), None);
+        assert_eq!(
+            inventory_config(None, true),
+            Some(HostLogsConfig::default())
+        );
+        let docker = HostLogsConfig {
+            journald: false,
+            docker: true,
+        };
+        assert_eq!(inventory_config(Some(docker), false), Some(docker));
+        assert_eq!(inventory_config(Some(docker), true), Some(docker));
+    }
 
     #[test]
     fn sources_parse_and_unknown_values_refuse_to_start() {

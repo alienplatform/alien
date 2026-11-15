@@ -367,6 +367,12 @@ async fn collect(config: HostLogsConfig) -> Option<ObservedInventoryBatch> {
     })
 }
 
+/// Scopes this operator writes itself, outside the deployment steps. A deployment
+/// step that replaces the pending batches keeps these.
+pub(crate) fn is_operator_scope(scope: &str) -> bool {
+    scope == INVENTORY_SCOPE
+}
+
 /// Replace this scope's pending batch and keep any other scope's.
 pub(crate) fn merge_batches(
     pending: Vec<ObservedInventoryBatch>,
@@ -388,10 +394,11 @@ pub async fn run_inventory_loop(
     loop {
         if let Some(batch) = collect(config).await {
             let result = async {
-                let pending = state.db.get_pending_observed_inventory_batches().await?;
                 state
                     .db
-                    .set_pending_observed_inventory_batches(&merge_batches(pending, batch))
+                    .update_pending_observed_inventory_batches(|pending| {
+                        merge_batches(pending, batch)
+                    })
                     .await?;
                 state.db.request_sync();
                 crate::error::Result::Ok(())
