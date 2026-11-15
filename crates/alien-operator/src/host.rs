@@ -35,7 +35,6 @@ use alien_core::{
     ObservedResourceSample, Platform, ProviderLifecycleState,
 };
 use chrono::Utc;
-use futures::StreamExt as _;
 use serde_json::{json, Value};
 use tracing::warn;
 
