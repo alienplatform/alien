@@ -2205,6 +2205,7 @@ mod tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         }
     }
 

@@ -1595,6 +1595,30 @@ impl OperatorDb {
         *self.queued_telemetry_bytes.lock().expect("queue size") = None;
     }
 
+    /// The Pods that have a saved log cursor.
+    pub async fn pod_log_cursor_uids(&self) -> Result<std::collections::HashSet<String>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT DISTINCT pod_uid FROM pod_log_offsets", ())
+            .await
+            .into_alien_error()
+            .context(database_error("Listing Pod log cursors"))?;
+        let mut uids = std::collections::HashSet::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(database_error("Reading Pod log cursors"))?
+        {
+            uids.insert(
+                row.get::<String>(0)
+                    .into_alien_error()
+                    .context(database_error("Decoding Pod log cursor"))?,
+            );
+        }
+        Ok(uids)
+    }
+
     /// Forget the log cursors of Pods that no longer exist, so the table does
     /// not grow with every Pod the cluster ever ran. Returns how many Pods'
     /// cursors were removed.

@@ -46,6 +46,9 @@ pub(crate) struct DailyIdentityState {
     /// newer key works.
     #[serde(default)]
     pub previous: Option<String>,
+    /// Which version of the Secret this state was read from. Not saved.
+    #[serde(skip)]
+    pub(crate) store_version: crate::identity_store::StoreVersion,
 }
 
 /// A re-enrollment whose response may have been lost. A retry with the same
@@ -170,6 +173,7 @@ impl DailyIdentity {
                     enrolled_code_hash: None,
                     pending_enrollment: None,
                     previous: None,
+                    store_version: Default::default(),
                 };
                 self.db.write_daily_identity(&state).await?;
                 state
@@ -1187,6 +1191,7 @@ mod persistence_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
             expires_at: Utc::now() + chrono::Duration::hours(12),
         };
         db.write_daily_identity(&state).await.unwrap();
@@ -1356,6 +1361,7 @@ mod persistence_tests {
             enrolled_code_hash: Some(key_hash("ax_enroll_original")),
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
             expires_at,
         };
         db.write_daily_identity(&state).await.unwrap();
@@ -1564,6 +1570,7 @@ mod persistence_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         }
     }
 
@@ -2088,6 +2095,7 @@ mod persistence_tests {
                 enrolled_code_hash: None,
                 pending_enrollment: None,
                 previous: None,
+                store_version: Default::default(),
                 expires_at: Utc::now() + chrono::Duration::hours(11),
             })
             .await
@@ -2218,6 +2226,7 @@ mod persistence_tests {
                 enrolled_code_hash: None,
                 pending_enrollment: None,
                 previous: None,
+                store_version: Default::default(),
             })
             .await
             .unwrap();
@@ -2268,6 +2277,7 @@ mod persistence_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         };
         db.write_daily_identity(&original).await.unwrap();
         let identity = DailyIdentity::new(db.clone()).unwrap();
@@ -2408,6 +2418,7 @@ mod grace_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         }
     }
 
@@ -2872,6 +2883,7 @@ mod lost_enrollment_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         };
         let error = identity
             .post_outcome(&state, "exchange", json!({}))

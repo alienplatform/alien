@@ -193,6 +193,27 @@ pub(crate) struct SecretIdentityStore {
     stopping: AtomicBool,
 }
 
+/// The version of the Secret an identity was read from. Every state derived
+/// from one read (clones, edits) shares it, so a later write is checked against
+/// the version that produced the state, not against whatever another task has
+/// fetched since. A state made from nothing has none and uses the latest.
+#[derive(Clone, Default)]
+pub(crate) struct StoreVersion(Arc<std::sync::Mutex<Option<String>>>);
+
+impl StoreVersion {
+    fn of(secret: &Secret) -> Self {
+        Self(Arc::new(std::sync::Mutex::new(
+            secret.metadata.resource_version.clone(),
+        )))
+    }
+    fn get(&self) -> Option<String> {
+        self.0.lock().expect("store version").clone()
+    }
+    fn set(&self, version: Option<String>) {
+        *self.0.lock().expect("store version") = version;
+    }
+}
+
 /// The outcome of writing a known identity back into a Secret that lost it.
 enum Restore {
     Done(Secret),
@@ -348,6 +369,7 @@ impl SecretIdentityStore {
     async fn update(
         &self,
         inner: &mut Inner,
+        expected: Option<String>,
         change: impl FnOnce(&mut BTreeMap<String, ByteString>),
     ) -> Result<()> {
         if self.stopping.load(Ordering::Relaxed) {
@@ -371,6 +393,9 @@ impl SecretIdentityStore {
                 }
             },
         };
+        if expected.is_some() {
+            secret.metadata.resource_version = expected;
+        }
         let mut data = secret.data.take().unwrap_or_default();
         change(&mut data);
         secret.data = Some(data);
@@ -439,7 +464,7 @@ impl SecretIdentityStore {
             let key = random_hex_key()?;
             let stored = key.clone();
             match self
-                .update(&mut inner, |data| {
+                .update(&mut inner, None, |data| {
                     data.insert(ENCRYPTION_KEY.into(), ByteString(stored.into_bytes()));
                 })
                 .await
@@ -507,8 +532,11 @@ fn parse_identity(secret: &Secret) -> Result<Option<DailyIdentityState>> {
         return Ok(None);
     }
     let text = std::str::from_utf8(&bytes.0).map_err(|_| unreadable())?;
-    serde_json::from_str(text)
-        .map(Some)
+    serde_json::from_str::<DailyIdentityState>(text)
+        .map(|mut state| {
+            state.store_version = StoreVersion::of(secret);
+            Some(state)
+        })
         .map_err(|_| unreadable())
 }
 
@@ -567,10 +595,16 @@ impl IdentityStore for SecretIdentityStore {
                 message: "Refusing to replace the enrolled operator identity with one that is not enrolled".into(),
             }));
         }
-        self.update(&mut inner, |data| {
+        self.update(&mut inner, state.store_version.get(), |data| {
             data.insert(IDENTITY_KEY.into(), value);
         })
         .await?;
+        state.store_version.set(
+            inner
+                .secret
+                .as_ref()
+                .and_then(|s| s.metadata.resource_version.clone()),
+        );
         inner.memory = Some(state.clone());
         Ok(())
     }
@@ -599,7 +633,7 @@ impl IdentityStore for SecretIdentityStore {
             }
         }
         let value = serialize(state)?;
-        self.update(&mut inner, |data| {
+        self.update(&mut inner, None, |data| {
             data.insert(IDENTITY_KEY.into(), value);
         })
         .await?;
@@ -620,7 +654,7 @@ impl IdentityStore for SecretIdentityStore {
             }
         };
         if parse_identity(&secret)?.is_some_and(|saved| saved.deployment_id.is_empty()) {
-            self.update(&mut inner, |data| {
+            self.update(&mut inner, None, |data| {
                 data.remove(IDENTITY_KEY);
             })
             .await?;
@@ -769,6 +803,7 @@ mod tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         }
     }
 
@@ -814,6 +849,33 @@ mod tests {
         assert_eq!(saved.current, "key-from-a");
         // After re-reading, the same writer succeeds.
         b.write(&state("dep_1", "key-from-b")).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_slow_rotation_cannot_overwrite_a_newer_saved_identity() {
+        let fake = Fake::with_empty_secret();
+        let (a, b) = (store(&fake), store(&fake));
+        a.persist_enrolled(&state("dep_1", "key-a")).await.unwrap();
+        // A starts a rotation from what it read, and waits for the manager.
+        let mut slow = a.read().await.unwrap().unwrap();
+        // Meanwhile another operator saves a newer identity, and A's cached
+        // Secret is refreshed by an unrelated read.
+        let mut newer = b.read().await.unwrap().unwrap();
+        newer.pending = Some("key-pending-b".into());
+        b.write(&newer).await.unwrap();
+        a.read().await.unwrap();
+        slow.pending = Some("key-pending-a".into());
+        let error = a.write(&slow).await.unwrap_err();
+        assert!(matches!(error.error, Some(ErrorData::IdentityConflict)));
+        let saved = b.read().await.unwrap().unwrap();
+        assert_eq!(saved.pending.as_deref(), Some("key-pending-b"));
+        // Writing twice from the same read works: the second write follows the first.
+        let mut fresh = a.read().await.unwrap().unwrap();
+        fresh.pending = Some("one".into());
+        a.write(&fresh).await.unwrap();
+        fresh.pending = None;
+        fresh.current = "two".into();
+        a.write(&fresh).await.unwrap();
     }
 
     #[tokio::test]

@@ -712,6 +712,9 @@ struct PodSurvey<'a> {
     live: HashSet<String>,
     eligible: Vec<(String, Source)>,
     namespaces: HashMap<String, String>,
+    /// Pods whose containers have a saved cursor. A finished one still gets
+    /// read to its end after a restart, however old it is.
+    with_cursor: &'a HashSet<String>,
 }
 
 impl<'a> PodSurvey<'a> {
@@ -719,6 +722,7 @@ impl<'a> PodSurvey<'a> {
         config: &'a PodLogCollectionConfig,
         cluster: &'a ClusterLogScope,
         started_at: DateTime<Utc>,
+        with_cursor: &'a HashSet<String>,
     ) -> Self {
         Self {
             config,
@@ -727,6 +731,7 @@ impl<'a> PodSurvey<'a> {
             live: HashSet::new(),
             eligible: Vec::new(),
             namespaces: HashMap::new(),
+            with_cursor,
         }
     }
 
@@ -745,13 +750,43 @@ impl<'a> PodSurvey<'a> {
             .as_ref()
             .and_then(|status| status.phase.as_deref())
             .is_some_and(|phase| phase != "Running");
-        if terminal && !finished_since(&pod, self.started_at) {
+        let has_cursor = pod
+            .metadata
+            .uid
+            .as_ref()
+            .is_some_and(|uid| self.with_cursor.contains(uid));
+        if terminal && !has_cursor && !finished_since(&pod, self.started_at) {
             return;
         }
         for source in selected_sources(&pod, self.config, self.started_at) {
             self.namespaces
                 .insert(source.pod_uid.clone(), namespace.to_string());
             self.eligible.push((namespace.to_string(), source));
+        }
+    }
+}
+
+/// A Pod that stops matching the selector is not gone: its cursor stays, so it
+/// does not replay its logs when it matches again. With a selector, add the uid
+/// of every Pod in the same namespaces to `live`. Returns false when the
+/// listing failed, which means no cursor may be pruned this time.
+async fn add_unselected_pods(
+    client: &KubernetesClient,
+    cluster: &ClusterLogScope,
+    live: &mut HashSet<String>,
+) -> bool {
+    if cluster.pod_selector.is_none() {
+        return true;
+    }
+    match list_cluster_pods(client, &cluster.namespaces, None, &mut |pod| {
+        live.extend(pod.metadata.uid)
+    })
+    .await
+    {
+        Ok(()) => true,
+        Err(error) => {
+            warn!(error = %error, "Could not list every Pod; log cursors are not pruned this time");
+            false
         }
     }
 }
@@ -773,7 +808,8 @@ async fn reconcile_cluster(
             return Ok(());
         }
     };
-    let mut survey = PodSurvey::new(config, cluster, started_at);
+    let with_cursor = state.db.pod_log_cursor_uids().await?;
+    let mut survey = PodSurvey::new(config, cluster, started_at, &with_cursor);
     list_cluster_pods(
         client,
         &cluster.namespaces,
@@ -782,14 +818,17 @@ async fn reconcile_cluster(
     )
     .await?;
     let PodSurvey {
-        live,
+        mut live,
         eligible,
         namespaces,
         ..
     } = survey;
+    let all_listed = add_unselected_pods(client, cluster, &mut live).await;
     // The whole listing arrived: cursors of Pods that are gone can be dropped.
-    if let Err(error) = state.db.prune_pod_log_offsets(&live).await {
-        warn!(error = %error, "Could not prune log cursors of Pods that no longer exist");
+    if all_listed {
+        if let Err(error) = state.db.prune_pod_log_offsets(&live).await {
+            warn!(error = %error, "Could not prune log cursors of Pods that no longer exist");
+        }
     }
     let mut eligible = eligible;
     let known: HashSet<_> = eligible.iter().map(|(_, source)| source.clone()).collect();
@@ -1533,7 +1572,8 @@ mod tests {
             }),
         };
         let cluster = config.cluster.clone().unwrap();
-        let mut survey = PodSurvey::new(&config, &cluster, Utc::now());
+        let none = HashSet::new();
+        let mut survey = PodSurvey::new(&config, &cluster, Utc::now(), &none);
         for i in 0..1000 {
             survey.add(survey_pod("noisy", &format!("n{i}")));
         }
@@ -1743,6 +1783,72 @@ mod tests {
         assert!(requests
             .iter()
             .all(|r| r.get("labelSelector").map(String::as_str) == Some("app=web")));
+    }
+
+    #[tokio::test]
+    async fn a_pod_that_stops_matching_the_selector_is_not_gone() {
+        let app = Router::new().route(
+            "/api/v1/pods",
+            get(|Query(query): Query<HashMap<String, String>>| async move {
+                let names: Vec<&str> = if query.contains_key("labelSelector") {
+                    vec!["matching"]
+                } else {
+                    vec!["matching", "unlabelled"]
+                };
+                Json(serde_json::json!({
+                    "apiVersion": "v1", "kind": "PodList", "metadata": {},
+                    "items": names.iter().map(|n| serde_json::json!({"metadata": {"name": n, "uid": n, "namespace": "x"}})).collect::<Vec<_>>()
+                }))
+            }),
+        );
+        let (client, server) = fake_api(app).await;
+        let cluster = ClusterLogScope {
+            namespaces: Vec::new(),
+            exclude_namespaces: Vec::new(),
+            pod_selector: Some("app=web".into()),
+        };
+        let mut live: HashSet<String> = ["matching".to_string()].into();
+        assert!(add_unselected_pods(&client, &cluster, &mut live).await);
+        server.abort();
+        assert!(live.contains("unlabelled"), "its cursor would be pruned");
+    }
+
+    #[test]
+    fn a_finished_pod_with_a_saved_cursor_is_read_to_its_end_after_a_restart() {
+        let config = PodLogCollectionConfig {
+            label_key: String::new(),
+            label_value: String::new(),
+            legacy_daemonset: None,
+            replacement_daemonset: None,
+            max_streams: 200,
+            cluster: Some(ClusterLogScope {
+                namespaces: Vec::new(),
+                exclude_namespaces: Vec::new(),
+                pod_selector: None,
+            }),
+        };
+        let cluster = config.cluster.clone().unwrap();
+        let finished = |uid: &str| -> Pod {
+            serde_json::from_value(serde_json::json!({
+                "metadata": {"name": uid, "namespace": "jobs", "uid": uid},
+                "spec": {"containers": [{"name": "app"}]},
+                "status": {"phase": "Succeeded", "containerStatuses": [{
+                    "name": "app", "image": "i", "imageID": "", "ready": false, "restartCount": 0,
+                    "state": {"terminated": {"exitCode": 0, "finishedAt": "2020-01-01T00:00:00Z"}}
+                }]}
+            }))
+            .unwrap()
+        };
+        let with_cursor: HashSet<String> = ["resumed".to_string()].into();
+        let mut survey = PodSurvey::new(&config, &cluster, Utc::now(), &with_cursor);
+        survey.add(finished("resumed"));
+        survey.add(finished("old-and-unread"));
+        let uids: Vec<_> = survey
+            .eligible
+            .iter()
+            .map(|(_, s)| s.pod_uid.as_str())
+            .collect();
+        assert_eq!(uids, ["resumed"]);
     }
 
     #[tokio::test]
