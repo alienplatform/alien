@@ -14,7 +14,7 @@
 # `alien-egress-gateway` (see AGENT_BINARY and GATEWAY_BINARY), and a service principal that can
 # create resources and role assignments in the subscription.
 #
-# Env (nothing is defaulted that names a customer, subscription or secret):
+# Env (nothing is defaulted that names a subscription or secret):
 #   AZURE_TARGET_SUBSCRIPTION_ID, AZURE_TARGET_TENANT_ID, AZURE_TARGET_CLIENT_ID, AZURE_TARGET_CLIENT_SECRET
 #   AZURE_INTERNET_PREFIX      short lowercase prefix, 3-10 chars (names every resource)
 #   AZURE_INTERNET_LOCATION    region, default eastus

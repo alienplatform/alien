@@ -416,6 +416,52 @@ async fn live_internet_proof() {
         // (g) restart a gateway VM: a write during the restart is not silently dropped, and the
         // restarted replica comes back holding the policy its peer holds.
         let token = arm_token(&tenant, &client_id, &client_secret).await;
+        // (g2) a sandbox that is deleted while a replica is away leaves no grant on either replica.
+        // Its own proxy credentials are read inside it (never logged), then replayed from the subject.
+        let doomed = sandbox
+            .create(CreateSandboxRequest {
+                egress: Some(allow(&[&format!("{ALLOWED}:443")])),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| format!("doomed create: {error}"))?;
+        let doomed_id = doomed.sandbox_id.clone();
+        created.push(doomed_id.clone());
+        let doomed_proxy = run(sandbox, &doomed_id, "printenv", &["HTTPS_PROXY"])
+            .await
+            .trim()
+            .to_string();
+        proof.check(
+            doomed_proxy.starts_with("http://"),
+            "g2 doomed sandbox has proxy credentials",
+            "(not logged)",
+        );
+        let replay = |via: String| {
+            let doomed_proxy = doomed_proxy.clone();
+            let probe_host = ALLOWED.to_string();
+            let subject_id = id.clone();
+            async move {
+                run(
+                    sandbox,
+                    &subject_id,
+                    "env",
+                    &[
+                        &format!("HTTPS_PROXY={doomed_proxy}"),
+                        "python3",
+                        "-c",
+                        PROXY_PROBE,
+                        &probe_host,
+                        "443",
+                        &via,
+                    ],
+                )
+                .await
+            }
+        };
+        for (index, ip) in gateway_ips.iter().enumerate() {
+            let seen = replay(format!("{ip}:3128")).await;
+            proof.check(connected(&seen), &format!("g2 replica {index} serves the doomed grant before delete"), &seen);
+        }
         let restarted = &gateway_vms[0];
         let response = reqwest::Client::new()
             .post(format!(
@@ -443,6 +489,16 @@ async fn live_internet_proof() {
                 Err(error) => format!("refused: {error}"),
             }
         ));
+        // (g2) delete the doomed sandbox while the replica is still away.
+        let deleted = sandbox.terminate(&doomed_id).await;
+        proof.note(format!(
+            "[g2] terminate during restart: {}",
+            match &deleted {
+                Ok(()) => "acknowledged by every replica".to_string(),
+                Err(error) => format!("reported (retryable={}): {error}", error.retryable),
+            }
+        ));
+        created.retain(|existing| existing != &doomed_id);
         let wanted_other = during.is_ok();
         // Wait for the restarted replica to answer again, through the sandbox's own credentials.
         let deadline = Instant::now() + Duration::from_secs(600);
@@ -466,6 +522,11 @@ async fn live_internet_proof() {
                 &format!("g replica {index} holds the last acknowledged policy (second host open={wanted_other})"),
                 &seen,
             );
+        }
+        // (g2) neither replica serves the deleted sandbox's grant, including the one that was away.
+        for (index, ip) in gateway_ips.iter().enumerate() {
+            let seen = replay(format!("{ip}:3128")).await;
+            proof.check(!connected(&seen), &format!("g2 replica {index} serves no grant for the deleted sandbox"), &seen);
         }
         // A fresh write reaches both replicas once both are back.
         sandbox
