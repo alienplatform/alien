@@ -271,7 +271,7 @@ pub(crate) fn journalctl_args(
     args
 }
 
-/// Reader failures in a row, with no entry read, after which a saved cursor is given up.
+/// Reader failures in a row, with no entry read and a cursor complaint from journalctl, after which a saved cursor is given up.
 const CURSOR_FAILURES_BEFORE_RESET: u32 = 5;
 /// Longest raw journal line read whole. A longer one is cut here and read past.
 const MAX_JOURNAL_LINE_BYTES: usize = 2 * 1024 * 1024;
@@ -284,14 +284,30 @@ async fn run_journald(state: Arc<OperatorState>, _started_at: DateTime<Utc>) {
     let mut start_unix_secs = Utc::now().timestamp();
     loop {
         let mut progressed = false;
-        if let Err(error) =
-            read_journal_once(&state, &units, start_unix_secs, &mut progressed).await
+        let cursor_rejected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Err(error) = read_journal_once(
+            &state,
+            &units,
+            start_unix_secs,
+            &mut progressed,
+            cursor_rejected.clone(),
+        )
+        .await
         {
             if !state.cancel.is_cancelled() {
                 warn!(error = %error, "Journal reader failed; will restart");
             }
         }
-        failures = if progressed { 0 } else { failures + 1 };
+        // Only a failure where journalctl itself complained about the cursor counts;
+        // a missing journalctl or a database error keeps the saved position.
+        let rejected = cursor_rejected.load(std::sync::atomic::Ordering::Relaxed);
+        failures = if progressed {
+            0
+        } else if rejected {
+            failures + 1
+        } else {
+            failures
+        };
         if failures >= CURSOR_FAILURES_BEFORE_RESET {
             failures = 0;
             // The journal may no longer accept the saved cursor (rotated away, or corrupt).
@@ -440,10 +456,21 @@ fn first_time_seen(seen: &mut HashSet<String>, line: &str) -> bool {
 
 /// Log each distinct journalctl error once, so a persistent failure does not
 /// fill the log.
-async fn log_journalctl_stderr(stderr: tokio::process::ChildStderr) {
+/// A `journalctl` message that says the saved cursor was not accepted.
+pub(crate) fn is_cursor_rejection(line: &str) -> bool {
+    line.to_ascii_lowercase().contains("cursor")
+}
+
+async fn log_journalctl_stderr(
+    stderr: tokio::process::ChildStderr,
+    cursor_rejected: Arc<std::sync::atomic::AtomicBool>,
+) {
     let mut lines = tokio::io::BufReader::new(stderr).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         let line: String = line.chars().take(300).collect();
+        if is_cursor_rejection(&line) {
+            cursor_rejected.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         let new = {
             let mut guard = LOGGED_JOURNALCTL_ERRORS
                 .lock()
@@ -461,6 +488,7 @@ async fn read_journal_once(
     units: &[String],
     start_unix_secs: i64,
     progressed: &mut bool,
+    cursor_rejected: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     let db = &state.db;
     let deployment_id = db.get_deployment_id().await?.ok_or_else(|| {
@@ -488,7 +516,7 @@ async fn read_journal_once(
             message: "could not start journalctl; the operator needs it and membership of the systemd-journal group".to_string(),
         })?;
     if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(log_journalctl_stderr(stderr));
+        tokio::spawn(log_journalctl_stderr(stderr, cursor_rejected));
     }
     let stdout = child.stdout.take().ok_or_else(|| {
         AlienError::new(ErrorData::PodLogReadFailed {
@@ -861,6 +889,19 @@ async fn flush_docker_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_cursor_complaint_counts_as_the_journal_rejecting_the_cursor() {
+        assert!(is_cursor_rejection(
+            "Failed to seek to cursor: Invalid argument"
+        ));
+        assert!(!is_cursor_rejection(
+            "No journal files were opened due to insufficient permissions."
+        ));
+        assert!(!is_cursor_rejection(
+            "Failed to open journal: No such file or directory"
+        ));
+    }
 
     #[test]
     fn a_journalctl_error_is_new_once_across_reader_restarts() {
