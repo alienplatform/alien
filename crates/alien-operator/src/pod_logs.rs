@@ -282,8 +282,15 @@ pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig)
     let mut client = None;
     let mut legacy_was_running = false;
     let mut coverage = None;
-    info!(namespace, label_key = %config.label_key, label_value = %config.label_value,
-        max_streams = config.max_streams, "Starting Kubernetes Pod log collection");
+    if config.cluster.is_some() {
+        info!(
+            max_streams = config.max_streams,
+            "Starting Kubernetes Pod log collection across the cluster"
+        );
+    } else {
+        info!(namespace, label_key = %config.label_key, label_value = %config.label_value,
+            max_streams = config.max_streams, "Starting Kubernetes Pod log collection");
+    }
 
     loop {
         if client.is_none() {
