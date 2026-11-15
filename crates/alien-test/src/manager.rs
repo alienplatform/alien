@@ -266,6 +266,8 @@ impl TestManager {
                 releases_url: None,
                 deployment_interval_secs: 2,
                 heartbeat_interval_secs: 60,
+                lease_wait_probe_interval_secs: 1,
+                max_open_lease_waits: 5_000,
                 supported_aws_regions: Vec::new(),
             },
             database: alien_manager::standalone_config::DatabaseConfig {
