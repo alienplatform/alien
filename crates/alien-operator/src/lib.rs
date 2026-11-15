@@ -1766,6 +1766,31 @@ pub async fn is_enrolled(db: &db::OperatorDb) -> error::Result<bool> {
     daily_identity::has_runtime_identity(db).await
 }
 
+/// Save an enrolled identity, as a finished enrollment leaves it, so an
+/// embedder's test can run against an enrolled Operator without a manager that
+/// implements enrollment.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn save_enrolled_identity_for_tests(
+    db: &db::OperatorDb,
+    manager_url: &str,
+    audience: &str,
+    deployment_id: &str,
+) -> error::Result<()> {
+    db.write_daily_identity(&daily_identity::DailyIdentityState {
+        manager_url: manager_url.to_owned(),
+        audience: audience.to_owned(),
+        deployment_id: deployment_id.to_owned(),
+        current: "ax_day_v1_test".to_owned(),
+        pending: None,
+        pending_started_at: None,
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+        enrolled_code_hash: None,
+        pending_enrollment: None,
+        previous: None,
+    })
+    .await
+}
+
 /// The credential source for this Operator's own operations queue.
 ///
 /// `None` while the Operator is not enrolled: it then keeps using its sync
