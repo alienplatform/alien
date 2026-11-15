@@ -1012,6 +1012,11 @@ fn the_documented_operations_example_reaches_the_operator_and_a_wrong_shape_is_r
 
 /// A made-up plugin that is off unless named: one read operation and one that patches.
 fn opt_in_chart(directory: &Path) {
+    opt_in_chart_with(directory, true);
+}
+
+/// The same chart, with the Kubernetes plugin on by default or not.
+fn opt_in_chart_with(directory: &Path, kubernetes_default: bool) {
     let rule = |verbs: &[&str], reason: &str| KubernetesPermissionRule {
         api_group: "apps".into(),
         resource: "replicasets/scale".into(),
@@ -1042,10 +1047,12 @@ fn opt_in_chart(directory: &Path) {
         OperatorChartPlugin {
             name: "kubernetes",
             opt_in: false,
+            default_enabled: kubernetes_default,
         },
         OperatorChartPlugin {
             name: "widgets",
             opt_in: true,
+            default_enabled: false,
         },
     ];
     let chart = generate_operator_chart(OperatorChartOptions {
@@ -1142,6 +1149,7 @@ fn an_opt_in_plugin_without_operations_is_refused_at_generation() {
     let plugins = [OperatorChartPlugin {
         name: "widgets",
         opt_in: true,
+        default_enabled: false,
     }];
     assert!(generate_operator_chart(OperatorChartOptions {
         chart_version: "1.0.0",
@@ -1152,4 +1160,154 @@ fn an_opt_in_plugin_without_operations_is_refused_at_generation() {
         plugins: &plugins,
     })
     .is_err());
+}
+
+/// `OPERATOR_OPERATIONS` of a render of the chart with the made-up plugins (the Kubernetes plugin
+/// on by default), as JSON; `None` when the variable is not set.
+fn rendered_operations(arguments: &[&str]) -> Option<serde_json::Value> {
+    let directory = tempfile::tempdir().unwrap();
+    opt_in_chart(directory.path());
+    let output = helm(
+        directory.path(),
+        &[&["--set", &format!("token={TOKEN}")], arguments].concat(),
+    );
+    assert!(
+        output.status.success(),
+        "helm template failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let documents = documents(&String::from_utf8(output.stdout).unwrap());
+    let deployment = kind(&documents, "Deployment")[0];
+    deployment["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "OPERATOR_OPERATIONS")
+        .and_then(|entry| entry["value"].as_str())
+        .map(|value| serde_json::from_str(value).unwrap())
+}
+
+#[test]
+fn a_plain_install_lists_the_default_plugin_with_reads_auto_and_changes_manual() {
+    // `operations()` has get-pods (read-only), restart-pod (mutating) and scale (destructive or
+    // mutating); every read is auto and everything else is manual.
+    let declared = rendered_operations(&[]).expect("the default plugin is declared");
+    let approval = &declared["plugins"]["kubernetes"]["approval"];
+    for operation in operations() {
+        if operation.plugin != "kubernetes" {
+            continue;
+        }
+        let expected = if operation.tier == RiskTier::ReadOnly {
+            "auto"
+        } else {
+            "manual"
+        };
+        assert_eq!(
+            approval[operation.operation.as_str()],
+            expected,
+            "{}",
+            operation.operation
+        );
+    }
+    // An opt-in plugin is never on by default, and the values file shows the default.
+    assert!(declared["plugins"].get("widgets").is_none());
+    let directory = tempfile::tempdir().unwrap();
+    opt_in_chart(directory.path());
+    let values = std::fs::read_to_string(directory.path().join("values.yaml")).unwrap();
+    assert!(values.contains("operations:\n  plugins:\n    kubernetes:\n      approval:\n"));
+}
+
+#[test]
+fn the_default_plugin_adds_no_permission() {
+    // The same chart without the default plugin renders the same ClusterRole.
+    let with_default = {
+        let directory = tempfile::tempdir().unwrap();
+        opt_in_chart(directory.path());
+        let output = helm(directory.path(), &["--set", &format!("token={TOKEN}")]);
+        assert!(output.status.success());
+        documents(&String::from_utf8(output.stdout).unwrap())
+    };
+    let without_default = {
+        let directory = tempfile::tempdir().unwrap();
+        opt_in_chart_with(directory.path(), false);
+        let output = helm(directory.path(), &["--set", &format!("token={TOKEN}")]);
+        assert!(output.status.success());
+        documents(&String::from_utf8(output.stdout).unwrap())
+    };
+    assert_eq!(
+        kind(&with_default, "ClusterRole")[0]["rules"],
+        kind(&without_default, "ClusterRole")[0]["rules"]
+    );
+    // The only difference in the Deployment is the declared operations.
+    assert!(without_default
+        .iter()
+        .filter(|document| document["kind"] == "Deployment")
+        .all(|document| {
+            document["spec"]["template"]["spec"]["containers"][0]["env"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .all(|entry| entry["name"] != "OPERATOR_OPERATIONS")
+        }));
+}
+
+#[test]
+fn naming_another_plugin_keeps_the_default_one_and_null_removes_it() {
+    let merged =
+        rendered_operations(&["--set-json", "operations={\"plugins\":{\"widgets\":{}}}"]).unwrap();
+    assert!(merged["plugins"].get("kubernetes").is_some(), "{merged}");
+    assert!(merged["plugins"].get("widgets").is_some(), "{merged}");
+    // One approval changed leaves the others of that plugin as listed.
+    let changed = rendered_operations(&[
+        "--set",
+        "operations.plugins.kubernetes.approval.get-pods=manual",
+    ])
+    .unwrap();
+    assert_eq!(
+        changed["plugins"]["kubernetes"]["approval"]["get-pods"],
+        "manual"
+    );
+    let changing = operations()
+        .into_iter()
+        .find(|operation| operation.plugin == "kubernetes" && operation.tier != RiskTier::ReadOnly)
+        .expect("the fixture has a changing Kubernetes operation");
+    assert_eq!(
+        changed["plugins"]["kubernetes"]["approval"][changing.operation.as_str()],
+        "manual"
+    );
+    // Removing the plugin: nothing is declared, as before this default existed.
+    let removed = rendered_operations(&["--set", "operations.plugins.kubernetes=null"]);
+    assert!(
+        removed
+            .as_ref()
+            .map(|value| value["plugins"]
+                .as_object()
+                .is_none_or(|plugins| plugins.is_empty()))
+            .unwrap_or(true),
+        "{removed:?}"
+    );
+}
+
+#[test]
+fn a_plugin_cannot_be_both_opt_in_and_on_by_default_or_on_without_operations() {
+    let operations = operations();
+    for (plugin, opt_in) in [("kubernetes", true), ("widgets", false)] {
+        let plugins = [OperatorChartPlugin {
+            name: plugin,
+            opt_in,
+            default_enabled: true,
+        }];
+        assert!(
+            generate_operator_chart(OperatorChartOptions {
+                chart_version: "1.0.0",
+                app_version: "1.0.0",
+                image_repository: "registry.example/operator",
+                image_digest: DIGEST,
+                operations: &operations,
+                plugins: &plugins,
+            })
+            .is_err(),
+            "{plugin} opt_in={opt_in}"
+        );
+    }
 }

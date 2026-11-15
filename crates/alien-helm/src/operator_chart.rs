@@ -49,6 +49,11 @@ pub struct OperatorChartPlugin<'a> {
     /// Off unless `operations.plugins.<name>` names it. Its rules are only in the ClusterRole then,
     /// so an existing install never gains them without the name being set.
     pub opt_in: bool,
+    /// On in the chart's own `values.yaml`: the plugin is listed under `operations.plugins` with
+    /// its approval rules written out (read-only operations `auto`, every other tier `manual`), so
+    /// a plain install can run its read-only operations. Removing it is
+    /// `--set operations.plugins.<name>=null`. An opt-in plugin is never on by default.
+    pub default_enabled: bool,
 }
 
 /// Render the generic Operator chart.
@@ -68,6 +73,23 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
         })?;
     }
     for plugin in options.plugins {
+        if plugin.opt_in && plugin.default_enabled {
+            return Err(format!(
+                "plugin {} cannot be both opt-in and on by default",
+                plugin.name
+            ));
+        }
+        if plugin.default_enabled
+            && !options
+                .operations
+                .iter()
+                .any(|operation| operation.plugin == plugin.name)
+        {
+            return Err(format!(
+                "plugin {} is on by default but has no operations to list",
+                plugin.name
+            ));
+        }
         if plugin.opt_in
             && !options
                 .operations
@@ -192,8 +214,50 @@ fn chart_yaml(options: &OperatorChartOptions<'_>) -> String {
     )
 }
 
+/// The `operations` value and the note above it. Each plugin that is on by default is listed with
+/// the approval of every one of its operations, taken from the operation's tier: read-only is
+/// `auto`; anything that changes or deletes is `manual`.
+fn default_operations(options: &OperatorChartOptions<'_>) -> (String, String) {
+    let defaults: Vec<&OperatorChartPlugin<'_>> = options
+        .plugins
+        .iter()
+        .filter(|plugin| plugin.default_enabled)
+        .collect();
+    if defaults.is_empty() {
+        return (String::new(), "operations: {}\n".to_string());
+    }
+    let mut yaml = String::from("operations:\n  plugins:\n");
+    for plugin in &defaults {
+        yaml.push_str(&format!("    {}:\n      approval:\n", plugin.name));
+        for operation in options
+            .operations
+            .iter()
+            .filter(|operation| operation.plugin == plugin.name)
+        {
+            let approval = if operation.tier == RiskTier::ReadOnly {
+                "auto"
+            } else {
+                "manual"
+            };
+            yaml.push_str(&format!("        {}: {approval}\n", operation.operation));
+        }
+    }
+    let names = defaults
+        .iter()
+        .map(|plugin| plugin.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    (
+        format!(
+            "# On from the first install, and listed below: {names}. Read-only operations run without\n# approval; every operation that changes something needs approval.\n"
+        ),
+        yaml,
+    )
+}
+
 fn values_yaml(options: &OperatorChartOptions<'_>) -> String {
     let excluded_names = DEFAULT_EXCLUDED_NAMESPACES.join(", ");
+    let (default_note, operations_default) = default_operations(options);
     format!(
         r#"# Enrollment token from the control plane. It is used once, within an hour.
 # Required on install unless existingSecret is set; not needed on upgrade.
@@ -256,19 +320,16 @@ brand:
 
 # Approval rules and settings for the built-in operations, passed to the Operator as JSON.
 # Built-in plugins go under `plugins`, by plugin name; `approval` maps an operation name (or `*`)
-# to `auto` or `manual`. Operations no rule matches need approval. For example:
-#
-#   operations:
-#     plugins:
-#       kubernetes:
-#         approval:
-#           get-pods: auto
+# to `auto` or `manual`. Operations no rule matches need approval.
+{default_note}#
+# Add or change a plugin with `--set operations.plugins.<name>.approval.<operation>=auto`; Helm
+# merges maps, so this keeps the plugins listed below. Remove a listed plugin with
+# `--set operations.plugins.<name>=null`.
 #
 # This only sets approval and settings. It does not change the permissions the chart grants: those
 # follow `permission`, except for an opt-in plugin: it is off until named here (`plugins: {{name: {{}}}}`),
 # and naming it adds its rules (its changing rules only with `permission: remediation`). `custom` takes published custom plugins ({{name, version, approval, settings}}).
-operations: {{}}
-
+{operations_default}
 resources:
   requests:
     cpu: 50m
@@ -289,6 +350,8 @@ extraEnv: []
         digest = yaml_string(options.image_digest),
         excluded_names = excluded_names,
         port = OPERATOR_CHART_OTLP_PORT,
+        default_note = default_note,
+        operations_default = operations_default,
     )
 }
 
@@ -1061,7 +1124,15 @@ or `--set token=<enrollment token>`.
 `token`, `existingSecret`, `image.repository`, `image.digest`, `permission`
 (`diagnostics` or `remediation`), `logs.*`, `otlp.enabled`, `accessRequests.enabled`,
 `accessRequests.installDefinition`, `operations`, `resources`, `nodeSelector`, `tolerations`, `imagePullSecrets`, `extraEnv`, `brand.*`.
-See `values.yaml`. The `brand.*` values ship the Operator under your own name with no image of your
+See `values.yaml`.
+
+`operations` lists the plugins that are on from the first install, each with the approval of every
+operation: read-only operations are `auto`, everything that changes something is `manual`. A
+plain install can therefore run its read-only operations at once. Add a plugin with
+`--set operations.plugins.<name>.approval.<operation>=auto` (Helm merges maps, so the listed ones
+stay), or remove a listed one with `--set operations.plugins.<name>=null`. The chart's permissions
+do not depend on this value.
+ The `brand.*` values ship the Operator under your own name with no image of your
 own: they become the Operator's packaged configuration (a ConfigMap), so the release's labels, the
 approval resource group and the log lines use that name:
 
