@@ -79,9 +79,9 @@ export type AgentSyncRequest = {
   session?: string | undefined;
   supportsExecutionClaims?: boolean | undefined;
   /**
-   * Absent for Operators that predate container tunnels.
+   * Absent for Operators that predate the pod security profile settings.
    */
-  supportsTunnels?: boolean | undefined;
+  supportsPodSecurity?: boolean | undefined;
   application?: ObservedApplicationReport | null | undefined;
   /**
    * Absent for older Operators. This report has no secret values.
@@ -123,7 +123,7 @@ export type AgentSyncRequest$Outbound = {
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session?: string | undefined;
   supportsExecutionClaims?: boolean | undefined;
-  supportsTunnels?: boolean | undefined;
+  supportsPodSecurity?: boolean | undefined;
   application?: ObservedApplicationReport$Outbound | null | undefined;
   dynamicContainers?: Array<DynamicContainerReport$Outbound> | null | undefined;
   installedConfigMissing?: boolean | undefined;
@@ -150,7 +150,7 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string().optional(),
   supportsExecutionClaims: z.boolean().optional(),
-  supportsTunnels: z.boolean().optional(),
+  supportsPodSecurity: z.boolean().optional(),
   application: z.nullable(ObservedApplicationReport$outboundSchema).optional(),
   dynamicContainers: z.nullable(z.array(DynamicContainerReport$outboundSchema))
     .optional(),

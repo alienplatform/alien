@@ -40,6 +40,7 @@ impl Modify for BearerSecurity {
         crate::auth::identity_exchange::enroll,
         crate::auth::identity_exchange::rotate,
         crate::auth::identity_exchange::issue_enrollment_code,
+        crate::auth::identity_exchange::issue_setup_credential,
         crate::routes::whoami::whoami,
         crate::routes::manager_info::manager_info,
         crate::routes::logs::recent_logs,
@@ -131,6 +132,7 @@ impl Modify for BearerSecurity {
         crate::auth::identity_exchange::IdentityRotationRequest,
         crate::auth::identity_exchange::IdentityRotationResponse,
         crate::auth::identity_exchange::IssuedEnrollmentCode,
+        crate::auth::identity_exchange::IssuedSetupCredential,
         crate::auth::runtime_capability::RuntimePurpose,
         crate::auth::runtime_capability::IssuedRuntimeCredential,
         // Deployment types

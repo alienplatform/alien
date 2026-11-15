@@ -9,6 +9,11 @@ import {
   GitMetadata$outboundSchema,
 } from "./gitmetadata.js";
 import {
+  SignedStatement,
+  SignedStatement$Outbound,
+  SignedStatement$outboundSchema,
+} from "./signedstatement.js";
+import {
   StackByPlatform,
   StackByPlatform$Outbound,
   StackByPlatform$outboundSchema,
@@ -38,6 +43,22 @@ export type CreateReleaseRequest = {
    */
   projectId: string;
   /**
+   * Setup template bytes (base64) keyed by platform and template name, as
+   *
+   * @remarks
+   * the release signed them. Required for every template a signed
+   * statement names, and refused unless each hashes to its signed digest.
+   */
+  setupTemplates?: { [k: string]: { [k: string]: string } } | undefined;
+  /**
+   * Signed statements keyed by platform, from `alien release` with a
+   *
+   * @remarks
+   * signing key. Stored and returned exactly as received; deployments in
+   * protected mode verify them and deploy only the stack they contain.
+   */
+  signedStacks?: { [k: string]: SignedStatement } | undefined;
+  /**
    * The release API accepts stacks keyed by platform.
    *
    * @remarks
@@ -51,6 +72,8 @@ export type CreateReleaseRequest$Outbound = {
   channel?: string | null | undefined;
   gitMetadata?: GitMetadata$Outbound | null | undefined;
   projectId: string;
+  setupTemplates?: { [k: string]: { [k: string]: string } } | undefined;
+  signedStacks?: { [k: string]: SignedStatement$Outbound } | undefined;
   stack: StackByPlatform$Outbound;
 };
 
@@ -62,6 +85,9 @@ export const CreateReleaseRequest$outboundSchema: z.ZodType<
   channel: z.nullable(z.string()).optional(),
   gitMetadata: z.nullable(GitMetadata$outboundSchema).optional(),
   projectId: z.string(),
+  setupTemplates: z.record(z.string(), z.record(z.string(), z.string()))
+    .optional(),
+  signedStacks: z.record(z.string(), SignedStatement$outboundSchema).optional(),
   stack: StackByPlatform$outboundSchema,
 });
 

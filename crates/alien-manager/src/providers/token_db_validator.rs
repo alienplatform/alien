@@ -50,7 +50,9 @@ impl TokenDbValidator {
         let hash = sha256_hash(token);
 
         match self.token_store.validate_token(&hash).await? {
-            Some(record) => Ok(Some(record_to_subject(&record, token.to_string()))),
+            Some(record) => record_to_subject(&record, token.to_string())
+                .map(Some)
+                .ok_or_else(invalid_token),
             None => {
                 let mut err = AlienError::new(GenericError {
                     message: "Invalid token".to_string(),
@@ -92,7 +94,9 @@ impl AuthValidator for TokenDbValidator {
         let hash = sha256_hash(&token);
 
         match self.token_store.validate_token(&hash).await? {
-            Some(record) => Ok(Some(record_to_subject(&record, token))),
+            Some(record) => record_to_subject(&record, token)
+                .map(Some)
+                .ok_or_else(invalid_token),
             None => {
                 let mut err = AlienError::new(GenericError {
                     message: "Invalid token".to_string(),
@@ -108,7 +112,10 @@ impl AuthValidator for TokenDbValidator {
 /// Build a unified [`Subject`] from an OSS token record. OSS is single-tenant
 /// — `workspace_id` is always `"default"` and the project_id on every scope
 /// variant is `"default"`.
-fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: String) -> Subject {
+fn record_to_subject(
+    record: &crate::traits::token_store::TokenRecord,
+    bearer: String,
+) -> Option<Subject> {
     let (scope, role) = match (
         &record.token_type,
         record.deployment_group_id.as_deref(),
@@ -133,6 +140,15 @@ fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: S
             },
             Role::DeploymentManager,
         ),
+        (TokenType::Setup, _, Some(deployment_id)) => (
+            Scope::Deployment {
+                project_id: "default".to_string(),
+                deployment_id: deployment_id.to_string(),
+            },
+            Role::DeploymentManager,
+        ),
+        // A setup key always names its deployment; one that does not is refused.
+        (TokenType::Setup, _, None) => return None,
         (TokenType::Deployment, _, None) => {
             // Unscoped deployment token shouldn't exist; fail closed.
             (Scope::Workspace, Role::DeploymentViewer)
@@ -147,7 +163,7 @@ fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: S
         ),
     };
 
-    Subject {
+    Some(Subject {
         kind: SubjectKind::ServiceAccount {
             id: record.id.clone(),
         },
@@ -155,5 +171,43 @@ fn record_to_subject(record: &crate::traits::token_store::TokenRecord, bearer: S
         scope,
         role,
         bearer_token: bearer,
+    })
+}
+
+fn invalid_token() -> AlienError {
+    let mut err = AlienError::new(GenericError {
+        message: "Invalid token".to_string(),
+    });
+    err.code = "UNAUTHORIZED".to_string();
+    err.http_status_code = Some(401);
+    err
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(
+        token_type: TokenType,
+        deployment_id: Option<&str>,
+    ) -> crate::traits::token_store::TokenRecord {
+        crate::traits::token_store::TokenRecord {
+            id: "tok".into(),
+            token_type,
+            key_prefix: "ax_setup_".into(),
+            key_hash: "hash".into(),
+            deployment_group_id: None,
+            deployment_id: deployment_id.map(str::to_string),
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+        }
+    }
+
+    #[test]
+    fn a_setup_key_without_a_deployment_is_refused() {
+        assert!(record_to_subject(&record(TokenType::Setup, None), "k".into()).is_none());
+        let subject =
+            record_to_subject(&record(TokenType::Setup, Some("dep")), "k".into()).unwrap();
+        assert_eq!(subject.role, Role::DeploymentManager);
     }
 }

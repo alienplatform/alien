@@ -107,6 +107,16 @@ pub struct IssuedEnrollmentCode {
     pub manager_audience: String,
 }
 
+/// A key that updates one installation for a few minutes, and its deadline.
+/// Not `Debug`: it holds a key.
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IssuedSetupCredential {
+    pub token: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// Trusted result of verifying both proof and recorded component membership.
 pub struct VerifiedRuntimeIdentity {
     pub grant: RuntimeGrant,
@@ -147,6 +157,20 @@ pub trait RuntimeIdentityVerifier: Send + Sync {
     /// never consumes the code. Implementations without codes refuse.
     async fn enrollment_code_is_live(&self, _code: &str) -> Result<bool, AlienError> {
         Ok(false)
+    }
+
+    /// Issue a short-lived key that updates `deployment_id`, to the Operator
+    /// that proves it holds that deployment's live key. The key is made for
+    /// one deployment, lives 15 minutes, and replaces the deployment's earlier
+    /// setup keys, so at most one is live. The implementation refuses any other
+    /// caller: another deployment's key, a setup key itself, an expired key.
+    /// By default no key is issued.
+    async fn issue_setup_credential(
+        &self,
+        _deployment_id: &str,
+        _operator_key: &str,
+    ) -> Result<IssuedSetupCredential, AlienError> {
+        Err(ErrorData::unauthorized("Setup credentials are unavailable").into_generic())
     }
 
     /// Issue a one-hour, one-use enrollment code for this deployment's operator.
@@ -193,6 +217,10 @@ pub fn router(
         .route(
             "/v1/deployments/{id}/enrollment-code",
             post(issue_enrollment_code),
+        )
+        .route(
+            "/v1/deployments/{id}/setup-credential",
+            post(issue_setup_credential),
         )
         .layer(Extension(credentials))
         .layer(Extension(verifier))
@@ -361,6 +389,44 @@ pub async fn issue_enrollment_code(
     }
 }
 
+/// Issue a short-lived key for rerunning an installation, to its own Operator.
+///
+/// The caller proves itself with the Operator's live key as the bearer token.
+/// It is not a session: the key is checked against this deployment only, so
+/// every other caller gets the same refusal.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post, path = "/v1/deployments/{id}/setup-credential", operation_id = "issueSetupCredential",
+    tag = "identity",
+    params(("id" = String, Path, description = "Deployment ID")),
+    responses((status = 200, body = IssuedSetupCredential), (status = 401), (status = 409), (status = 503))
+))]
+pub async fn issue_setup_credential(
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Extension(verifier): Extension<Arc<dyn RuntimeIdentityVerifier>>,
+) -> Response {
+    let Some(key) = headers
+        .get(http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|key| !key.is_empty())
+    else {
+        return ErrorData::unauthorized("Setup credential refused").into_response();
+    };
+    // Provider errors can carry the key. Never log or return their message.
+    match verifier.issue_setup_credential(&id, key).await {
+        Ok(issued) => ([(http::header::CACHE_CONTROL, "no-store")], Json(issued)).into_response(),
+        Err(error) if error.retryable => {
+            AlienError::new(ErrorData::AuthenticationUnavailable).into_response()
+        }
+        // Only the Operator's own key reaches this point, so saying why is no leak.
+        Err(error) if error.code == "DEPLOYMENT_REMOVING" => {
+            AlienError::new(ErrorData::DeploymentRemoving { deployment_id: id }).into_response()
+        }
+        Err(_) => ErrorData::unauthorized("Setup credential refused").into_response(),
+    }
+}
+
 /// Whether `error` is the refusal of a token-made code for a deployment that
 /// already has an operator key.
 fn is_key_exists_refusal(error: &AlienError) -> bool {
@@ -393,4 +459,90 @@ async fn record_refused_token_code(state: &AppState, deployment_id: &str, stage:
             ],
         })
         .await;
+}
+
+#[cfg(test)]
+mod setup_credential_route_tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// Accepts one key for one deployment and records what it was asked.
+    struct OneKey;
+
+    #[async_trait]
+    impl RuntimeIdentityVerifier for OneKey {
+        async fn verify(
+            &self,
+            _: &IdentityExchangeRequest,
+            _: &str,
+        ) -> Result<VerifiedRuntimeIdentity, AlienError> {
+            Err(ErrorData::unauthorized("unused").into_generic())
+        }
+
+        async fn issue_setup_credential(
+            &self,
+            deployment_id: &str,
+            operator_key: &str,
+        ) -> Result<IssuedSetupCredential, AlienError> {
+            if deployment_id == "dep-1" && operator_key == "ax_day_v1_live" {
+                Ok(IssuedSetupCredential {
+                    token: "ax_setup_minted".into(),
+                    expires_at: Utc::now() + chrono::Duration::minutes(15),
+                })
+            } else {
+                Err(ErrorData::unauthorized("a key with the secret in it").into_generic())
+            }
+        }
+    }
+
+    async fn call(deployment: &str, authorization: Option<&str>) -> (u16, String, Option<String>) {
+        let verifier: Arc<dyn RuntimeIdentityVerifier> = Arc::new(OneKey);
+        let app = Router::new()
+            .route(
+                "/v1/deployments/{id}/setup-credential",
+                post(issue_setup_credential),
+            )
+            .layer(Extension(verifier));
+        let mut request = Request::post(format!("/v1/deployments/{deployment}/setup-credential"));
+        if let Some(value) = authorization {
+            request = request.header("authorization", value);
+        }
+        let response = app
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status().as_u16();
+        let cache = response
+            .headers()
+            .get("cache-control")
+            .map(|v| v.to_str().unwrap().to_string());
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&body).into_owned(), cache)
+    }
+
+    #[tokio::test]
+    async fn only_the_live_operator_key_gets_a_key_and_the_answer_is_not_cached() {
+        let (status, body, cache) = call("dep-1", Some("Bearer ax_day_v1_live")).await;
+        assert_eq!(status, 200);
+        assert!(body.contains("ax_setup_minted"));
+        assert_eq!(cache.as_deref(), Some("no-store"));
+
+        for (deployment, header) in [
+            ("dep-1", None),
+            ("dep-1", Some("Basic abc")),
+            ("dep-1", Some("Bearer ")),
+            ("dep-1", Some("Bearer ax_day_v1_other")),
+            ("dep-2", Some("Bearer ax_day_v1_live")),
+        ] {
+            let (status, body, _) = call(deployment, header).await;
+            assert_eq!(status, 401, "{deployment} {header:?}");
+            assert!(
+                !body.contains("secret"),
+                "the verifier's message leaked: {body}"
+            );
+            assert!(!body.contains("ax_day_v1"), "a key was echoed: {body}");
+        }
+    }
 }
