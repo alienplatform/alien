@@ -51,6 +51,12 @@ pub(crate) trait IdentityStore: Send + Sync {
     /// Why the identity cannot be saved right now, if it cannot. While it is
     /// set the operator keeps its current key and does not rotate.
     fn rotation_blocked(&self) -> Option<String>;
+    /// The saved identity for a caller that only looks at it (is the operator
+    /// enrolled, where is its manager), so it may be a few seconds old. A
+    /// manager request asks the API server once, in `read`, not once per check.
+    async fn read_recent(&self) -> Result<Option<DailyIdentityState>> {
+        self.read().await
+    }
     /// The operator is shutting down: from now on nothing is written, so a
     /// terminating pod cannot put its identity into a Secret that a newer
     /// install has since created.
@@ -159,7 +165,12 @@ struct Inner {
     memory: Option<DailyIdentityState>,
     /// The local database key last seen in, or generated for, the Secret.
     key: Option<String>,
+    /// When `secret` was last read or written.
+    fetched_at: Option<std::time::Instant>,
 }
+
+/// How long a caller that only looks at the identity may be served a copy.
+const RECENT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What reading the Secret came to.
 enum Loaded {
@@ -240,6 +251,7 @@ impl SecretIdentityStore {
             Ok(Some(mut secret)) => {
                 self.read_worked();
                 inner.secret = Some(secret.clone());
+                inner.fetched_at = Some(std::time::Instant::now());
                 let saved = parse_identity(&secret).ok().flatten();
                 if saved.is_none() {
                     if let Some(restored) = self.restore(inner, &secret).await {
@@ -341,6 +353,7 @@ impl SecretIdentityStore {
             Ok(PutOutcome::Stored(stored)) => {
                 self.write_worked();
                 inner.secret = Some(stored);
+                inner.fetched_at = Some(std::time::Instant::now());
                 Ok(())
             }
             Ok(PutOutcome::Conflict) => {
@@ -609,6 +622,21 @@ impl IdentityStore for SecretIdentityStore {
         self.blocked.lock().expect("blocked flag").clone()
     }
 
+    async fn read_recent(&self) -> Result<Option<DailyIdentityState>> {
+        {
+            let inner = self.inner.lock().await;
+            if let (Some(secret), Some(at)) = (&inner.secret, inner.fetched_at) {
+                if at.elapsed() < RECENT {
+                    if let Some(state) = parse_identity(secret)? {
+                        return Ok(Some(state));
+                    }
+                    return Ok(inner.memory.clone());
+                }
+            }
+        }
+        self.read().await
+    }
+
     fn stop_writing(&self) {
         self.stopping.store(true, Ordering::Relaxed);
     }
@@ -629,6 +657,7 @@ mod tests {
         version: AtomicU32,
         refuse_writes: AtomicBool,
         refuse_reads: AtomicBool,
+        gets: AtomicU32,
     }
 
     impl Fake {
@@ -646,6 +675,7 @@ mod tests {
                 version: AtomicU32::new(1),
                 refuse_writes: AtomicBool::new(false),
                 refuse_reads: AtomicBool::new(false),
+                gets: AtomicU32::new(0),
             })
         }
         /// What `helm upgrade --force`, `kubectl replace` and GitOps replace do.
@@ -671,6 +701,7 @@ mod tests {
     #[async_trait]
     impl SecretBackend for Fake {
         async fn get(&self) -> Result<Option<Secret>> {
+            self.gets.fetch_add(1, Ordering::Relaxed);
             if self.refuse_reads.load(Ordering::Relaxed) {
                 return Err(AlienError::new(ErrorData::ConfigurationError {
                     message: "connection refused".into(),
@@ -954,6 +985,22 @@ mod tests {
         fake.refuse_writes.store(false, Ordering::Relaxed);
         store.write(&state("dep_1", "key-a")).await.unwrap();
         assert!(!store.reported_write.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn checks_that_only_look_at_the_identity_do_not_each_ask_the_api_server() {
+        let fake = Fake::with_empty_secret();
+        let store = store(&fake);
+        store
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        store.read().await.unwrap();
+        let before = fake.gets.load(Ordering::Relaxed);
+        for _ in 0..4 {
+            assert_eq!(store.read_recent().await.unwrap().unwrap().current, "key-a");
+        }
+        assert_eq!(fake.gets.load(Ordering::Relaxed), before);
     }
 
     #[tokio::test]

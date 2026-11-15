@@ -235,10 +235,11 @@ impl OperatorDb {
     pub(crate) async fn read_enrolled_daily_identity(
         &self,
     ) -> Result<Option<crate::daily_identity::DailyIdentityState>> {
-        Ok(self
-            .read_daily_identity()
-            .await?
-            .filter(|identity| !identity.deployment_id.is_empty()))
+        let saved = match &self.identity_store {
+            Some(store) => store.read_recent().await?,
+            None => self.read_daily_identity().await?,
+        };
+        Ok(saved.filter(|identity| !identity.deployment_id.is_empty()))
     }
 
     pub(crate) async fn write_daily_identity(
@@ -1823,8 +1824,7 @@ impl OperatorDb {
             .context(ErrorData::DatabaseError {
                 message: "Failed to queue Pod logs".to_string(),
             })?;
-            self.queue_changed();
-            conn.execute(
+                        conn.execute(
                 "INSERT INTO pod_log_offsets (pod_uid, container, restart_count, timestamp, ordinal) VALUES (?, ?, ?, ?, ?) ON CONFLICT(pod_uid, container, restart_count) DO UPDATE SET timestamp = excluded.timestamp, ordinal = excluded.ordinal",
                 (
                     pod_uid.to_string(),
@@ -1852,6 +1852,9 @@ impl OperatorDb {
             .context(ErrorData::DatabaseError {
                 message: "Failed to commit Pod log batch".to_string(),
             })?;
+        // Only a committed batch changes the queue; the measured size grows by it
+        // instead of being forgotten, so the table is not summed again per insert.
+        self.queue_grew(data.len());
         Ok(())
     }
 
@@ -3258,6 +3261,26 @@ mod tests {
                 .unwrap(),
             later
         );
+    }
+
+    #[tokio::test]
+    async fn pod_log_batches_grow_the_measured_queue_size_instead_of_forgetting_it() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let db = OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        db.store_telemetry_capped("logs", b"first", Some(1 << 20))
+            .await
+            .unwrap();
+        assert_eq!(*db.queued_telemetry_bytes.lock().unwrap(), Some(5));
+        let offset = PodLogOffset {
+            timestamp: "2026-09-27T00:00:00.000000001Z".to_string(),
+            ordinal: 1,
+        };
+        db.store_pod_log_batch("pod-uid", "api", 0, &offset, b"pod-line")
+            .await
+            .unwrap();
+        assert_eq!(*db.queued_telemetry_bytes.lock().unwrap(), Some(13));
     }
 
     #[tokio::test]
