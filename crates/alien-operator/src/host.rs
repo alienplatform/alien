@@ -18,6 +18,7 @@ pub fn docker_socket_path() -> String {
 
 /// A Docker Engine client on the socket. Cheap; built per use so a daemon
 /// restart needs no reconnect logic.
+#[cfg(unix)]
 pub fn docker_client() -> Result<Docker> {
     Docker::connect_with_unix(&docker_socket_path(), 30, bollard::API_DEFAULT_VERSION)
         .into_alien_error()
@@ -25,6 +26,18 @@ pub fn docker_client() -> Result<Docker> {
             message: "could not open the Docker socket".to_string(),
         })
 }
+
+/// Host logs and host inventory read a Unix socket, journald and systemd. On
+/// other platforms they are not available.
+#[cfg(not(unix))]
+pub fn docker_client() -> Result<Docker> {
+    Err(alien_error::AlienError::new(ErrorData::PodLogReadFailed {
+        message: "Docker host collection is only supported on Unix platforms".to_string(),
+    }))
+}
+
+/// Whether host logs and host inventory can run on this platform.
+pub const HOST_COLLECTION_SUPPORTED: bool = cfg!(unix);
 
 // ---------------------------------------------------------------- inventory
 

@@ -92,12 +92,27 @@ pub fn parse_sources(
 pub fn config_from_env(enrolled_by_token: bool) -> Result<Option<HostLogsConfig>> {
     let value = std::env::var("OPERATOR_HOST_LOGS").ok();
     log_units_from_env()?;
+    if !crate::host::HOST_COLLECTION_SUPPORTED {
+        return Ok(unsupported_platform(value.as_deref()));
+    }
     parse_sources(
         value.as_deref(),
         Path::new("/.dockerenv").exists(),
         Path::new(&crate::host::docker_socket_path()).exists(),
         enrolled_by_token,
     )
+}
+
+/// Host collection is off on a platform without journald, systemd and Unix
+/// sockets. One line says so when someone asked for a source.
+pub(crate) fn unsupported_platform(value: Option<&str>) -> Option<HostLogsConfig> {
+    if value
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty() && value != "none")
+    {
+        warn!("OPERATOR_HOST_LOGS is ignored: host logs and host inventory are only supported on Linux");
+    }
+    None
 }
 
 /// What the inventory reports. The collectors that log sources turned on decide
@@ -107,6 +122,9 @@ pub fn inventory_config(
     logs: Option<HostLogsConfig>,
     enrolled_by_token: bool,
 ) -> Option<HostLogsConfig> {
+    if !crate::host::HOST_COLLECTION_SUPPORTED {
+        return None;
+    }
     logs.or_else(|| enrolled_by_token.then_some(HostLogsConfig::default()))
 }
 
@@ -1122,6 +1140,14 @@ mod tests {
         let next = second.accept(at(101, 0)).unwrap();
         assert_eq!(next.ordinal, 2);
         assert!(second.accept(at(102, 0)).is_some());
+    }
+
+    #[test]
+    fn an_unsupported_platform_turns_host_collection_off() {
+        // The function every non-Unix build goes through: no source, whatever was asked.
+        assert!(unsupported_platform(Some("journald,docker")).is_none());
+        assert!(unsupported_platform(None).is_none());
+        assert!(unsupported_platform(Some("none")).is_none());
     }
 
     #[test]
