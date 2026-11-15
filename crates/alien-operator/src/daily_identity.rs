@@ -525,7 +525,7 @@ impl DailyIdentity {
             .read_daily_identity()
             .await?
             .ok_or_else(|| failed("Component identity has not been enrolled"))?;
-        if state.audience != audience || state.deployment_id.is_empty() {
+        if !same_endpoint(&state.audience, audience) || state.deployment_id.is_empty() {
             return Err(failed(
                 "Component identity is not enrolled for this manager",
             ));
@@ -1363,6 +1363,34 @@ mod persistence_tests {
             code,
             deployment_id: Some("deployment-one"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_later_token_for_the_same_manager_with_a_trailing_slash_keeps_the_working_key() {
+        let (db, mut state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(20)).await;
+        // Enrolled with the manager URL as its audience, as a join token does.
+        state.audience = state.manager_url.clone();
+        db.write_daily_identity(&state).await.unwrap();
+        db.persist_enrolled_identity(&state).await.unwrap();
+        *manager.current.lock().await = key_hash(&state.current);
+        let slashed = format!("{}/", state.manager_url);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        let (deployment, _) = identity
+            .connect(EnrollmentRequest {
+                manager_url: &slashed,
+                audience: &slashed,
+                code: "ax_enroll_original",
+                deployment_id: Some("deployment-one"),
+            })
+            .await
+            .unwrap();
+        assert_eq!(deployment, "deployment-one");
+        // The key is unchanged.
+        assert_eq!(
+            db.read_daily_identity().await.unwrap().unwrap().current,
+            state.current
+        );
     }
 
     #[tokio::test]

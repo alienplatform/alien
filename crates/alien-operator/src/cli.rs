@@ -712,9 +712,13 @@ async fn run_operator_cli(
                     message: "Component enrollment requires a manager URL".into(),
                 })
             })?;
-        let audience = join_token
+        // An enrolled operator keeps the audience it enrolled with: a later
+        // token may spell the same manager URL differently.
+        let audience = stored_identity
             .as_ref()
-            .map(|token| token.manager_url.clone())
+            .filter(|identity| !identity.deployment_id.is_empty())
+            .map(|identity| identity.audience.clone())
+            .or_else(|| join_token.as_ref().map(|token| token.manager_url.clone()))
             .or(args.manager_audience)
             .or_else(|| {
                 stored_identity
