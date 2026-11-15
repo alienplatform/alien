@@ -880,9 +880,7 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
         assert!(compact.contains("management_url = var.management_url"));
         let readme = module.get("README.md").expect("README.md");
         assert!(
-            readme.contains(
-                "wait until its status is `teardown-required`, `retention-required` or `deleted`"
-            ),
+            readme.contains("wait until its status is `teardown-required`, `retention-required` or `deleted`"),
             "{mode} README names the erase-first order"
         );
         assert!(
@@ -1211,13 +1209,9 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     );
 }
 
-/// A module that installs the chart itself must hand the chart the bindings of the storage it
-/// created. The provider-rendered values carry `infrastructure: null`; without this the
-/// Operator finds no binding for the bucket and fails on its first step.
-#[test]
-fn embedded_helm_install_passes_the_module_created_bindings_to_the_chart() {
-    let stack = Stack::new("eks-registered-setup-bindings".to_string())
-        .add(
+/// Renders the registered EKS module that installs the chart itself.
+fn embedded_helm_module(with_storage: bool) -> alien_terraform::ModuleFiles {
+    let mut builder = Stack::new("eks-registered-setup-bindings".to_string()).add(
             KubernetesCluster::new("kubernetes".to_string())
                 .provider(KubernetesClusterProvider::Eks)
                 .ownership(KubernetesClusterOwnership::Managed)
@@ -1225,12 +1219,14 @@ fn embedded_helm_install_passes_the_module_created_bindings_to_the_chart() {
                 .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
                 .build(),
             ResourceLifecycle::Frozen,
-        )
-        .add(
+    );
+    if with_storage {
+        builder = builder.add(
             Storage::new("files".to_string()).build(),
             ResourceLifecycle::Frozen,
-        )
-        .build();
+        );
+    }
+    let stack = builder.build();
     let registry = TfRegistry::built_in();
     let module = generate_product_terraform_module(
         &stack,
@@ -1262,6 +1258,15 @@ fn embedded_helm_install_passes_the_module_created_bindings_to_the_chart() {
     )
     .expect("module should render");
 
+    module
+}
+
+/// A module that installs the chart itself must hand the chart the bindings of the storage it
+/// created. The provider-rendered values carry `infrastructure: null`; without this the
+/// Operator finds no binding for the bucket and fails on its first step.
+#[test]
+fn embedded_helm_install_passes_the_module_created_bindings_to_the_chart() {
+    let module = embedded_helm_module(true);
     let helm = module.get("helm.tf").expect("helm.tf");
     let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
@@ -1272,12 +1277,36 @@ fn embedded_helm_install_passes_the_module_created_bindings_to_the_chart() {
         compact.contains("bucketName = aws_s3_bucket.files.bucket"),
         "the chart's binding must name the bucket this module creates: {helm}"
     );
-    // The chart value and the published output must be the same bindings.
+    // The values entry must come after the provider values so it wins in Helm's merge.
+    assert!(
+        compact.find("helm_values").expect("provider values")
+            < compact.find("yamlencode({ infrastructure").expect("infrastructure"),
+        "{helm}"
+    );
     let outputs = module.get("outputs.tf").expect("outputs.tf");
     assert!(
         outputs.contains("output \"chart_infrastructure_json\""),
         "{outputs}"
     );
+}
+
+/// A stack with nothing the chart binds renders the same helm_release values as before: only the
+/// provider's values, no infrastructure entry, no published output.
+#[test]
+fn embedded_helm_install_without_chart_bound_resources_is_unchanged() {
+    let module = embedded_helm_module(false);
+    let helm = module.get("helm.tf").expect("helm.tf");
+    let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        !compact.contains("infrastructure"),
+        "no infrastructure entry without chart-bound resources: {helm}"
+    );
+    assert!(
+        compact.contains("values = [ acme_app_deployment.this.helm_values, yamlencode({ remoteOperator = "),
+        "the values list keeps the provider values: {helm}"
+    );
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    assert!(!outputs.contains("chart_infrastructure_json"), "{outputs}");
 }
 
 #[test]
