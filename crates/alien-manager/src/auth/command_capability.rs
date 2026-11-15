@@ -286,6 +286,52 @@ pub fn commands_key_may_use_target(subject: &Subject, target: &CommandTarget) ->
     subject.role != Role::CommandsReceiver || !is_operations_command_target(&target.resource_id)
 }
 
+/// The one rule for who may lease, answer or release a command on a reserved
+/// operations target. Checked first on every such path, before any policy, so
+/// no policy can widen it.
+///
+/// Targets that are not reserved are not decided here (`true`). A reserved id
+/// must carry its expected type (operator: daemon, operations worker: worker);
+/// any other pairing is refused for everyone. On a reserved
+/// target only two credentials of the command's own deployment pass:
+/// 1. the Operator's operations credential, for the Operator queue only;
+/// 2. the deployment's own deployment token with the manager role, for both
+///    reserved ids (a token-installed Operator relay may lease the operations
+///    worker from stack state).
+///
+/// Other subjects are refused.
+pub fn reserved_target_decision(
+    subject: &Subject,
+    deployment_id: &str,
+    target: &CommandTarget,
+) -> bool {
+    if !is_operations_command_target(&target.resource_id) {
+        return true;
+    }
+    // A reserved id with any other type is not a target that exists: refused
+    // for every caller before anything is touched.
+    if !alien_commands::server::command_registry::is_operations_target(target) {
+        return false;
+    }
+    match &subject.scope {
+        Scope::Commands {
+            deployment_id: scoped,
+            capability: CommandCapability::Receive { target: held },
+            ..
+        } => {
+            subject.role == Role::CommandCapability
+                && scoped == deployment_id
+                && is_operator_queue(target)
+                && held == target
+        }
+        Scope::Deployment {
+            deployment_id: scoped,
+            ..
+        } => subject.role == Role::DeploymentManager && scoped == deployment_id,
+        _ => false,
+    }
+}
+
 /// Authorize response and release operations from canonical command data.
 pub fn receiver_context_allowed(subject: &Subject, command: &CommandAccessContext) -> bool {
     matches!(
@@ -726,5 +772,80 @@ mod tests {
         other.workspace_id = "workspace-1".to_string();
         other.project_id = "project-2".to_string();
         assert!(!receiver_context_allowed(&own, &other));
+    }
+
+    fn scoped_subject(role: Role, scope: Scope) -> Subject {
+        Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "caller".to_string(),
+            },
+            workspace_id: "workspace-1".to_string(),
+            scope,
+            role,
+            bearer_token: "bearer".to_string(),
+        }
+    }
+
+    fn deployment_scope(deployment_id: &str) -> Scope {
+        Scope::Deployment {
+            project_id: "project-1".to_string(),
+            deployment_id: deployment_id.to_string(),
+        }
+    }
+
+    #[test]
+    fn only_the_two_allowed_credentials_reach_a_reserved_target() {
+        let operator = CommandTarget::new(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon);
+        let worker = CommandTarget::new(
+            OPERATIONS_WORKER_COMMAND_TARGET_ID,
+            CommandTargetType::Worker,
+        );
+        let ordinary = CommandTarget::new("api", CommandTargetType::Worker);
+
+        // Rule 1: the operations credential, Operator queue only, own deployment.
+        let own = receive_subject(operator.clone());
+        assert!(reserved_target_decision(&own, "deployment-1", &operator));
+        assert!(!reserved_target_decision(&own, "deployment-2", &operator));
+        assert!(!reserved_target_decision(&own, "deployment-1", &worker));
+
+        // Rule 2: the deployment's own token with the manager role, both ids.
+        let token = scoped_subject(Role::DeploymentManager, deployment_scope("deployment-1"));
+        assert!(reserved_target_decision(&token, "deployment-1", &operator));
+        assert!(reserved_target_decision(&token, "deployment-1", &worker));
+        assert!(!reserved_target_decision(&token, "deployment-2", &worker));
+
+        // Other subjects are refused on both ids.
+        let others = [
+            scoped_subject(Role::WorkspaceAdmin, Scope::Workspace),
+            scoped_subject(Role::WorkspaceMember, Scope::Workspace),
+            scoped_subject(
+                Role::ProjectDeveloper,
+                Scope::Project {
+                    project_id: "project-1".to_string(),
+                },
+            ),
+            scoped_subject(Role::DeploymentViewer, deployment_scope("deployment-1")),
+            scoped_subject(Role::OperatorSync, deployment_scope("deployment-1")),
+            scoped_subject(Role::CommandsReceiver, deployment_scope("deployment-1")),
+            scoped_subject(
+                Role::DeploymentGroupDeployer,
+                Scope::DeploymentGroup {
+                    project_id: "project-1".to_string(),
+                    deployment_group_id: "group-1".to_string(),
+                },
+            ),
+            operations_subject("workspace-1", "project-1", "deployment-1", "x/y"),
+        ];
+        for other in &others {
+            for target in [&operator, &worker] {
+                assert!(
+                    !reserved_target_decision(other, "deployment-1", target),
+                    "{:?} reached {target:?}",
+                    other.role
+                );
+            }
+            // Ordinary targets are not decided here.
+            assert!(reserved_target_decision(other, "deployment-1", &ordinary));
+        }
     }
 }

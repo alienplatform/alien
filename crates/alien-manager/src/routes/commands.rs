@@ -219,6 +219,9 @@ async fn require_command_receive_access(
     deployment_id: &str,
     target: &alien_core::CommandTarget,
 ) -> Result<(), Response> {
+    if !crate::auth::command_capability::reserved_target_decision(subject, deployment_id, target) {
+        return Err(ErrorData::forbidden("Access denied").into_response());
+    }
     if let Some(allowed) =
         crate::auth::command_capability::receiver_request_decision(subject, deployment_id, target)
     {
@@ -248,6 +251,13 @@ async fn require_command_execution_context(
     subject: &crate::auth::Subject,
     command: &alien_commands::server::CommandAccessContext,
 ) -> Result<(), Response> {
+    if !crate::auth::command_capability::reserved_target_decision(
+        subject,
+        &command.deployment_id,
+        &command.target,
+    ) {
+        return Err(ErrorData::forbidden("Access denied").into_response());
+    }
     if matches!(subject.scope, crate::auth::Scope::Commands { .. }) {
         return if state.authz.can_execute_command_context(subject, command) {
             Ok(())
@@ -767,14 +777,22 @@ async fn release_lease(
             return e;
         }
     } else {
-        // The commands-only key never reaches a reserved operations target.
-        if let Some(command) = &command {
-            if !crate::auth::command_capability::commands_key_may_use_target(
-                &subject,
-                &command.target,
-            ) {
-                return ErrorData::forbidden("Access denied").into_response();
-            }
+        // The rule for the reserved operations targets needs the command's
+        // target. A lease whose command record cannot be loaded is not
+        // released: no delete path for command records was found, so this is
+        // not expected, and the lease expires on its own.
+        let Some(command) = &command else {
+            return alien_error::AlienError::new(
+                alien_commands::error::ErrorData::CommandNotFound { command_id },
+            )
+            .into_response();
+        };
+        if !crate::auth::command_capability::reserved_target_decision(
+            &subject,
+            &command.deployment_id,
+            &command.target,
+        ) {
+            return ErrorData::forbidden("Access denied").into_response();
         }
         if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
             return e;

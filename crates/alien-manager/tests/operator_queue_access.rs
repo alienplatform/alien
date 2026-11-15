@@ -51,9 +51,6 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const WORKSPACE: &str = "default";
-/// What a deployment-scoped viewer may do on the Operator queue today; the
-/// policy for existing roles is not part of this change.
-const DEPLOYMENT_VIEWER_TODAY: bool = true;
 const AUDIENCE: &str = "https://manager.example.test";
 
 struct TokenValidator(HashMap<String, Subject>);
@@ -140,6 +137,8 @@ struct Fixture {
     state: AppState,
     dep_a: String,
     dep_b: String,
+    /// Another deployment in deployment A's group.
+    dep_a2: String,
     project: String,
     credentials: Arc<RuntimeCredentials>,
     identity: Arc<StandaloneRuntimeIdentity>,
@@ -212,6 +211,36 @@ async fn fixture_with(sqlite_registry: bool) -> Fixture {
             .unwrap();
         ids.push((group.id, deployment));
     }
+    // A second deployment in the first group.
+    let group_a_id = ids[0].0.clone();
+    let second_in_group = deployment_store
+        .create_with_state(
+            &Subject::system(),
+            CreateImportedDeploymentParams {
+                deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                name: "deployment-group-a-second".to_owned(),
+                deployment_group_id: group_a_id,
+                platform: Platform::Kubernetes,
+                base_platform: None,
+                stack_settings: StackSettings::default(),
+                stack_state: StackState::new(Platform::Kubernetes),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "running".to_owned(),
+                current_release_id: None,
+                desired_release_id: None,
+                import_source: None,
+                setup_metadata: None,
+                setup_target: "test".to_owned(),
+                setup_fingerprint: "test".to_owned(),
+                setup_fingerprint_version: 1,
+                input_values: Default::default(),
+                deployment_token: None,
+                management_config: None,
+            },
+        )
+        .await
+        .unwrap();
     let (group_a, dep_a) = ids.remove(0);
     let (group_b, dep_b) = ids.remove(0);
     let project = dep_a.project_id.clone();
@@ -288,6 +317,15 @@ async fn fixture_with(sqlite_registry: bool) -> Fixture {
         ),
     );
     add(
+        "deployment-a2-token",
+        legacy(
+            WORKSPACE,
+            deployment_scope(&second_in_group.id),
+            Role::DeploymentManager,
+            false,
+        ),
+    );
+    add(
         "deployment-b-token",
         legacy(
             WORKSPACE,
@@ -296,6 +334,27 @@ async fn fixture_with(sqlite_registry: bool) -> Fixture {
             false,
         ),
     );
+    add(
+        "workspace-viewer",
+        legacy(WORKSPACE, Scope::Workspace, Role::WorkspaceViewer, true),
+    );
+    // Setup and setup-import tokens are validated as the deployment's own
+    // deployment-manager subject (project "default", as the token validator
+    // builds them), so they pass the same rule as the deployment token.
+    for name in ["setup-token", "setup-import-token"] {
+        add(
+            name,
+            legacy(
+                WORKSPACE,
+                Scope::Deployment {
+                    project_id: "default".to_owned(),
+                    deployment_id: dep_a.id.clone(),
+                },
+                Role::DeploymentManager,
+                false,
+            ),
+        );
+    }
     add(
         "deployment-a-viewer",
         legacy(
@@ -379,6 +438,13 @@ async fn fixture_with(sqlite_registry: bool) -> Fixture {
             .await
             .unwrap();
         registry
+            .register_target(
+                OPERATIONS_WORKER_COMMAND_TARGET_ID,
+                CommandTargetType::Worker,
+            )
+            .await
+            .unwrap();
+        registry
     };
 
     let identity = Arc::new(
@@ -435,6 +501,7 @@ async fn fixture_with(sqlite_registry: bool) -> Fixture {
         state,
         dep_a: dep_a.id,
         dep_b: dep_b.id,
+        dep_a2: second_in_group.id,
         project,
         credentials,
         identity,
@@ -476,13 +543,18 @@ impl Fixture {
         let stack_target = CommandTarget::new("daemon-a", CommandTargetType::Daemon);
         let worker_target = CommandTarget::new("worker-a", CommandTargetType::Worker);
         vec![
-            ("workspace key", legacy("workspace-key"), true),
-            ("workspace user", legacy("workspace-user"), true),
-            ("project developer", legacy("project-developer"), true),
-            // The standalone manager lets every project-scoped user act on the
-            // project's deployments; that policy is not part of this change.
-            ("project viewer", legacy("project-viewer"), true),
-            ("group token, own group", legacy("group-a-token"), true),
+            ("workspace key", legacy("workspace-key"), false),
+            ("workspace viewer", legacy("workspace-viewer"), false),
+            ("setup token, own deployment", legacy("setup-token"), true),
+            (
+                "setup-import token, own deployment",
+                legacy("setup-import-token"),
+                true,
+            ),
+            ("workspace user", legacy("workspace-user"), false),
+            ("project developer", legacy("project-developer"), false),
+            ("project viewer", legacy("project-viewer"), false),
+            ("group token, own group", legacy("group-a-token"), false),
             ("group token, other group", legacy("group-b-token"), false),
             (
                 "deployment token, own deployment",
@@ -497,12 +569,10 @@ impl Fixture {
             (
                 "deployment viewer, own deployment",
                 legacy("deployment-a-viewer"),
-                DEPLOYMENT_VIEWER_TODAY,
+                false,
             ),
             ("commands-only key", legacy("commands-key"), false),
-            // The standalone manager serves one workspace and does not compare the
-            // workspace of a workspace-scoped key.
-            ("other workspace key", legacy("other-workspace-key"), true),
+            ("other workspace key", legacy("other-workspace-key"), false),
             (
                 "sender operations capability",
                 legacy("sender-operations-capability"),
@@ -578,6 +648,11 @@ impl Fixture {
     }
 
     async fn queue_command(&self, deployment: &str) -> String {
+        self.queue_command_for(deployment, OPERATOR_COMMAND_TARGET_ID)
+            .await
+    }
+
+    async fn queue_command_for(&self, deployment: &str, target_id: &str) -> String {
         self.state
             .command_server
             .create_command(alien_core::CreateCommandRequest {
@@ -586,7 +661,7 @@ impl Fixture {
                 params: alien_core::BodySpec::inline(b"hello"),
                 deadline: None,
                 idempotency_key: None,
-                target_resource_id: Some(OPERATOR_COMMAND_TARGET_ID.to_owned()),
+                target_resource_id: Some(target_id.to_owned()),
                 operation_result_contract: None,
             })
             .await
@@ -595,12 +670,20 @@ impl Fixture {
     }
 
     async fn lease_directly(&self, deployment: &str) -> alien_core::LeaseInfo {
+        self.lease_target(deployment, &operator_queue()).await
+    }
+
+    async fn lease_target(
+        &self,
+        deployment: &str,
+        target: &CommandTarget,
+    ) -> alien_core::LeaseInfo {
         let mut leased = self
             .state
             .command_server
             .acquire_lease(
                 deployment,
-                &serde_json::from_value(lease_body(deployment, &operator_queue())).unwrap(),
+                &serde_json::from_value(lease_body(deployment, target)).unwrap(),
             )
             .await
             .unwrap();
@@ -1263,4 +1346,300 @@ async fn only_an_operators_daily_key_is_issued_the_operations_credential() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, _) = exchange(&fixture, &fixture.dep_a, purpose, daily(successor)).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+fn respond_body() -> Value {
+    serde_json::to_value(alien_core::SubmitResponseRequest {
+        response: alien_core::CommandResponse::success(b"done"),
+    })
+    .unwrap()
+}
+
+/// Two deployments in one group: the group's token and the first
+/// deployment's own token reach nothing of the second deployment's
+/// queue; the second deployment's own token reaches all of it.
+#[tokio::test]
+async fn a_group_token_for_one_deployment_is_refused_on_a_second_deployment_in_the_group() {
+    for (bearer, allowed) in [
+        ("group-a-token", false),
+        ("deployment-a-token", false),
+        ("deployment-a2-token", true),
+    ] {
+        for action in ["lease", "respond", "release"] {
+            let fixture = fixture().await;
+            let router = fixture.router();
+            let command_id = fixture.queue_command(&fixture.dep_a2).await;
+            let lease = fixture.lease_directly(&fixture.dep_a2).await;
+            let before = fixture.state_of(&command_id).await;
+            let (status, body) = match action {
+                "lease" => {
+                    send(
+                        &router,
+                        bearer,
+                        "POST",
+                        "/v1/commands/leases",
+                        lease_body(&fixture.dep_a2, &operator_queue()),
+                    )
+                    .await
+                }
+                "respond" => {
+                    send(
+                        &router,
+                        bearer,
+                        "PUT",
+                        &format!(
+                            "/v1/commands/{command_id}/response?lease_id={}",
+                            lease.lease_id
+                        ),
+                        respond_body(),
+                    )
+                    .await
+                }
+                _ => {
+                    send(
+                        &router,
+                        bearer,
+                        "POST",
+                        &format!("/v1/commands/leases/{}/release", lease.lease_id),
+                        json!({}),
+                    )
+                    .await
+                }
+            };
+            if allowed {
+                assert_eq!(status, StatusCode::OK, "{bearer} {action}: {body}");
+            } else {
+                assert_eq!(status, StatusCode::FORBIDDEN, "{bearer} {action}: {body}");
+                assert_eq!(
+                    fixture.state_of(&command_id).await,
+                    before,
+                    "{bearer} {action} must leave the command untouched"
+                );
+            }
+        }
+    }
+}
+
+/// A command that was never leased can be answered without a lease id; on
+/// the Operator queue that path is closed to other callers.
+#[tokio::test]
+async fn a_pending_operator_command_is_not_answered_without_a_lease_by_others() {
+    for index in 0..case_count().await {
+        let (fixture, name, bearer, allowed) = case(index).await;
+        if name.starts_with("operatorOperations, other") {
+            continue;
+        }
+        let router = fixture.router();
+        let command_id = fixture.queue_command(&fixture.dep_a).await;
+        let before = fixture.state_of(&command_id).await;
+        let (status, body) = send(
+            &router,
+            &bearer,
+            "PUT",
+            &format!("/v1/commands/{command_id}/response"),
+            respond_body(),
+        )
+        .await;
+        if !allowed {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+            assert_eq!(
+                fixture.state_of(&command_id).await,
+                before,
+                "{name} must not have answered the command"
+            );
+        }
+    }
+}
+
+/// `operations-worker` is delivered by push. On the lease route only its own
+/// deployment's token passes the rule; other subjects are refused.
+#[tokio::test]
+async fn nobody_but_the_deployments_own_token_leases_the_operations_worker() {
+    for index in 0..case_count().await {
+        let (fixture, name, bearer, allowed) = case(index).await;
+        let router = fixture.router();
+        for resource_type in [CommandTargetType::Worker, CommandTargetType::Daemon] {
+            let target = CommandTarget::new(OPERATIONS_WORKER_COMMAND_TARGET_ID, resource_type);
+            let (status, body) = send(
+                &router,
+                &bearer,
+                "POST",
+                "/v1/commands/leases",
+                lease_body(&fixture.dep_a, &target),
+            )
+            .await;
+            if allowed
+                && !name.starts_with("operatorOperations")
+                && resource_type == CommandTargetType::Worker
+            {
+                assert_ne!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+            } else {
+                assert_eq!(
+                    status,
+                    StatusCode::FORBIDDEN,
+                    "{name} {resource_type:?}: {body}"
+                );
+            }
+        }
+    }
+}
+
+/// A reserved id with the wrong type is not a target: every caller, the
+/// deployment's own token included, is refused before a lease slot is taken
+/// or an attempt is counted.
+#[tokio::test]
+async fn a_reserved_id_with_the_wrong_type_is_refused_for_everyone_and_touches_nothing() {
+    for index in 0..case_count().await {
+        let (fixture, name, bearer, _) = case(index).await;
+        let router = fixture.router();
+        let command_id = fixture.queue_command(&fixture.dep_a).await;
+        let before = fixture.state_of(&command_id).await;
+        for (id, resource_type) in confused_targets() {
+            if id == OPERATIONS_WORKER_COMMAND_TARGET_ID
+                && resource_type == CommandTargetType::Worker
+            {
+                continue; // the real worker target, not a confusion
+            }
+            let (status, body) = send(
+                &router,
+                &bearer,
+                "POST",
+                "/v1/commands/leases",
+                lease_body(&fixture.dep_a, &CommandTarget::new(id, resource_type)),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{name} {id}/{resource_type:?}: {body}"
+            );
+            assert_eq!(fixture.state_of(&command_id).await, before, "{name}");
+        }
+        // Nothing was leased or counted: the real queue still hands the
+        // command out as a first attempt.
+        let lease = fixture.lease_directly(&fixture.dep_a).await;
+        assert_eq!(lease.command_id, command_id, "{name}");
+        assert_eq!(lease.attempt, 1, "{name}: no attempt was spent");
+    }
+}
+
+/// Answer and release on the operations worker: the own deployment token
+/// passes, the others are refused and leave command and lease alone.
+#[tokio::test]
+async fn answer_and_release_on_the_operations_worker_follow_the_same_rule() {
+    let worker = CommandTarget::new(
+        OPERATIONS_WORKER_COMMAND_TARGET_ID,
+        CommandTargetType::Worker,
+    );
+    for index in 0..case_count().await {
+        for action in ["respond", "release"] {
+            let (fixture, name, bearer, allowed) = {
+                let fixture = memory_fixture().await;
+                let (name, bearer, allowed) = fixture.callers().remove(index);
+                (fixture, name, bearer, allowed)
+            };
+            // Only the deployment-manager subjects pass on the worker; the
+            // operations credential is the Operator queue's alone.
+            let allowed = allowed && !name.starts_with("operatorOperations");
+            let router = fixture.router();
+            let command_id = fixture
+                .queue_command_for(&fixture.dep_a, OPERATIONS_WORKER_COMMAND_TARGET_ID)
+                .await;
+            let lease = fixture.lease_target(&fixture.dep_a, &worker).await;
+            let before = fixture.state_of(&command_id).await;
+            let (status, body) = if action == "respond" {
+                send(
+                    &router,
+                    &bearer,
+                    "PUT",
+                    &format!(
+                        "/v1/commands/{command_id}/response?lease_id={}",
+                        lease.lease_id
+                    ),
+                    respond_body(),
+                )
+                .await
+            } else {
+                send(
+                    &router,
+                    &bearer,
+                    "POST",
+                    &format!("/v1/commands/leases/{}/release", lease.lease_id),
+                    json!({}),
+                )
+                .await
+            };
+            if allowed {
+                assert_eq!(status, StatusCode::OK, "{name} {action}: {body}");
+            } else {
+                assert_eq!(status, StatusCode::FORBIDDEN, "{name} {action}: {body}");
+                assert_eq!(
+                    fixture.state_of(&command_id).await,
+                    before,
+                    "{name} {action}"
+                );
+                assert!(
+                    fixture
+                        .state
+                        .command_server
+                        .get_lease_owner(&lease.lease_id)
+                        .await
+                        .unwrap()
+                        .is_some(),
+                    "{name} {action} must leave the lease in place"
+                );
+            }
+        }
+    }
+}
+
+/// The response-context route applies the same rule to a reserved-target
+/// command.
+#[tokio::test]
+async fn response_context_for_a_reserved_target_command_follows_the_rule() {
+    for index in 0..case_count().await {
+        let (fixture, name, bearer, allowed) = case(index).await;
+        let router = fixture.router();
+        let command_id = fixture.queue_command(&fixture.dep_a).await;
+        let lease = fixture.lease_directly(&fixture.dep_a).await;
+        let (status, body) = send(
+            &router,
+            &bearer,
+            "GET",
+            &format!(
+                "/v1/commands/{command_id}/response-context?leaseId={}",
+                lease.lease_id
+            ),
+            Value::Null,
+        )
+        .await;
+        if allowed {
+            assert_ne!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+        } else {
+            assert_eq!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+        }
+    }
+}
+
+/// The allowed row of the no-lease answer: the deployment's own token (and the
+/// operations credential) may answer a pending command without a lease id.
+#[tokio::test]
+async fn the_allowed_callers_pass_the_no_lease_answer() {
+    for index in 0..case_count().await {
+        let (fixture, name, bearer, allowed) = case(index).await;
+        if !allowed || name.starts_with("operatorOperations, other") {
+            continue;
+        }
+        let router = fixture.router();
+        let command_id = fixture.queue_command(&fixture.dep_a).await;
+        let (status, body) = send(
+            &router,
+            &bearer,
+            "PUT",
+            &format!("/v1/commands/{command_id}/response"),
+            respond_body(),
+        )
+        .await;
+        assert_ne!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+    }
 }

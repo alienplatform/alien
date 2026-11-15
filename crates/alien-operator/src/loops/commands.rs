@@ -169,7 +169,10 @@ async fn poll_and_dispatch(
 
     // 4. Enumerate every push-capable target from stack state.
     let platform = state.config.platform;
-    let targets = enumerate_push_targets(stack_state, platform);
+    let enrolled = crate::is_enrolled(&state.db)
+        .await
+        .map_err(|e| format!("Failed to read the enrollment state: {}", e))?;
+    let targets = enumerate_push_targets(stack_state, platform, enrolled);
     if targets.is_empty() {
         debug!("No push-capable command targets in stack state");
         // Drop any stale cached dispatchers.
@@ -329,6 +332,10 @@ fn normalize_leased_envelopes(
     }
 }
 
+/// The reserved id of the manager's operations Worker (the manager's registry
+/// owns the name; the Operator build does not link the manager side).
+const OPERATIONS_WORKER_TARGET_ID: &str = "operations-worker";
+
 /// Enumerate every push-capable command target in stack state.
 ///
 /// A target is a Running resource whose outputs are `WorkerOutputs` with
@@ -339,12 +346,23 @@ fn normalize_leased_envelopes(
 /// are sorted by resource id so enumeration (and the per-tick lease round) is
 /// deterministic and fair regardless of the underlying `HashMap` iteration
 /// order.
-fn enumerate_push_targets(stack_state: &StackState, platform: Platform) -> Vec<PushTarget> {
+fn enumerate_push_targets(
+    stack_state: &StackState,
+    platform: Platform,
+    enrolled: bool,
+) -> Vec<PushTarget> {
     let mut targets: Vec<PushTarget> = stack_state
         .resources
         .iter()
         .filter_map(|(resource_id, resource_state)| {
             if resource_state.status != ResourceStatus::Running {
+                return None;
+            }
+            // An enrolled Operator holds no credential the manager accepts for
+            // the reserved operations targets, and the manager pushes to that
+            // Worker itself: asking for a capability would only be refused on
+            // every tick. A token-installed Operator keeps leasing it.
+            if enrolled && resource_id == OPERATIONS_WORKER_TARGET_ID {
                 return None;
             }
             let worker = resource_state.config.downcast_ref::<alien_core::Worker>()?;
@@ -784,7 +802,7 @@ mod tests {
             .resources
             .insert("worker-d".to_string(), worker_state_no_outputs("worker-d"));
 
-        let targets = enumerate_push_targets(&stack_state, Platform::Aws);
+        let targets = enumerate_push_targets(&stack_state, Platform::Aws, false);
 
         assert_eq!(
             targets,
@@ -806,6 +824,49 @@ mod tests {
         );
     }
 
+    /// The operations worker is a stack Worker with a push target, so the
+    /// relay of an Operator installed with a deployment token leases it with
+    /// that token. The manager lets only the deployment's own token do so on
+    /// this id; an enrolled Operator's relay authority is refused for it, so it skips it.
+    #[test]
+    fn enumerate_includes_the_operations_worker_for_the_relay() {
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "operations-worker".to_string(),
+            worker_state("operations-worker", Some("lambda-ops")),
+        );
+        stack_state.resources.insert(
+            "worker-a".to_string(),
+            worker_state("worker-a", Some("lambda-a")),
+        );
+
+        let ids: Vec<String> = enumerate_push_targets(&stack_state, Platform::Aws, false)
+            .into_iter()
+            .map(|target| target.resource_id)
+            .collect();
+        assert_eq!(ids, vec!["operations-worker", "worker-a"]);
+    }
+
+    /// An enrolled Operator skips the reserved ids; ordinary Workers stay.
+    #[test]
+    fn enumerate_skips_the_operations_worker_for_an_enrolled_operator() {
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "operations-worker".to_string(),
+            worker_state("operations-worker", Some("lambda-ops")),
+        );
+        stack_state.resources.insert(
+            "worker-a".to_string(),
+            worker_state("worker-a", Some("lambda-a")),
+        );
+
+        let ids: Vec<String> = enumerate_push_targets(&stack_state, Platform::Aws, true)
+            .into_iter()
+            .map(|target| target.resource_id)
+            .collect();
+        assert_eq!(ids, vec!["worker-a"]);
+    }
+
     #[test]
     fn enumerate_empty_when_no_push_targets() {
         let mut stack_state = StackState::new(Platform::Aws);
@@ -816,7 +877,7 @@ mod tests {
             .resources
             .insert("worker-b".to_string(), worker_state_no_outputs("worker-b"));
 
-        assert!(enumerate_push_targets(&stack_state, Platform::Aws).is_empty());
+        assert!(enumerate_push_targets(&stack_state, Platform::Aws, false).is_empty());
     }
 
     #[test]
@@ -836,7 +897,7 @@ mod tests {
             worker_state("running", Some("http://running.worker")),
         );
 
-        let targets = enumerate_push_targets(&stack_state, Platform::Kubernetes);
+        let targets = enumerate_push_targets(&stack_state, Platform::Kubernetes, false);
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].resource_id, "running");
@@ -936,7 +997,7 @@ mod tests {
             .resources
             .insert("long-worker".to_string(), state);
 
-        let targets = enumerate_push_targets(&stack_state, Platform::Kubernetes);
+        let targets = enumerate_push_targets(&stack_state, Platform::Kubernetes, false);
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].lease_seconds, 3660);
