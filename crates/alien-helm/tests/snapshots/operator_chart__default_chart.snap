@@ -62,8 +62,7 @@ rules:
   - apiGroups: ['']
     resources: ['events']
     verbs: ['list']
-  # Required by kubernetes/get-pods: list pods
-  # Required by kubernetes/restart: restart a pod
+  # Required by operation kubernetes/get-pods: list pods
   # Required by the Operator runtime: Pod status of each observed workload; pod log discovery in podApi mode.
   - apiGroups: ['']
     resources: ['pods']
@@ -149,28 +148,6 @@ subjects:
     name: alien
     namespace: shop
 ---
-# Source: operator/templates/service.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: alien
-  namespace: shop
-  labels:
-    app.kubernetes.io/name: operator
-    app.kubernetes.io/instance: alien
-    app.kubernetes.io/managed-by: Helm
-    app.kubernetes.io/version: "1.2.3"
-    helm.sh/chart: "operator-1.2.3"
-spec:
-  type: ClusterIP
-  selector:
-    app.kubernetes.io/name: operator
-    app.kubernetes.io/instance: alien
-  ports:
-    - name: otlp
-      port: 4318
-      targetPort: otlp
----
 # Source: operator/templates/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -196,6 +173,9 @@ spec:
       labels:
         app.kubernetes.io/name: operator
         app.kubernetes.io/instance: alien
+      annotations:
+        # A new token on upgrade restarts the pod, which then uses it.
+        checksum/enrollment: 3d4819b11014e73ed221a3a7d50a9a9e4c1c001522c0e6ee121413b9c37a577d
     spec:
       serviceAccountName: alien
       automountServiceAccountToken: true
@@ -242,6 +222,8 @@ spec:
               value: "/etc/alien/enrollment/token"
             - name: OPERATOR_ACCESS_REQUESTS
               value: "false"
+            - name: OPERATOR_OTLP_MAX_QUEUED_BYTES
+              value: "268435456"
             - name: SYNC_INTERVAL
               value: "30"
             - name: OPERATOR_READINESS_PORT
@@ -250,17 +232,9 @@ spec:
               value: "cluster"
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: "200"
-            - name: OPERATOR_POD_LOG_EXCLUDE_NAMESPACES
-              value: "kube-system,kube-public,kube-node-lease"
-            - name: OTLP_HOST
-              value: "0.0.0.0"
-            - name: OTLP_PORT
-              value: "4318"
           ports:
             - name: readiness
               containerPort: 8081
-            - name: otlp
-              containerPort: 4318
           readinessProbe:
             httpGet:
               path: /ready

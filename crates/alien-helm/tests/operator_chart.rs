@@ -170,7 +170,6 @@ fn the_default_install_has_no_volume_claim_no_hook_and_no_custom_resource_defini
             "RoleBinding",
             "Secret",
             "Secret",
-            "Service",
             "ServiceAccount"
         ]
     );
@@ -195,9 +194,6 @@ fn the_default_install_has_no_volume_claim_no_hook_and_no_custom_resource_defini
     assert!(volumes
         .iter()
         .any(|volume| volume["name"].as_str() == Some("data") && volume.get("emptyDir").is_some()));
-    let service = kind(&documents, "Service")[0];
-    assert_eq!(service["spec"]["ports"][0]["port"].as_i64(), Some(4318));
-    assert_eq!(service["spec"]["type"].as_str(), Some("ClusterIP"));
 }
 
 #[test]
@@ -244,8 +240,9 @@ fn remediation_adds_the_write_verbs_of_operations_and_nothing_else() {
         "permission=remediation",
     ]));
     let actual = rules(kind(&documents, "ClusterRole")[0]);
-    assert!(actual.contains(&rule("", "pods", &["delete"])));
     assert!(actual.contains(&rule("", "pods", &["get", "list"])));
+    // The mutating operation's rule arrives whole, with its read verb, only here.
+    assert!(actual.contains(&rule("", "pods", &["delete", "get"])));
     assert_eq!(actual.len(), 8);
 }
 
@@ -296,8 +293,7 @@ fn access_requests_are_off_by_default_and_on_they_bring_the_kind_and_its_rules()
 }
 
 #[test]
-fn install_needs_a_token_or_an_existing_secret_and_upgrade_does_not() {
-    assert!(refusal(&[]).contains("token"));
+fn install_takes_a_token_or_an_existing_secret_never_both_and_upgrade_needs_neither() {
     assert!(refusal(&[
         "--set",
         &format!("token={TOKEN}"),
@@ -305,6 +301,12 @@ fn install_needs_a_token_or_an_existing_secret_and_upgrade_does_not() {
         "existingSecret=mine"
     ])
     .contains("not both"));
+
+    // Without either, the chart still renders (it does not depend on whether this is an
+    // install, which `helm template` and GitOps tools cannot tell): there is just no
+    // enrollment Secret, and the Operator uses its saved identity or says to issue a new token.
+    let bare = documents(&render(&[]));
+    assert_eq!(kind(&bare, "Secret").len(), 1);
 
     let upgrade = render(&["--is-upgrade"]);
     let documents = documents(&upgrade);
@@ -349,10 +351,25 @@ fn logs_settings_reach_the_operator_and_an_invalid_permission_is_refused() {
         "OPERATOR_POD_LOG_NAMESPACES\n              value: \"a,b\"",
         "OPERATOR_POD_LOG_POD_SELECTOR\n              value: \"app=web\"",
         "OPERATOR_POD_LOG_MAX_STREAMS\n              value: \"50\"",
-        "OPERATOR_POD_LOG_EXCLUDE_NAMESPACES\n              value: \"kube-system,kube-public,kube-node-lease\"",
     ] {
         assert!(rendered.contains(expected), "missing {expected}");
     }
+    // The system namespaces are left out by the Operator itself; nothing is set by default.
+    assert!(!rendered.contains("OPERATOR_POD_LOG_EXCLUDE_NAMESPACES"));
+    assert!(!rendered.contains("INCLUDE_SYSTEM_NAMESPACES"));
+    let custom = render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "logs.excludeNamespaces={monitoring}",
+        "--set",
+        "logs.includeSystemNamespaces=true",
+    ]);
+    assert!(
+        custom.contains("OPERATOR_POD_LOG_EXCLUDE_NAMESPACES\n              value: \"monitoring\"")
+    );
+    assert!(custom
+        .contains("OPERATOR_POD_LOG_INCLUDE_SYSTEM_NAMESPACES\n              value: \"true\""));
     assert!(refusal(&[
         "--set",
         &format!("token={TOKEN}"),
@@ -377,4 +394,102 @@ fn the_chart_passes_helm_lint() {
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
+}
+
+#[test]
+fn the_intake_is_off_by_default_and_the_queue_is_capped() {
+    let default = render(&["--set", &format!("token={TOKEN}")]);
+    let documents_default = documents(&default);
+    assert!(kind(&documents_default, "Service").is_empty());
+    assert!(!default.contains("OTLP_PORT"));
+    assert!(default.contains("OPERATOR_OTLP_MAX_QUEUED_BYTES\n              value: \"268435456\""));
+    let on = documents(&render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "otlp.enabled=true",
+    ]));
+    assert_eq!(kind(&on, "Service").len(), 1);
+    let service = kind(&on, "Service")[0];
+    assert_eq!(service["spec"]["ports"][0]["port"].as_i64(), Some(4318));
+    assert_eq!(service["spec"]["type"].as_str(), Some("ClusterIP"));
+}
+
+#[test]
+fn scheduling_pull_secrets_and_extra_environment_reach_the_pod_and_global_is_allowed() {
+    let rendered = render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "nodeSelector.pool=ops",
+        "--set",
+        "tolerations[0].key=dedicated",
+        "--set",
+        "tolerations[0].operator=Exists",
+        "--set",
+        "imagePullSecrets[0].name=regcred",
+        "--set",
+        "extraEnv[0].name=HTTPS_PROXY",
+        "--set",
+        "extraEnv[0].value=http://proxy:3128",
+        "--set",
+        "global.anything=1",
+    ]);
+    let documents = documents(&rendered);
+    let spec = &kind(&documents, "Deployment")[0]["spec"]["template"]["spec"];
+    assert_eq!(spec["nodeSelector"]["pool"].as_str(), Some("ops"));
+    assert_eq!(spec["tolerations"][0]["key"].as_str(), Some("dedicated"));
+    assert_eq!(
+        spec["imagePullSecrets"][0]["name"].as_str(),
+        Some("regcred")
+    );
+    let env = spec["containers"][0]["env"].as_sequence().unwrap();
+    assert!(env
+        .iter()
+        .any(|entry| entry["name"].as_str() == Some("HTTPS_PROXY")
+            && entry["value"].as_str() == Some("http://proxy:3128")));
+    // The values are checked: an unknown one is refused.
+    assert!(refusal(&["--set", &format!("token={TOKEN}"), "--set", "bogus=1"]).contains("bogus"));
+}
+
+#[test]
+fn a_new_token_on_upgrade_restarts_the_pod_so_it_is_used() {
+    let annotation = |arguments: &[&str]| {
+        let documents = documents(&render(arguments));
+        kind(&documents, "Deployment")[0]["spec"]["template"]["metadata"]["annotations"]
+            ["checksum/enrollment"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let first = annotation(&["--set", &format!("token={TOKEN}")]);
+    let second = annotation(&["--set", &format!("token={TOKEN}x")]);
+    let none = annotation(&[]);
+    assert_ne!(first, second);
+    assert_ne!(first, none);
+}
+
+#[test]
+fn operations_that_could_read_secrets_or_exec_are_refused_at_generation() {
+    let bad = |resource: &str, verbs: &[&str]| {
+        let mut operations = operations();
+        operations[0].permissions.rules[0].resource = resource.into();
+        operations[0].permissions.rules[0].verbs = verbs.iter().map(|v| v.to_string()).collect();
+        generate_operator_chart(OperatorChartOptions {
+            chart_version: "1.0.0",
+            app_version: "1.0.0",
+            image_repository: "registry.example/operator",
+            image_digest: DIGEST,
+            operations: &operations,
+            label_domain: None,
+        })
+    };
+    assert!(bad("secrets", &["get"]).is_err());
+    assert!(bad("pods/exec", &["create"]).is_err());
+    assert!(bad("*", &["get"]).is_err());
+    assert!(
+        bad("pods", &["delete"]).is_err(),
+        "a read-only operation cannot delete"
+    );
+    assert!(bad("pods", &["get"]).is_ok());
 }

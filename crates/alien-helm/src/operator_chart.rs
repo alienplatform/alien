@@ -12,9 +12,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alien_core::access_request_crd::{access_request_crd_names, AccessRequestCrdNames};
-use alien_operations_sdk::KubernetesOperationPermissions;
-use alien_permissions::operations::kubernetes::{grants_verb, operator_runtime_rules};
-use alien_permissions::operations::KubernetesMode;
+use alien_operations_sdk::{KubernetesOperationPermissions, RiskTier};
+use alien_permissions::operations::kubernetes::operator_runtime_rules;
 use indexmap::IndexMap;
 
 use crate::generator::{access_request_crd_doc, HelmChart};
@@ -48,6 +47,16 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
     validate_digest(options.image_digest)?;
     if options.image_repository.is_empty() || options.image_repository.contains(['@', ' ']) {
         return Err("the image repository must be a name without a tag or digest".into());
+    }
+    // The same validation a plugin goes through: it refuses Secrets, exec and
+    // wildcards, and a rule that does not fit the operation's tier.
+    for operation in options.operations {
+        operation.validate().map_err(|error| {
+            format!(
+                "operation {}/{} has invalid Kubernetes permissions: {error}",
+                operation.plugin, operation.operation
+            )
+        })?;
     }
     let crd_names = access_request_crd_names(options.label_domain);
     let mut files = IndexMap::new();
@@ -93,6 +102,7 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
         access_request_crd_template(&crd_names),
     );
     files.insert("templates/NOTES.txt".to_string(), NOTES.to_string());
+    files.insert("README.md".to_string(), README.to_string());
     Ok(HelmChart {
         name: "operator".to_string(),
         files,
@@ -122,10 +132,7 @@ fn chart_yaml(options: &OperatorChartOptions<'_>) -> String {
 }
 
 fn values_yaml(options: &OperatorChartOptions<'_>) -> String {
-    let excluded = DEFAULT_EXCLUDED_NAMESPACES
-        .iter()
-        .map(|namespace| format!("    - {namespace}\n"))
-        .collect::<String>();
+    let excluded_names = DEFAULT_EXCLUDED_NAMESPACES.join(", ");
     format!(
         r#"# Enrollment token from the control plane. It is used once, within an hour.
 # Required on install unless existingSecret is set; not needed on upgrade.
@@ -143,16 +150,21 @@ permission: diagnostics
 
 logs:
   enabled: true
-  # Read only these namespaces; empty means all except excludeNamespaces.
+  # Read only these namespaces; empty means all namespaces not left out.
   namespaces: []
-  excludeNamespaces:
-{excluded}  # Kubernetes label selector Pods must match, for example "app=web".
+  # Left out in addition to {excluded_names}.
+  excludeNamespaces: []
+  # Set to true to read those system namespaces too.
+  includeSystemNamespaces: false
+  # Kubernetes label selector Pods must match, for example "app=web".
   podSelector: ""
   maxStreams: 200
 
 otlp:
-  # A ClusterIP Service on port {port} that applications send OTLP to.
-  enabled: true
+  # A ClusterIP Service on port {port} that applications send OTLP to. Anything in
+  # the cluster that can reach it can send telemetry through this Operator, so it is
+  # off until you need it.
+  enabled: false
 
 accessRequests:
   # The in-cluster approval flow (a custom resource). Off by default.
@@ -169,10 +181,18 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+
+nodeSelector: {{}}
+tolerations: []
+# Secrets of registries to pull the Operator image from, for example [{{name: regcred}}].
+imagePullSecrets: []
+# Extra environment variables for the Operator, for example proxy settings:
+# [{{name: HTTPS_PROXY, value: "http://proxy:3128"}}].
+extraEnv: []
 "#,
         repository = yaml_string(options.image_repository),
         digest = yaml_string(options.image_digest),
-        excluded = excluded,
+        excluded_names = excluded_names,
         port = OPERATOR_CHART_OTLP_PORT,
     )
 }
@@ -201,6 +221,7 @@ fn values_schema_json() -> serde_json::Result<String> {
                     "enabled": {"type": "boolean"},
                     "namespaces": {"type": "array", "items": {"type": "string"}},
                     "excludeNamespaces": {"type": "array", "items": {"type": "string"}},
+                    "includeSystemNamespaces": {"type": "boolean"},
                     "podSelector": {"type": "string"},
                     "maxStreams": {"type": "integer", "minimum": 1, "maximum": 256}
                 }
@@ -216,7 +237,27 @@ fn values_schema_json() -> serde_json::Result<String> {
                 "properties": {"enabled": {"type": "boolean"}}
             },
             "operations": {"type": "object"},
-            "resources": {"type": "object"}
+            "resources": {"type": "object"},
+            "nodeSelector": {"type": "object", "additionalProperties": {"type": "string"}},
+            "tolerations": {"type": "array", "items": {"type": "object"}},
+            "imagePullSecrets": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {"name": {"type": "string", "minLength": 1}}
+                }
+            },
+            "extraEnv": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["name"],
+                    "properties": {"name": {"type": "string", "minLength": 1}}
+                }
+            },
+            // Helm passes `global` to every subchart, so the chart can be one.
+            "global": {"type": "object"}
         }
     });
     serde_json::to_string_pretty(&schema).map(|mut text| {
@@ -233,12 +274,26 @@ struct RuleScope {
     resource_names: BTreeSet<String>,
 }
 
+/// Which installs get a rule.
+#[derive(Clone, Copy)]
+enum Tier {
+    /// Every install: the Operator's own needs and read-only operations.
+    Always,
+    /// Only `permission: remediation`: operations that change things.
+    Remediation,
+}
+
 #[derive(Default)]
 struct Grant {
-    /// Verbs a read-only (`diagnostics`) install gets.
-    read_verbs: BTreeSet<String>,
-    /// Verbs only a `remediation` install gets.
-    write_verbs: BTreeSet<String>,
+    /// Verbs and the operations that need them, for every install.
+    always: Section,
+    /// Verbs and the operations that need them, for `remediation` installs.
+    remediation: Section,
+}
+
+#[derive(Default)]
+struct Section {
+    verbs: BTreeSet<String>,
     reasons: BTreeSet<String>,
 }
 
@@ -252,7 +307,7 @@ fn cluster_role_template(
                    names: BTreeSet<String>,
                    verbs: Vec<String>,
                    reason: String,
-                   fixed: bool| {
+                   tier: Tier| {
         let grant = rules
             .entry(RuleScope {
                 api_group: group.to_owned(),
@@ -260,14 +315,12 @@ fn cluster_role_template(
                 resource_names: names,
             })
             .or_default();
-        for verb in verbs {
-            if fixed || grants_verb(KubernetesMode::Diagnostics, &verb) {
-                grant.read_verbs.insert(verb);
-            } else {
-                grant.write_verbs.insert(verb);
-            }
-        }
-        grant.reasons.insert(reason);
+        let section = match tier {
+            Tier::Always => &mut grant.always,
+            Tier::Remediation => &mut grant.remediation,
+        };
+        section.verbs.extend(verbs);
+        section.reasons.insert(reason);
     };
     for rule in operator_runtime_rules()
         .into_iter()
@@ -279,10 +332,16 @@ fn cluster_role_template(
             BTreeSet::new(),
             rule.verbs,
             format!("the Operator runtime: {}.", rule.reason),
-            true,
+            Tier::Always,
         );
     }
+    // An operation's rules follow its tier as a whole, not verb by verb: a
+    // read-only install gets the read-only operations and nothing of the others.
     for operation in operations {
+        let tier = match operation.tier {
+            RiskTier::ReadOnly => Tier::Always,
+            RiskTier::Mutating | RiskTier::Destructive => Tier::Remediation,
+        };
         for rule in &operation.permissions.rules {
             add(
                 &rule.api_group,
@@ -290,10 +349,10 @@ fn cluster_role_template(
                 rule.resource_names.iter().cloned().collect(),
                 rule.verbs.clone(),
                 format!(
-                    "{}/{}: {}",
+                    "operation {}/{}: {}",
                     operation.plugin, operation.operation, rule.reason
                 ),
-                false,
+                tier,
             );
         }
     }
@@ -302,19 +361,21 @@ fn cluster_role_template(
         "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: {{ include \"operator.clusterRoleName\" . }}\n  labels:\n    {{- include \"operator.labels\" . | nindent 4 }}\nrules:\n",
     );
     for (scope, grant) in &rules {
-        let comment: String = grant
-            .reasons
-            .iter()
-            .map(|reason| format!("  # Required by {reason}\n"))
-            .collect();
-        if !grant.read_verbs.is_empty() {
-            yaml.push_str(&comment);
-            yaml.push_str(&rule_yaml(scope, &grant.read_verbs));
+        let comment = |section: &Section| -> String {
+            section
+                .reasons
+                .iter()
+                .map(|reason| format!("  # Required by {reason}\n"))
+                .collect()
+        };
+        if !grant.always.verbs.is_empty() {
+            yaml.push_str(&comment(&grant.always));
+            yaml.push_str(&rule_yaml(scope, &grant.always.verbs));
         }
-        if !grant.write_verbs.is_empty() {
+        if !grant.remediation.verbs.is_empty() {
             yaml.push_str("  {{- if eq .Values.permission \"remediation\" }}\n");
-            yaml.push_str(&comment);
-            yaml.push_str(&rule_yaml(scope, &grant.write_verbs));
+            yaml.push_str(&comment(&grant.remediation));
+            yaml.push_str(&rule_yaml(scope, &grant.remediation.verbs));
             yaml.push_str("  {{- end }}\n");
         }
     }
@@ -499,9 +560,6 @@ type: Opaque
 const DEPLOYMENT: &str = r#"{{- if and .Values.token .Values.existingSecret }}
 {{- fail "Set either token or existingSecret, not both." }}
 {{- end }}
-{{- if and .Release.IsInstall (not .Values.token) (not .Values.existingSecret) }}
-{{- fail "Install with --set token=<enrollment token> or --set existingSecret=<name of a Secret with the key `token`>." }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -520,7 +578,22 @@ spec:
     metadata:
       labels:
         {{- include "operator.selectorLabels" . | nindent 8 }}
+      annotations:
+        # A new token on upgrade restarts the pod, which then uses it.
+        checksum/enrollment: {{ include (print $.Template.BasePath "/enrollment-secret.yaml") . | sha256sum }}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ include "operator.name" . }}
       automountServiceAccountToken: true
       securityContext:
@@ -566,6 +639,8 @@ spec:
               value: "/etc/alien/enrollment/token"
             - name: OPERATOR_ACCESS_REQUESTS
               value: {{ .Values.accessRequests.enabled | quote }}
+            - name: OPERATOR_OTLP_MAX_QUEUED_BYTES
+              value: "268435456"
             - name: SYNC_INTERVAL
               value: "30"
             - name: OPERATOR_READINESS_PORT
@@ -583,6 +658,10 @@ spec:
             - name: OPERATOR_POD_LOG_EXCLUDE_NAMESPACES
               value: {{ join "," . | quote }}
             {{- end }}
+            {{- if .Values.logs.includeSystemNamespaces }}
+            - name: OPERATOR_POD_LOG_INCLUDE_SYSTEM_NAMESPACES
+              value: "true"
+            {{- end }}
             {{- with .Values.logs.podSelector }}
             - name: OPERATOR_POD_LOG_POD_SELECTOR
               value: {{ . | quote }}
@@ -597,6 +676,9 @@ spec:
             {{- with .Values.operations }}
             - name: OPERATOR_OPERATIONS
               value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
           ports:
             - name: readiness
@@ -666,5 +748,42 @@ Applications can send OTLP over HTTP to:
   http://{{ include "operator.name" . }}.{{ .Release.Namespace }}.svc:4318
 {{- end }}
 
-The enrollment token works once. To reinstall, issue a new one.
+About the enrollment token:
+  * It works once, within an hour. The operator then keeps its identity in the Secret
+    {{ include "operator.identitySecret" . }}; upgrades without a token leave it alone.
+  * It names the control plane this operator will obey, so treat it as a trust root.
+    `--set token=...` stays in the Helm release history; prefer `--set existingSecret=<name>`
+    (a Secret in this namespace with the key `token`) and delete that Secret after the install.
+  * `helm uninstall` deletes the identity Secret. Installing again, or restoring that Secret from
+    an old backup, needs a new token.
+"#;
+
+const README: &str = r#"# Operator
+
+Connects a Kubernetes cluster to its control plane: environment status, logs from the whole
+cluster, an optional OTLP intake and the control plane's built-in operations.
+
+    helm install alien oci://<registry>/operator --namespace alien --create-namespace \
+      --set existingSecret=<name of a Secret with the key `token`>
+
+or `--set token=<enrollment token>`.
+
+## The enrollment token
+
+- It works once, within an hour. The Operator then keeps its identity in the Secret
+  `<release>-identity` (created empty by the chart) and its working data in an `emptyDir`, so
+  there is no volume claim and no StorageClass is needed.
+- It names the control plane this Operator will obey, so it is a trust root. `--set token=...`
+  stays in the Helm release history; prefer `existingSecret`, and delete that Secret after the
+  install.
+- `helm upgrade` needs no token. A new token on upgrade restarts the pod, which uses it.
+- `helm uninstall` deletes the identity Secret. Installing again, or restoring the identity
+  Secret from an old backup, needs a new token.
+
+## Values
+
+`token`, `existingSecret`, `image.repository`, `image.digest`, `permission`
+(`diagnostics` or `remediation`), `logs.*`, `otlp.enabled`, `accessRequests.enabled`,
+`operations`, `resources`, `nodeSelector`, `tolerations`, `imagePullSecrets`, `extraEnv`.
+See `values.yaml`. There is no self-update: whoever installs the chart owns the image version.
 "#;
