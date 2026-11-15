@@ -28,8 +28,41 @@ fn require_gateway(ctx: &ResourceControllerContext<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Ports the gateway VMs serve: the sandbox proxy and the private policy administration port.
+const PROXY_PORT: u16 = 3128;
+const ADMIN_PORT: u16 = 3129;
+
+/// The gateway VM addresses setup recorded on the deployment Network, empty when setup predates
+/// them or the stack has no Network. Only the Internet sandboxes' own checks decide whether that
+/// is an error, so the declaration records nothing rather than failing here.
+fn setup_gateway_ips(ctx: &ResourceControllerContext<'_>) -> Result<Vec<String>> {
+    use crate::core::state_utils::StackResourceStateExt;
+    let Some(network_id) = ctx.desired_stack.resources().find_map(|(id, entry)| {
+        entry
+            .config
+            .downcast_ref::<alien_core::Network>()
+            .map(|_| id.to_string())
+    }) else {
+        return Ok(Vec::new());
+    };
+    let Some(state) = ctx.state.resources.get(&network_id) else {
+        return Ok(Vec::new());
+    };
+    let network =
+        state.get_internal_controller_typed::<crate::network::AzureNetworkController>()?;
+    Ok(network
+        .sandbox_network
+        .map(|declared| declared.gateway_ips)
+        .unwrap_or_default())
+}
+
 #[controller]
-pub struct AzureSandboxGatewayDeclarationController {}
+pub struct AzureSandboxGatewayDeclarationController {
+    /// Static addresses of the setup-created gateway VMs. The first one is the proxy and admin
+    /// address the Container binding names, as every replica serves both ports.
+    #[serde(default)]
+    pub(crate) gateway_ips: Vec<String>,
+}
 
 #[controller]
 impl AzureSandboxGatewayDeclarationController {
@@ -41,6 +74,7 @@ impl AzureSandboxGatewayDeclarationController {
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         require_gateway(ctx)?;
+        self.gateway_ips = setup_gateway_ips(ctx)?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -55,6 +89,7 @@ impl AzureSandboxGatewayDeclarationController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         require_gateway(ctx)?;
+        self.gateway_ips = setup_gateway_ips(ctx)?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -104,10 +139,41 @@ impl AzureSandboxGatewayDeclarationController {
     fn build_outputs(&self) -> Option<alien_core::ResourceOutputs> {
         None
     }
+
+    /// The sandbox binding and every consumer of the sandbox load the gateway as a linked
+    /// Container. Azure has no managed container backend to report its URLs, so they come from
+    /// the setup-created VM addresses.
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
+        use alien_core::bindings::{ContainerBinding, HorizonContainerBinding};
+        use alien_core::BindingValue;
+        use alien_error::{Context, IntoAlienError};
+
+        let Some(address) = self.gateway_ips.first() else {
+            return Ok(None);
+        };
+        let url = |port: u16| BindingValue::value(format!("http://{address}:{port}"));
+        let binding = ContainerBinding::Horizon(HorizonContainerBinding {
+            container_name: BindingValue::value(SANDBOX_EGRESS_GATEWAY_ID.to_string()),
+            internal_url: url(PROXY_PORT),
+            public_url: None,
+            internal_urls: [(PROXY_PORT, url(PROXY_PORT)), (ADMIN_PORT, url(ADMIN_PORT))]
+                .into_iter()
+                .collect(),
+        });
+        serde_json::to_value(binding)
+            .into_alien_error()
+            .context(ErrorData::ResourceStateSerializationFailed {
+                resource_id: SANDBOX_EGRESS_GATEWAY_ID.to_string(),
+                message: "Failed to serialize binding parameters".to_string(),
+            })
+            .map(Some)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::core::ResourceController;
     use alien_azure_clients::AzureClientConfigExt;
     use alien_core::{
         sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID, ClientConfig, Container, ContainerCode,
@@ -254,5 +320,93 @@ mod tests {
             state.resources[SANDBOX_EGRESS_GATEWAY_ID].status,
             ResourceStatus::Deleted
         );
+    }
+
+    fn gateway() -> Container {
+        Container::new(SANDBOX_EGRESS_GATEWAY_ID.into())
+            .code(ContainerCode::Image {
+                image: "example.invalid/gateway@sha256:0".into(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.25".into(),
+                desired: "0.25".into(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
+            })
+            .port(3128)
+            .port(3129)
+            .permissions(SANDBOX_EGRESS_GATEWAY_ID.into())
+            .build()
+    }
+
+    async fn run_with_network(
+        network: crate::network::AzureNetworkController,
+    ) -> crate::core::controller_test::SingleControllerExecutor {
+        let mut run = crate::core::controller_test::SingleControllerExecutor::builder()
+            .resource(gateway())
+            .controller(AzureSandboxGatewayDeclarationController::default())
+            .platform(Platform::Azure)
+            .resource_lifecycle(ResourceLifecycle::Live)
+            .with_dependency(
+                alien_core::Network::new("network".into())
+                    .settings(alien_core::NetworkSettings::Create {
+                        cidr: Some("10.0.0.0/16".into()),
+                        availability_zones: 2,
+                    })
+                    .build(),
+                network,
+            )
+            .build()
+            .await
+            .unwrap();
+        run.run_until_status(ResourceStatus::Running).await.unwrap();
+        run
+    }
+
+    /// The sandbox binding loads the gateway as a linked Container binding, and the sandbox's
+    /// consumers receive it the same way. Azure has no managed container backend, so the
+    /// declaration must publish the binding itself from the setup-created gateway VM addresses.
+    #[tokio::test]
+    async fn the_declaration_publishes_a_container_binding_for_the_setup_gateway_vms() {
+        let (network, ..) = crate::network::azure_sandbox::tests::fixture();
+        let run = run_with_network(network).await;
+        let controller = run
+            .internal_state::<AzureSandboxGatewayDeclarationController>()
+            .unwrap();
+        let binding = controller
+            .get_binding_params()
+            .unwrap()
+            .expect("a binding for the linked gateway Container");
+        let parsed: alien_core::bindings::ContainerBinding =
+            serde_json::from_value(binding).unwrap();
+        let alien_core::bindings::ContainerBinding::Horizon(horizon) = parsed else {
+            panic!("the Azure gateway binding is a plain internal-URL container binding");
+        };
+        let url = |port: u16| match horizon.internal_urls.get(&port) {
+            Some(alien_core::BindingValue::Value(url)) => url.clone(),
+            other => panic!("port {port}: {other:?}"),
+        };
+        assert_eq!(url(3128), "http://10.0.6.4:3128");
+        assert_eq!(url(3129), "http://10.0.6.4:3129");
+    }
+
+    /// A deployment whose setup predates the gateway VMs has no addresses to hand over; the
+    /// declaration must not invent a binding, so the sandbox refuses to start.
+    #[tokio::test]
+    async fn without_gateway_vm_addresses_there_is_no_binding() {
+        let (mut network, ..) = crate::network::azure_sandbox::tests::fixture();
+        network
+            .sandbox_network
+            .as_mut()
+            .unwrap()
+            .gateway_ips
+            .clear();
+        let run = run_with_network(network).await;
+        let controller = run
+            .internal_state::<AzureSandboxGatewayDeclarationController>()
+            .unwrap();
+        assert!(controller.get_binding_params().unwrap().is_none());
     }
 }
