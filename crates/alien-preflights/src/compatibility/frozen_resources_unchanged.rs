@@ -431,12 +431,25 @@ pub fn unused_frozen_additions(
 /// reference (see [`FrozenResourcesUnchangedCheck`]) installed nothing for it, so the stack
 /// recorded afterwards must say so. Were the reference kept, a later answer that lists values
 /// would compare equal to the recorded reference, skip setup, and never be installed.
-pub fn resolve_empty_frozen_input_references(stack: &mut Stack, config: &DeploymentConfig) {
+///
+/// Only a reference the installed stack did not record is dropped. One setup recorded (it
+/// installed values for it) stays, so the baseline keeps what setup installed.
+pub fn resolve_empty_frozen_input_references(
+    installed: &Stack,
+    stack: &mut Stack,
+    config: &DeploymentConfig,
+) {
     let resolved: Vec<_> = {
         let answers = InputAnswers::new(&stack.inputs, &config.input_values);
         stack
             .resources()
             .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+            .filter(|(id, _)| {
+                installed
+                    .resources
+                    .get(id.as_str())
+                    .is_some_and(|old| old.config.input_references().is_empty())
+            })
             .filter_map(|(id, entry)| {
                 entry
                     .config

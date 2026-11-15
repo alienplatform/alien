@@ -441,6 +441,9 @@ pub async fn handle_update_pending(
     // The update installs nothing for a frozen input reference that resolves to no value; the
     // recorded target must not keep it (a later answer listing values would compare equal).
     alien_preflights::compatibility::resolve_empty_frozen_input_references(
+        old_stack_for_comparison
+            .as_deref()
+            .unwrap_or(&nothing_installed),
         &mut mutated_stack,
         &config,
     );

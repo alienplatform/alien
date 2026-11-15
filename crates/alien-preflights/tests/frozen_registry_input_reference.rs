@@ -189,7 +189,7 @@ async fn regions_listed_after_an_accepted_empty_update_ask_for_a_setup_update() 
     // First update: accepted with no regions. The stack recorded for it is the update target.
     let first = deployment_config(Some(json!([])));
     let mut recorded = prepare(after(), &first).await;
-    alien_preflights::compatibility::resolve_empty_frozen_input_references(&mut recorded, &first);
+    alien_preflights::compatibility::resolve_empty_frozen_input_references(&before(), &mut recorded, &first);
     // Second update to the same release: the deployer now lists a region.
     let second = deployment_config(Some(json!(["us-west-2"])));
     let next = prepare(after(), &second).await;
@@ -202,4 +202,23 @@ async fn regions_listed_after_an_accepted_empty_update_ask_for_a_setup_update() 
         .flat_map(|result| result.errors.clone())
         .collect();
     assert!(registry_modified(&errors), "{errors:?}");
+}
+
+/// Setup installed the reference (the installed stack records it). A later update with an empty
+/// answer compares equal, and the baseline recorded for it must keep the reference setup
+/// installed, not erase it.
+#[tokio::test]
+async fn an_update_with_an_empty_answer_keeps_the_reference_setup_installed() {
+    let installed = prepare(after(), &deployment_config(Some(json!(["us-west-2"])))).await;
+    let config = deployment_config(Some(json!([])));
+    let mut target = prepare(after(), &config).await;
+    alien_preflights::compatibility::resolve_empty_frozen_input_references(
+        &installed,
+        &mut target,
+        &config,
+    );
+    let kept = target
+        .resources()
+        .any(|(_, entry)| !entry.config.input_references().is_empty());
+    assert!(kept, "the registry lost the reference setup installed");
 }
