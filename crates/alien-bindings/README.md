@@ -69,8 +69,12 @@ Accepted limitations of this version:
   serve it. The admin protocol stays backward compatible.
 - **Patching.** The VMs use platform-orchestrated patching (`AutomaticByPlatform`),
   so Azure patches the OS and they sit in an availability set so a reboot takes one
-  gateway down at a time. The binding's replica write tolerates one VM down. The
-  gateway container image is pinned by setup and is updated only by a setup re-run.
+  gateway down at a time. A running sandbox keeps its egress while one VM is down:
+  the agent's proxy address is a loopback forwarder that dials each connection to
+  the last good replica, then the other (`alien-sandbox-agent` `proxy_failover`).
+  Policy writes (create, update) need both replicas and are refused with a retryable
+  error while one is down; a delete reaches every replica that answers. The gateway
+  container image is pinned by setup and is updated only by a setup re-run.
 - **Gateway identity.** Each VM's managed identity reads only two Key Vault secrets
   (`sandbox-egress-gateway-config`, `sandbox-egress-replica-secret`), never the
   signing key. The container reaches the identity endpoint through the docker bridge
