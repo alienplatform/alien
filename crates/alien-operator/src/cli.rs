@@ -560,11 +560,15 @@ async fn run_operator_cli(
     info!("   Platform: {}", args.platform);
     info!("   Data directory: {}", data_dir);
 
+    // The token is only needed until the operator is enrolled. A release
+    // upgraded without it has no token file, and the saved identity is enough.
     let join_token = match args.enrollment_token_file.as_deref() {
-        Some(path) => Some(crate::enrollment_token::EnrollmentToken::parse(
-            &read_secret_file(path, "enrollment token").await?,
-        )?),
-        None => None,
+        Some(path) if tokio::fs::try_exists(path).await.unwrap_or(false) => {
+            Some(crate::enrollment_token::EnrollmentToken::parse(
+                &read_secret_file(path, "enrollment token").await?,
+            )?)
+        }
+        _ => None,
     };
     let owned_values = load_owned_secret(
         args.owned_secret.as_deref(),
@@ -670,6 +674,16 @@ async fn run_operator_cli(
         .await?;
     }
     let stored_identity = db.read_daily_identity().await?;
+    if args.enrollment_token_file.is_some()
+        && join_token.is_none()
+        && !stored_identity
+            .as_ref()
+            .is_some_and(|identity| !identity.deployment_id.is_empty())
+    {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "This operator has no saved identity and no enrollment token. Install with the enrollment token (or a Secret that holds it under the key `token`); a token is used once, so issue a new one if it was already used.".into(),
+        }));
+    }
     // A key saved before its enrollment finished is no identity yet.
     let sync_config = if args.identity_enrollment_code_file.is_some()
         || join_token.is_some()
