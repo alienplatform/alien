@@ -1093,6 +1093,9 @@ async fn run_operator_cli(
         operations_sync_handler,
         cancel,
         runtime_options,
+        // The loops share the database that holds the identity store; without a store the
+        // library opens the same files itself, as before.
+        args.identity_secret.is_some().then(|| db.clone()),
     )
     .await?;
 

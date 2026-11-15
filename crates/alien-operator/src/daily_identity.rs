@@ -1808,6 +1808,65 @@ mod persistence_tests {
         (Arc::new(db), store, directory)
     }
 
+    /// Tells whether the loops can see an identity through the Operator's state.
+    struct SeesIdentity(Arc<std::sync::atomic::AtomicBool>);
+
+    #[async_trait::async_trait]
+    impl crate::loops::operations_exec::OperationsExecLoop for SeesIdentity {
+        async fn run(self: Arc<Self>, state: Arc<crate::OperatorState>) {
+            let seen = state.db.read_enrolled_daily_identity().await.unwrap().is_some();
+            self.0.store(seen, std::sync::atomic::Ordering::SeqCst);
+            state.cancel.cancelled().await;
+        }
+    }
+
+    /// The loops (sync, telemetry, operations) must use the database that holds the identity
+    /// store. A database of their own has no identity, so they fall back to the one-hour key
+    /// they started with: telemetry is refused for its role and the Operator drops off after an
+    /// hour.
+    #[tokio::test]
+    async fn the_running_loops_see_the_identity_kept_in_the_store() {
+        let (_db, state, _manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        let (db, _store, directory) = operator_on_store(&state).await;
+        let config = crate::OperatorConfig::builder()
+            .platform(alien_core::Platform::Local)
+            .data_dir(directory.path().to_string_lossy().to_string())
+            .encryption_key("a".repeat(64))
+            .otlp_server_port(0)
+            .sync(crate::SyncConfig {
+                url: "http://127.0.0.1:9/".parse().unwrap(),
+                token: "ax_cap_v1_start".to_string(),
+            })
+            .build();
+        let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task = tokio::spawn(crate::run_operator_with_cancel_and_loops_and_runtime(
+            config,
+            None,
+            None,
+            None,
+            None,
+            Some(Arc::new(SeesIdentity(seen.clone()))),
+            None,
+            cancel.clone(),
+            crate::OperatorRuntimeOptions {
+                readiness_server_port: None,
+                identity_initialized_config_map: None,
+                runtime_deployment_scope: None,
+                pod_log_collection: None,
+            },
+            Some(db),
+        ));
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        cancel.cancel();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), task).await;
+        assert!(
+            seen.load(std::sync::atomic::Ordering::SeqCst),
+            "a loop saw no identity: it has a database of its own"
+        );
+    }
+
     /// The identity cannot be saved (the Secret was deleted), so a rotation could
     /// lose the successor key. The operator keeps its working key and does not rotate.
     #[tokio::test]

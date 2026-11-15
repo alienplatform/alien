@@ -243,6 +243,7 @@ pub async fn run_operator_with_cancel_and_loops(
         operations_sync_handler,
         cancel,
         runtime_options,
+        None,
     )
     .await
 }
@@ -258,6 +259,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
     cancel: CancellationToken,
     runtime_options: OperatorRuntimeOptions,
+    opened_db: Option<Arc<db::OperatorDb>>,
 ) -> error::Result<()> {
     info!(
         sync_configured = config.sync.is_some(),
@@ -319,8 +321,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         .as_ref()
         .and_then(|provider| provider.get_local_bindings_provider());
 
-    // Initialize encrypted database
-    let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
+    // Initialize encrypted database. An Operator that keeps its identity outside the database
+    // hands over the one it already opened, so every loop reads and writes the identity there
+    // instead of an empty cache with no identity.
+    let db = match opened_db {
+        Some(db) => db,
+        None => Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?),
+    };
     // The digest key is kept in the database, so the checksums saved in the
     // deployment's state still match after a restart. A key the embedder
     // already set wins.
@@ -1130,6 +1137,7 @@ mod tests {
                 runtime_deployment_scope: None,
                 pod_log_collection: None,
             },
+            None,
         ));
         tokio::time::sleep(Duration::from_secs(2)).await;
         assert!(
@@ -1276,6 +1284,7 @@ mod tests {
                     runtime_deployment_scope: None,
                     pod_log_collection: None,
                 },
+                None,
             ),
         )
         .await
