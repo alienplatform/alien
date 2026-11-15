@@ -25,10 +25,8 @@ use object_store::path::Path as StoragePath;
 
 use crate::error::{ErrorData, Result};
 use crate::types::*;
-use lease_wait::{
-    LeaseWaiters, DEFAULT_LEASE_WAIT_RESCAN_INTERVAL, DEFAULT_MAX_OPEN_LEASE_WAITS,
-};
 use crate::INLINE_MAX_BYTES;
+use lease_wait::{LeaseWaiters, DEFAULT_LEASE_WAIT_RESCAN_INTERVAL, DEFAULT_MAX_OPEN_LEASE_WAITS};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -1024,7 +1022,7 @@ impl CommandServer {
     ) -> Result<LeaseResponse> {
         if lease_request.wait_seconds == 0 {
             return self
-                .acquire_lease_once(deployment_id, lease_request, authority_deadline)
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline, false)
                 .await;
         }
         // Over the cap, answer at once, as a request that did not ask to wait.
@@ -1035,16 +1033,20 @@ impl CommandServer {
         ) else {
             debug!("Too many open lease waits; answering without waiting");
             return self
-                .acquire_lease_once(deployment_id, lease_request, authority_deadline)
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline, false)
                 .await;
         };
 
-        let mut window = Duration::from_secs(lease_request.wait_seconds.min(MAX_LEASE_WAIT_SECONDS));
+        let mut window =
+            Duration::from_secs(lease_request.wait_seconds.min(MAX_LEASE_WAIT_SECONDS));
         if let Some(deadline) = authority_deadline {
             let left = (deadline - self.now()).to_std().unwrap_or(Duration::ZERO);
             window = window.min(left);
         }
         let end = tokio::time::Instant::now() + window;
+        // A scan right after a wake-up reads consistently: the wake-up says a
+        // key was just written, and a lagging read must not hide it.
+        let mut woken = false;
         loop {
             // Listen before scanning: a command queued between the scan and the
             // wait must still wake this request.
@@ -1053,7 +1055,7 @@ impl CommandServer {
             notified.as_mut().enable();
 
             let response = self
-                .acquire_lease_once(deployment_id, lease_request, authority_deadline)
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline, woken)
                 .await?;
             let now = tokio::time::Instant::now();
             if !response.leases.is_empty() || now >= end {
@@ -1061,8 +1063,8 @@ impl CommandServer {
             }
             let next_scan = end.min(now + self.lease_wait_rescan_interval);
             tokio::select! {
-                _ = &mut notified => {}
-                _ = tokio::time::sleep_until(next_scan) => {}
+                _ = &mut notified => woken = true,
+                _ = tokio::time::sleep_until(next_scan) => woken = false,
             }
         }
     }
@@ -1072,6 +1074,7 @@ impl CommandServer {
         deployment_id: &str,
         lease_request: &LeaseRequest,
         authority_deadline: Option<DateTime<Utc>>,
+        consistent_scan: bool,
     ) -> Result<LeaseResponse> {
         if let Some(deadline) = authority_deadline {
             self.remaining_authority(deadline)?;
@@ -1084,16 +1087,20 @@ impl CommandServer {
             "target:{}:{}:pending:",
             deployment_id, lease_request.target.resource_id
         );
-        let scan_result = self
-            .kv
-            .scan_prefix(&target_prefix, Some(lease_request.max_leases * 2), None)
-            .await
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "scan_prefix".to_string(),
-                key: target_prefix.clone(),
-                message: "Failed to scan for pending commands".to_string(),
-            })?;
+        let scan_limit = Some(lease_request.max_leases * 2);
+        let scan_result = if consistent_scan {
+            self.kv
+                .scan_prefix_consistent(&target_prefix, scan_limit, None)
+                .await
+        } else {
+            self.kv.scan_prefix(&target_prefix, scan_limit, None).await
+        }
+        .into_alien_error()
+        .context(ErrorData::KvOperationFailed {
+            operation: "scan_prefix".to_string(),
+            key: target_prefix.clone(),
+            message: "Failed to scan for pending commands".to_string(),
+        })?;
 
         for entry in scan_result.items {
             let index_key = entry.key;

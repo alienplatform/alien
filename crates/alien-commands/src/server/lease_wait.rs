@@ -19,7 +19,7 @@ pub const DEFAULT_MAX_OPEN_LEASE_WAITS: usize = 5_000;
 
 /// How often a waiting request scans again without a wake-up. Covers commands
 /// queued through another manager replica and lost wake-ups.
-pub const DEFAULT_LEASE_WAIT_RESCAN_INTERVAL: Duration = Duration::from_secs(10);
+pub const DEFAULT_LEASE_WAIT_RESCAN_INTERVAL: Duration = Duration::from_secs(3);
 
 type Key = (String, String);
 
