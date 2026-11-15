@@ -25,6 +25,10 @@ static WRITER_ID: LazyLock<String> = LazyLock::new(|| {
         .collect()
 });
 static LAST_MILLIS: AtomicU64 = AtomicU64::new(0);
+/// Attempts a revocation makes; with the capped pause below it waits about 35 s in all.
+const REVOCATION_ATTEMPTS: u64 = 40;
+/// The longest pause between two attempts of a replicated write.
+const MAX_RETRY_PAUSE_MILLIS: u64 = 1000;
 
 /// A token for the backend's authenticated agent transport. Debug never exposes it.
 pub struct EgressDelivery {
@@ -214,10 +218,17 @@ impl SandboxEgressManager {
         };
         // A replicated write counts only once every ready replica holds it. Rolling
         // updates briefly change the ready set, so those writes retry for longer.
-        let attempts = if self.config.replicas.is_some() {
-            10
-        } else {
-            3
+        //
+        // A revocation waits longer, because giving up leaves the grant alive. A replica VM that
+        // restarts is away for longer than a policy update waits, and the protocol check stops
+        // the write before any replica holds it. Teardown is not latency sensitive.
+        let attempts = match (self.config.replicas.is_some(), policy.is_some()) {
+            (true, false) => REVOCATION_ATTEMPTS,
+            (true, true) => 10,
+            (false, _) => 3,
+        };
+        let backoff = |attempt: u64| {
+            std::time::Duration::from_millis((100 * (attempt + 1)).min(MAX_RETRY_PAUSE_MILLIS))
         };
         // Partial fan-out may already have applied this write. Retry the exact record;
         // allocating a newer version here could overwrite another writer's decision.
@@ -227,7 +238,7 @@ impl SandboxEgressManager {
                 Ok(targets) => targets,
                 Err(error) if last => return Err(error),
                 Err(_) => {
-                    tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1))).await;
+                    tokio::time::sleep(backoff(attempt)).await;
                     continue;
                 }
             };
@@ -247,8 +258,7 @@ impl SandboxEgressManager {
                     }
                     Err(error) if last => return Err(error),
                     Err(_) => {
-                        tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1)))
-                            .await;
+                        tokio::time::sleep(backoff(attempt)).await;
                         continue;
                     }
                 }
@@ -291,7 +301,7 @@ impl SandboxEgressManager {
             if acknowledged {
                 return Ok(record);
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100 * (attempt + 1))).await;
+            tokio::time::sleep(backoff(attempt)).await;
         }
         unreachable!("every final attempt returns")
     }

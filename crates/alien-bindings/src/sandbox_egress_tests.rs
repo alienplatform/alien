@@ -831,3 +831,91 @@ async fn a_gateway_older_than_the_binding_needs_is_refused_with_a_rerun_setup_me
         "{error}"
     );
 }
+
+/// Revoking a sandbox's grant outlasts a replica that is briefly unreachable.
+///
+/// A replica VM that restarts is away for longer than a policy update is willing to wait, and the
+/// protocol check that precedes every replicated write stops before any replica is written. A
+/// revocation that gives up then leaves the grant alive on every replica for a sandbox that is
+/// already gone, so a delete keeps trying for as long as a restart takes.
+#[tokio::test]
+async fn a_revocation_outlasts_a_replica_that_is_away_for_a_few_seconds() {
+    let h = Harness::new().await;
+    let port = h.manager.admin_url.port().unwrap();
+    let second = Arc::new(AdminState {
+        public: h.state.public,
+        policies: StdMutex::new(Default::default()),
+        writes: StdMutex::new(Vec::new()),
+        refuse: AtomicBool::new(false),
+        transient_failures: AtomicUsize::new(0),
+        records: StdMutex::new(Vec::new()),
+        record_response: StdMutex::new(None),
+    });
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: String::new(),
+        addresses: vec!["127.0.0.1".into(), "127.0.0.2".into()],
+        port,
+        count: 2,
+        min_protocol: 1,
+    });
+    let manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        h.manager.admin_url.to_string(),
+    )
+    .unwrap();
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+
+    // The second replica comes back after longer than a policy update waits (about 4.5 s).
+    let state = second.clone();
+    let restart = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.2", port))
+            .await
+            .unwrap();
+        let router = Router::new()
+            .route("/v1/policies", put(policy_request).delete(policy_request))
+            .route(
+                "/v1/protocol",
+                axum::routing::get(|| async { axum::Json(serde_json::json!({"protocol": 1})) }),
+            )
+            .with_state(state);
+        axum::serve(listener, router).await.unwrap();
+    });
+    // Both replicas hold the grant first: the first replica is up now, the second after the wait.
+    h.state.policies.lock().unwrap().insert(
+        "box-1".into(),
+        ((0, String::new()), Some(policy.clone()), String::new()),
+    );
+    second.policies.lock().unwrap().insert(
+        "box-1".into(),
+        ((0, String::new()), Some(policy), String::new()),
+    );
+
+    manager
+        .delete("box-1")
+        .await
+        .expect("the revocation waits for the replica and reaches both");
+    assert!(
+        h.state
+            .policies
+            .lock()
+            .unwrap()
+            .get("box-1")
+            .is_some_and(|row| row.1.is_none()),
+        "the first replica holds no grant"
+    );
+    assert!(
+        second
+            .policies
+            .lock()
+            .unwrap()
+            .get("box-1")
+            .is_some_and(|row| row.1.is_none()),
+        "the second replica holds no grant"
+    );
+    restart.abort();
+}
