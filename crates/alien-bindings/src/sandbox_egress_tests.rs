@@ -952,3 +952,195 @@ async fn a_revocation_reaches_a_replica_that_returns_during_the_retries() {
     assert!(!holds_grant(&second));
     back.abort();
 }
+
+fn clear_grant(state: &AdminState) {
+    state.policies.lock().unwrap().remove("box-1");
+}
+
+/// A new grant counts once one replica acknowledges it, however long the other has been away,
+/// and the call is bounded: it must not wait out every replica's timeout on every attempt.
+#[tokio::test]
+async fn a_new_grant_succeeds_while_one_replica_is_away() {
+    let h = Harness::new().await;
+    let (manager, second, away) = two_replicas(&h, None).await;
+    clear_grant(&h.state);
+    clear_grant(&second);
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+
+    let started = std::time::Instant::now();
+    let delivery = manager
+        .create("box-1", &policy, now_unix().unwrap() + 600)
+        .await
+        .expect("one replica acknowledges the grant");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "bounded: {:?}",
+        started.elapsed()
+    );
+    assert!(!delivery.policy.is_empty());
+    assert!(holds_grant(&h.state), "the reachable replica serves the grant");
+    assert!(!holds_grant(&second), "the absent replica holds nothing yet");
+    away.abort();
+}
+
+/// With no replica answering, a create fails within the budget and says it can be retried.
+#[tokio::test]
+async fn a_new_grant_with_every_replica_away_fails_fast_and_retryable() {
+    let h = Harness::new().await;
+    let port = h.manager.admin_url.port().unwrap();
+    // Both replicas at addresses nothing listens on.
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: String::new(),
+        addresses: vec!["127.0.0.3".into(), "127.0.0.4".into()],
+        port,
+        count: 2,
+        min_protocol: 1,
+    });
+    let manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        h.manager.admin_url.to_string(),
+    )
+    .unwrap();
+    let away = tokio::spawn(async {});
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+    let started = std::time::Instant::now();
+    let error = manager
+        .create("box-1", &policy, now_unix().unwrap() + 600)
+        .await
+        .expect_err("nothing acknowledges");
+    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE", "{error}");
+    assert!(error.retryable, "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
+    away.abort();
+}
+
+/// An update (which may narrow) still needs every replica, so a replica that missed it can
+/// never keep serving the wider policy.
+#[tokio::test]
+async fn an_update_still_needs_every_replica() {
+    let h = Harness::new().await;
+    let (manager, _second, away) = two_replicas(&h, None).await;
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["a.example.com"]})).unwrap();
+    assert!(manager.update("box-1", &policy).await.is_err());
+    away.abort();
+}
+
+/// Two real gateway processes: a create while replica A is stopped succeeds, the sandbox reaches
+/// its allowed host through B, and A serves the same grant once it has started and synchronized.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires ALIEN_TEST_EGRESS_GATEWAY_BIN and public TCP access to one.one.one.one:443"]
+async fn a_create_with_a_stopped_real_replica_succeeds_and_the_replica_catches_up() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let h = Harness::new().await;
+    let binary =
+        std::env::var("ALIEN_TEST_EGRESS_GATEWAY_BIN").expect("set the gateway executable path");
+    let ports = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxies = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let admin_port = ports.local_addr().unwrap().port();
+    let proxy_port = proxies.local_addr().unwrap().port();
+    drop((ports, proxies));
+    let key = KeyPair::from_seed(Seed::new([29; 32]));
+    let start = |me: &str, peer: &str| {
+        let config = serde_json::json!({
+            "listen":format!("{me}:{proxy_port}"),"admin":format!("{me}:{admin_port}"),
+            "audiences":["prefix/box"],"defaultPolicies":{},
+            "keys":[{"kid":"key-1","publicKey":base64::engine::general_purpose::STANDARD.encode(key.pk.as_ref())}],
+            "deniedRanges":[],"credentials":[],
+            "peers":{"static":[format!("{peer}:{admin_port}")]},
+            "replicaSecret":base64::engine::general_purpose::STANDARD.encode([13u8;32]),
+            "policyMemoryBytes":67108864
+        });
+        tokio::process::Command::new(&binary)
+            .kill_on_drop(true)
+            .env("ALIEN_DEPLOYMENT_TYPE", "local")
+            .env("ALIEN_EGRESS_GATEWAY_CONFIG", config.to_string())
+            .env("RUST_LOG", "error")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .unwrap()
+    };
+    let client = reqwest::Client::new();
+    let ready = |me: String| {
+        let client = client.clone();
+        async move {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+            while client
+                .get(format!("http://{me}:{admin_port}/health"))
+                .send()
+                .await
+                .map_or(true, |r| !r.status().is_success())
+            {
+                assert!(tokio::time::Instant::now() < deadline, "gateway {me} not ready");
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
+    };
+    let connect = |me: &str, token: String| {
+        let address = format!("{me}:{proxy_port}");
+        async move {
+            let mut connection = tokio::net::TcpStream::connect(address).await.unwrap();
+            connection
+                .write_all(format!("CONNECT one.one.one.one:443 HTTP/1.1\r\nHost: one.one.one.one:443\r\nProxy-Authorization: Bearer {token}\r\n\r\n").as_bytes())
+                .await
+                .unwrap();
+            let mut status = String::new();
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(8),
+                BufReader::new(connection).read_line(&mut status),
+            )
+            .await;
+            status.split_whitespace().nth(1).unwrap_or("none").to_string()
+        }
+    };
+
+    // Replica A (127.0.0.1) is stopped; only B (127.0.0.2) runs.
+    let _b = start("127.0.0.2", "127.0.0.1");
+    ready("127.0.0.2".into()).await;
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: String::new(),
+        addresses: vec!["127.0.0.1".into(), "127.0.0.2".into()],
+        port: admin_port,
+        count: 2,
+        min_protocol: 1,
+    });
+    let manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        format!("127.0.0.2:{proxy_port}"),
+        format!("http://127.0.0.2:{admin_port}"),
+    )
+    .unwrap();
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["one.one.one.one"]})).unwrap();
+    let started = std::time::Instant::now();
+    let delivery = manager
+        .create("box-1", &policy, now_unix().unwrap() + 600)
+        .await
+        .expect("create succeeds with one replica away");
+    assert!(started.elapsed() < std::time::Duration::from_secs(15));
+    assert_eq!(connect("127.0.0.2", delivery.token.clone()).await, "200");
+
+    // A starts later: it refuses until synchronized, then serves the grant from its peer.
+    let _a = start("127.0.0.1", "127.0.0.2");
+    ready("127.0.0.1".into()).await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(45);
+    loop {
+        let status = connect("127.0.0.1", delivery.token.clone()).await;
+        if status == "200" {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "replica A never served the grant (last status {status})"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}

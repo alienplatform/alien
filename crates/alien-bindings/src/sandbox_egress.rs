@@ -18,6 +18,10 @@ use std::{
 // One writer identity and logical clock per process, shared by reopened bindings.
 // A process-wide clock is also strictly increasing for every individual sandbox,
 // without retaining a map of all sandbox identities ever used.
+/// How long publishing a new grant may take in all, however many replicas are away.
+const GRANT_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+/// One request to one replica; a replica that is powered off must not hold a write for long.
+const REPLICA_REQUEST: std::time::Duration = std::time::Duration::from_secs(3);
 static WRITER_ID: LazyLock<String> = LazyLock::new(|| {
     ed25519_compact::Seed::generate()[..16]
         .iter()
@@ -166,7 +170,7 @@ impl SandboxEgressManager {
         expires_at: i64,
     ) -> Result<EgressDelivery> {
         let token = self.mint_identity(id, expires_at).await?;
-        let policy = self.write(id, Some(policy)).await?;
+        let policy = self.write_grant(id, policy).await?;
         Ok(EgressDelivery { token, policy })
     }
     /// Update new connections without changing the token or the sandbox's lifecycle state.
@@ -197,6 +201,143 @@ impl SandboxEgressManager {
                 .build(),
         )?;
         Ok(token)
+    }
+    /// Publish a brand-new grant. A new grant has nothing to narrow, so it counts once at least
+    /// one replica acknowledges it: the replica that was away starts empty, refuses every
+    /// connection until it has synchronized from its peer, and so can only ever serve this grant
+    /// or none (fail closed). Updates and revocations keep the every-replica rule because a
+    /// replica that missed a narrowing would keep serving the wider policy.
+    ///
+    /// The whole attempt is bounded (`GRANT_BUDGET`), and a failure because no replica answered
+    /// is retryable: a replica that is away is a condition that passes.
+    async fn write_grant(&self, id: &str, policy: &EgressPolicy) -> Result<String> {
+        if self.config.replicas.is_none() {
+            return self.write(id, Some(policy)).await;
+        }
+        let issuer = self.issuer().await?;
+        let version = self.next_version()?;
+        let record =
+            issuer.mint_record(&self.config.audience, id, (version, &WRITER_ID), Some(policy))?;
+        let body = serde_json::json!({"record":record});
+        let deadline = tokio::time::Instant::now() + GRANT_BUDGET;
+        let mut failure = unavailable("no gateway replica acknowledged the new grant");
+        loop {
+            let targets = match self.resolved_targets().await {
+                Ok(targets) if !targets.is_empty() => targets,
+                Ok(_) => Vec::new(),
+                Err(error) => {
+                    failure = error;
+                    Vec::new()
+                }
+            };
+            let min = self
+                .config
+                .replicas
+                .as_ref()
+                .map_or(0, |replicas| replicas.min_protocol);
+            let mut acknowledged = 0usize;
+            let sends = targets.iter().map(|target| {
+                let body = &body;
+                let issuer = &issuer;
+                async move {
+                    let authorization = issuer.mint_admin(
+                        &self.config.audience,
+                        id,
+                        EgressAdminOperation::Put,
+                        now_unix()?,
+                    )?;
+                    if min > 0 {
+                        // A replica that cannot be reached is away, not old.
+                        if let Ok(served) = self.served_protocol(target).await {
+                            if served < min {
+                                return Err(unavailable(
+                                    "the egress gateway is older than this release needs; re-run setup to update the egress gateway",
+                                ));
+                            }
+                        } else {
+                            return Ok(None);
+                        }
+                    }
+                    let response = self
+                        .admin
+                        .put(format!("{target}/v1/policies"))
+                        .timeout(REPLICA_REQUEST)
+                        .bearer_auth(authorization)
+                        .json(body)
+                        .send()
+                        .await;
+                    match response {
+                        Ok(response) if response.status() == reqwest::StatusCode::NO_CONTENT => {
+                            Ok(Some(true))
+                        }
+                        Ok(response)
+                            if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE =>
+                        {
+                            Ok(None)
+                        }
+                        Ok(response) => Err(gateway_error(response).await),
+                        Err(_) => Ok(None),
+                    }
+                }
+            });
+            for outcome in futures::future::join_all(sends).await {
+                match outcome {
+                    Ok(Some(_)) => acknowledged += 1,
+                    Ok(None) => {}
+                    // Old gateway or a refusal that retrying cannot fix: surface it at once.
+                    Err(error) => return Err(error),
+                }
+            }
+            if acknowledged > 0 {
+                return Ok(record);
+            }
+            if tokio::time::Instant::now() + std::time::Duration::from_millis(500) >= deadline {
+                failure.retryable = true;
+                return Err(failure);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    /// The admin protocol a replica serves; an error means it could not be reached or answered.
+    async fn served_protocol(&self, target: &str) -> Result<u32> {
+        #[derive(Deserialize)]
+        struct Protocol {
+            protocol: u32,
+        }
+        let response = self
+            .admin
+            .get(format!("{target}/v1/protocol"))
+            .timeout(REPLICA_REQUEST)
+            .send()
+            .await
+            .map_err(|_| unavailable("gateway protocol request failed"))?;
+        match response.status() {
+            reqwest::StatusCode::OK => {
+                let body = bounded_body(response, 1024).await?;
+                Ok(serde_json::from_slice::<Protocol>(&body)
+                    .map(|p| p.protocol)
+                    .unwrap_or(0))
+            }
+            reqwest::StatusCode::NOT_FOUND => Ok(0),
+            _ => Err(unavailable("gateway protocol request was not answered")),
+        }
+    }
+
+    fn next_version(&self) -> Result<u64> {
+        let millis = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| unavailable("system clock predates Unix epoch"))?
+                .as_millis(),
+        )
+        .map_err(|_| unavailable("system clock is outside the supported range"))?;
+        let previous = LAST_MILLIS
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |last| {
+                last.checked_add(1).map(|next| next.max(millis))
+            })
+            .map_err(|_| unavailable("policy clock is exhausted"))?;
+        Ok(millis.max(previous + 1))
     }
     async fn write(&self, id: &str, policy: Option<&EgressPolicy>) -> Result<String> {
         let issuer = self.issuer().await?;
@@ -345,6 +486,7 @@ impl SandboxEgressManager {
                 let response = self
                     .admin
                     .request(method.clone(), format!("{target}/v1/policies"))
+                    .timeout(REPLICA_REQUEST)
                     .bearer_auth(authorization)
                     .json(body)
                     .send()
