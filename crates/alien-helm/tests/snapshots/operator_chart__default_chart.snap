@@ -10,7 +10,7 @@ metadata:
   name: alien
   namespace: shop
   labels:
-    app.kubernetes.io/name: operator
+    app.kubernetes.io/name: "operator"
     app.kubernetes.io/instance: alien
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -23,7 +23,7 @@ metadata:
   name: alien-enrollment
   namespace: shop
   labels:
-    app.kubernetes.io/name: operator
+    app.kubernetes.io/name: "operator"
     app.kubernetes.io/instance: alien
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -39,7 +39,7 @@ metadata:
   name: alien-identity
   namespace: shop
   labels:
-    app.kubernetes.io/name: operator
+    app.kubernetes.io/name: "operator"
     app.kubernetes.io/instance: alien
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -52,7 +52,7 @@ kind: ClusterRole
 metadata:
   name: alien-shop
   labels:
-    app.kubernetes.io/name: operator
+    app.kubernetes.io/name: "operator"
     app.kubernetes.io/instance: alien
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -94,7 +94,7 @@ kind: ClusterRoleBinding
 metadata:
   name: alien-shop
   labels:
-    app.kubernetes.io/name: operator
+    app.kubernetes.io/name: "operator"
     app.kubernetes.io/instance: alien
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -115,7 +115,7 @@ metadata:
   name: alien
   namespace: shop
   labels:
-    app.kubernetes.io/name: operator
+    app.kubernetes.io/name: "operator"
     app.kubernetes.io/instance: alien
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -134,7 +134,7 @@ metadata:
   name: alien
   namespace: shop
   labels:
-    app.kubernetes.io/name: operator
+    app.kubernetes.io/name: "operator"
     app.kubernetes.io/instance: alien
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -155,7 +155,7 @@ metadata:
   name: alien
   namespace: shop
   labels:
-    app.kubernetes.io/name: operator
+    app.kubernetes.io/name: "operator"
     app.kubernetes.io/instance: alien
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -166,16 +166,16 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: operator
+      app.kubernetes.io/name: "operator"
       app.kubernetes.io/instance: alien
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: operator
+        app.kubernetes.io/name: "operator"
         app.kubernetes.io/instance: alien
       annotations:
         # A new token on upgrade restarts the pod, which then uses it.
-        checksum/enrollment: 3d4819b11014e73ed221a3a7d50a9a9e4c1c001522c0e6ee121413b9c37a577d
+        checksum/enrollment: 372aa5c9cd0c428e7b3c3b117a3da1c13c4d1ffb33b6ff0390b1993783baba23
     spec:
       serviceAccountName: alien
       automountServiceAccountToken: true

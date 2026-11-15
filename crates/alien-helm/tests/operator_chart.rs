@@ -760,3 +760,58 @@ fn installed_on_its_own_the_names_are_the_release_name() {
         .collect();
     assert!(secrets.contains(&"alien-identity".to_string()) && secrets.contains(&"alien-enrollment".to_string()));
 }
+
+#[test]
+fn a_branded_chart_with_approvals_needs_a_label_domain() {
+    let message = refusal(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "brand.name=acme-operator",
+        "--set",
+        "accessRequests.enabled=true",
+    ]);
+    assert!(message.contains("brand.labelDomain is required"), "{message}");
+    // With the domain it renders, and without approvals no domain is needed.
+    render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "brand.name=acme-operator",
+        "--set",
+        "accessRequests.enabled=true",
+        "--set",
+        "brand.labelDomain=acme.dev",
+    ]);
+    render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        "brand.name=acme-operator",
+    ]);
+}
+
+#[test]
+fn the_brand_name_is_a_short_slug_that_starts_with_a_letter() {
+    for bad in ["1acme", "-acme", "acme-", "Acme", &"a".repeat(49)] {
+        let message = refusal(&[
+            "--set",
+            &format!("token={TOKEN}"),
+            "--set",
+            &format!("brand.name={bad}"),
+        ]);
+        assert!(message.contains("brand"), "{bad}: {message}");
+    }
+    render(&[
+        "--set",
+        &format!("token={TOKEN}"),
+        "--set",
+        &format!("brand.name=a{}", "b".repeat(47)),
+    ]);
+}
+
+#[test]
+fn the_name_label_is_quoted_so_a_numeric_looking_brand_stays_a_string() {
+    let rendered = render(&["--set", &format!("token={TOKEN}")]);
+    assert!(rendered.contains("app.kubernetes.io/name: \"operator\""), "{rendered}");
+}

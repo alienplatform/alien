@@ -200,14 +200,17 @@ otlp:
   enabled: false
 
 accessRequests:
-  # The in-cluster approval flow (a custom resource). Off by default.
+  # The in-cluster approval flow (a custom resource). Off by default. The resource definition is
+  # cluster-wide and kept when the release is removed, so approvals survive a reinstall.
   enabled: false
 
 # Ship the Operator under your own name, with no image of your own. All empty means the default
 # product name. They become the Operator's packaged configuration (a ConfigMap), so the approval
 # resource group, labels and log lines use your name.
 brand:
-  # The Operator's name, for example "acme-operator". Also the `app.kubernetes.io/name` label.
+  # The Operator's name, for example "acme-operator": a lowercase slug that starts with a letter,
+  # at most 48 characters. It is the `app.kubernetes.io/name` label, which the Deployment's selector
+  # uses, so it cannot be changed by `helm upgrade`; reinstall to rename.
   name: ""
   # Short slug for generated resource names, for example "acme".
   brand: ""
@@ -289,7 +292,7 @@ fn values_schema_json() -> serde_json::Result<String> {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "name": {"type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"},
+                    "name": {"type": "string", "pattern": "^$|^[a-z]([-a-z0-9]{0,46}[a-z0-9])?$"},
                     "brand": {"type": "string", "pattern": "^[a-z0-9]{0,30}$"},
                     "displayName": {"type": "string", "maxLength": 100},
                     "envPrefix": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,30}$|^$"},
@@ -547,7 +550,7 @@ const HELPERS: &str = r#"{{- /* The name every object derives from. Installed on
 {{- define "operator.crdKind" -}}{{ $b := include "operator.crdBrand" . }}{{ upper (substr 0 1 $b) }}{{ substr 1 (len $b) $b }}AccessRequest{{- end -}}
 
 {{- define "operator.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "operator.brandName" . }}
+app.kubernetes.io/name: {{ include "operator.brandName" . | quote }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
@@ -647,6 +650,9 @@ type: Opaque
 
 const DEPLOYMENT: &str = r#"{{- if and .Values.token .Values.existingSecret }}
 {{- fail "Set either token or existingSecret, not both." }}
+{{- end }}
+{{- if and (include "operator.branded" .) .Values.accessRequests.enabled (not (trim .Values.brand.labelDomain)) }}
+{{- fail "brand.labelDomain is required when brand values and accessRequests.enabled are both set: it names the approval resource's group (for example acme.dev). Without it the resource would be named after the default product." }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -880,6 +886,9 @@ About the enrollment token:
     (a Secret in this namespace with the key `token`) and delete that Secret after the install.
   * `helm uninstall` deletes the identity Secret. Installing again, or restoring that Secret from
     an old backup, needs a new token.
+  * With `existingSecret`, replacing the token inside that Secret does not restart the pod. Run
+    `kubectl -n {{ .Release.Namespace }} rollout restart deploy/{{ include "operator.name" . }}`
+    after replacing it.
 "#;
 
 const README: &str = r#"# Operator
@@ -900,7 +909,12 @@ or `--set token=<enrollment token>`.
 - It names the control plane this Operator will obey, so it is a trust root. `--set token=...`
   stays in the Helm release history; prefer `existingSecret`, and delete that Secret after the
   install.
-- `helm upgrade` needs no token. A new token on upgrade restarts the pod, which uses it.
+- `helm upgrade` needs no token. A new `--set token=...` on upgrade restarts the pod, which uses
+  it. With `existingSecret`, replacing the token in that Secret does not restart the pod: run
+  `kubectl rollout restart deploy/<release>` afterwards.
+- An enrolled Operator keeps the manager address it enrolled with. If the control plane later moves
+  to a new hostname, a token for the new address is ignored until the old hostname is retired;
+  install again with a newly issued token then.
 - `helm uninstall` deletes the identity Secret. Installing again, or restoring the identity
   Secret from an old backup, needs a new token.
 
@@ -911,5 +925,15 @@ or `--set token=<enrollment token>`.
 `operations`, `resources`, `nodeSelector`, `tolerations`, `imagePullSecrets`, `extraEnv`, `brand.*`.
 See `values.yaml`. The `brand.*` values ship the Operator under your own name with no image of your
 own: they become the Operator's packaged configuration (a ConfigMap), so the release's labels, the
-approval resource group and the log lines use that name. There is no self-update: whoever installs the chart owns the image version.
+approval resource group and the log lines use that name:
+
+    helm install acme-operator oci://<registry>/operator --namespace acme --create-namespace \
+      --set existingSecret=acme-enrollment \
+      --set brand.name=acme-operator --set brand.brand=acme --set brand.labelDomain=acme.dev
+
+`brand.name` is in the Deployment's selector, so `helm upgrade` cannot change it. With
+`accessRequests.enabled` and any `brand.*` value, `brand.labelDomain` is required (the render fails
+without it). The approval resource definition is cluster-wide and kept on uninstall.
+
+There is no self-update: whoever installs the chart owns the image version.
 "#;

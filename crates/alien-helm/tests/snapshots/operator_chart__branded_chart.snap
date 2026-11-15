@@ -10,7 +10,7 @@ metadata:
   name: acme
   namespace: shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -23,7 +23,7 @@ metadata:
   name: acme-enrollment
   namespace: shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -39,7 +39,7 @@ metadata:
   name: acme-identity
   namespace: shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -53,7 +53,7 @@ metadata:
   name: acme-config
   namespace: shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -160,7 +160,7 @@ kind: ClusterRole
 metadata:
   name: acme-shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -210,7 +210,7 @@ kind: ClusterRoleBinding
 metadata:
   name: acme-shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -231,7 +231,7 @@ metadata:
   name: acme
   namespace: shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -250,7 +250,7 @@ metadata:
   name: acme
   namespace: shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -271,7 +271,7 @@ metadata:
   name: acme
   namespace: shop
   labels:
-    app.kubernetes.io/name: acme-operator
+    app.kubernetes.io/name: "acme-operator"
     app.kubernetes.io/instance: acme
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/version: "1.2.3"
@@ -282,17 +282,17 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: acme-operator
+      app.kubernetes.io/name: "acme-operator"
       app.kubernetes.io/instance: acme
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: acme-operator
+        app.kubernetes.io/name: "acme-operator"
         app.kubernetes.io/instance: acme
       annotations:
         # A new token on upgrade restarts the pod, which then uses it.
-        checksum/enrollment: 36997ef9c1713fc3ce0a28cdce364a1cdda1544e7c225647a45d7f031f0f624b
-        checksum/config: 347ce9315469113a8cde28756fed59ed997a0fd869fd7ada897909a41ef80ca5
+        checksum/enrollment: c136fdb8a1c77dde80246fe8af2b5fd76951673b4cd5e3647128ae61959df8fc
+        checksum/config: f55f184d8a41fd34c8ad3580f05e52b138a711c4bcfd936e93a2c55f0634bbfd
     spec:
       serviceAccountName: acme
       automountServiceAccountToken: true
