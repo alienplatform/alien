@@ -84,6 +84,13 @@ fn main() -> Result<()> {
 
     tracing_subscriber::fmt::init();
 
+    // Azure `internet`: the proxy address commands use is a loopback forwarder over both gateway
+    // replicas. It must listen before the gate and the workload.
+    if let Err(message) = alien_sandbox_agent::proxy_failover::spawn_from_env() {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+
     // Kubernetes: never start the workload before the pod's egress restriction is in force.
     if let Err(message) = alien_sandbox_agent::startup_gate::enforce_from_env() {
         eprintln!("{message}");

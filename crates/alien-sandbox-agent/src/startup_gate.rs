@@ -60,7 +60,13 @@ where
     let mut problems = Vec::new();
     match &probe.control {
         Some(control) => {
-            if attempt(control) != Attempt::Connected {
+            // Replicated gateways list every replica; one that connects proves the path.
+            let reachable = control
+                .split(',')
+                .map(str::trim)
+                .filter(|replica| !replica.is_empty())
+                .any(|replica| attempt(replica) == Attempt::Connected);
+            if !reachable {
                 problems.push(format!("{control} (the gateway) is not reachable"));
             }
         }
@@ -369,6 +375,28 @@ mod tests {
             || up,
             |_| {},
         )
+    }
+
+    #[test]
+    fn the_gate_passes_when_either_gateway_replica_connects() {
+        let probe = Probe {
+            control: Some("10.0.6.4:3128,10.0.6.5:3128".into()),
+            ..none(&["1.1.1.1:8443"])
+        };
+        let result = run(
+            &probe,
+            50,
+            |target| match target {
+                "10.0.6.4:3128" => Attempt::Dropped,
+                "10.0.6.5:3128" => Attempt::Connected,
+                _ => Attempt::Dropped,
+            },
+            true,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        // Neither replica answering is still a failure.
+        let result = run(&probe, 20, |_| Attempt::Dropped, true);
+        assert!(result.is_err());
     }
 
     #[test]

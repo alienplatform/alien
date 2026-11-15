@@ -127,6 +127,77 @@ async fn an_agent_sandbox_boots_behind_a_60s_gateway_startup_gate() {
 }
 
 #[tokio::test]
+async fn an_agent_sandbox_with_two_gateway_replicas_proxies_through_a_loopback_failover() {
+    let h = Harness::new().await;
+    let mut sandbox = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::Internet,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_egress_manager(
+        Arc::new(h.reopen_with_replicas(&["10.0.6.4", "10.0.6.5"]).await),
+        None,
+    );
+    sandbox.agent = true;
+    let mut env = BTreeMap::new();
+    let mut labels = BTreeMap::from([(
+        SANDBOX_EXPIRY_LABEL.to_string(),
+        (chrono::Utc::now().timestamp_millis() + 600_000).to_string(),
+    )]);
+    sandbox
+        .prepare_identity(&mut env, &mut labels)
+        .await
+        .unwrap();
+    // Neither replica's address is in a command's environment: the agent forwards to both.
+    for name in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
+        assert!(env[name].starts_with("http://alien:"), "{name}");
+        assert!(env[name].ends_with("@127.0.0.1:18128"), "{}", env[name]);
+    }
+    assert_eq!(env["ALIEN_SANDBOX_PROXY_REPLICAS"], "10.0.6.4:3128,10.0.6.5:3128");
+    assert_eq!(env["ALIEN_SANDBOX_PROXY_LISTEN"], "127.0.0.1:18128");
+    // Either replica proves the path at startup.
+    assert_eq!(
+        env["ALIEN_SANDBOX_STARTUP_GATE_CONTROL"],
+        "10.0.6.4:3128,10.0.6.5:3128"
+    );
+}
+
+#[tokio::test]
+async fn an_image_without_the_agent_keeps_the_single_gateway_address() {
+    let h = Harness::new().await;
+    let sandbox = AzureSandbox::new(
+        Arc::new(MockSandboxDataPlaneApi::new()),
+        "group".into(),
+        "ubuntu".into(),
+        alien_core::SandboxEgress::Internet,
+        None,
+        "1000m".into(),
+        "2048Mi".into(),
+        None,
+    )
+    .with_egress_manager(
+        Arc::new(h.reopen_with_replicas(&["10.0.6.4", "10.0.6.5"]).await),
+        None,
+    );
+    let mut env = BTreeMap::new();
+    let mut labels = BTreeMap::from([(
+        SANDBOX_EXPIRY_LABEL.to_string(),
+        (chrono::Utc::now().timestamp_millis() + 600_000).to_string(),
+    )]);
+    sandbox
+        .prepare_identity(&mut env, &mut labels)
+        .await
+        .unwrap();
+    assert!(env["HTTPS_PROXY"].ends_with("@10.0.6.4:3128"));
+    assert!(!env.contains_key("ALIEN_SANDBOX_PROXY_REPLICAS"));
+}
+
+#[tokio::test]
 async fn durable_identity_drives_create_reconnect_update_and_termination() {
     let h = Harness::new().await;
     let (sandbox, record, request) = provider(h.reopen().await, false);

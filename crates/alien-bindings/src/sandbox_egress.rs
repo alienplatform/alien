@@ -119,6 +119,22 @@ impl SandboxEgressManager {
     pub(crate) fn gateway_authority(&self) -> &str {
         &self.gateway
     }
+    /// Every gateway replica's proxy authority (`ip:port`). One entry when the binding does not
+    /// list fixed replica addresses.
+    pub(crate) fn proxy_authorities(&self) -> Vec<String> {
+        let port = self
+            .gateway
+            .rsplit_once(':')
+            .map(|(_, port)| port.to_string());
+        match (&self.config.replicas, port) {
+            (Some(replicas), Some(port)) if !replicas.addresses.is_empty() => replicas
+                .addresses
+                .iter()
+                .map(|address| format!("{address}:{port}"))
+                .collect(),
+            _ => vec![self.gateway.clone()],
+        }
+    }
     /// Admin authority exposed by the same Container link; requests still require admin tokens.
     pub(crate) fn gateway_admin_authority(&self) -> &str {
         &self.admin_url[url::Position::BeforeHost..url::Position::AfterPort]

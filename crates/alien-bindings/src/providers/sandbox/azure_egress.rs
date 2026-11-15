@@ -27,6 +27,10 @@ fn gateway_policy_holds(expected: &EgressPolicy, effective: &EgressPolicy) -> bo
         }
 }
 
+/// Where the agent's failover forwarder listens in the guest (see `alien-sandbox-agent`
+/// `proxy_failover`); commands' proxy variables point here when two gateway replicas exist.
+const PROXY_LOOPBACK: &str = "127.0.0.1:18128";
+
 impl AzureSandbox {
     /// Use the deployment's gateway for policy writes and create-time proxy credentials.
     pub fn with_egress_manager(
@@ -99,7 +103,17 @@ impl AzureSandbox {
         // Azure chooses its vendor id after create; the label persists the pre-created identity.
         let identity = uuid::Uuid::new_v4().to_string();
         let token = manager.mint_identity(&identity, expires / 1000).await?;
-        let proxy = format!("http://alien:{}@{}", token, manager.gateway_authority());
+        // An agent image can run the loopback forwarder, so with several replicas its proxy
+        // address is the loopback and the agent fails over between the replicas per connection.
+        // Without the agent there is no forwarder: the one gateway address stays.
+        let replicas = manager.proxy_authorities();
+        let failover = self.agent && replicas.len() > 1;
+        let proxy_authority = if failover {
+            PROXY_LOOPBACK
+        } else {
+            manager.gateway_authority()
+        };
+        let proxy = format!("http://alien:{}@{}", token, proxy_authority);
         for name in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
             environment.insert(name.into(), proxy.clone());
         }
@@ -117,7 +131,7 @@ impl AzureSandbox {
                 ("ALIEN_SANDBOX_STARTUP_GATE_BOUND_SECS", "60"),
                 (
                     "ALIEN_SANDBOX_STARTUP_GATE_CONTROL",
-                    manager.gateway_authority(),
+                    replicas.join(",").as_str(),
                 ),
                 (
                     alien_core::sandbox_image::ENV_MUST_DROP_PUBLIC,
@@ -128,6 +142,10 @@ impl AzureSandbox {
                 ),
             ] {
                 environment.insert(name.into(), value.into());
+            }
+            if failover {
+                environment.insert("ALIEN_SANDBOX_PROXY_REPLICAS".into(), replicas.join(","));
+                environment.insert("ALIEN_SANDBOX_PROXY_LISTEN".into(), PROXY_LOOPBACK.into());
             }
         }
         labels.insert(IDENTITY_LABEL.into(), identity.clone());

@@ -256,6 +256,24 @@ impl Harness {
         )
         .unwrap()
     }
+    /// A manager whose binding lists fixed replica addresses (admin port 3129), as on Azure.
+    pub(crate) async fn reopen_with_replicas(&self, addresses: &[&str]) -> SandboxEgressManager {
+        let mut config = self.config.clone();
+        config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+            dns: String::new(),
+            addresses: addresses.iter().map(|a| a.to_string()).collect(),
+            port: 3129,
+            count: addresses.len() as u32,
+            min_protocol: 0,
+        });
+        SandboxEgressManager::with_endpoints(
+            config,
+            self.vault.clone(),
+            format!("{}:3128", addresses[0]),
+            format!("http://{}:3129", addresses[0]),
+        )
+        .unwrap()
+    }
 }
 fn claims(delivery: &EgressDelivery) -> crate::sandbox_egress_token::EgressTokenClaims {
     serde_json::from_slice(
