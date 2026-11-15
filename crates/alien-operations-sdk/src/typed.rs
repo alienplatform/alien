@@ -109,6 +109,7 @@ pub struct OperationDefinition<Params, Output, const PERMISSIONS_REVIEWED: bool 
     invalid_params_message: &'static str,
     permissions: Vec<PermissionSetReference>,
     kubernetes_permissions: Option<KubernetesPermissions>,
+    host_permissions: Option<crate::HostPermissions>,
     timeout_seconds: Option<u32>,
     retries: Option<RetryPolicy>,
     verification: Option<Verification>,
@@ -130,6 +131,7 @@ impl<Params, Output> OperationDefinition<Params, Output> {
             invalid_params_message: "parameters do not match the operation schema",
             permissions: Vec::new(),
             kubernetes_permissions: None,
+            host_permissions: None,
             timeout_seconds: None,
             retries: None,
             verification: None,
@@ -146,6 +148,7 @@ impl<Params, Output> OperationDefinition<Params, Output> {
     {
         CanonicalOperationManifest {
             kubernetes_permissions: self.kubernetes_permissions.clone(),
+            host_permissions: self.host_permissions.clone(),
             name: self.name.to_string(),
             tier: Some(self.tier),
             description: Some(self.description.to_string()),
@@ -172,6 +175,14 @@ impl<Params, Output, const PERMISSIONS_REVIEWED: bool>
     /// Declare Kubernetes API permissions required by the operation.
     pub fn with_kubernetes_permissions(mut self, permissions: KubernetesPermissions) -> Self {
         self.kubernetes_permissions = Some(permissions);
+        self
+    }
+
+    /// Declare what the operation needs from a Linux machine or Docker host.
+    /// Validated with the manifest; wildcards and anything off the fixed list
+    /// are rejected.
+    pub fn with_host_permissions(mut self, permissions: crate::HostPermissions) -> Self {
+        self.host_permissions = Some(permissions);
         self
     }
 
@@ -261,6 +272,7 @@ impl<Params, Output> OperationDefinition<Params, Output, false> {
             invalid_params_message: self.invalid_params_message,
             permissions,
             kubernetes_permissions: self.kubernetes_permissions,
+            host_permissions: self.host_permissions,
             timeout_seconds: self.timeout_seconds,
             retries: self.retries,
             verification: self.verification,
