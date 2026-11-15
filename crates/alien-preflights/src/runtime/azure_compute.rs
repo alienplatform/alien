@@ -611,7 +611,7 @@ mod tests {
         server
             .mock_async(|when, then| {
                 when.method(GET).path_contains("/locations/eastus2/usages");
-                then.status(200).body("not json");
+                then.status(200).json_body(json!({"value": "usage-shape-marker"}));
             })
             .await;
         let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
@@ -632,7 +632,7 @@ mod tests {
             "{reason}"
         );
         assert!(
-            reason.contains("Azure ListComputeUsages: JSON parse error for eastus2"),
+            reason.contains("usage-shape-marker"),
             "the reason keeps the underlying failure: {reason}"
         );
     }

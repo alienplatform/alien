@@ -3392,6 +3392,133 @@ mod tests {
         assert!(!machine.ends_with("s_v6"), "{machine}");
     }
 
+    /// The prepared stack of an imported install already names the catalog machine in its
+    /// cluster, and planning keeps a machine the stack names. First-setup selection therefore
+    /// plans from the release's own stack, where the pool is still automatic.
+    #[test]
+    fn selection_plans_from_the_release_stack_not_the_prepared_one() {
+        let release = generated_pool_stack();
+        let cluster = ComputeCluster::new("compute".into())
+            .capacity_group(CapacityGroup {
+                group_id: "general".into(),
+                instance_type: Some("Standard_D8s_v5".into()),
+                min_size: 1,
+                max_size: 5,
+                profile: None,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        let with_cluster = Stack::new("cluster".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .build();
+        let mut prepared = release.clone();
+        prepared.resources.extend(with_cluster.resources);
+        let state = azure_state(vec![]);
+        let only_v6 = || StubRoom::new(|spec, _| spec.series == "Dsv6");
+
+        let from_release = ComputeClusterMutation
+            .choose_pool_machines(release, &state, &empty_config(), &only_v6())
+            .unwrap();
+        let machine = pool_machine(&from_release).expect("the release's pool is chosen");
+        assert!(machine.ends_with("s_v6"), "{machine}");
+
+        let from_prepared = ComputeClusterMutation
+            .choose_pool_machines(prepared, &state, &empty_config(), &only_v6())
+            .unwrap();
+        let machine = pool_machine(&from_prepared).unwrap_or_default();
+        assert!(
+            !machine.ends_with("s_v6"),
+            "the prepared stack's pinned machine is honoured, so it cannot be the planning input: {machine}"
+        );
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    fn cluster_with_general(machine: Option<&str>) -> Stack {
+        let cluster = ComputeCluster::new("compute".into())
+            .capacity_group(CapacityGroup {
+                group_id: "general".into(),
+                instance_type: machine.map(ToString::to_string),
+                min_size: 1,
+                max_size: 5,
+                profile: None,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        Stack::new("cluster".to_string())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .build()
+    }
+
+    /// A release with two clusters where registration declined one: the planning stack drops
+    /// the declined one, so selection succeeds for the remaining cluster.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_planning_leaves_out_what_registration_removed() {
+        use crate::runner::PreflightRunner;
+        let mut release = cluster_with_general(Some("Standard_D8s_v5"));
+        let mut declined = cluster_with_general(Some("Standard_D8s_v5"));
+        let entry = declined.resources.shift_remove("compute").unwrap();
+        release.resources.insert("declined-compute".into(), entry);
+        let prepared = cluster_with_general(Some("Standard_D8s_v5"));
+        let state = azure_state(vec![]);
+        let only_v6 = || StubRoom::new(|spec, _| spec.series == "Dsv6");
+
+        let planning = PreflightRunner::first_setup_planning_stack(&release, &prepared);
+        assert_eq!(planning.resources.len(), 1);
+        assert!(planning.resources.contains_key("compute"));
+        ComputeClusterMutation
+            .choose_pool_machines(planning, &state, &empty_config(), &only_v6())
+            .expect("selection succeeds for the cluster registration kept");
+    }
+
+    /// A machine the release declares explicitly is not replaced by the selection.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_planning_keeps_a_machine_the_release_declares() {
+        use crate::runner::PreflightRunner;
+        let release = cluster_with_general(Some("Standard_D8s_v5"));
+        let prepared = release.clone();
+        let planning = PreflightRunner::first_setup_planning_stack(&release, &prepared);
+        let chosen = ComputeClusterMutation
+            .choose_pool_machines(
+                planning,
+                &azure_state(vec![]),
+                &empty_config(),
+                &StubRoom::new(|spec, _| spec.series == "Dsv6"),
+            )
+            .unwrap();
+        assert_eq!(pool_machine(&chosen).as_deref(), Some("Standard_D8s_v5"));
+    }
+
+    /// A pool mutations generate is sized from the workload, not from the catalog profile the
+    /// prepared cluster carries: the pick equals the direct-setup pick for the same stack and
+    /// quota.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_planning_sizes_a_generated_pool_like_direct_setup() {
+        use crate::runner::PreflightRunner;
+        let release = generated_pool_stack();
+        let mut prepared = release.clone();
+        prepared
+            .resources
+            .extend(cluster_with_general(Some("Standard_D8s_v5")).resources);
+        let state = azure_state(vec![]);
+        let room = || StubRoom::new(|spec, _| spec.series == "Dsv6");
+        let direct = ComputeClusterMutation
+            .choose_pool_machines(release.clone(), &state, &empty_config(), &room())
+            .unwrap();
+        let planning = PreflightRunner::first_setup_planning_stack(&release, &prepared);
+        let imported = ComputeClusterMutation
+            .choose_pool_machines(planning, &state, &empty_config(), &room())
+            .unwrap();
+        assert!(pool_machine(&direct).is_some());
+        assert_eq!(pool_machine(&imported), pool_machine(&direct));
+    }
+
     #[test]
     fn an_installed_azure_pool_without_settings_keeps_its_machine_whatever_the_quota() {
         let chosen = ComputeClusterMutation

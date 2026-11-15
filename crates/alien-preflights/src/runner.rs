@@ -290,6 +290,96 @@ impl PreflightRunner {
         Ok(Some(chosen))
     }
 
+    /// First setup of an imported (Terraform or CloudFormation) install on Azure: the stack was
+    /// prepared at registration, with no cloud credentials, so its pools carry the catalog
+    /// default machine. Before anything is created, pick the machine each not-yet-created pool
+    /// gets from the subscription's free quota, as `handle_pending` does for a direct setup, and
+    /// write it into the prepared stack. Returns the stack to use, or `None` when nothing
+    /// changes, with the preflight results the selection collected (a warning when quota could
+    /// not be read or no series has room). Pools whose machines exist are never touched.
+    ///
+    /// Planning reads the release's own stack, without the resources registration removed
+    /// (declined gates, other platforms): they exist in the release but not in the prepared
+    /// stack. A cluster the mutations generate exists only in the prepared stack, so planning
+    /// regenerates it from the containers, sized from the workload as a direct setup does.
+    /// Machines the release declares are kept. A machine the operator chose comes from
+    /// `config.stack_settings`, which planning honours.
+    #[cfg(feature = "runtime-checks")]
+    pub async fn select_first_setup_machines(
+        &self,
+        release_stack: &Stack,
+        prepared: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+        client_config: &ClientConfig,
+    ) -> Result<(Option<Stack>, Vec<CheckResult>)> {
+        let mut results = Vec::new();
+        let planning = Self::first_setup_planning_stack(release_stack, prepared);
+        let Some(chosen) = self
+            .choose_machines_with_room(&planning, stack_state, config, client_config, &mut results)
+            .await?
+        else {
+            return Ok((None, results));
+        };
+        Ok((
+            Self::with_chosen_machines(prepared, stack_state, &chosen),
+            results,
+        ))
+    }
+
+    /// The release's stack without the resources registration removed: those in the release
+    /// but not in the prepared stack.
+    #[cfg(feature = "runtime-checks")]
+    pub(crate) fn first_setup_planning_stack(release_stack: &Stack, prepared: &Stack) -> Stack {
+        let mut planning = release_stack.clone();
+        planning
+            .resources
+            .retain(|id, _| prepared.resources.contains_key(id));
+        planning
+    }
+
+    /// The stack with each not-yet-created pool's capacity group on the machine `chosen` names.
+    #[cfg(feature = "runtime-checks")]
+    fn with_chosen_machines(
+        stack: &Stack,
+        stack_state: &StackState,
+        chosen: &DeploymentConfig,
+    ) -> Option<Stack> {
+        use alien_core::ComputeCluster;
+        let settings = chosen.stack_settings.compute.as_ref()?;
+        let mut updated = stack.clone();
+        let mut changed = false;
+        for entry in updated.resources.values_mut() {
+            let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
+                continue;
+            };
+            for group in cluster.capacity_groups.iter_mut() {
+                let already_created = stack_state.resources.values().any(|state| {
+                    crate::mutations::compute_cluster::group_was_created(state, &group.group_id)
+                });
+                let Some(machine) = settings
+                    .pools
+                    .get(&group.group_id)
+                    .and_then(|selection| selection.machine())
+                else {
+                    continue;
+                };
+                if already_created || group.instance_type.as_deref() == Some(machine) {
+                    continue;
+                }
+                info!(
+                    pool = %group.group_id,
+                    from = ?group.instance_type,
+                    to = %machine,
+                    "Automatic machine selection moved a pool that has no machines yet"
+                );
+                group.instance_type = Some(machine.to_string());
+                changed = true;
+            }
+        }
+        changed.then_some(updated)
+    }
+
     /// Apply all stack mutations to a stack.
     ///
     /// Mutations are evaluated incrementally: each mutation's `should_run()` is checked
@@ -967,6 +1057,104 @@ mod setup_update_authorization_tests {
             text.contains("no Azure credentials for reading quota"),
             "{text}"
         );
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn first_setup_selection_returns_the_warnings_it_collected() {
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let config = deployment_config();
+        let state = StackState::new(Platform::Azure);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".into(),
+        };
+        let stack = Stack::new("azure-pool".into())
+            .add(
+                alien_core::ComputeCluster::new("compute".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let (selected, results) = runner
+            .select_first_setup_machines(&stack, &stack, &state, &config, &client)
+            .await
+            .unwrap();
+        assert!(selected.is_none());
+        let text = format!("{results:?}");
+        assert!(
+            text.contains("no Azure credentials for reading quota"),
+            "{text}"
+        );
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_moves_only_pools_without_machines() {
+        use alien_core::{CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings};
+        let group = |id: &str, machine: &str| CapacityGroup {
+            group_id: id.to_string(),
+            instance_type: Some(machine.to_string()),
+            profile: None,
+            min_size: 1,
+            max_size: 1,
+            scale_policy: None,
+            nested_virtualization: None,
+            data_disk_gib_range: None,
+        };
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(group("general", "Standard_D8s_v5"))
+            .capacity_group(group("stateful", "Standard_D2s_v5"))
+            .build();
+        let stack = Stack::new("azure-pool".into())
+            .add(cluster.clone(), ResourceLifecycle::Frozen)
+            .build();
+        // The stateful pool already has machines: its resource is Running with that group.
+        let mut installed_cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(group("stateful", "Standard_D2s_v5"))
+            .build();
+        installed_cluster.capacity_groups[0].instance_type = Some("Standard_D2s_v5".into());
+        let mut installed = alien_core::StackResourceState::new_pending(
+            "compute-cluster".into(),
+            alien_core::Resource::new(installed_cluster),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        installed.status = alien_core::ResourceStatus::Running;
+        let mut state = StackState::new(Platform::Azure);
+        state.resources.insert("compute".into(), installed);
+        let mut chosen = deployment_config();
+        let pool = |machine: &str| ComputePoolSelection::Fixed {
+            machines: 1,
+            machine: Some(machine.to_string()),
+            failure_domains: None,
+            data_disk_gib: None,
+        };
+        chosen.stack_settings.compute = Some(ComputeSettings {
+            pools: [
+                ("general".to_string(), pool("Standard_D8s_v6")),
+                ("stateful".to_string(), pool("Standard_D2s_v6")),
+            ]
+            .into(),
+            containers: Default::default(),
+        });
+
+        let updated = PreflightRunner::with_chosen_machines(&stack, &state, &chosen)
+            .expect("the pool without machines moves");
+        let machines: Vec<(String, Option<String>)> = updated
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<ComputeCluster>())
+            .flat_map(|cluster| cluster.capacity_groups.iter())
+            .map(|group| (group.group_id.clone(), group.instance_type.clone()))
+            .collect();
+        assert_eq!(
+            machines,
+            vec![
+                ("general".to_string(), Some("Standard_D8s_v6".to_string())),
+                ("stateful".to_string(), Some("Standard_D2s_v5".to_string())),
+            ]
+        );
+        // Nothing to move once the pick matches the stack.
+        assert!(PreflightRunner::with_chosen_machines(&updated, &state, &chosen).is_none());
     }
 
     #[cfg(feature = "runtime-checks")]
