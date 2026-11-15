@@ -425,6 +425,18 @@ impl Receiver {
         Self::from_env_and_source(env, Some(TokenSource::Runtime(Arc::new(credentials))))
     }
 
+    /// Build a receiver that authenticates with refreshable runtime
+    /// credentials the caller already holds, such as an Operator's own
+    /// operations credential. Stored tokens in the environment are ignored.
+    /// The manager origin comes from the credentials; the commands URL must
+    /// share it.
+    pub fn from_env_vars_with_credentials(
+        env: &HashMap<String, String>,
+        credentials: Arc<RuntimeCredentials>,
+    ) -> Result<Self> {
+        Self::from_env_and_source(env, Some(TokenSource::Runtime(credentials)))
+    }
+
     fn from_env_and_source(
         env: &HashMap<String, String>,
         source: Option<TokenSource>,
@@ -2122,6 +2134,87 @@ mod identity_lifecycle_tests {
         destination_server.abort();
         assert!(manager_server.await.unwrap_err().is_cancelled());
         assert!(destination_server.await.unwrap_err().is_cancelled());
+    }
+
+    /// A receiver built from credentials the caller already holds uses them,
+    /// ignores a stored token, and still refuses a commands URL that is not on
+    /// the credentials' manager origin.
+    #[tokio::test]
+    async fn receiver_with_held_credentials_uses_them_and_keeps_the_origin_boundary() {
+        let manager = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let manager_url = format!("http://{}", manager.local_addr().unwrap());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let app = Router::new()
+            .route(
+                "/v1/identity/exchange",
+                post(|| async {
+                    Json(json!({"token":"held-credential", "expiresAt":chrono::Utc::now() + chrono::Duration::minutes(5)}))
+                }),
+            )
+            .route(
+                "/v1/commands/leases",
+                post({
+                    let seen = seen.clone();
+                    move |headers: axum::http::HeaderMap| {
+                        let seen = seen.clone();
+                        async move {
+                            seen.lock().unwrap().push(
+                                headers["authorization"].to_str().unwrap().to_owned(),
+                            );
+                            Json(json!({"leases":[]}))
+                        }
+                    }
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(manager, app).await.unwrap() });
+        let credentials = Arc::new(
+            RuntimeCredentials::new(
+                RuntimeCredentialConfig {
+                    manager_url: manager_url.clone(),
+                    audience: "trusted-manager".into(),
+                    deployment_id: "deployment-one".into(),
+                    purpose: json!({"type":"operatorOperations"}),
+                },
+                Arc::new(FixtureProof),
+            )
+            .unwrap(),
+        );
+        let mut env = HashMap::from([
+            (
+                ENV_ALIEN_COMMANDS_URL.to_string(),
+                format!("{manager_url}/v1"),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                "stale-token".to_string(),
+            ),
+            (
+                ENV_ALIEN_DEPLOYMENT_ID.to_string(),
+                "deployment-one".to_string(),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                "operator".to_string(),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE.to_string(),
+                "daemon".to_string(),
+            ),
+        ]);
+        let receiver = Receiver::from_env_vars_with_credentials(&env, credentials.clone()).unwrap();
+        assert!(receiver.acquire_leases(1).await.unwrap().is_empty());
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            ["Bearer held-credential".to_string()],
+            "the stored token must never be sent"
+        );
+
+        env.insert(
+            ENV_ALIEN_COMMANDS_URL.to_string(),
+            "http://127.0.0.1:9/v1".to_string(),
+        );
+        assert!(Receiver::from_env_vars_with_credentials(&env, credentials).is_err());
+        server.abort();
     }
 
     #[tokio::test]

@@ -1756,3 +1756,30 @@ impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
 }
 
 mod daily_identity;
+
+/// Whether this Operator has finished enrolling and so holds a daily key.
+///
+/// An Operator installed with a one-use enrollment code is enrolled and has no
+/// stored sync token; an Operator installed with a token is not enrolled until
+/// it swaps that token for a key.
+pub async fn is_enrolled(db: &db::OperatorDb) -> error::Result<bool> {
+    daily_identity::has_runtime_identity(db).await
+}
+
+/// The credential source for this Operator's own operations queue.
+///
+/// `None` while the Operator is not enrolled: it then keeps using its sync
+/// token. Once enrolled, the returned credentials exchange the daily key for a
+/// short-lived `operatorOperations` credential, refresh it before it expires,
+/// and replace it after the manager rejects one. Credentials are cached per
+/// manager, audience and deployment, so calling this again is cheap.
+pub async fn operations_credentials(
+    db: &Arc<db::OperatorDb>,
+) -> error::Result<Option<Arc<alien_client_core::runtime_credentials::RuntimeCredentials>>> {
+    if !daily_identity::has_runtime_identity(db).await? {
+        return Ok(None);
+    }
+    daily_identity::request_operations_credentials(db)
+        .await
+        .map(Some)
+}
