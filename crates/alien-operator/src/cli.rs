@@ -1048,9 +1048,13 @@ async fn run_operator_cli(
     let cancel = CancellationToken::new();
 
     let signal_cancel = cancel.clone();
+    let signal_db = db.clone();
     tokio::spawn(async move {
         wait_for_shutdown_signal().await;
         info!("Received shutdown signal");
+        // A terminating pod must not write its identity into a Secret that a
+        // newer install has created since.
+        signal_db.stop_identity_writes();
         signal_cancel.cancel();
     });
 

@@ -201,6 +201,13 @@ impl OperatorDb {
             .and_then(|store| store.rotation_blocked())
     }
 
+    /// The operator is stopping: the identity store writes nothing more.
+    pub(crate) fn stop_identity_writes(&self) {
+        if let Some(store) = &self.identity_store {
+            store.stop_writing();
+        }
+    }
+
     pub(crate) fn pull_secret_refreshed(&self) -> bool {
         self.pull_secret_refreshed
             .load(std::sync::atomic::Ordering::Relaxed)

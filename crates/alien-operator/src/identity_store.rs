@@ -51,6 +51,10 @@ pub(crate) trait IdentityStore: Send + Sync {
     /// Why the identity cannot be saved right now, if it cannot. While it is
     /// set the operator keeps its current key and does not rotate.
     fn rotation_blocked(&self) -> Option<String>;
+    /// The operator is shutting down: from now on nothing is written, so a
+    /// terminating pod cannot put its identity into a Secret that a newer
+    /// install has since created.
+    fn stop_writing(&self);
 }
 
 /// What a write to the Secret came to.
@@ -171,7 +175,11 @@ pub(crate) struct SecretIdentityStore {
     name: String,
     inner: Mutex<Inner>,
     blocked: std::sync::Mutex<Option<String>>,
-    reported: AtomicBool,
+    /// Whether the current read problem, and the current write problem, were
+    /// already logged. A read that works again must not re-arm the write log.
+    reported_read: AtomicBool,
+    reported_write: AtomicBool,
+    stopping: AtomicBool,
 }
 
 impl SecretIdentityStore {
@@ -181,7 +189,9 @@ impl SecretIdentityStore {
             name: name.into(),
             inner: Mutex::new(Inner::default()),
             blocked: std::sync::Mutex::new(None),
-            reported: AtomicBool::new(false),
+            reported_read: AtomicBool::new(false),
+            reported_write: AtomicBool::new(false),
+            stopping: AtomicBool::new(false),
         }
     }
 
@@ -195,18 +205,30 @@ impl SecretIdentityStore {
     }
 
     /// Record why the Secret cannot be used; the first time, log it once.
-    fn block(&self, what: &str) -> AlienError<ErrorData> {
+    fn block(&self, what: &str, writing: bool) -> AlienError<ErrorData> {
         let message = self.fix(what);
         *self.blocked.lock().expect("blocked flag") = Some(message.clone());
-        if !self.reported.swap(true, Ordering::Relaxed) {
+        let reported = if writing {
+            &self.reported_write
+        } else {
+            &self.reported_read
+        };
+        if !reported.swap(true, Ordering::Relaxed) {
             error!("{message}");
         }
         AlienError::new(ErrorData::ConfigurationError { message })
     }
 
-    fn unblock(&self) {
+    /// The Secret was read. A refused write stays reported: reads work without
+    /// update permission, and the problem is still there.
+    fn read_worked(&self) {
         *self.blocked.lock().expect("blocked flag") = None;
-        self.reported.store(false, Ordering::Relaxed);
+        self.reported_read.store(false, Ordering::Relaxed);
+    }
+
+    fn write_worked(&self) {
+        self.read_worked();
+        self.reported_write.store(false, Ordering::Relaxed);
     }
 
     /// Read the Secret and remember it. When the Secret exists but holds no
@@ -216,7 +238,7 @@ impl SecretIdentityStore {
     async fn load(&self, inner: &mut Inner) -> Loaded {
         match self.backend.get().await {
             Ok(Some(mut secret)) => {
-                self.unblock();
+                self.read_worked();
                 inner.secret = Some(secret.clone());
                 let saved = parse_identity(&secret).ok().flatten();
                 if saved.is_none() {
@@ -235,18 +257,21 @@ impl SecretIdentityStore {
             }
             Ok(None) => {
                 inner.secret = None;
-                self.block(&format!(
-                    "The identity Secret '{}' does not exist",
-                    self.name
-                ));
+                self.block(
+                    &format!("The identity Secret '{}' does not exist", self.name),
+                    false,
+                );
                 Loaded::Missing
             }
             Err(source) => {
                 inner.secret = None;
-                self.block(&format!(
-                    "The identity Secret '{}' cannot be read ({})",
-                    self.name, source
-                ));
+                self.block(
+                    &format!(
+                        "The identity Secret '{}' cannot be read ({})",
+                        self.name, source
+                    ),
+                    false,
+                );
                 Loaded::Unreadable
             }
         }
@@ -256,6 +281,9 @@ impl SecretIdentityStore {
     /// a Secret that lost them. A conflict or failure leaves the Secret as read:
     /// the next read tries again.
     async fn restore(&self, inner: &mut Inner, secret: &Secret) -> Option<Secret> {
+        if self.stopping.load(Ordering::Relaxed) {
+            return None;
+        }
         let identity = inner
             .memory
             .as_ref()
@@ -285,6 +313,11 @@ impl SecretIdentityStore {
         inner: &mut Inner,
         change: impl FnOnce(&mut BTreeMap<String, ByteString>),
     ) -> Result<()> {
+        if self.stopping.load(Ordering::Relaxed) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "The operator is shutting down; the identity Secret is not written".into(),
+            }));
+        }
         let mut secret = match inner.secret.clone() {
             Some(secret) => secret,
             None => match self.load(inner).await {
@@ -306,7 +339,7 @@ impl SecretIdentityStore {
         secret.data = Some(data);
         match self.backend.put(&secret).await {
             Ok(PutOutcome::Stored(stored)) => {
-                self.unblock();
+                self.write_worked();
                 inner.secret = Some(stored);
                 Ok(())
             }
@@ -317,14 +350,20 @@ impl SecretIdentityStore {
             }
             Ok(PutOutcome::Missing) => {
                 inner.secret = None;
-                Err(self.block(&format!("The identity Secret '{}' was deleted", self.name)))
+                Err(self.block(
+                    &format!("The identity Secret '{}' was deleted", self.name),
+                    true,
+                ))
             }
             Err(source) => {
                 inner.secret = None;
-                Err(self.block(&format!(
-                    "The identity Secret '{}' cannot be written ({})",
-                    self.name, source
-                )))
+                Err(self.block(
+                    &format!(
+                        "The identity Secret '{}' cannot be written ({})",
+                        self.name, source
+                    ),
+                    true,
+                ))
             }
         }
     }
@@ -414,15 +453,23 @@ fn secret_text(secret: &Secret, key: &str) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
+/// The identity in the Secret. Empty data is "no identity yet"; anything that
+/// is there but cannot be read (not text, cut off, the wrong shape) is an error
+/// that says what to do, never mistaken for empty.
 fn parse_identity(secret: &Secret) -> Result<Option<DailyIdentityState>> {
-    match secret_text(secret, IDENTITY_KEY) {
-        None => Ok(None),
-        Some(text) => serde_json::from_str(&text).map(Some).map_err(|_| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "The saved operator identity in the Secret is not readable".into(),
-            })
-        }),
+    let unreadable = || {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "The saved operator identity in the Secret cannot be read. Delete the identity Secret (`helm upgrade` creates it again empty) and install with a newly issued token.".into(),
+        })
+    };
+    let Some(bytes) = secret.data.as_ref().and_then(|data| data.get(IDENTITY_KEY)) else {
+        return Ok(None);
+    };
+    if bytes.0.is_empty() {
+        return Ok(None);
     }
+    let text = std::str::from_utf8(&bytes.0).map_err(|_| unreadable())?;
+    serde_json::from_str(text).map(Some).map_err(|_| unreadable())
 }
 
 fn serialize(state: &DailyIdentityState) -> Result<ByteString> {
@@ -438,7 +485,14 @@ impl IdentityStore for SecretIdentityStore {
     async fn read(&self) -> Result<Option<DailyIdentityState>> {
         let mut inner = self.inner.lock().await;
         match self.load(&mut inner).await {
-            Loaded::Found(secret) => parse_identity(&secret),
+            // A Secret that holds no identity while memory holds an enrolled one
+            // was recreated and could not be written back (no permission, a
+            // conflict, an unavailable API server): the enrolled identity in
+            // memory is still the truth.
+            Loaded::Found(secret) => match parse_identity(&secret)? {
+                Some(state) => Ok(Some(state)),
+                None => Ok(inner.memory.clone()),
+            },
             // Deleted: keep serving the key already in use.
             Loaded::Missing => Ok(inner.memory.clone()),
             // Unreachable: with no identity in memory, "no saved identity" would be a
@@ -553,6 +607,10 @@ impl IdentityStore for SecretIdentityStore {
 
     fn rotation_blocked(&self) -> Option<String> {
         self.blocked.lock().expect("blocked flag").clone()
+    }
+
+    fn stop_writing(&self) {
+        self.stopping.store(true, Ordering::Relaxed);
     }
 }
 
@@ -851,6 +909,98 @@ mod tests {
         assert_eq!(restarted.read().await.unwrap().unwrap().current, "key-a");
         assert_eq!(restarted.encryption_key().await.unwrap(), key);
         store.write(&state("dep_1", "key-b")).await.unwrap();
+    }
+
+    fn secret_with(identity: &[u8]) -> Secret {
+        Secret {
+            metadata: ObjectMeta {
+                name: Some("identity".into()),
+                resource_version: Some("1".into()),
+                ..Default::default()
+            },
+            data: Some([(IDENTITY_KEY.to_string(), ByteString(identity.to_vec()))].into()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_recreated_secret_that_cannot_be_written_back_does_not_read_as_no_identity() {
+        let fake = Fake::with_empty_secret();
+        let store = store(&fake);
+        store
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        fake.recreate_empty();
+        fake.refuse_writes.store(true, Ordering::Relaxed);
+        assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
+        assert_eq!(store.read().await.unwrap().unwrap().current, "key-a");
+    }
+
+    #[tokio::test]
+    async fn a_refused_write_is_logged_once_even_though_reads_keep_working() {
+        let fake = Fake::with_empty_secret();
+        let store = store(&fake);
+        store.read().await.unwrap();
+        fake.refuse_writes.store(true, Ordering::Relaxed);
+        for _ in 0..3 {
+            assert!(store.write(&state("dep_1", "key-a")).await.is_err());
+            // Reads work, and clear the flag the rotation checks.
+            store.read().await.unwrap();
+            assert!(store.rotation_blocked().is_none());
+            assert!(store.reported_write.load(Ordering::Relaxed));
+        }
+        // Counting the logs: the flag is armed once and only a write re-arms it.
+        fake.refuse_writes.store(false, Ordering::Relaxed);
+        store.write(&state("dep_1", "key-a")).await.unwrap();
+        assert!(!store.reported_write.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn nothing_is_written_after_shutdown_begins() {
+        let fake = Fake::with_empty_secret();
+        let store = store(&fake);
+        store
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        store.stop_writing();
+        // A newer install recreates the Secret empty; the stopping operator must
+        // not restore its identity into it.
+        fake.recreate_empty();
+        store.read().await.unwrap();
+        assert!(fake.stored().data.is_none());
+        assert!(store.write(&state("dep_1", "key-b")).await.is_err());
+        assert!(fake.stored().data.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_secret_is_an_error_that_says_what_to_do_and_never_a_panic() {
+        for content in [
+            &[0xff, 0xfe, 0x00][..],
+            br#"{"managerUrl":"https://m.example","aud"#,
+            br#"["not","an","identity"]"#,
+            br#"{"deploymentId": 7}"#,
+            b"null",
+        ] {
+            let fake = Fake::with_empty_secret();
+            *fake.secret.lock().unwrap() = Some(secret_with(content));
+            let store = store(&fake);
+            let Err(error) = store.read().await else {
+                panic!("not an identity");
+            };
+            let message = error.to_string();
+            assert!(
+                message.contains("Delete the identity Secret") && message.contains("new"),
+                "{message}"
+            );
+            // Writing over it with an enrolled identity is how the operator repairs itself.
+            assert!(store.check_enrolled(&state("dep_1", "k")).await.is_err());
+        }
+        // Empty data is "no identity yet", not an error.
+        let fake = Fake::with_empty_secret();
+        *fake.secret.lock().unwrap() = Some(secret_with(b""));
+        assert!(store(&fake).read().await.unwrap().is_none());
     }
 
     /// Against a real API server (a Kind cluster) through `kubectl proxy`:

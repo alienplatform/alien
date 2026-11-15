@@ -613,7 +613,14 @@ impl DailyIdentity {
             }
             state.pending = Some(new_key()?);
             state.pending_started_at = Some(now);
-            self.db.write_daily_identity(&state).await?;
+            // Nothing has been sent yet, so a successor that cannot be saved
+            // only delays the swap: the current key keeps working.
+            if let Err(error) = self.db.write_daily_identity(&state).await {
+                if matches!(error.error, Some(ErrorData::IdentityConflict)) {
+                    return Err(error);
+                }
+                return keep_current(&state, error);
+            }
         }
         let mut pending = state
             .pending
@@ -1772,6 +1779,7 @@ mod persistence_tests {
         fn rotation_blocked(&self) -> Option<String> {
             self.blocked.lock().unwrap().clone()
         }
+        fn stop_writing(&self) {}
     }
 
     async fn operator_on_store(
@@ -1811,6 +1819,68 @@ mod persistence_tests {
         assert_eq!(token, "ax_cap_v1_recovered");
         assert_eq!(*manager.current.lock().await, key_hash(&state.current));
         assert_eq!(store.writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A Secret the operator may read but not update. Rotation fails when the
+    /// successor key cannot be saved, before anything is sent: the key that
+    /// still works keeps working, even inside the last twelve hours.
+    #[tokio::test]
+    async fn without_update_permission_the_working_key_keeps_working_until_it_expires() {
+        use crate::identity_store::{PutOutcome, SecretBackend, SecretIdentityStore};
+        use k8s_openapi::{api::core::v1::Secret, ByteString};
+
+        struct ReadOnly(Secret);
+        #[async_trait::async_trait]
+        impl SecretBackend for ReadOnly {
+            async fn get(&self) -> Result<Option<Secret>> {
+                Ok(Some(self.0.clone()))
+            }
+            async fn put(&self, _secret: &Secret) -> Result<PutOutcome> {
+                Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "forbidden".into(),
+                }))
+            }
+        }
+
+        let (_db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let secret = Secret {
+            data: Some(
+                [
+                    (
+                        "identity".to_string(),
+                        ByteString(serde_json::to_vec(&state).unwrap()),
+                    ),
+                    ("encryptionKey".to_string(), ByteString(vec![b'a'; 64])),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let store = Arc::new(SecretIdentityStore::new(
+            Arc::new(ReadOnly(secret)),
+            "identity",
+        ));
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap()
+                .use_identity_store(store)
+                .await
+                .unwrap(),
+        );
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        for _ in 0..2 {
+            let (_, token) = identity
+                .clone()
+                .connect(request(&state, "ax_enroll_original"))
+                .await
+                .expect("the current key keeps working");
+            assert_eq!(token, "ax_cap_v1_recovered");
+        }
+        assert_eq!(*manager.current.lock().await, key_hash(&state.current));
     }
 
     /// Another operator saved first: the write is refused, and this one starts over
