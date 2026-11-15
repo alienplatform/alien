@@ -425,6 +425,50 @@ impl Receiver {
         Self::from_env_and_source(env, Some(TokenSource::Runtime(Arc::new(credentials))))
     }
 
+    /// Build a receiver that authenticates with refreshable runtime
+    /// credentials the caller already holds, such as an Operator's own
+    /// operations credential. Stored tokens in the environment are ignored.
+    /// The manager origin comes from the credentials; the commands URL must
+    /// share it.
+    ///
+    /// The deployment and target in `env` must be the ones the credentials are
+    /// for: a receiver never leases a queue its credentials were not issued for.
+    pub fn from_env_vars_with_credentials(
+        env: &HashMap<String, String>,
+        credentials: Arc<RuntimeCredentials>,
+    ) -> Result<Self> {
+        let mismatch = |message: &str, env_var: &str| {
+            AlienError::new(ErrorData::CommandReceiverConfigInvalid {
+                message: message.to_string(),
+                env_var: env_var.to_string(),
+            })
+        };
+        if require_env(env, ENV_ALIEN_DEPLOYMENT_ID)? != credentials.deployment_id() {
+            return Err(mismatch(
+                "The deployment does not match the one the credentials are for",
+                ENV_ALIEN_DEPLOYMENT_ID,
+            ));
+        }
+        let target_id = require_env(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)?;
+        let target_type = require_env(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE)?;
+        let purpose = credentials.purpose();
+        let target_matches = match purpose.get("type").and_then(serde_json::Value::as_str) {
+            Some("operatorOperations") => target_id == "operator" && target_type == "daemon",
+            Some("receiveCommands") => {
+                purpose["target"]["resourceId"].as_str() == Some(target_id.as_str())
+                    && purpose["target"]["resourceType"].as_str() == Some(target_type.as_str())
+            }
+            _ => false,
+        };
+        if !target_matches {
+            return Err(mismatch(
+                "The target does not match the purpose of the credentials",
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+            ));
+        }
+        Self::from_env_and_source(env, Some(TokenSource::Runtime(credentials)))
+    }
+
     fn from_env_and_source(
         env: &HashMap<String, String>,
         source: Option<TokenSource>,
@@ -2122,6 +2166,128 @@ mod identity_lifecycle_tests {
         destination_server.abort();
         assert!(manager_server.await.unwrap_err().is_cancelled());
         assert!(destination_server.await.unwrap_err().is_cancelled());
+    }
+
+    /// A receiver built from credentials the caller already holds uses them,
+    /// ignores a stored token, and still refuses a commands URL that is not on
+    /// the credentials' manager origin.
+    #[tokio::test]
+    async fn receiver_with_held_credentials_uses_them_and_keeps_the_origin_boundary() {
+        let manager = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let manager_url = format!("http://{}", manager.local_addr().unwrap());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let app = Router::new()
+            .route(
+                "/v1/identity/exchange",
+                post(|| async {
+                    Json(json!({"token":"held-credential", "expiresAt":chrono::Utc::now() + chrono::Duration::minutes(5)}))
+                }),
+            )
+            .route(
+                "/v1/commands/leases",
+                post({
+                    let seen = seen.clone();
+                    move |headers: axum::http::HeaderMap| {
+                        let seen = seen.clone();
+                        async move {
+                            seen.lock().unwrap().push(
+                                headers["authorization"].to_str().unwrap().to_owned(),
+                            );
+                            Json(json!({"leases":[]}))
+                        }
+                    }
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(manager, app).await.unwrap() });
+        let credentials = Arc::new(
+            RuntimeCredentials::new(
+                RuntimeCredentialConfig {
+                    manager_url: manager_url.clone(),
+                    audience: "trusted-manager".into(),
+                    deployment_id: "deployment-one".into(),
+                    purpose: json!({"type":"operatorOperations"}),
+                },
+                Arc::new(FixtureProof),
+            )
+            .unwrap(),
+        );
+        let mut env = HashMap::from([
+            (
+                ENV_ALIEN_COMMANDS_URL.to_string(),
+                format!("{manager_url}/v1"),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                "stale-token".to_string(),
+            ),
+            (
+                ENV_ALIEN_DEPLOYMENT_ID.to_string(),
+                "deployment-one".to_string(),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                "operator".to_string(),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE.to_string(),
+                "daemon".to_string(),
+            ),
+        ]);
+        let receiver = Receiver::from_env_vars_with_credentials(&env, credentials.clone()).unwrap();
+        assert!(receiver.acquire_leases(1).await.unwrap().is_empty());
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            ["Bearer held-credential".to_string()],
+            "the stored token must never be sent"
+        );
+
+        // A deployment or target other than the credentials' own is refused at
+        // build, as is a purpose that is not a command receiver's.
+        let mut other_deployment = env.clone();
+        other_deployment.insert(
+            ENV_ALIEN_DEPLOYMENT_ID.to_string(),
+            "deployment-two".to_string(),
+        );
+        assert!(
+            Receiver::from_env_vars_with_credentials(&other_deployment, credentials.clone())
+                .is_err()
+        );
+        for (id, kind) in [("operator", "container"), ("daemon-a", "daemon")] {
+            let mut other_target = env.clone();
+            other_target.insert(
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                id.to_string(),
+            );
+            other_target.insert(
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE.to_string(),
+                kind.to_string(),
+            );
+            assert!(
+                Receiver::from_env_vars_with_credentials(&other_target, credentials.clone())
+                    .is_err(),
+                "{id}/{kind}"
+            );
+        }
+        let telemetry = Arc::new(
+            RuntimeCredentials::new(
+                RuntimeCredentialConfig {
+                    manager_url: manager_url.clone(),
+                    audience: "trusted-manager".into(),
+                    deployment_id: "deployment-one".into(),
+                    purpose: json!({"type":"telemetry"}),
+                },
+                Arc::new(FixtureProof),
+            )
+            .unwrap(),
+        );
+        assert!(Receiver::from_env_vars_with_credentials(&env, telemetry).is_err());
+
+        env.insert(
+            ENV_ALIEN_COMMANDS_URL.to_string(),
+            "http://127.0.0.1:9/v1".to_string(),
+        );
+        assert!(Receiver::from_env_vars_with_credentials(&env, credentials).is_err());
+        server.abort();
     }
 
     #[tokio::test]

@@ -888,8 +888,31 @@ mod tests {
             target: operator.clone(),
             ..command
         };
-        assert!(!OssAuthz.can_receive_command(&operator_receiver, &own, &operator,));
-        assert!(!OssAuthz.can_execute_command_context(&operator_receiver, &operator_command,));
+        // The Operator's own queue is the one reserved target a receive
+        // capability may use; the operations worker and the operator id as
+        // another resource type stay refused.
+        assert!(OssAuthz.can_receive_command(&operator_receiver, &own, &operator,));
+        assert!(OssAuthz.can_execute_command_context(&operator_receiver, &operator_command,));
+        for reserved in [
+            alien_core::CommandTarget::new(
+                alien_commands::server::command_registry::OPERATIONS_WORKER_COMMAND_TARGET_ID,
+                alien_core::CommandTargetType::Daemon,
+            ),
+            alien_core::CommandTarget::new(
+                alien_commands::server::command_registry::OPERATOR_COMMAND_TARGET_ID,
+                alien_core::CommandTargetType::Container,
+            ),
+        ] {
+            let receiver = command_receiver("d1", reserved.clone());
+            assert!(!OssAuthz.can_receive_command(&receiver, &own, &reserved));
+            assert!(!OssAuthz.can_execute_command_context(
+                &receiver,
+                &alien_commands::server::CommandAccessContext {
+                    target: reserved,
+                    ..operator_command.clone()
+                },
+            ));
+        }
     }
 
     #[test]
