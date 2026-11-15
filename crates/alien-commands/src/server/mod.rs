@@ -25,6 +25,9 @@ use object_store::path::Path as StoragePath;
 
 use crate::error::{ErrorData, Result};
 use crate::types::*;
+use lease_wait::{
+    LeaseWaiters, DEFAULT_LEASE_WAIT_RESCAN_INTERVAL, DEFAULT_MAX_OPEN_LEASE_WAITS,
+};
 use crate::INLINE_MAX_BYTES;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -42,6 +45,7 @@ fn is_definite_dispatch_rejection(error: &crate::error::Error) -> bool {
 
 pub mod axum_handlers;
 pub mod command_registry;
+pub mod lease_wait;
 pub mod storage;
 
 pub use crate::dispatchers::{CommandDispatcher, NullCommandDispatcher};
@@ -121,6 +125,9 @@ pub struct CommandServer {
     base_url: String,
     response_signing_key: Vec<u8>,
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
+    lease_waiters: Arc<LeaseWaiters>,
+    max_open_lease_waits: usize,
+    lease_wait_rescan_interval: Duration,
 }
 
 impl CommandServer {
@@ -148,6 +155,9 @@ impl CommandServer {
             base_url,
             response_signing_key,
             clock: Arc::new(Utc::now),
+            lease_waiters: Arc::new(LeaseWaiters::default()),
+            max_open_lease_waits: DEFAULT_MAX_OPEN_LEASE_WAITS,
+            lease_wait_rescan_interval: DEFAULT_LEASE_WAIT_RESCAN_INTERVAL,
         }
     }
 
@@ -170,6 +180,9 @@ impl CommandServer {
             base_url,
             response_signing_key,
             clock: Arc::new(Utc::now),
+            lease_waiters: Arc::new(LeaseWaiters::default()),
+            max_open_lease_waits: DEFAULT_MAX_OPEN_LEASE_WAITS,
+            lease_wait_rescan_interval: DEFAULT_LEASE_WAIT_RESCAN_INTERVAL,
         }
     }
 
@@ -177,6 +190,25 @@ impl CommandServer {
     pub fn with_clock(mut self, clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// Limit the lease requests this process holds open while waiting for a
+    /// command (default 5,000). Over the limit a request is answered at once.
+    pub fn with_max_open_lease_waits(mut self, max: usize) -> Self {
+        self.max_open_lease_waits = max;
+        self
+    }
+
+    /// How often a waiting lease request scans again without a wake-up
+    /// (default 10 s).
+    pub fn with_lease_wait_rescan_interval(mut self, interval: Duration) -> Self {
+        self.lease_wait_rescan_interval = interval;
+        self
+    }
+
+    /// Lease requests currently held open waiting for a command.
+    pub fn open_lease_waits(&self) -> usize {
+        self.lease_waiters.open_waits()
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -978,7 +1010,64 @@ impl CommandServer {
 
     /// Lease commands without delegating response or storage authority beyond
     /// the authenticated receiver's absolute deadline. None retains legacy policy.
+    ///
+    /// With `wait_seconds > 0` and nothing queued, the request is held open and
+    /// answered as soon as a command for the target is queued, or empty when
+    /// the wait ends. The wait is capped at [`MAX_LEASE_WAIT_SECONDS`] and ends
+    /// when the caller's credential does. Every scan, first or repeated, is the
+    /// same scan and atomic lease write as a request that does not wait.
     pub async fn acquire_lease_with_deadline(
+        &self,
+        deployment_id: &str,
+        lease_request: &LeaseRequest,
+        authority_deadline: Option<DateTime<Utc>>,
+    ) -> Result<LeaseResponse> {
+        if lease_request.wait_seconds == 0 {
+            return self
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline)
+                .await;
+        }
+        // Over the cap, answer at once, as a request that did not ask to wait.
+        let Some(wait) = self.lease_waiters.register(
+            deployment_id,
+            &lease_request.target.resource_id,
+            self.max_open_lease_waits,
+        ) else {
+            debug!("Too many open lease waits; answering without waiting");
+            return self
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline)
+                .await;
+        };
+
+        let mut window = Duration::from_secs(lease_request.wait_seconds.min(MAX_LEASE_WAIT_SECONDS));
+        if let Some(deadline) = authority_deadline {
+            let left = (deadline - self.now()).to_std().unwrap_or(Duration::ZERO);
+            window = window.min(left);
+        }
+        let end = tokio::time::Instant::now() + window;
+        loop {
+            // Listen before scanning: a command queued between the scan and the
+            // wait must still wake this request.
+            let notified = wait.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            let response = self
+                .acquire_lease_once(deployment_id, lease_request, authority_deadline)
+                .await?;
+            let now = tokio::time::Instant::now();
+            if !response.leases.is_empty() || now >= end {
+                return Ok(response);
+            }
+            let next_scan = end.min(now + self.lease_wait_rescan_interval);
+            tokio::select! {
+                _ = &mut notified => {}
+                _ = tokio::time::sleep_until(next_scan) => {}
+            }
+        }
+    }
+
+    async fn acquire_lease_once(
         &self,
         deployment_id: &str,
         lease_request: &LeaseRequest,
@@ -1832,6 +1921,8 @@ impl CommandServer {
                 key: key.clone(),
                 message: "Failed to create pending index".to_string(),
             })?;
+        // Only after the write: a waiter woken by this scans and finds the key.
+        self.lease_waiters.notify(deployment_id, target_resource_id);
         Ok(())
     }
 

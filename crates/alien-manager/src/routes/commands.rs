@@ -1250,6 +1250,7 @@ mod tests {
                     ),
                     max_leases: 1,
                     lease_seconds: 60,
+                    wait_seconds: 0,
                 },
             )
             .await
