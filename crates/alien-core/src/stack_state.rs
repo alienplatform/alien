@@ -353,6 +353,14 @@ pub struct StackResourceState {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[builder(default)]
     pub dependency_update_pending: bool,
+
+    /// Whether an update already ran because the controller asked for one while the config was
+    /// unchanged. While the controller keeps asking after that, its dependents no longer wait
+    /// for it, so a check that never settles cannot hold them back for good. Cleared once the
+    /// controller stops asking. State written before this field existed reads as false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[builder(default)]
+    pub requested_update_ran: bool,
 }
 
 impl StackResourceState {
@@ -382,6 +390,7 @@ impl StackResourceState {
             remote_binding_params: None,
             external_binding: false,
             dependency_update_pending: false,
+            requested_update_ran: false,
         }
     }
 
@@ -703,6 +712,7 @@ mod tests {
             controller_platform: None,
             external_binding: false,
             dependency_update_pending: false,
+            requested_update_ran: false,
         };
 
         stack_state

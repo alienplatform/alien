@@ -45,6 +45,7 @@ get "previousConfig"(){
               },
 "progress": z.string().describe("Last reported step explanation for display only; not a machine-readable status.").nullish(),
 "remoteBindingParams": z.optional(z.any().describe("Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params().")),
+"requestedUpdateRan": z.optional(z.boolean().describe("Whether an update already ran because the controller asked for one while the config was\nunchanged. While the controller keeps asking after that, its dependents no longer wait\nfor it, so a check that never settles cannot hold them back for good. Cleared once the\ncontroller stops asking. State written before this field existed reads as false.")),
 "retryAttempt": z.optional(z.int().min(0).describe("Tracks consecutive retry attempts for the current state transition.")),
 get "status"(){
                 return ResourceStatusSchema.describe("Represents the high-level status of a resource during its lifecycle.")

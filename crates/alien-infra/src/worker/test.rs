@@ -46,6 +46,21 @@ pub fn request_test_worker_update(identifier: &str, requested: bool) {
     }
 }
 
+/// Workers whose update check fails, as one that cannot compute its inputs does.
+static UPDATE_CHECK_FAILING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Makes the update check of the test controller of the worker with this identifier fail
+/// (`true`), or work again (`false`).
+pub fn fail_test_worker_update_check(identifier: &str, failing: bool) {
+    let mut ids = UPDATE_CHECK_FAILING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    ids.retain(|id| id != identifier);
+    if failing {
+        ids.push(identifier.to_string());
+    }
+}
+
 /// Workers whose delete the test controller denies, as a role without the delete permission
 /// would, and how many deletes it denied for each.
 static DENIED_DELETES: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
@@ -252,6 +267,17 @@ impl TestWorkerController {
 
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let worker = ctx.desired_resource_config::<Worker>()?;
+        if UPDATE_CHECK_FAILING
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .any(|id| id == &worker.id)
+        {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "the update check cannot run".to_string(),
+                resource_id: Some(worker.id.clone()),
+            }));
+        }
         Ok(UPDATE_REQUESTED
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

@@ -22111,6 +22111,10 @@
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
           },
+          "requestedUpdateRan": {
+            "type": "boolean",
+            "description": "Whether an update already ran because the controller asked for one while the config was\nunchanged. While the controller keeps asking after that, its dependents no longer wait\nfor it, so a check that never settles cannot hold them back for good. Cleared once the\ncontroller stops asking. State written before this field existed reads as false."
+          },
           "retryAttempt": {
             "type": "integer",
             "format": "int32",

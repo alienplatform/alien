@@ -68,6 +68,10 @@ pub struct PlanResult {
     /// rolled, in a later plan or after a restart.
     #[serde(default)]
     pub dependency_update_pending: Vec<String>,
+    /// Resource IDs whose controller no longer asks for an update, though an earlier one ran
+    /// for the same request. The step clears their record of it.
+    #[serde(default)]
+    pub requested_update_settled: Vec<String>,
 }
 
 /// Represents the outcome of a single step in the stack execution process.
@@ -1220,10 +1224,38 @@ impl StackExecutor {
         controller.needs_update(&context)
     }
 
-    /// Whether the controller asks for an update with the config unchanged. A controller that
-    /// cannot be read or asked keeps the wait; `plan` reports the failure.
+    /// Asks the controller whether it wants an update with its config unchanged. A check that
+    /// fails is logged and reads as no request: a resource whose check cannot run must not stop
+    /// the rest of the stack from rolling.
+    fn controller_update_requested(
+        &self,
+        resource_id: &str,
+        controller: &dyn crate::ResourceController,
+        desired: &ResourceConfig,
+        current: &StackResourceState,
+        state: &StackState,
+    ) -> bool {
+        match self.controller_needs_update(controller, desired, current, state) {
+            Ok(requested) => requested,
+            Err(error) => {
+                warn!(
+                    resource_id,
+                    %error,
+                    "The update check of a resource failed; treating it as not requesting an update"
+                );
+                false
+            }
+        }
+    }
+
+    /// Whether the dependency's controller asks for an update that its dependents must wait
+    /// for. A controller that cannot be asked does not hold them. One that keeps asking after
+    /// the update it asked for already ran does not either: that update did not settle the
+    /// check, and another would not. A controller state that cannot be read keeps the wait;
+    /// `plan` reports the failure.
     fn needs_update_requested(
         &self,
+        resource_id: &str,
         desired: &ResourceConfig,
         current: &StackResourceState,
         state: &StackState,
@@ -1232,9 +1264,23 @@ impl StackExecutor {
             return false;
         }
         match current.get_internal_controller() {
-            Ok(Some(controller)) => self
-                .controller_needs_update(controller.as_ref(), desired, current, state)
-                .unwrap_or(true),
+            Ok(Some(controller)) => {
+                let requested = self.controller_update_requested(
+                    resource_id,
+                    controller.as_ref(),
+                    desired,
+                    current,
+                    state,
+                );
+                if requested && current.requested_update_ran {
+                    warn!(
+                        resource_id,
+                        "A resource keeps asking for an update after the one it asked for ran; its dependents no longer wait for it"
+                    );
+                    return false;
+                }
+                requested
+            }
             Ok(None) => false,
             Err(_) => true,
         }
@@ -1274,7 +1320,7 @@ impl StackExecutor {
             || self
                 .external_binding_drifted(dependency_id, current)
                 .unwrap_or(true)
-            || self.needs_update_requested(desired, current, state)
+            || self.needs_update_requested(dependency_id, desired, current, state)
         {
             return Ok(false);
         }
@@ -1889,12 +1935,13 @@ impl StackExecutor {
                         if let Some(resource_controller) =
                             current_resource_state.get_internal_controller()?
                         {
-                            if self.controller_needs_update(
+                            if self.controller_update_requested(
+                                resource_id,
                                 resource_controller.as_ref(),
                                 desired_config,
                                 current_resource_state,
                                 state,
-                            )? {
+                            ) {
                                 debug!(
                                     "Scheduling UPDATE transition for '{}' due to deployment config drift",
                                     resource_id
@@ -1902,6 +1949,10 @@ impl StackExecutor {
                                 plan_result
                                     .updates
                                     .insert(resource_id.clone(), desired_config.resource.clone());
+                            } else if current_resource_state.requested_update_ran {
+                                plan_result
+                                    .requested_update_settled
+                                    .push(resource_id.clone());
                             }
                         }
                     } else if current_resource_state.status == ResourceStatus::DeleteFailed
@@ -2674,6 +2725,12 @@ impl StackExecutor {
             }
         }
 
+        for resource_id in &plan_result.requested_update_settled {
+            if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
+                resource_state.requested_update_ran = false;
+            }
+        }
+
         // A setup run that failed can leave the marker on a resource only setup may update.
         // This executor will never run that update, so the marker would hold the deployment
         // open for good.
@@ -2734,8 +2791,14 @@ impl StackExecutor {
                     Ok(Some(mut controller)) => {
                         match controller.transition_to_update() {
                             Ok(()) => {
+                                // An update the controller asked for with nothing else changed:
+                                // its dependents wait for it once, not for as long as it asks.
+                                let requested_only = !current_state.dependency_update_pending
+                                    && current_state.config == *new_config
+                                    && current_state.dependencies == desired_config.dependencies;
                                 let updated_state = update_state.with_updates(|state| {
                                     state.dependency_update_pending = false;
+                                    state.requested_update_ran = requested_only;
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config =
                                         previous_config_for_update(current_state);

@@ -1008,6 +1008,184 @@ mod rollout_order {
         Ok(())
     }
 
+    /// `dep` <- `app`: `dep` is Running on release one, `app` is asked to move to release two.
+    fn requested_stack(dep: &str, app: &str, release: &str, fail_dep_update: bool) -> Stack {
+        Stack::new("rollout-fail-open".to_owned())
+            .add(worker(dep, "r1", fail_dep_update), ResourceLifecycle::Live)
+            .add_with_dependencies(
+                worker(app, release, false),
+                ResourceLifecycle::Live,
+                vec![ResourceRef::new(Worker::RESOURCE_TYPE, dep)],
+            )
+            .build()
+    }
+
+    /// A dependency whose update check cannot run does not hold its dependents: they roll, and
+    /// the dependency itself stays as it was.
+    #[tokio::test]
+    async fn dependents_roll_when_the_dependency_check_errors() -> Result<()> {
+        let (dep, app) = ("dep-check-errors", "app-check-errors");
+        let mut state = run_to_synced(
+            &new_executor(&requested_stack(dep, app, "r1", false))?,
+            new_test_state(),
+        )
+        .await?;
+        assert_all_running(&state, &[dep, app]);
+
+        crate::worker::fail_test_worker_update_check(dep, true);
+        let executor = new_executor(&requested_stack(dep, app, "r2", false))?;
+        for _ in 0..40 {
+            state = executor.step(state).await?.next_state;
+        }
+        crate::worker::fail_test_worker_update_check(dep, false);
+
+        assert_eq!(image(&state, app), format!("{app}-r2"));
+        assert_all_running(&state, &[dep, app]);
+        Ok(())
+    }
+
+    /// A dependency that still asks for an update after its own update ran does not hold its
+    /// dependents for good: they roll once that update has completed.
+    #[tokio::test]
+    async fn dependents_roll_when_the_dependency_check_stays_true_after_its_update() -> Result<()> {
+        let (dep, app) = ("dep-always-true", "app-always-true");
+        let mut state = run_to_synced(
+            &new_executor(&requested_stack(dep, app, "r1", false))?,
+            new_test_state(),
+        )
+        .await?;
+        assert_all_running(&state, &[dep, app]);
+
+        crate::worker::request_test_worker_update(dep, true);
+        let executor = new_executor(&requested_stack(dep, app, "r2", false))?;
+        let mut dep_updated = false;
+        let mut app_rolled_after_update = false;
+        for _ in 0..80 {
+            let before = state.clone();
+            state = executor.step(state).await?.next_state;
+            dep_updated |= get_status(&state, dep) == Some(ResourceStatus::Updating);
+            if image(&before, app) != image(&state, app) {
+                app_rolled_after_update = dep_updated
+                    && get_status(&before, dep) == Some(ResourceStatus::Running)
+                    && state.resources[dep].requested_update_ran;
+            }
+        }
+        crate::worker::request_test_worker_update(dep, false);
+
+        assert_eq!(image(&state, app), format!("{app}-r2"));
+        assert!(
+            app_rolled_after_update,
+            "the dependent must start only after the dependency's update completed"
+        );
+        Ok(())
+    }
+
+    /// A dependent never moves while its dependency is still in the middle of an update, even
+    /// one the dependency asked for itself and whose check stays true.
+    #[tokio::test]
+    async fn dependent_does_not_move_while_its_dependency_is_mid_update() -> Result<()> {
+        let (dep, app) = ("dep-mid-update", "app-mid-update");
+        let mut state = run_to_synced(
+            &new_executor(&requested_stack(dep, app, "r1", false))?,
+            new_test_state(),
+        )
+        .await?;
+
+        crate::worker::request_test_worker_update(dep, true);
+        let executor = new_executor(&requested_stack(dep, app, "r2", false))?;
+        let mut saw_mid_update = false;
+        for _ in 0..80 {
+            let before = state.clone();
+            state = executor.step(state).await?.next_state;
+            let dependency_was_busy = get_status(&before, dep) != Some(ResourceStatus::Running);
+            saw_mid_update |= dependency_was_busy;
+            if dependency_was_busy {
+                assert_eq!(
+                    image(&state, app),
+                    image(&before, app),
+                    "the dependent started while its dependency was {:?}",
+                    get_status(&before, dep)
+                );
+            }
+        }
+        crate::worker::request_test_worker_update(dep, false);
+
+        assert!(saw_mid_update, "the dependency never updated");
+        assert_eq!(image(&state, app), format!("{app}-r2"));
+        Ok(())
+    }
+
+    /// A dependency whose requested update fails still holds its dependents on the previous
+    /// release: failing open is for checks that cannot settle, not for a failed update.
+    #[tokio::test]
+    async fn a_failed_requested_update_still_holds_dependents() -> Result<()> {
+        let (dep, app) = ("dep-requested-fails", "app-requested-fails");
+        // The dependency's config says its updates fail; creating it does not.
+        let mut state = run_to_synced(
+            &new_executor(&requested_stack(dep, app, "r1", true))?,
+            new_test_state(),
+        )
+        .await?;
+        assert_all_running(&state, &[dep, app]);
+
+        crate::worker::request_test_worker_update(dep, true);
+        let executor = new_executor(&requested_stack(dep, app, "r2", true))?;
+        let mut dependency_failed = false;
+        for _ in 0..60 {
+            state = executor.step(state).await?.next_state;
+            dependency_failed |= get_status(&state, dep) == Some(ResourceStatus::UpdateFailed);
+            assert_eq!(
+                image(&state, app),
+                format!("{app}-r1"),
+                "the dependent must not roll past a failed dependency"
+            );
+        }
+        crate::worker::request_test_worker_update(dep, false);
+
+        assert!(dependency_failed, "the dependency's update never failed");
+        Ok(())
+    }
+
+    /// An owed update survives a hold: the resource is held (left as it is) for now, keeps
+    /// its marker, and runs the update once released. Nothing clears the marker for it.
+    #[tokio::test]
+    async fn a_marker_on_a_held_resource_is_kept_until_it_is_released() -> Result<()> {
+        let stack = |release: &str| {
+            Stack::new("rollout-held".to_owned())
+                .add(
+                    test_function_with_image("func-held", release),
+                    ResourceLifecycle::Live,
+                )
+                .add_with_dependencies(
+                    test_storage("store-held"),
+                    ResourceLifecycle::Live,
+                    vec![ResourceRef::new(Worker::RESOURCE_TYPE, "func-held")],
+                )
+                .build()
+        };
+        let mut state = run_to_synced(&new_executor(&stack("v1"))?, new_test_state()).await?;
+        state = new_executor(&stack("v2"))?.step(state).await?.next_state;
+        assert!(state.resources["store-held"].dependency_update_pending);
+
+        let held =
+            crate::core::StackExecutor::builder(&stack("v2"), alien_core::ClientConfig::Test)
+                .deployment_config(&default_deployment_config())
+                .held_resources(["store-held".to_string()].into_iter().collect())
+                .build()?;
+        for _ in 0..40 {
+            state = held.step(state).await?.next_state;
+        }
+        assert!(
+            state.resources["store-held"].dependency_update_pending,
+            "a hold must not lose the owed update"
+        );
+
+        let released = run_to_synced(&new_executor(&stack("v2"))?, state).await?;
+        assert_all_running(&released, &["func-held", "store-held"]);
+        assert!(!released.resources["store-held"].dependency_update_pending);
+        Ok(())
+    }
+
     /// A dependency this executor does not update (a Frozen resource under a Live-only run)
     /// never holds its dependents back, though its recorded config differs from the desired.
     #[tokio::test]
