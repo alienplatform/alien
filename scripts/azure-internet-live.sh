@@ -66,7 +66,7 @@ teardown() {
     arm DELETE "/subscriptions/$SUB/resourcegroups/$group?api-version=2021-04-01" >/dev/null || true
   done
   for group in "$RG" "$ACR_RG"; do
-    for _ in $(seq 1 120); do
+    for _ in $(seq 1 480); do
       status=$(arm_status GET "/subscriptions/$SUB/resourcegroups/$group?api-version=2021-04-01")
       [ "$status" = 404 ] && break
       sleep 15
@@ -226,9 +226,10 @@ arm PUT "$JOB_ID?api-version=2024-03-01" -d "$job" | jq -e '.id' >/dev/null
 arm POST "$JOB_ID/start?api-version=2024-03-01" -d '' >/dev/null
 for _ in $(seq 1 240); do
   sleep 15
-  st=$(arm GET "$JOB_ID/executions?api-version=2024-03-01" | jq -r '[.value[]|.properties|select(.startTime)]|sort_by(.startTime)|last|.status')
+  st=$(arm GET "$JOB_ID/executions?api-version=2024-03-01" | jq -r '[.value[]?|.properties|select(.startTime)]|sort_by(.startTime)|last|.status')
   echo "job: $st"
-  case "$st" in Running|Processing|Pending|null) ;; *) break ;; esac
+  # Only a terminal status ends the wait; a just-started execution can report Unknown or none.
+  case "$st" in Succeeded|Failed|Stopped|Degraded) break ;; esac
 done
 secret=$(curl -fsS -H "Authorization: Bearer $(token https://vault.azure.net/.default)" \
   "https://$vault.vault.azure.net/secrets/azure-internet-proof-log?api-version=7.4" | jq -r .value)
