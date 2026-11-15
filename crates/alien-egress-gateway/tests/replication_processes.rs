@@ -618,3 +618,30 @@ async fn stopped_replica_ports_cannot_be_claimed_by_an_ephemeral_client() {
         cluster.stop(index).await;
     }
 }
+
+/// A delete reaches the replica that is up even while a peer is away, and the replica that was
+/// away does not come back serving the old grant: it starts empty, refuses until it has
+/// synchronized, then holds the tombstone it took from its peer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_delete_made_while_a_replica_is_away_is_not_served_by_it_afterwards() {
+    let mut cluster = Cluster::new().await;
+    let token = identity();
+    let base = millis();
+    let allow = record(base, 1, Some(json!("internet")));
+    assert_eq!(cluster.write(0, &allow, false).await, 204);
+    cluster.assert_all(&token, 200).await;
+
+    cluster.stop(2).await;
+    let deleted = record(base + 1, 1, None);
+    // The write reports the missing acknowledgement, and the live replicas are already clean.
+    assert_eq!(cluster.write(0, &deleted, true).await, 503);
+    assert_eq!(cluster.connect(0, &token).await, 403);
+    assert_eq!(cluster.write(1, &deleted, true).await, 503);
+    assert_eq!(cluster.connect(1, &token).await, 403);
+
+    cluster.start(2);
+    cluster.ready_all().await;
+    // Never an allow from the replica that was away, whenever it is first asked.
+    assert_eq!(cluster.connect(2, &token).await, 403);
+    cluster.assert_all(&token, 403).await;
+}

@@ -25,10 +25,6 @@ static WRITER_ID: LazyLock<String> = LazyLock::new(|| {
         .collect()
 });
 static LAST_MILLIS: AtomicU64 = AtomicU64::new(0);
-/// Attempts a revocation makes; with the capped pause below it waits about 35 s in all.
-const REVOCATION_ATTEMPTS: u64 = 40;
-/// The longest pause between two attempts of a replicated write.
-const MAX_RETRY_PAUSE_MILLIS: u64 = 1000;
 
 /// A token for the backend's authenticated agent transport. Debug never exposes it.
 pub struct EgressDelivery {
@@ -218,18 +214,13 @@ impl SandboxEgressManager {
         };
         // A replicated write counts only once every ready replica holds it. Rolling
         // updates briefly change the ready set, so those writes retry for longer.
-        //
-        // A revocation waits longer, because giving up leaves the grant alive. A replica VM that
-        // restarts is away for longer than a policy update waits, and the protocol check stops
-        // the write before any replica holds it. Teardown is not latency sensitive.
-        let attempts = match (self.config.replicas.is_some(), policy.is_some()) {
-            (true, false) => REVOCATION_ATTEMPTS,
-            (true, true) => 10,
-            (false, _) => 3,
-        };
-        let backoff = |attempt: u64| {
-            std::time::Duration::from_millis((100 * (attempt + 1)).min(MAX_RETRY_PAUSE_MILLIS))
-        };
+        let attempts = if self.config.replicas.is_some() { 10 } else { 3 };
+        let backoff = |attempt: u64| std::time::Duration::from_millis(100 * (attempt + 1));
+        if policy.is_none() && self.config.replicas.is_some() {
+            self.revoke(&body, &method, id, &issuer, attempts, backoff)
+                .await?;
+            return Ok(record);
+        }
         // Partial fan-out may already have applied this write. Retry the exact record;
         // allocating a newer version here could overwrite another writer's decision.
         for attempt in 0..attempts {
@@ -306,10 +297,98 @@ impl SandboxEgressManager {
         unreachable!("every final attempt returns")
     }
 
+    /// Delete a grant on every replica that answers, right away. An unreachable replica never
+    /// stops the delete reaching the others: the reachable replicas are already clean when this
+    /// returns a retryable error for the ones that have not acknowledged. A replica that was away
+    /// takes the tombstone from its peers before it serves again (it starts empty and refuses until
+    /// synchronized, or catches up on its next pass).
+    async fn revoke(
+        &self,
+        body: &serde_json::Value,
+        method: &reqwest::Method,
+        id: &str,
+        issuer: &EgressTokenIssuer,
+        attempts: u64,
+        backoff: impl Fn(u64) -> std::time::Duration,
+    ) -> Result<()> {
+        let mut done: std::collections::HashSet<String> = Default::default();
+        let mut failure = unavailable("a gateway replica did not acknowledge the revocation");
+        for attempt in 0..attempts {
+            let (targets, complete) = self.revocation_targets().await?;
+            let mut pending = false;
+            for target in &targets {
+                if done.contains(target) {
+                    continue;
+                }
+                let authorization = issuer.mint_admin(
+                    &self.config.audience,
+                    id,
+                    EgressAdminOperation::Delete,
+                    now_unix()?,
+                )?;
+                let response = self
+                    .admin
+                    .request(method.clone(), format!("{target}/v1/policies"))
+                    .bearer_auth(authorization)
+                    .json(body)
+                    .send()
+                    .await;
+                match response {
+                    Ok(response) if response.status() == reqwest::StatusCode::NO_CONTENT => {
+                        done.insert(target.clone());
+                    }
+                    Ok(response) => {
+                        failure = gateway_error(response).await;
+                        pending = true;
+                    }
+                    Err(_) => pending = true,
+                }
+            }
+            if !pending && complete {
+                return Ok(());
+            }
+            if attempt + 1 < attempts {
+                tokio::time::sleep(backoff(attempt)).await;
+            }
+        }
+        // The reachable replicas are clean already; trying again reaches the others.
+        failure.retryable = true;
+        Err(failure)
+    }
+
+    /// Every replica address that resolves now, and whether that is all of them.
+    async fn revocation_targets(&self) -> Result<(Vec<String>, bool)> {
+        match self.write_targets().await {
+            Ok(targets) => Ok((targets, true)),
+            Err(error) => {
+                let targets = self.resolved_targets().await.unwrap_or_default();
+                if targets.is_empty() {
+                    Err(error)
+                } else {
+                    Ok((targets, false))
+                }
+            }
+        }
+    }
+
     /// Admin origins that must all acknowledge a write: the single admin address, or
     /// every ready replica. Fewer resolvable replicas than the gateway runs refuses the
     /// write, so no replica keeps serving a policy the caller believes was replaced.
     async fn write_targets(&self) -> Result<Vec<String>> {
+        let targets = self.resolved_targets().await?;
+        let expected = self.config.replicas.as_ref().map_or(1, |r| r.count as usize);
+        if targets.len() < expected {
+            return Err(unavailable(&format!(
+                "{} of {} gateway replicas are ready; a policy write must reach every replica",
+                targets.len(),
+                expected
+            )));
+        }
+        Ok(targets)
+    }
+
+    /// The admin origins that resolve now, however many there are.
+    async fn resolved_targets(&self) -> Result<Vec<String>> {
         let Some(replicas) = &self.config.replicas else {
             return Ok(vec![self
                 .admin_url
@@ -346,13 +425,6 @@ impl SandboxEgressManager {
         addresses.retain(std::net::SocketAddr::is_ipv4);
         addresses.sort();
         addresses.dedup();
-        if addresses.len() < replicas.count as usize {
-            return Err(unavailable(&format!(
-                "{} of {} gateway replicas are ready; a policy write must reach every replica",
-                addresses.len(),
-                replicas.count
-            )));
-        }
         let scheme = self.admin_url.scheme();
         Ok(addresses
             .into_iter()

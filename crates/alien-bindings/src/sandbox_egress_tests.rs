@@ -832,15 +832,12 @@ async fn a_gateway_older_than_the_binding_needs_is_refused_with_a_rerun_setup_me
     );
 }
 
-/// Revoking a sandbox's grant outlasts a replica that is briefly unreachable.
-///
-/// A replica VM that restarts is away for longer than a policy update is willing to wait, and the
-/// protocol check that precedes every replicated write stops before any replica is written. A
-/// revocation that gives up then leaves the grant alive on every replica for a sandbox that is
-/// already gone, so a delete keeps trying for as long as a restart takes.
-#[tokio::test]
-async fn a_revocation_outlasts_a_replica_that_is_away_for_a_few_seconds() {
-    let h = Harness::new().await;
+/// A two-replica manager whose second replica listens on `127.0.0.2` only after `delay`
+/// (never when `delay` is `None`). Both replicas hold the grant for `box-1` first.
+async fn two_replicas(
+    h: &Harness,
+    delay: Option<std::time::Duration>,
+) -> (SandboxEgressManager, Arc<AdminState>, tokio::task::JoinHandle<()>) {
     let port = h.manager.admin_url.port().unwrap();
     let second = Arc::new(AdminState {
         public: h.state.public,
@@ -868,11 +865,18 @@ async fn a_revocation_outlasts_a_replica_that_is_away_for_a_few_seconds() {
     .unwrap();
     let policy: EgressPolicy =
         serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
-
-    // The second replica comes back after longer than a policy update waits (about 4.5 s).
+    for state in [&h.state, &second] {
+        state.policies.lock().unwrap().insert(
+            "box-1".into(),
+            ((0, String::new()), Some(policy.clone()), String::new()),
+        );
+    }
     let state = second.clone();
     let restart = tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        let Some(delay) = delay else {
+            return std::future::pending().await;
+        };
+        tokio::time::sleep(delay).await;
         let listener = tokio::net::TcpListener::bind(("127.0.0.2", port))
             .await
             .unwrap();
@@ -885,37 +889,48 @@ async fn a_revocation_outlasts_a_replica_that_is_away_for_a_few_seconds() {
             .with_state(state);
         axum::serve(listener, router).await.unwrap();
     });
-    // Both replicas hold the grant first: the first replica is up now, the second after the wait.
-    h.state.policies.lock().unwrap().insert(
-        "box-1".into(),
-        ((0, String::new()), Some(policy.clone()), String::new()),
-    );
-    second.policies.lock().unwrap().insert(
-        "box-1".into(),
-        ((0, String::new()), Some(policy), String::new()),
-    );
+    (manager, second, restart)
+}
 
-    manager
+fn holds_grant(state: &AdminState) -> bool {
+    state
+        .policies
+        .lock()
+        .unwrap()
+        .get("box-1")
+        .is_some_and(|row| row.1.is_some())
+}
+
+/// A replica that is away for longer than the whole retry budget never stops the delete from
+/// reaching the replica that answers: that one is clean, and the caller gets a retryable error
+/// because the other has not acknowledged.
+#[tokio::test]
+async fn a_revocation_reaches_the_reachable_replica_while_the_other_is_away() {
+    let h = Harness::new().await;
+    let (manager, _second, away) = two_replicas(&h, None).await;
+
+    let error = manager
         .delete("box-1")
         .await
-        .expect("the revocation waits for the replica and reaches both");
+        .expect_err("one replica never acknowledges");
+    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE", "{error}");
+    assert!(error.retryable, "{error}");
     assert!(
-        h.state
-            .policies
-            .lock()
-            .unwrap()
-            .get("box-1")
-            .is_some_and(|row| row.1.is_none()),
-        "the first replica holds no grant"
+        !holds_grant(&h.state),
+        "the reachable replica holds no grant"
     );
-    assert!(
-        second
-            .policies
-            .lock()
-            .unwrap()
-            .get("box-1")
-            .is_some_and(|row| row.1.is_none()),
-        "the second replica holds no grant"
-    );
-    restart.abort();
+    away.abort();
+}
+
+/// A replica that comes back within the budget gets the same delete, and the delete then succeeds.
+#[tokio::test]
+async fn a_revocation_reaches_a_replica_that_returns_during_the_retries() {
+    let h = Harness::new().await;
+    let (manager, second, back) =
+        two_replicas(&h, Some(std::time::Duration::from_millis(1500))).await;
+
+    manager.delete("box-1").await.expect("both acknowledge");
+    assert!(!holds_grant(&h.state));
+    assert!(!holds_grant(&second));
+    back.abort();
 }
