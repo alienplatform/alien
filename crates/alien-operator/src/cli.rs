@@ -2516,7 +2516,7 @@ mod tests {
             format!(
                 "ax_join_v1_{}",
                 base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
-                    r#"{{"u":"https://manager.example.com","a":"https://manager.example.com","c":"{code}"}}"#
+                    r#"{{"u":"https://manager.example.com","c":"{code}"}}"#
                 ))
             )
         };
