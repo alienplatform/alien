@@ -35,7 +35,7 @@ pub use generator::{
     ProductOperatorManifestOptions, OPERATOR_RBAC_POLICY_VERSION,
 };
 pub use operator_chart::{
-    generate_operator_chart, OperatorChartOptions, DEFAULT_EXCLUDED_NAMESPACES,
+    generate_operator_chart, OperatorChartOptions, OperatorChartPlugin, DEFAULT_EXCLUDED_NAMESPACES,
     OPERATOR_CHART_OTLP_PORT,
 };
 pub use package::{

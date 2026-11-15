@@ -38,6 +38,17 @@ pub struct OperatorChartOptions<'a> {
     /// The built-in operations the Operator can run. Their Kubernetes
     /// requirements become RBAC at the chosen `permission` tier.
     pub operations: &'a [KubernetesOperationPermissions],
+    /// The built-in plugins. Empty means the chart does not know them: no plugin is opt-in and
+    /// `operations.plugins` takes any name. When given, `operations.plugins` only takes these names.
+    pub plugins: &'a [OperatorChartPlugin<'a>],
+}
+
+/// A built-in plugin as the chart sees it.
+pub struct OperatorChartPlugin<'a> {
+    pub name: &'a str,
+    /// Off unless `operations.plugins.<name>` names it. Its rules are only in the ClusterRole then,
+    /// so an existing install never gains them without the name being set.
+    pub opt_in: bool,
 }
 
 /// Render the generic Operator chart.
@@ -56,6 +67,19 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
             )
         })?;
     }
+    for plugin in options.plugins {
+        if plugin.opt_in
+            && !options
+                .operations
+                .iter()
+                .any(|operation| operation.plugin == plugin.name)
+        {
+            return Err(format!(
+                "opt-in plugin {} has no Kubernetes operations to grant",
+                plugin.name
+            ));
+        }
+    }
     // The approval kind's names come from the brand values at install time, so the generator
     // writes placeholders that Helm fills in (see `operator.crdBrand`).
     let crd_names = placeholder_crd_names();
@@ -64,7 +88,7 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
     files.insert("values.yaml".to_string(), values_yaml(&options));
     files.insert(
         "values.schema.json".to_string(),
-        values_schema_json().map_err(|error| error.to_string())?,
+        values_schema_json(options.plugins).map_err(|error| error.to_string())?,
     );
     files.insert("templates/_helpers.tpl".to_string(), HELPERS.to_string());
     files.insert(
@@ -73,7 +97,11 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
     );
     files.insert(
         "templates/clusterrole.yaml".to_string(),
-        fill_crd_placeholders(&cluster_role_template(options.operations, &crd_names)),
+        fill_crd_placeholders(&cluster_role_template(
+            options.operations,
+            options.plugins,
+            &crd_names,
+        )),
     );
     files.insert(
         "templates/clusterrolebinding.yaml".to_string(),
@@ -237,7 +265,8 @@ brand:
 #           get-pods: auto
 #
 # This only sets approval and settings. It does not change the permissions the chart grants: those
-# follow `permission`. `custom` takes published custom plugins ({{name, version, approval, settings}}).
+# follow `permission`, except for an opt-in plugin: it is off until named here (`plugins: {{name: {{}}}}`),
+# and naming it adds its rules (its changing rules only with `permission: remediation`). `custom` takes published custom plugins ({{name, version, approval, settings}}).
 operations: {{}}
 
 resources:
@@ -263,7 +292,13 @@ extraEnv: []
     )
 }
 
-fn values_schema_json() -> serde_json::Result<String> {
+fn values_schema_json(plugins: &[OperatorChartPlugin<'_>]) -> serde_json::Result<String> {
+    // With the built-in plugins known, an unknown name is refused at install.
+    let plugin_names = if plugins.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({"enum": plugins.iter().map(|plugin| plugin.name).collect::<Vec<_>>()})
+    };
     let schema = serde_json::json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -310,6 +345,7 @@ fn values_schema_json() -> serde_json::Result<String> {
                 "properties": {
                     "plugins": {
                         "type": "object",
+                        "propertyNames": plugin_names,
                         "additionalProperties": {
                             "type": "object",
                             "properties": {
@@ -400,6 +436,7 @@ struct Section {
 
 fn cluster_role_template(
     operations: &[KubernetesOperationPermissions],
+    plugins: &[OperatorChartPlugin<'_>],
     crd_names: &AccessRequestCrdNames,
 ) -> String {
     let mut rules = BTreeMap::<RuleScope, Grant>::new();
@@ -438,7 +475,15 @@ fn cluster_role_template(
     }
     // An operation's rules follow its tier as a whole, not verb by verb: a
     // read-only install gets the read-only operations and nothing of the others.
-    for operation in operations {
+    let is_opt_in = |plugin: &str| {
+        plugins
+            .iter()
+            .any(|candidate| candidate.opt_in && candidate.name == plugin)
+    };
+    for operation in operations
+        .iter()
+        .filter(|operation| !is_opt_in(&operation.plugin))
+    {
         let tier = match operation.tier {
             RiskTier::ReadOnly => Tier::Always,
             RiskTier::Mutating | RiskTier::Destructive => Tier::Remediation,
@@ -479,6 +524,39 @@ fn cluster_role_template(
             yaml.push_str(&rule_yaml(scope, &grant.remediation.verbs));
             yaml.push_str("  {{- end }}\n");
         }
+    }
+    // An opt-in plugin's rules exist only when the plugin is named under `operations.plugins`,
+    // and its changing rules only at `remediation` as for any operation.
+    for plugin in plugins.iter().filter(|plugin| plugin.opt_in) {
+        yaml.push_str(&format!(
+            "  {{{{- if hasKey (default dict (.Values.operations).plugins) {} }}}}\n",
+            serde_json::to_string(plugin.name).unwrap_or_default()
+        ));
+        for operation in operations
+            .iter()
+            .filter(|operation| operation.plugin == plugin.name)
+        {
+            let remediation = !matches!(operation.tier, RiskTier::ReadOnly);
+            if remediation {
+                yaml.push_str("  {{- if eq .Values.permission \"remediation\" }}\n");
+            }
+            for rule in &operation.permissions.rules {
+                yaml.push_str(&format!(
+                    "  # Required by operation {}/{}: {}\n",
+                    operation.plugin, operation.operation, rule.reason
+                ));
+                let scope = RuleScope {
+                    api_group: rule.api_group.clone(),
+                    resource: rule.resource.clone(),
+                    resource_names: rule.resource_names.iter().cloned().collect(),
+                };
+                yaml.push_str(&rule_yaml(&scope, &rule.verbs.iter().cloned().collect()));
+            }
+            if remediation {
+                yaml.push_str("  {{- end }}\n");
+            }
+        }
+        yaml.push_str("  {{- end }}\n");
     }
     // Reading Pod logs is the one cluster-wide `get` the Operator needs.
     yaml.push_str("  {{- if .Values.logs.enabled }}\n");

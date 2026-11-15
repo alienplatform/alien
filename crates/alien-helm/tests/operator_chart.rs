@@ -8,7 +8,7 @@ use std::{
     process::{Command, Output},
 };
 
-use alien_helm::{generate_operator_chart, OperatorChartOptions};
+use alien_helm::{generate_operator_chart, OperatorChartOptions, OperatorChartPlugin};
 use alien_operations_sdk::{
     KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions, RiskTier,
 };
@@ -55,6 +55,7 @@ fn write_chart(directory: &Path) {
         image_repository: "registry.example/operator",
         image_digest: DIGEST,
         operations: &operations,
+        plugins: &[],
     })
     .unwrap();
     for (path, content) in &chart.files {
@@ -113,7 +114,10 @@ fn canonical(rendered: &str) -> String {
     documents.sort_by_key(|document| {
         (
             document["kind"].as_str().unwrap_or_default().to_string(),
-            document["metadata"]["name"].as_str().unwrap_or_default().to_string(),
+            document["metadata"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
         )
     });
     documents
@@ -497,6 +501,7 @@ fn operations_that_could_read_secrets_or_exec_are_refused_at_generation() {
             image_repository: "registry.example/operator",
             image_digest: DIGEST,
             operations: &operations,
+            plugins: &[],
         })
     };
     assert!(bad("secrets", &["get"]).is_err());
@@ -761,7 +766,10 @@ spec:
         .iter()
         .map(|d| d["metadata"]["name"].as_str().unwrap())
         .collect();
-    assert!(names.contains(&"alien") && names.contains(&"alien-operator"), "{names:?}");
+    assert!(
+        names.contains(&"alien") && names.contains(&"alien-operator"),
+        "{names:?}"
+    );
 }
 
 /// Installed on its own the names are the release name, as before.
@@ -775,7 +783,10 @@ fn installed_on_its_own_the_names_are_the_release_name() {
         .iter()
         .map(|s| s["metadata"]["name"].as_str().unwrap().to_string())
         .collect();
-    assert!(secrets.contains(&"alien-identity".to_string()) && secrets.contains(&"alien-enrollment".to_string()));
+    assert!(
+        secrets.contains(&"alien-identity".to_string())
+            && secrets.contains(&"alien-enrollment".to_string())
+    );
 }
 
 #[test]
@@ -788,7 +799,10 @@ fn a_branded_chart_with_approvals_needs_a_label_domain() {
         "--set",
         "accessRequests.enabled=true",
     ]);
-    assert!(message.contains("brand.labelDomain is required"), "{message}");
+    assert!(
+        message.contains("brand.labelDomain is required"),
+        "{message}"
+    );
     // With the domain it renders, and without approvals no domain is needed.
     render(&[
         "--set",
@@ -830,7 +844,10 @@ fn the_brand_name_is_a_short_slug_that_starts_with_a_letter() {
 #[test]
 fn the_name_label_is_quoted_so_a_numeric_looking_brand_stays_a_string() {
     let rendered = render(&["--set", &format!("token={TOKEN}")]);
-    assert!(rendered.contains("app.kubernetes.io/name: \"operator\""), "{rendered}");
+    assert!(
+        rendered.contains("app.kubernetes.io/name: \"operator\""),
+        "{rendered}"
+    );
 }
 
 /// Two copies of the chart under different aliases of one parent release, both
@@ -864,7 +881,10 @@ fn two_aliased_copies_do_not_share_pod_labels() {
         .map(|service| format!("{:?}", service["spec"]["selector"]))
         .collect();
     assert_eq!(selectors.len(), 2);
-    assert_ne!(selectors[0], selectors[1], "both Services select both Operators");
+    assert_ne!(
+        selectors[0], selectors[1],
+        "both Services select both Operators"
+    );
     let pod_labels: Vec<_> = kind(&all, "Deployment")
         .iter()
         .map(|d| format!("{:?}", d["spec"]["template"]["metadata"]["labels"]))
@@ -886,7 +906,11 @@ fn long_release_names_in_different_namespaces_keep_separate_cluster_role_names()
             .args(["--namespace", namespace, "--set", &format!("token={TOKEN}")])
             .output()
             .expect("helm must be installed to run the chart tests");
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         let all = documents(&String::from_utf8(output.stdout).unwrap());
         let name = kind(&all, "ClusterRole")[0]["metadata"]["name"]
             .as_str()
@@ -984,4 +1008,146 @@ fn the_documented_operations_example_reaches_the_operator_and_a_wrong_shape_is_r
         "operations={\"plugins\":{\"kubernetes\":\"auto\"}}",
     ]);
     assert!(error.contains("operations"), "{error}");
+}
+
+/// A made-up plugin that is off unless named: one read operation and one that patches.
+fn opt_in_chart(directory: &Path) {
+    let rule = |verbs: &[&str], reason: &str| KubernetesPermissionRule {
+        api_group: "apps".into(),
+        resource: "replicasets/scale".into(),
+        verbs: verbs.iter().map(|verb| verb.to_string()).collect(),
+        resource_names: Vec::new(),
+        reason: reason.into(),
+    };
+    let mut operations = operations();
+    operations.push(KubernetesOperationPermissions {
+        plugin: "widgets".into(),
+        operation: "show".into(),
+        tier: RiskTier::ReadOnly,
+        permissions: KubernetesPermissions {
+            schema_version: 1,
+            rules: vec![rule(&["get"], "show a widget")],
+        },
+    });
+    operations.push(KubernetesOperationPermissions {
+        plugin: "widgets".into(),
+        operation: "nudge".into(),
+        tier: RiskTier::Mutating,
+        permissions: KubernetesPermissions {
+            schema_version: 1,
+            rules: vec![rule(&["get", "patch"], "nudge a widget")],
+        },
+    });
+    let plugins = [
+        OperatorChartPlugin {
+            name: "kubernetes",
+            opt_in: false,
+        },
+        OperatorChartPlugin {
+            name: "widgets",
+            opt_in: true,
+        },
+    ];
+    let chart = generate_operator_chart(OperatorChartOptions {
+        chart_version: "1.2.3",
+        app_version: "1.2.3",
+        image_repository: "registry.example/operator",
+        image_digest: DIGEST,
+        operations: &operations,
+        plugins: &plugins,
+    })
+    .unwrap();
+    for (path, content) in &chart.files {
+        let target = directory.join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, content).unwrap();
+    }
+}
+
+fn widget_rules(arguments: &[&str]) -> Vec<(String, String, Vec<String>, Vec<String>)> {
+    let directory = tempfile::tempdir().unwrap();
+    opt_in_chart(directory.path());
+    let output = helm(
+        directory.path(),
+        &[&["--set", &format!("token={TOKEN}")], arguments].concat(),
+    );
+    assert!(
+        output.status.success(),
+        "helm template failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let documents = documents(&String::from_utf8(output.stdout).unwrap());
+    rules(kind(&documents, "ClusterRole")[0])
+        .into_iter()
+        .filter(|rule| rule.1 == "replicasets/scale")
+        .collect()
+}
+
+#[test]
+fn an_opt_in_plugin_has_no_rules_until_it_is_named() {
+    assert!(widget_rules(&[]).is_empty());
+    // Permission alone does not add them.
+    assert!(widget_rules(&["--set", "permission=remediation"]).is_empty());
+    // Other plugins named do not add them either.
+    assert!(
+        widget_rules(&["--set-json", "operations={\"plugins\":{\"kubernetes\":{}}}"]).is_empty()
+    );
+}
+
+#[test]
+fn naming_an_opt_in_plugin_adds_its_read_rules_and_its_changing_rules_only_at_remediation() {
+    let named = ["--set-json", "operations={\"plugins\":{\"widgets\":{}}}"];
+    assert_eq!(
+        widget_rules(&named),
+        vec![rule("apps", "replicasets/scale", &["get"])]
+    );
+    let mut remediation =
+        widget_rules(&[&named[..], &["--set", "permission=remediation"]].concat());
+    remediation.sort();
+    assert_eq!(
+        remediation,
+        vec![
+            rule("apps", "replicasets/scale", &["get"]),
+            rule("apps", "replicasets/scale", &["get", "patch"]),
+        ]
+    );
+}
+
+#[test]
+fn an_unknown_plugin_name_is_refused_with_the_known_names() {
+    let directory = tempfile::tempdir().unwrap();
+    opt_in_chart(directory.path());
+    let output = helm(
+        directory.path(),
+        &[
+            "--set",
+            &format!("token={TOKEN}"),
+            "--set-json",
+            "operations={\"plugins\":{\"wigets\":{}}}",
+        ],
+    );
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("operations.plugins") && error.contains("wigets"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_opt_in_plugin_without_operations_is_refused_at_generation() {
+    let operations = operations();
+    let plugins = [OperatorChartPlugin {
+        name: "widgets",
+        opt_in: true,
+    }];
+    assert!(generate_operator_chart(OperatorChartOptions {
+        chart_version: "1.0.0",
+        app_version: "1.0.0",
+        image_repository: "registry.example/operator",
+        image_digest: DIGEST,
+        operations: &operations,
+        plugins: &plugins,
+    })
+    .is_err());
 }
