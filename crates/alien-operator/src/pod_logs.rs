@@ -31,6 +31,14 @@ use crate::{
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 const DEFAULT_MAX_STREAMS: usize = 32;
+const DEFAULT_CLUSTER_MAX_STREAMS: usize = 200;
+/// Cluster discovery is heavier than a single namespace, so it runs less often.
+const CLUSTER_DISCOVERY_INTERVAL: Duration = Duration::from_secs(30);
+const CLUSTER_PAGE_SIZE: &str = "500";
+/// When more containers are eligible than streams are allowed, the set read
+/// moves on this often, so every container is read in turn.
+const CLUSTER_ROTATION_SECONDS: i64 = 300;
+const DEFAULT_EXCLUDED_NAMESPACES: [&str; 3] = ["kube-system", "kube-public", "kube-node-lease"];
 const HARD_MAX_STREAMS: usize = 256;
 const MAX_LINE_BYTES: usize = 256 * 1024;
 const MAX_BATCH_RECORDS: usize = 100;
@@ -44,6 +52,60 @@ pub struct PodLogCollectionConfig {
     pub legacy_daemonset: Option<String>,
     pub replacement_daemonset: Option<String>,
     pub max_streams: usize,
+    /// Read Pods of the whole cluster instead of one label in the installation
+    /// namespace. Unset keeps the namespace-scoped behavior.
+    pub cluster: Option<ClusterLogScope>,
+}
+
+/// Which Pods a cluster-scope collection reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClusterLogScope {
+    /// Only these namespaces; empty means every namespace not excluded.
+    pub namespaces: Vec<String>,
+    /// Namespaces never read.
+    pub exclude_namespaces: Vec<String>,
+    /// Kubernetes label selector Pods must match.
+    pub pod_selector: Option<String>,
+}
+
+impl ClusterLogScope {
+    fn includes(&self, namespace: &str) -> bool {
+        (self.namespaces.is_empty() || self.namespaces.iter().any(|n| n == namespace))
+            && !self.exclude_namespaces.iter().any(|n| n == namespace)
+    }
+}
+
+fn env_list(name: &str) -> Result<Option<Vec<String>>> {
+    Ok(env_value(name)?.map(|value| {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect()
+    }))
+}
+
+/// `OPERATOR_POD_LOG_SCOPE=cluster` selects cluster scope.
+fn cluster_scope_from_env() -> Result<Option<ClusterLogScope>> {
+    match env_value("OPERATOR_POD_LOG_SCOPE")?.as_deref() {
+        None | Some("namespace") => Ok(None),
+        Some("cluster") => Ok(Some(ClusterLogScope {
+            namespaces: env_list("OPERATOR_POD_LOG_NAMESPACES")?.unwrap_or_default(),
+            exclude_namespaces: env_list("OPERATOR_POD_LOG_EXCLUDE_NAMESPACES")?.unwrap_or_else(
+                || {
+                    DEFAULT_EXCLUDED_NAMESPACES
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect()
+                },
+            ),
+            pod_selector: env_value("OPERATOR_POD_LOG_POD_SELECTOR")?,
+        })),
+        Some(_) => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "OPERATOR_POD_LOG_SCOPE must be `namespace` or `cluster`".to_string(),
+        })),
+    }
 }
 
 pub fn config_from_env() -> Result<Option<PodLogCollectionConfig>> {
@@ -51,6 +113,12 @@ pub fn config_from_env() -> Result<Option<PodLogCollectionConfig>> {
     let value = env_value("OPERATOR_POD_LOG_LABEL_VALUE")?;
     let legacy_daemonset = env_value("OPERATOR_POD_LOG_LEGACY_DAEMONSET")?;
     let replacement_daemonset = env_value("OPERATOR_POD_LOG_REPLACEMENT_DAEMONSET")?;
+    let cluster = cluster_scope_from_env()?;
+    let default_streams = if cluster.is_some() {
+        DEFAULT_CLUSTER_MAX_STREAMS
+    } else {
+        DEFAULT_MAX_STREAMS
+    };
     let max_streams = match env_value("OPERATOR_POD_LOG_MAX_STREAMS")? {
         Some(value) => value.parse::<usize>().map_err(|_| {
             AlienError::new(ErrorData::ConfigurationError {
@@ -59,13 +127,23 @@ pub fn config_from_env() -> Result<Option<PodLogCollectionConfig>> {
                 ),
             })
         })?,
-        None => DEFAULT_MAX_STREAMS,
+        None => default_streams,
     };
     if max_streams == 0 || max_streams > HARD_MAX_STREAMS {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: format!(
                 "OPERATOR_POD_LOG_MAX_STREAMS must be between 1 and {HARD_MAX_STREAMS}"
             ),
+        }));
+    }
+    if let Some(cluster) = cluster {
+        return Ok(Some(PodLogCollectionConfig {
+            label_key: String::new(),
+            label_value: String::new(),
+            legacy_daemonset: None,
+            replacement_daemonset: None,
+            max_streams,
+            cluster: Some(cluster),
         }));
     }
     match (key, value) {
@@ -79,6 +157,7 @@ pub fn config_from_env() -> Result<Option<PodLogCollectionConfig>> {
                 legacy_daemonset,
                 replacement_daemonset,
                 max_streams,
+                cluster: None,
             }))
         }
         _ => Err(AlienError::new(ErrorData::ConfigurationError {
@@ -159,8 +238,11 @@ struct StreamTask {
 }
 
 pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig) {
+    // New streams begin at operator start: a restart does not replay old logs.
+    let started_at = Utc::now();
     let namespace = match state.config.namespace.as_deref() {
         Some(namespace) => namespace.to_string(),
+        None if config.cluster.is_some() => String::new(),
         None => {
             warn!("Pod log collection requires a Kubernetes namespace");
             state.cancel.cancelled().await;
@@ -204,18 +286,27 @@ pub async fn run_loop(state: Arc<OperatorState>, config: PodLogCollectionConfig)
                     &mut legacy_was_running,
                     &mut tasks,
                     &mut completed,
+                    started_at,
                 )
                 .await
             }
             None => Ok(()),
         };
         if let Err(error) = result {
-            stop_all(&mut tasks).await;
+            // A failed cluster listing keeps the streams already running.
+            if config.cluster.is_none() {
+                stop_all(&mut tasks).await;
+            }
             warn!(error = %error, "Pod log discovery failed; will retry");
         }
+        let interval = if config.cluster.is_some() {
+            CLUSTER_DISCOVERY_INTERVAL
+        } else {
+            DISCOVERY_INTERVAL
+        };
         tokio::select! {
             _ = state.cancel.cancelled() => break,
-            _ = time::sleep(DISCOVERY_INTERVAL) => {}
+            _ = time::sleep(interval) => {}
         }
     }
     stop_all(&mut tasks).await;
@@ -230,7 +321,12 @@ async fn reconcile(
     legacy_was_running: &mut bool,
     tasks: &mut HashMap<Source, StreamTask>,
     completed: &mut HashSet<Source>,
+    started_at: DateTime<Utc>,
 ) -> Result<()> {
+    if let Some(cluster) = &config.cluster {
+        return reconcile_cluster(state, client, config, cluster, tasks, completed, started_at)
+            .await;
+    }
     let selector = format!("{}={}", config.label_key, config.label_value);
     let daemonset_names: Vec<_> = [
         config.legacy_daemonset.as_deref(),
@@ -360,7 +456,10 @@ fn selected_sources(
         .status
         .as_ref()
         .and_then(|status| status.phase.as_deref());
-    if labels.and_then(|labels| labels.get(&config.label_key)) != Some(&config.label_value)
+    // Cluster scope selects by namespace and selector before this point.
+    let label_matches = config.cluster.is_some()
+        || labels.and_then(|labels| labels.get(&config.label_key)) == Some(&config.label_value);
+    if !label_matches
         || labels
             .and_then(|labels| labels.get("alien.dev/log-collector-exclude"))
             .is_some_and(|value| value == "true")
@@ -401,6 +500,206 @@ fn selected_sources(
             }
         })
         .collect()
+}
+
+/// Pods of every namespace, page by page.
+async fn list_cluster_pods(client: &KubernetesClient, selector: Option<&str>) -> Result<Vec<Pod>> {
+    let failed = |message: &str| ErrorData::PodLogReadFailed {
+        message: message.to_string(),
+    };
+    let url = format!(
+        "{}/api/v1/pods",
+        client.get_base_url().trim_end_matches('/')
+    );
+    let mut pods = Vec::new();
+    let mut continue_token: Option<String> = None;
+    loop {
+        let mut request = client
+            .client()
+            .get(&url)
+            .query(&[("limit", CLUSTER_PAGE_SIZE)]);
+        if let Some(selector) = selector {
+            request = request.query(&[("labelSelector", selector)]);
+        }
+        if let Some(token) = &continue_token {
+            request = request.query(&[("continue", token.as_str())]);
+        }
+        let response = request
+            .sign_kubernetes_request(&client.auth_config())
+            .context(failed("could not authenticate the Pod listing"))?
+            .send()
+            .await
+            .into_alien_error()
+            .context(failed("could not list Pods in the cluster"))?;
+        if !response.status().is_success() {
+            return Err(AlienError::new(failed(&format!(
+                "listing Pods in the cluster returned HTTP {}",
+                response.status()
+            ))));
+        }
+        let page: k8s_openapi::List<Pod> = response
+            .json()
+            .await
+            .into_alien_error()
+            .context(failed("the Pod listing could not be read"))?;
+        pods.extend(page.items);
+        continue_token = page.metadata.continue_.filter(|token| !token.is_empty());
+        if continue_token.is_none() {
+            return Ok(pods);
+        }
+    }
+}
+
+/// A terminal Pod is only worth reading when it finished after `since`.
+fn finished_since(pod: &Pod, since: DateTime<Utc>) -> bool {
+    pod.status
+        .as_ref()
+        .and_then(|status| status.container_statuses.as_ref())
+        .is_some_and(|statuses| {
+            statuses.iter().any(|status| {
+                status
+                    .state
+                    .as_ref()
+                    .and_then(|state| state.terminated.as_ref())
+                    .and_then(|terminated| terminated.finished_at.as_ref())
+                    .is_some_and(|finished| finished.0 >= since)
+            })
+        })
+}
+
+/// Pick the streams to run when more are eligible than allowed. Namespaces
+/// take turns, so one busy namespace does not crowd out the others, and the
+/// window moves with `slot`, so every container is read in turn.
+fn choose_streams(
+    mut eligible: Vec<(String, Source)>,
+    max_streams: usize,
+    slot: i64,
+) -> Vec<Source> {
+    if eligible.len() <= max_streams {
+        return eligible.into_iter().map(|(_, source)| source).collect();
+    }
+    eligible.sort();
+    let mut by_namespace =
+        std::collections::BTreeMap::<String, std::collections::VecDeque<Source>>::new();
+    for (namespace, source) in eligible {
+        by_namespace.entry(namespace).or_default().push_back(source);
+    }
+    let mut order = Vec::new();
+    while !by_namespace.is_empty() {
+        by_namespace.retain(|_, queue| {
+            if let Some(source) = queue.pop_front() {
+                order.push(source);
+            }
+            !queue.is_empty()
+        });
+    }
+    let start = (slot.unsigned_abs() as usize).wrapping_mul(max_streams) % order.len();
+    order.rotate_left(start);
+    order.truncate(max_streams);
+    order
+}
+
+async fn reconcile_cluster(
+    state: &Arc<OperatorState>,
+    client: &KubernetesClient,
+    config: &PodLogCollectionConfig,
+    cluster: &ClusterLogScope,
+    tasks: &mut HashMap<Source, StreamTask>,
+    completed: &mut HashSet<Source>,
+    started_at: DateTime<Utc>,
+) -> Result<()> {
+    let deployment_id = match state.db.get_deployment_id().await? {
+        Some(id) => id,
+        None => {
+            stop_all(tasks).await;
+            return Ok(());
+        }
+    };
+    let pods = list_cluster_pods(client, cluster.pod_selector.as_deref()).await?;
+    let mut eligible = Vec::new();
+    let mut namespaces = HashMap::<String, String>::new();
+    for pod in &pods {
+        let Some(namespace) = pod.metadata.namespace.as_deref() else {
+            continue;
+        };
+        if !cluster.includes(namespace) {
+            continue;
+        }
+        let terminal = pod
+            .status
+            .as_ref()
+            .and_then(|status| status.phase.as_deref())
+            .is_some_and(|phase| phase != "Running");
+        if terminal && !finished_since(pod, started_at) {
+            continue;
+        }
+        for source in selected_sources(pod, config, started_at) {
+            namespaces.insert(source.pod_uid.clone(), namespace.to_string());
+            eligible.push((namespace.to_string(), source));
+        }
+    }
+    let known: HashSet<_> = eligible.iter().map(|(_, source)| source.clone()).collect();
+    completed.retain(|source| known.contains(source));
+    eligible.retain(|(_, source)| !completed.contains(source));
+    let total = eligible.len() + completed.len();
+    let slot = Utc::now().timestamp() / CLUSTER_ROTATION_SECONDS;
+    let desired: BTreeSet<_> = choose_streams(eligible, config.max_streams, slot)
+        .into_iter()
+        .collect();
+    info!(
+        collecting = desired.len() + completed.len(),
+        containers = total,
+        "Collecting {} of {} containers",
+        desired.len() + completed.len(),
+        total
+    );
+    if desired.len() + completed.len() < total {
+        warn!(
+            max_streams = config.max_streams,
+            "More containers than the Pod log stream limit; they are read in turn"
+        );
+    }
+    let stale: Vec<_> = tasks
+        .iter()
+        .filter(|(source, task)| !desired.contains(*source) || task.handle.is_finished())
+        .map(|(source, _)| source.clone())
+        .collect();
+    for source in stale {
+        let task = tasks.remove(&source).expect("stale task is present");
+        let finished = task.handle.is_finished();
+        task.cancel.cancel();
+        let _ = task.handle.await;
+        if source.terminal && desired.contains(&source) && finished {
+            completed.insert(source);
+        }
+    }
+    for source in desired {
+        if completed.contains(&source) || tasks.contains_key(&source) {
+            continue;
+        }
+        let Some(namespace) = namespaces.get(&source.pod_uid).cloned() else {
+            continue;
+        };
+        let task_cancel = state.cancel.child_token();
+        let handle = tokio::spawn({
+            let client = client.clone();
+            let db = state.db.clone();
+            let deployment_id = deployment_id.clone();
+            let source = source.clone();
+            let cancel = task_cancel.clone();
+            async move {
+                stream_source(client, db, namespace, deployment_id, source, cancel).await;
+            }
+        });
+        tasks.insert(
+            source,
+            StreamTask {
+                cancel: task_cancel,
+                handle,
+            },
+        );
+    }
+    Ok(())
 }
 
 async fn legacy_collector_running(
@@ -927,6 +1226,7 @@ mod tests {
             legacy_daemonset: None,
             replacement_daemonset: None,
             max_streams: 32,
+            cluster: None,
         };
         let mut pod = Pod::default();
         pod.metadata.uid = Some("uid-one".to_string());
@@ -982,6 +1282,106 @@ mod tests {
             .all(|source| source.terminal));
         pod.status.as_mut().unwrap().phase = Some("Pending".to_string());
         assert!(selected_sources(&pod, &config, cutover).is_empty());
+    }
+
+    fn source(namespace: &str, index: usize) -> (String, Source) {
+        (
+            namespace.to_string(),
+            Source {
+                pod_uid: format!("{namespace}-{index:03}"),
+                pod_name: format!("pod-{index}"),
+                container: "app".to_string(),
+                restart_count: 0,
+                terminal: false,
+                initial_since: Utc::now(),
+            },
+        )
+    }
+
+    #[test]
+    fn a_busy_namespace_does_not_crowd_out_the_others() {
+        let mut eligible: Vec<_> = (0..30).map(|i| source("busy", i)).collect();
+        eligible.extend((0..3).map(|i| source("quiet", i)));
+        let chosen = choose_streams(eligible, 10, 0);
+        assert_eq!(chosen.len(), 10);
+        assert_eq!(
+            chosen
+                .iter()
+                .filter(|s| s.pod_uid.starts_with("quiet"))
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn over_the_cap_every_container_is_read_in_turn() {
+        let eligible: Vec<_> = (0..25).map(|i| source("apps", i)).collect();
+        let mut seen = HashSet::new();
+        for slot in 0..5 {
+            for chosen in choose_streams(eligible.clone(), 10, slot) {
+                seen.insert(chosen.pod_uid);
+            }
+        }
+        assert_eq!(seen.len(), 25);
+        // Under the cap, nothing moves.
+        assert_eq!(choose_streams(eligible.clone(), 25, 7).len(), 25);
+    }
+
+    #[test]
+    fn cluster_scope_excludes_system_namespaces_and_honors_lists() {
+        let scope = ClusterLogScope {
+            namespaces: Vec::new(),
+            exclude_namespaces: DEFAULT_EXCLUDED_NAMESPACES
+                .iter()
+                .map(|n| n.to_string())
+                .collect(),
+            pod_selector: None,
+        };
+        assert!(scope.includes("shop") && !scope.includes("kube-system"));
+        let only = ClusterLogScope {
+            namespaces: vec!["a".into(), "b".into()],
+            exclude_namespaces: vec!["b".into()],
+            pod_selector: None,
+        };
+        assert!(only.includes("a") && !only.includes("b") && !only.includes("c"));
+    }
+
+    #[test]
+    fn cluster_scope_reads_pods_without_the_namespace_label_and_never_older_than_start() {
+        let started = Utc::now();
+        let config = PodLogCollectionConfig {
+            label_key: String::new(),
+            label_value: String::new(),
+            legacy_daemonset: None,
+            replacement_daemonset: None,
+            max_streams: 200,
+            cluster: Some(ClusterLogScope {
+                namespaces: Vec::new(),
+                exclude_namespaces: Vec::new(),
+                pod_selector: None,
+            }),
+        };
+        let mut pod = Pod::default();
+        pod.metadata.uid = Some("uid".to_string());
+        pod.metadata.name = Some("web".to_string());
+        pod.metadata.creation_timestamp =
+            Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::Time(
+                started - chrono::Duration::hours(3),
+            ));
+        pod.spec = Some(PodSpec {
+            containers: vec![Container {
+                name: "web".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        pod.status = Some(PodStatus {
+            phase: Some("Running".to_string()),
+            ..Default::default()
+        });
+        let selected = selected_sources(&pod, &config, started);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].initial_since, started);
     }
 
     #[test]

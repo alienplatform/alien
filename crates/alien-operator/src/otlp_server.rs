@@ -39,6 +39,24 @@ struct OtlpServerState {
 
 const MAX_OTLP_BYTES: usize = 10 * 1024 * 1024;
 
+/// Telemetry waiting to be sent to the manager is capped at this many bytes
+/// when connected, so a long outage cannot fill the disk. New batches are
+/// refused with 503 (exporters retry) until the queue drains. An air-gapped
+/// operator drops its oldest batches instead.
+const MAX_QUEUED_TELEMETRY_BYTES: i64 = 256 * 1024 * 1024;
+
+impl OtlpServerState {
+    async fn store(&self, telemetry_type: &str, data: &[u8]) -> crate::error::Result<()> {
+        let cap = self
+            .airgap_export_token
+            .is_none()
+            .then_some(MAX_QUEUED_TELEMETRY_BYTES);
+        self.db
+            .store_telemetry_capped(telemetry_type, data, cap)
+            .await
+    }
+}
+
 /// Only decoded protobuf enters the buffer; bound gzip expansion as well as wire bytes.
 fn otlp_body(headers: &HeaderMap, body: Bytes) -> Result<Bytes, StatusCode> {
     let content_type = headers
@@ -255,7 +273,7 @@ async fn handle_logs(
     ExportLogsServiceRequest::decode(body.clone()).map_err(|_| StatusCode::BAD_REQUEST)?;
     debug!(bytes = body.len(), "Received OTLP logs");
 
-    if let Err(e) = state.db.store_telemetry("logs", &body).await {
+    if let Err(e) = state.store("logs", &body).await {
         error!(error = %e, "Failed to store logs");
         return Err(e
             .http_status_code
@@ -279,7 +297,7 @@ async fn handle_metrics(
     ExportMetricsServiceRequest::decode(body.clone()).map_err(|_| StatusCode::BAD_REQUEST)?;
     debug!(bytes = body.len(), "Received OTLP metrics");
 
-    if let Err(e) = state.db.store_telemetry("metrics", &body).await {
+    if let Err(e) = state.store("metrics", &body).await {
         error!(error = %e, "Failed to store metrics");
         return Err(e
             .http_status_code
@@ -303,7 +321,7 @@ async fn handle_traces(
     ExportTraceServiceRequest::decode(body.clone()).map_err(|_| StatusCode::BAD_REQUEST)?;
     debug!(bytes = body.len(), "Received OTLP traces");
 
-    if let Err(e) = state.db.store_telemetry("traces", &body).await {
+    if let Err(e) = state.store("traces", &body).await {
         error!(error = %e, "Failed to store traces");
         return Err(e
             .http_status_code
@@ -355,7 +373,7 @@ async fn ingest_collector_logs(
     })?;
 
     let (count, otlp) = collector_records_to_otlp(&body, namespace, &deployment_id)?;
-    state.db.store_telemetry("logs", &otlp).await?;
+    state.store("logs", &otlp).await?;
     Ok(count)
 }
 
@@ -670,6 +688,36 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reopened.telemetry_after(0, 100).await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_connected_operator_refuses_telemetry_past_the_queue_cap_until_it_drains() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .unwrap();
+        db.store_telemetry_capped("logs", &[1; 100], Some(250))
+            .await
+            .unwrap();
+        db.store_telemetry_capped("traces", &[2; 100], Some(250))
+            .await
+            .unwrap();
+        let refused = db
+            .store_telemetry_capped("logs", &[3; 100], Some(250))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.http_status_code, Some(503));
+        assert!(refused.retryable);
+        // Draining makes room again; without a cap nothing is refused.
+        let queued = db.telemetry_after(0, 10).await.unwrap();
+        assert_eq!(queued.len(), 2);
+        db.delete_telemetry_through(queued[0].0).await.unwrap();
+        db.store_telemetry_capped("logs", &[3; 100], Some(250))
+            .await
+            .unwrap();
+        db.store_telemetry_capped("logs", &[4; 1000], None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

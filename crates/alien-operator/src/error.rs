@@ -61,17 +61,6 @@ pub enum ErrorData {
     )]
     IdentityConflict,
 
-    /// The manager refused an enrollment code outright: it was already used,
-    /// it expired, or it is not valid.
-    #[error(
-        code = "ENROLLMENT_CODE_REFUSED",
-        message = "Component identity request refused (HTTP {status})",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 400
-    )]
-    EnrollmentCodeRefused { status: u16 },
-
     #[error(
         code = "DATABASE_ERROR",
         message = "Database error: {message}",
@@ -145,6 +134,16 @@ pub enum ErrorData {
         http_status_code = 500
     )]
     CollectorTelemetryInvalid { message: String },
+
+    /// Telemetry waiting to be sent reached its limit; exporters retry.
+    #[error(
+        code = "TELEMETRY_BUFFER_FULL",
+        message = "Telemetry queue reached its {limit_bytes}-byte limit",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    TelemetryBufferFull { limit_bytes: i64 },
 
     /// The bounded local Pod-log queue must drain before reading more logs.
     #[error(

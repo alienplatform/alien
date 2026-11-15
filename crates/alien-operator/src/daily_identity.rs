@@ -73,6 +73,9 @@ pub(crate) struct DailyIdentity {
     /// unreadable answer. The saved candidate key is then the only way to
     /// finish the enrollment, so it is kept.
     enrollment_uncertain: std::sync::atomic::AtomicBool,
+    /// Set when the manager refused an enrollment code outright (a 4xx other
+    /// than a retry hint): it was already used, expired, or is not valid.
+    enrollment_refused: std::sync::atomic::AtomicBool,
 }
 
 impl DailyIdentity {
@@ -88,7 +91,14 @@ impl DailyIdentity {
             operation: db.daily_identity_operation.clone(),
             client,
             enrollment_uncertain: std::sync::atomic::AtomicBool::new(false),
+            enrollment_refused: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Whether the manager refused an enrollment code outright.
+    pub(crate) fn code_was_refused(&self) -> bool {
+        self.enrollment_refused
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Enroll with the configured code unless this operator is already
@@ -226,9 +236,8 @@ impl DailyIdentity {
                     self.mark_enrollment_uncertain();
                 }
                 if status.is_client_error() && !matches!(status.as_u16(), 408 | 429) {
-                    return Err(AlienError::new(ErrorData::EnrollmentCodeRefused {
-                        status: status.as_u16(),
-                    }));
+                    self.enrollment_refused
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 return Err(refused(status));
             }
@@ -2328,6 +2337,26 @@ mod lost_enrollment_tests {
                 .unwrap(),
         );
         (db, url, manager, directory)
+    }
+
+    /// A code the manager refuses outright (spent, expired) is told apart from
+    /// a lost answer, so the installer can say to issue a new code.
+    #[tokio::test]
+    async fn a_spent_code_is_a_refusal_and_a_lost_answer_is_not() {
+        for (answer, refused) in [(REFUSED, true), (LOST, false)] {
+            let (db, url, _manager, _directory) = fixture(answer).await;
+            let identity = DailyIdentity::new(db.clone()).unwrap();
+            identity
+                .enroll(EnrollmentRequest {
+                    manager_url: &url,
+                    audience: "manager-one",
+                    code: "ax_enroll_v1_spent",
+                    deployment_id: None,
+                })
+                .await
+                .expect_err("no identity is made");
+            assert_eq!(identity.code_was_refused(), refused);
+        }
     }
 
     /// The manager installed the key and its reply was lost. The next start

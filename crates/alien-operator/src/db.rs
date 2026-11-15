@@ -1484,8 +1484,44 @@ impl OperatorDb {
 
     /// Store telemetry for later push
     pub async fn store_telemetry(&self, telemetry_type: &str, data: &[u8]) -> Result<()> {
+        self.store_telemetry_capped(telemetry_type, data, None)
+            .await
+    }
+
+    /// Queue a telemetry batch, refusing it when the queue would pass
+    /// `max_queued_bytes`.
+    pub(crate) async fn store_telemetry_capped(
+        &self,
+        telemetry_type: &str,
+        data: &[u8],
+        max_queued_bytes: Option<i64>,
+    ) -> Result<()> {
         let conn = self.conn.lock().await;
         Self::ensure_telemetry_writable(&conn).await?;
+        if let Some(limit) = max_queued_bytes {
+            let mut rows = conn
+                .query("SELECT COALESCE(SUM(length(data)), 0) FROM telemetry", ())
+                .await
+                .into_alien_error()
+                .context(database_error("Measuring queued telemetry"))?;
+            let queued: i64 = match rows
+                .next()
+                .await
+                .into_alien_error()
+                .context(database_error("Reading queued telemetry size"))?
+            {
+                Some(row) => row
+                    .get(0)
+                    .into_alien_error()
+                    .context(database_error("Decoding queued telemetry size"))?,
+                None => 0,
+            };
+            if queued.saturating_add(data.len() as i64) > limit {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::TelemetryBufferFull { limit_bytes: limit },
+                ));
+            }
+        }
 
         conn.execute(
             "INSERT INTO telemetry (type, data, created_at) VALUES (?, ?, datetime('now'))",

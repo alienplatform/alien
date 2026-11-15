@@ -712,26 +712,24 @@ async fn run_operator_cli(
         let enrolled_before = stored_identity
             .as_ref()
             .is_some_and(|identity| !identity.deployment_id.is_empty());
-        let (deployment_id, token) =
-            std::sync::Arc::new(crate::daily_identity::DailyIdentity::new(db.clone())?)
-                .connect(crate::daily_identity::EnrollmentRequest {
-                    manager_url: &manager_url,
-                    audience: &audience,
-                    code: &code,
-                    deployment_id: configured_deployment_id.as_deref(),
-                })
-                .await
-                .map_err(|error| {
-                    if join_token.is_some()
-                        && !enrolled_before
-                        && matches!(error.error, Some(ErrorData::EnrollmentCodeRefused { .. }))
-                    {
-                        return AlienError::new(ErrorData::ConfigurationError {
-                            message: "The enrollment token was already used, has expired or is not valid, and this operator has no saved identity. Issue a new enrollment token and install again with it.".into(),
-                        });
-                    }
-                    error
-                })?;
+        let identity = std::sync::Arc::new(crate::daily_identity::DailyIdentity::new(db.clone())?);
+        let (deployment_id, token) = identity
+            .clone()
+            .connect(crate::daily_identity::EnrollmentRequest {
+                manager_url: &manager_url,
+                audience: &audience,
+                code: &code,
+                deployment_id: configured_deployment_id.as_deref(),
+            })
+            .await
+            .map_err(|error| {
+                if join_token.is_some() && !enrolled_before && identity.code_was_refused() {
+                    return AlienError::new(ErrorData::ConfigurationError {
+                        message: "The enrollment token was already used, has expired or is not valid, and this operator has no saved identity. Issue a new enrollment token and install again with it.".into(),
+                    });
+                }
+                error
+            })?;
         // A start from an empty cache has no deployment state yet; an
         // observe-only environment starts as running, as it does when it
         // registers itself.

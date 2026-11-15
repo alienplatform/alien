@@ -614,6 +614,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     // shutdown.
     let access_request_handle = if !config.is_airgapped()
         && !config.is_protected()
+        && access_requests_enabled()
         && matches!(config.platform, Platform::Kubernetes)
     {
         let loop_impl: Arc<dyn loops::access_requests::AccessRequestSyncLoop> = access_request_loop
@@ -1754,6 +1755,13 @@ impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
             service_accounts,
         })
     }
+}
+
+/// `OPERATOR_ACCESS_REQUESTS=false` stops the in-cluster approval loop. Unset
+/// or any other value keeps it running, as before.
+fn access_requests_enabled() -> bool {
+    !std::env::var("OPERATOR_ACCESS_REQUESTS")
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("false"))
 }
 
 mod daily_identity;
