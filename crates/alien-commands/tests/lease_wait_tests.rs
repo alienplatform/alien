@@ -858,3 +858,77 @@ async fn three_commands_queued_at_once_run_back_to_back_with_one_slot() {
     shutdown.shutdown();
     run.await.unwrap().unwrap();
 }
+
+fn proc_status_kb(field: &str) -> u64 {
+    std::fs::read_to_string("/proc/self/status")
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix(field))
+        .and_then(|rest| rest.trim().trim_end_matches("kB").trim().parse().ok())
+        .unwrap()
+}
+
+fn open_fds() -> usize {
+    std::fs::read_dir("/proc/self/fd").unwrap().count()
+}
+
+/// Cost of holding the default maximum of open waits: memory and file
+/// descriptors of the manager side. Linux only. Raise `ulimit -n` to 32768
+/// first. Clients are bare sockets that send one request and read nothing, so
+/// their cost is one descriptor each.
+///   cargo test ... measure_open_waits -- --ignored --nocapture
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "measurement; needs a high descriptor limit"]
+async fn measure_open_waits() {
+    use tokio::io::AsyncWriteExt;
+    const WAITS: usize = 5_000;
+    let server = pull_server().await;
+    let body = serde_json::json!({
+        "deploymentId": DEPLOYMENT_ID,
+        "target": {"resourceId": server.default_target.resource_id, "resourceType": "daemon"},
+        "maxLeases": 1, "leaseSeconds": 60, "waitSeconds": 25,
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/commands/leases HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let (rss_before, fds_before) = (proc_status_kb("VmRSS:"), open_fds());
+    let mut sockets = Vec::new();
+    for _ in 0..WAITS {
+        let mut stream = tokio::net::TcpStream::connect(server.server_addr)
+            .await
+            .unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        sockets.push(stream);
+    }
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while server.command_server.open_lease_waits() < WAITS {
+        assert!(Instant::now() < deadline, "waits did not open");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (rss_after, fds_after) = (proc_status_kb("VmRSS:"), open_fds());
+    println!(
+        "{WAITS} open waits: RSS {rss_before} kB -> {rss_after} kB (+{} kB, {} bytes per wait); fds {fds_before} -> {fds_after} (+{}; half are the test's own client sockets, so {} on the manager side)",
+        rss_after - rss_before,
+        (rss_after - rss_before) * 1024 / WAITS as u64,
+        fds_after - fds_before,
+        (fds_after - fds_before) / 2
+    );
+    // Over the cap: answered at once.
+    let started = Instant::now();
+    let answer = client(&server)
+        .acquire(&lease_request(&server, 25))
+        .await
+        .unwrap();
+    assert!(answer.is_empty() && started.elapsed() < Duration::from_secs(1));
+    drop(sockets);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while server.command_server.open_lease_waits() > 0 {
+        assert!(Instant::now() < deadline, "waits not released after close");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    println!("all waits released after the clients closed");
+}
