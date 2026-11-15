@@ -501,20 +501,29 @@ fn yaml_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-const HELPERS: &str = r#"{{- define "operator.name" -}}
+const HELPERS: &str = r#"{{- /* The name every object derives from. Installed on its own, the release name, so `helm install alien` gives `alien`. As a subchart the release name belongs to the parent, whose own objects may use it, so the chart's name is added. */ -}}
+{{- define "operator.name" -}}
+{{- if contains "/charts/" .Template.BasePath -}}
+{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "operator.clusterRoleName" -}}
-{{- printf "%s-%s" .Release.Name .Release.Namespace | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s" (include "operator.name" .) .Release.Namespace | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
 {{- define "operator.identitySecret" -}}
-{{- printf "%s-identity" .Release.Name -}}
+{{- printf "%s-identity" (include "operator.name" .) -}}
 {{- end -}}
 
 {{- define "operator.enrollmentSecret" -}}
-{{- default (printf "%s-enrollment" .Release.Name) .Values.existingSecret -}}
+{{- default (printf "%s-enrollment" (include "operator.name" .)) .Values.existingSecret -}}
+{{- end -}}
+
+{{- define "operator.configName" -}}
+{{- printf "%s-config" (include "operator.name" .) -}}
 {{- end -}}
 
 {{- define "operator.brandName" -}}
@@ -614,7 +623,7 @@ const ENROLLMENT_SECRET: &str = r#"{{- if and .Values.token (not .Values.existin
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ printf "%s-enrollment" .Release.Name }}
+  name: {{ printf "%s-enrollment" (include "operator.name" .) }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "operator.labels" . | nindent 4 }}
@@ -805,7 +814,7 @@ spec:
         {{- if include "operator.branded" . }}
         - name: config
           configMap:
-            name: {{ printf "%s-config" .Release.Name }}
+            name: {{ include "operator.configName" . }}
         {{- end }}
         # A cache. The identity and the key to this cache live in the Secret.
         - name: data
@@ -826,7 +835,7 @@ const CONFIG_MAP: &str = r#"{{- if include "operator.branded" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ printf "%s-config" .Release.Name }}
+  name: {{ include "operator.configName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "operator.labels" . | nindent 4 }}

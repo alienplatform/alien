@@ -672,3 +672,91 @@ fn the_chart_works_as_a_dependency_under_an_alias_and_stays_unbranded_without_br
     assert_eq!(kind(&documents, "Deployment").len(), 1);
     assert_eq!(kind(&documents, "ConfigMap").len(), 1);
 }
+
+/// A parent chart that names its own objects after the release, as many do.
+/// Installed as a subchart, the Operator's objects must not take those names.
+#[test]
+fn as_a_subchart_no_object_takes_the_name_of_a_parent_object() {
+    let parent = tempfile::tempdir().unwrap();
+    std::fs::write(
+        parent.path().join("Chart.yaml"),
+        "apiVersion: v2\nname: shop\nversion: 0.1.0\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(parent.path().join("templates")).unwrap();
+    std::fs::write(
+        parent.path().join("templates/app.yaml"),
+        r#"apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels: {app: shop}
+  template:
+    metadata:
+      labels: {app: shop}
+    spec:
+      containers: [{name: app, image: shop}]
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-identity
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  ports: [{port: 80}]
+"#,
+    )
+    .unwrap();
+    write_chart(&parent.path().join("charts/operator"));
+    let output = helm(
+        parent.path(),
+        &["--set", &format!("operator.token={TOKEN}")],
+    );
+    assert!(
+        output.status.success(),
+        "helm template failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    let all = documents(&rendered);
+    let mut seen = std::collections::BTreeSet::new();
+    for document in &all {
+        let key = (
+            document["kind"].as_str().unwrap().to_string(),
+            document["metadata"]["name"].as_str().unwrap().to_string(),
+        );
+        assert!(seen.insert(key.clone()), "two objects are named {key:?}");
+    }
+    // The Operator's objects all carry the chart's name; the parent's stay as they were.
+    let deployments = kind(&all, "Deployment");
+    let names: Vec<_> = deployments
+        .iter()
+        .map(|d| d["metadata"]["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"alien") && names.contains(&"alien-operator"), "{names:?}");
+}
+
+/// Installed on its own the names are the release name, as before.
+#[test]
+fn installed_on_its_own_the_names_are_the_release_name() {
+    let rendered = render(&["--set", &format!("token={TOKEN}")]);
+    let all = documents(&rendered);
+    let deployment = kind(&all, "Deployment");
+    assert_eq!(deployment[0]["metadata"]["name"].as_str(), Some("alien"));
+    let secrets: Vec<_> = kind(&all, "Secret")
+        .iter()
+        .map(|s| s["metadata"]["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(secrets.contains(&"alien-identity".to_string()) && secrets.contains(&"alien-enrollment".to_string()));
+}
