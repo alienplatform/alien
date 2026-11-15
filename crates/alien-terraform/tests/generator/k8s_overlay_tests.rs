@@ -1209,6 +1209,72 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     );
 }
 
+/// A module that installs the chart itself must hand the chart the bindings of the storage it
+/// created. The provider-rendered values carry `infrastructure: null`; without this the
+/// Operator finds no binding for the bucket and fails on its first step.
+#[test]
+fn embedded_helm_install_passes_the_module_created_bindings_to_the_chart() {
+    let stack = Stack::new("eks-registered-setup-bindings".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("production".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("files".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let registry = TfRegistry::built_in();
+    let module = generate_product_terraform_module(
+        &stack,
+        TerraformTarget::Eks,
+        TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings::default(),
+            registration: Some(TerraformRegistration {
+                provider_name: "acme_app".to_string(),
+                provider_source: "pkg.example.com/acme/app".to_string(),
+                provider_version: "1.0.0".to_string(),
+                resource_type: "deployment".to_string(),
+                release_id: Some("rel-test".to_string()),
+                setup_target: "kubernetes".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                destroy_guard: true,
+            }),
+            helm_install: Some(TerraformHelmInstall {
+                chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                release_name: "acme-operator".to_string(),
+            }),
+            supported_aws_regions: Vec::new(),
+        },
+        false,
+    )
+    .expect("module should render");
+
+    let helm = module.get("helm.tf").expect("helm.tf");
+    let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        compact.contains("yamlencode({ infrastructure = "),
+        "the embedded helm_release must pass the chart its infrastructure bindings: {helm}"
+    );
+    assert!(
+        compact.contains("bucketName = aws_s3_bucket.files.bucket"),
+        "the chart's binding must name the bucket this module creates: {helm}"
+    );
+    // The chart value and the published output must be the same bindings.
+    let outputs = module.get("outputs.tf").expect("outputs.tf");
+    assert!(outputs.contains("output \"chart_infrastructure_json\""), "{outputs}");
+}
+
 #[test]
 fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
     let stack = Stack::new("gke-registered-setup-values".to_string())
