@@ -1810,10 +1810,13 @@ async fn reregister_existing_join(
         }));
     }
     let previous_join_token = snapshot_secret_file(&state.join_token_path, "join token")?;
+    let daily_key_path = daily_machine_key_path(machine_token_path);
+    let previous_daily_key = snapshot_secret_file(&daily_key_path, "daily machine key")?;
 
     output::step(2, 4, "Writing refreshed machine credentials");
     let join_token_candidate = write_secret_candidate(&state.join_token_path, &request.token)?;
     let credentials_changed = Cell::new(false);
+    let new_credential_seen = Cell::new(false);
     run_with_credential_recovery(
         async {
             replace_secret_candidate(&join_token_candidate, &state.join_token_path)?;
@@ -1821,27 +1824,36 @@ async fn reregister_existing_join(
             sync_secret_parent(&state.join_token_path)?;
             output::step(3, 4, "Restarting machine registration");
             stop_machine_service(&state.service_label)?;
-            remove_file_if_exists(machine_token_path)?;
             start_machine_service(&state.service_label)?;
             output::step(4, 4, "Verifying machine registration");
-            wait_for_secret_file(
+            wait_for_new_machine_credential(
                 machine_token_path,
+                &previous_machine_token,
+                &daily_key_path,
+                &previous_daily_key,
                 Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
                 Duration::from_millis(REGISTRATION_POLL_INTERVAL_MS),
             )
-            .await
+            .await?;
+            // The machine agent has registered again. Restoring the previous files now
+            // would undo a working registration, so never roll back past this point.
+            new_credential_seen.set(true);
+            Ok(())
         },
         || {
-            recover_if_credentials_changed(credentials_changed.get(), || {
-                restore_credentials_and_service(
-                    &state.join_token_path,
-                    &previous_join_token,
-                    machine_token_path,
-                    &previous_machine_token,
-                    || stop_machine_service(&state.service_label),
-                    || start_machine_service(&state.service_label),
-                )
-            })
+            recover_if_credentials_changed(
+                credentials_changed.get() && !new_credential_seen.get(),
+                || {
+                    restore_credentials_and_service(
+                        &state.join_token_path,
+                        &previous_join_token,
+                        machine_token_path,
+                        &previous_machine_token,
+                        || stop_machine_service(&state.service_label),
+                        || start_machine_service(&state.service_label),
+                    )
+                },
+            )
         },
     )
     .await?;
@@ -2608,23 +2620,52 @@ async fn wait_for_machine_id_file(
     }
 }
 
-async fn wait_for_secret_file(
-    path: &Path,
+/// Where current machine agents write their daily key: next to the machine token.
+fn daily_machine_key_path(machine_token_path: &Path) -> PathBuf {
+    let mut name = machine_token_path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_default();
+    name.push(".daily");
+    machine_token_path.with_file_name(name)
+}
+
+/// True when `path` holds a non-empty secret that differs from the snapshot taken before
+/// the restart (or the file did not exist then).
+fn secret_file_changed(path: &Path, description: &str, previous: &SecretFileSnapshot) -> bool {
+    match read_secret_string(path, description) {
+        Ok(current) => !previous
+            .contents
+            .as_deref()
+            .is_some_and(|before| before.trim() == current),
+        Err(_) => false,
+    }
+}
+
+/// Waits until the restarted machine agent has registered again: either a daily key or
+/// (older agents) a machine token whose contents differ from before the restart. Files left
+/// unchanged by the restart do not count.
+async fn wait_for_new_machine_credential(
+    machine_token_path: &Path,
+    previous_machine_token: &SecretFileSnapshot,
+    daily_key_path: &Path,
+    previous_daily_key: &SecretFileSnapshot,
     timeout: Duration,
     poll_interval: Duration,
 ) -> Result<()> {
     let started = Instant::now();
     loop {
-        match read_secret_string(path, "machine token") {
-            Ok(_) => return Ok(()),
-            Err(_) if !path.exists() => {}
-            Err(error) => return Err(error),
+        if secret_file_changed(daily_key_path, "daily machine key", previous_daily_key)
+            || secret_file_changed(machine_token_path, "machine token", previous_machine_token)
+        {
+            return Ok(());
         }
         if started.elapsed() >= timeout {
             return Err(AlienError::new(ErrorData::ConfigurationError {
                 message: format!(
-                    "Timed out waiting for refreshed machine credentials at {}",
-                    path.display()
+                    "Timed out waiting for refreshed machine credentials at {} or {}",
+                    daily_key_path.display(),
+                    machine_token_path.display()
                 ),
             }));
         }
@@ -3951,22 +3992,128 @@ mod tests {
         assert!(!wrapper_was_run.exists());
     }
 
-    #[tokio::test]
-    async fn refreshed_credentials_wait_for_a_nonempty_machine_token() {
-        let directory = tempfile::tempdir().expect("token directory");
-        let path = directory.path().join("machine-token");
-        let writer_path = path.clone();
+    /// Runs the verification and recovery wiring of the refresh with a fake agent
+    /// that does `agent` after the restart. Returns the result and whether recovery ran.
+    async fn run_refresh_verification(
+        directory: &Path,
+        previous_daily: Option<&str>,
+        agent: impl FnOnce(&Path, &Path) + Send + 'static,
+    ) -> (Result<()>, bool) {
+        let machine_token_path = directory.join("machine-token");
+        let daily_path = daily_machine_key_path(&machine_token_path);
+        if let Some(previous) = previous_daily {
+            write_secret_file(&daily_path, previous).expect("write previous daily key");
+        }
+        write_secret_file(&machine_token_path, "old-token").expect("write previous token");
+        let previous_machine_token =
+            snapshot_secret_file(&machine_token_path, "machine token").expect("snapshot");
+        let previous_daily_key = snapshot_secret_file(&daily_path, "daily key").expect("snapshot");
+        let seen = Cell::new(false);
+        let recovered = Cell::new(false);
+        let (token, daily) = (machine_token_path.clone(), daily_path.clone());
         tokio::spawn(async move {
             tokio::task::yield_now().await;
-            std::fs::write(writer_path, "new-token\n").expect("write token");
+            agent(&token, &daily);
         });
+        let result = run_with_credential_recovery(
+            async {
+                wait_for_new_machine_credential(
+                    &machine_token_path,
+                    &previous_machine_token,
+                    &daily_path,
+                    &previous_daily_key,
+                    Duration::from_millis(300),
+                    Duration::from_millis(1),
+                )
+                .await?;
+                seen.set(true);
+                Ok(())
+            },
+            || {
+                recover_if_credentials_changed(!seen.get(), || {
+                    recovered.set(true);
+                    Ok(())
+                })
+            },
+        )
+        .await;
+        (result, recovered.get())
+    }
 
-        wait_for_secret_file(&path, Duration::from_secs(1), Duration::from_millis(1))
-            .await
-            .expect("credentials should appear");
+    #[tokio::test]
+    async fn refresh_succeeds_when_the_agent_writes_only_the_daily_key() {
+        let directory = tempfile::tempdir().expect("directory");
+        let (result, recovered) = run_refresh_verification(directory.path(), None, |_, daily| {
+            std::fs::write(daily, "daily-key\n").expect("write daily key");
+        })
+        .await;
+        result.expect("daily key counts as registration");
+        assert!(!recovered);
+        assert!(directory.path().join("machine-token").exists());
+    }
+
+    #[tokio::test]
+    async fn second_refresh_keeps_the_machine_token_and_ignores_unchanged_files() {
+        let directory = tempfile::tempdir().expect("directory");
+        let (result, _) = run_refresh_verification(directory.path(), None, |_, daily| {
+            std::fs::write(daily, "daily-key\n").expect("write daily key");
+        })
+        .await;
+        result.expect("first refresh succeeds");
+        let token = directory.path().join("machine-token");
+        assert_eq!(std::fs::read_to_string(&token).expect("token kept"), "old-token");
+        // Second run: stale daily key and the old machine token, agent writes nothing.
+        let (result, recovered) =
+            run_refresh_verification(directory.path(), Some("daily-key\n"), |_, _| {}).await;
+        assert!(result.is_err());
+        assert!(recovered);
+    }
+
+    #[tokio::test]
+    async fn refresh_succeeds_when_an_older_agent_writes_the_machine_token() {
+        let directory = tempfile::tempdir().expect("directory");
+        let (result, recovered) = run_refresh_verification(directory.path(), None, |token, _| {
+            std::fs::write(token, "new-token\n").expect("write token");
+        })
+        .await;
+        result.expect("replaced machine token counts as registration");
+        assert!(!recovered);
+    }
+
+    #[tokio::test]
+    async fn refresh_succeeds_when_the_daily_key_is_replaced() {
+        let directory = tempfile::tempdir().expect("directory");
+        let (result, recovered) =
+            run_refresh_verification(directory.path(), Some("old-daily"), |_, daily| {
+                std::fs::write(daily, "new-daily\n").expect("write daily key");
+            })
+            .await;
+        result.expect("changed daily key counts as registration");
+        assert!(!recovered);
+    }
+
+    #[tokio::test]
+    async fn refresh_times_out_and_recovers_when_nothing_is_written() {
+        let directory = tempfile::tempdir().expect("directory");
+        let (result, recovered) = run_refresh_verification(directory.path(), None, |_, _| {}).await;
+        assert!(result.is_err());
+        assert!(recovered);
+    }
+
+    #[tokio::test]
+    async fn refresh_ignores_a_stale_unchanged_daily_key() {
+        let directory = tempfile::tempdir().expect("directory");
+        let (result, recovered) =
+            run_refresh_verification(directory.path(), Some("old-daily\n"), |_, _| {}).await;
+        assert!(result.is_err());
+        assert!(recovered);
+    }
+
+    #[test]
+    fn daily_key_path_is_next_to_the_machine_token() {
         assert_eq!(
-            read_secret_string(&path, "machine token").expect("read token"),
-            "new-token"
+            daily_machine_key_path(Path::new("/var/lib/machine-service/machine-token")),
+            Path::new("/var/lib/machine-service/machine-token.daily")
         );
     }
 
