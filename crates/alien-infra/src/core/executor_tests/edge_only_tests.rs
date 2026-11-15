@@ -217,9 +217,10 @@ fn a_managed_frozen_resource_records_an_edge_to_an_unsettled_dependency() {
     assert!(plan.updates.is_empty());
 }
 
-/// A dependency that changes in the same plan is a reason to update, not just a new edge.
+/// A registry waits for a dependency that is updating; once it has rolled, only the new
+/// edges remain, and they are recorded.
 #[test]
-fn a_dependency_updated_in_the_same_plan_still_updates_a_managed_frozen_resource() {
+fn a_managed_frozen_resource_waits_for_a_dependency_update_and_then_records_its_edges() {
     let (mut stack, mut state) = registry_gaining_an_edge();
     // A Live bucket the registry already depends on gets a real config change.
     let uploads = Storage::new("uploads".to_string()).build();
@@ -252,12 +253,21 @@ fn a_dependency_updated_in_the_same_plan_still_updates_a_managed_frozen_resource
         "{:?}",
         plan.updates.keys()
     );
+    // The registry follows the bucket's update: it waits until the bucket has rolled.
     assert!(
-        plan.updates.contains_key("images"),
+        !plan.updates.contains_key("images"),
         "{:?}",
         plan.updates.keys()
     );
-    assert!(plan.dependency_records.is_empty());
+
+    state.resources.get_mut("uploads").unwrap().config = stack.resources["uploads"].config.clone();
+    let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
+        .plan(&state)
+        .unwrap();
+    // Nothing but edges changed for the registry, and the bucket's rollout is no reason to
+    // rewrite it: the edges are recorded.
+    assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
+    assert_eq!(plan.dependency_records, ["images"]);
 }
 
 /// A config change that comes with new edges is a real update, even for a setup-owned resource.

@@ -22033,6 +22033,10 @@
             },
             "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
           },
+          "dependencyUpdatePending": {
+            "type": "boolean",
+            "description": "Whether this resource owes an update because a dependency is changing, though its own\nconfig is not. The update waits until the dependency has rolled to the release being\napplied, so the owed update must survive between plans and restarts. Cleared when the\nupdate starts. State written before this field existed reads as not owing one."
+          },
           "description": {
             "type": [
               "string",
@@ -22106,6 +22110,13 @@
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "requestedUpdateRan": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rollout in which an update ran because the controller asked for one while the\nconfig was unchanged. While the controller keeps asking in that same rollout, its\ndependents no longer wait for it, so a check that never settles cannot hold them back\nfor good. A later rollout is a new request and is waited for again. Cleared once the\ncontroller stops asking. State written before this field existed (it was a flag then)\nreads as none."
           },
           "retryAttempt": {
             "type": "integer",
