@@ -47,6 +47,7 @@ fn registration() -> TerraformRegistration {
         setup_target: "aws".to_string(),
         setup_fingerprint: "abc".to_string(),
         setup_fingerprint_version: 1,
+        destroy_guard: false,
     }
 }
 

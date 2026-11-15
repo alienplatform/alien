@@ -161,6 +161,151 @@ impl AwsDynamodbKv {
         }
         Ok(state)
     }
+
+    async fn scan_with_read_mode(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+        consistent: bool,
+    ) -> Result<ScanResult> {
+        validate_key(prefix)?;
+        let limit = limit.unwrap_or(1000);
+        let initial = cursor
+            .as_deref()
+            .map(|cursor| Self::decode_cursor(prefix, cursor))
+            .transpose()?
+            .unwrap_or(CursorState {
+                version: 1,
+                prefix: prefix.to_string(),
+                bucket: 0,
+                last_key: None,
+            });
+        if limit == 0 {
+            return Ok(ScanResult {
+                items: Vec::new(),
+                next_cursor: cursor,
+            });
+        }
+
+        let mut items = Vec::with_capacity(limit);
+        let mut bucket_id = initial.bucket;
+        let mut last_key = initial.last_key;
+
+        while bucket_id < HASH_BUCKET_COUNT {
+            let bucket = format!("bucket_{}", bucket_id);
+            let mut expression_attribute_values = HashMap::new();
+            expression_attribute_values
+                .insert(":bucket".to_string(), AttributeValue::s(bucket.clone()));
+            expression_attribute_values
+                .insert(":prefix".to_string(), AttributeValue::s(prefix.to_string()));
+
+            let exclusive_start_key = last_key.as_ref().map(|key| {
+                HashMap::from([
+                    ("pk".to_string(), AttributeValue::s(bucket.clone())),
+                    ("sk".to_string(), AttributeValue::s(key.clone())),
+                ])
+            });
+            let request = QueryRequest::builder()
+                .table_name(self.table_name.clone())
+                .key_condition_expression("pk = :bucket AND begins_with(sk, :prefix)".to_string())
+                .expression_attribute_values(expression_attribute_values)
+                .limit(i32::try_from(limit - items.len()).unwrap_or(i32::MAX))
+                .maybe_exclusive_start_key(exclusive_start_key)
+                .consistent_read(consistent)
+                .build();
+
+            let response = self.client.query(request).await.map_err(|e| {
+                map_cloud_client_error(
+                    e,
+                    format!("Failed to scan prefix '{}' in bucket {}", prefix, bucket_id),
+                    Some(prefix.to_string()),
+                )
+            })?;
+
+            for item in response.items {
+                if let Some(ttl_attr) = item.get("ttl") {
+                    if let Some(ttl_epoch) = ttl_attr.n.as_ref().and_then(|s| s.parse::<i64>().ok())
+                    {
+                        if self.is_expired(Some(ttl_epoch)) {
+                            continue; // Skip expired items
+                        }
+                    }
+                }
+
+                if let (Some(key_attr), Some(value_attr)) = (item.get("sk"), item.get("value")) {
+                    if let (Some(key), Some(base64_value)) =
+                        (key_attr.s.as_ref(), value_attr.b.as_ref())
+                    {
+                        if let Ok(value) = base64::prelude::BASE64_STANDARD.decode(base64_value) {
+                            let ttl = Self::item_ttl(&item);
+                            if let Some(backend_version) =
+                                item.get("version").and_then(|value| value.s.clone())
+                            {
+                                items.push(KvEntry {
+                                    key: key.clone(),
+                                    value,
+                                    version: encode_version(
+                                        key,
+                                        backend_version,
+                                        ttl.map(|expires_at| expires_at.saturating_mul(1000)),
+                                    )?,
+                                });
+                            } else {
+                                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                                    message: format!(
+                                        "Missing or invalid version attribute for key '{}'",
+                                        key
+                                    ),
+                                    resource_id: Some(key.clone()),
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+
+            let provider_last_key = response
+                .last_evaluated_key
+                .as_ref()
+                .and_then(|key| key.get("sk"))
+                .and_then(|value| value.s.clone());
+
+            if items.len() == limit {
+                let (next_bucket, next_key) = match provider_last_key {
+                    Some(key) => (bucket_id, Some(key)),
+                    None if bucket_id + 1 < HASH_BUCKET_COUNT => (bucket_id + 1, None),
+                    None => {
+                        return Ok(ScanResult {
+                            items,
+                            next_cursor: None,
+                        });
+                    }
+                };
+                return Ok(ScanResult {
+                    items,
+                    next_cursor: Some(Self::encode_cursor(&CursorState {
+                        version: 1,
+                        prefix: prefix.to_string(),
+                        bucket: next_bucket,
+                        last_key: next_key,
+                    })?),
+                });
+            }
+
+            if let Some(key) = provider_last_key {
+                last_key = Some(key);
+            } else {
+                bucket_id += 1;
+                last_key = None;
+            }
+        }
+
+        Ok(ScanResult {
+            items,
+            next_cursor: None,
+        })
+    }
 }
 
 impl Binding for AwsDynamodbKv {}
@@ -403,140 +548,15 @@ impl Kv for AwsDynamodbKv {
         limit: Option<usize>,
         cursor: Option<String>,
     ) -> Result<ScanResult> {
-        validate_key(prefix)?;
-        let limit = limit.unwrap_or(1000);
-        let initial = cursor
-            .as_deref()
-            .map(|cursor| Self::decode_cursor(prefix, cursor))
-            .transpose()?
-            .unwrap_or(CursorState {
-                version: 1,
-                prefix: prefix.to_string(),
-                bucket: 0,
-                last_key: None,
-            });
-        if limit == 0 {
-            return Ok(ScanResult {
-                items: Vec::new(),
-                next_cursor: cursor,
-            });
-        }
+        self.scan_with_read_mode(prefix, limit, cursor, false).await
+    }
 
-        let mut items = Vec::with_capacity(limit);
-        let mut bucket_id = initial.bucket;
-        let mut last_key = initial.last_key;
-
-        while bucket_id < HASH_BUCKET_COUNT {
-            let bucket = format!("bucket_{}", bucket_id);
-            let mut expression_attribute_values = HashMap::new();
-            expression_attribute_values
-                .insert(":bucket".to_string(), AttributeValue::s(bucket.clone()));
-            expression_attribute_values
-                .insert(":prefix".to_string(), AttributeValue::s(prefix.to_string()));
-
-            let exclusive_start_key = last_key.as_ref().map(|key| {
-                HashMap::from([
-                    ("pk".to_string(), AttributeValue::s(bucket.clone())),
-                    ("sk".to_string(), AttributeValue::s(key.clone())),
-                ])
-            });
-            let request = QueryRequest::builder()
-                .table_name(self.table_name.clone())
-                .key_condition_expression("pk = :bucket AND begins_with(sk, :prefix)".to_string())
-                .expression_attribute_values(expression_attribute_values)
-                .limit(i32::try_from(limit - items.len()).unwrap_or(i32::MAX))
-                .maybe_exclusive_start_key(exclusive_start_key)
-                .build();
-
-            let response = self.client.query(request).await.map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!("Failed to scan prefix '{}' in bucket {}", prefix, bucket_id),
-                    Some(prefix.to_string()),
-                )
-            })?;
-
-            for item in response.items {
-                if let Some(ttl_attr) = item.get("ttl") {
-                    if let Some(ttl_epoch) = ttl_attr.n.as_ref().and_then(|s| s.parse::<i64>().ok())
-                    {
-                        if self.is_expired(Some(ttl_epoch)) {
-                            continue; // Skip expired items
-                        }
-                    }
-                }
-
-                if let (Some(key_attr), Some(value_attr)) = (item.get("sk"), item.get("value")) {
-                    if let (Some(key), Some(base64_value)) =
-                        (key_attr.s.as_ref(), value_attr.b.as_ref())
-                    {
-                        if let Ok(value) = base64::prelude::BASE64_STANDARD.decode(base64_value) {
-                            let ttl = Self::item_ttl(&item);
-                            if let Some(backend_version) =
-                                item.get("version").and_then(|value| value.s.clone())
-                            {
-                                items.push(KvEntry {
-                                    key: key.clone(),
-                                    value,
-                                    version: encode_version(
-                                        key,
-                                        backend_version,
-                                        ttl.map(|expires_at| expires_at.saturating_mul(1000)),
-                                    )?,
-                                });
-                            } else {
-                                return Err(AlienError::new(ErrorData::CloudPlatformError {
-                                    message: format!(
-                                        "Missing or invalid version attribute for key '{}'",
-                                        key
-                                    ),
-                                    resource_id: Some(key.clone()),
-                                }));
-                            }
-                        }
-                    }
-                }
-            }
-
-            let provider_last_key = response
-                .last_evaluated_key
-                .as_ref()
-                .and_then(|key| key.get("sk"))
-                .and_then(|value| value.s.clone());
-
-            if items.len() == limit {
-                let (next_bucket, next_key) = match provider_last_key {
-                    Some(key) => (bucket_id, Some(key)),
-                    None if bucket_id + 1 < HASH_BUCKET_COUNT => (bucket_id + 1, None),
-                    None => {
-                        return Ok(ScanResult {
-                            items,
-                            next_cursor: None,
-                        });
-                    }
-                };
-                return Ok(ScanResult {
-                    items,
-                    next_cursor: Some(Self::encode_cursor(&CursorState {
-                        version: 1,
-                        prefix: prefix.to_string(),
-                        bucket: next_bucket,
-                        last_key: next_key,
-                    })?),
-                });
-            }
-
-            if let Some(key) = provider_last_key {
-                last_key = Some(key);
-            } else {
-                bucket_id += 1;
-                last_key = None;
-            }
-        }
-
-        Ok(ScanResult {
-            items,
-            next_cursor: None,
-        })
+    async fn scan_prefix_consistent(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> Result<ScanResult> {
+        self.scan_with_read_mode(prefix, limit, cursor, true).await
     }
 }

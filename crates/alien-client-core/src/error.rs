@@ -134,6 +134,19 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// A resource reached the provider's cap on how many versions it can hold. Waiting does not
+    /// clear it: a version has to be deleted, so a blind retry only repeats the refusal.
+    #[error(
+        code = "VERSION_LIMIT_EXCEEDED",
+        message = "Version limit reached: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    VersionLimitExceeded {
+        /// Human-readable description of the limit and the resource that reached it
+        message: String,
+    },
+
     /// A remote asynchronous operation finished unsuccessfully; its handle cannot recover.
     /// Retrying the issuing handler can reissue the operation, so preserve executor retries.
     /// Callers that persist handles must recognize this variant and stop polling the old handle.

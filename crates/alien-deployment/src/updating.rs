@@ -330,6 +330,16 @@ pub async fn handle_update_pending(
             input_values: &config.input_values,
         })?;
     persisted_gate_answers.extend(new_declines);
+    persisted_gate_answers.extend(crate::pending::default_frozen_gate_declines(
+        crate::pending::FrozenGateFixityCheck {
+            persisted: &persisted_gate_answers,
+            stack: &target_stack,
+            still_frozen_gating: &frozen_gating,
+            existing_resource_ids: &existing_resource_ids,
+            input_values: &config.input_values,
+        },
+        current.platform,
+    ));
 
     // Drop gated setup resources the deployer declined, BEFORE the
     // preflights: the frozen-compatibility check compares against the
@@ -404,13 +414,41 @@ pub async fn handle_update_pending(
         target_release_id,
         current.platform,
     );
-    let mutated_stack = crate::pending::strip_declined_live_resources(
+    // A frozen identity that is new in this release and unused while its gate is off passed the
+    // frozen-compatibility check as not an addition. It is not installed, and setup owns it, so
+    // the executor must not plan to create it with runtime credentials. One setup already
+    // installed stays in the target. This is where the executor's target is pruned: the stack
+    // stored below as `pending_prepared_stack` is what `handle_updating` plans from. The list is
+    // taken before the strip, because the strip removes the gated users the excuse is judged by.
+    let nothing_installed = Stack::new(mutated_stack.id.clone()).build();
+    let unused_identities = alien_preflights::compatibility::unused_frozen_additions(
+        old_stack_for_comparison
+            .as_deref()
+            .unwrap_or(&nothing_installed),
+        &mutated_stack,
+        &config,
+        current.platform,
+    )
+    .into_iter()
+    .filter(|id| !existing_resource_ids.contains(id))
+    .collect::<Vec<_>>();
+    let mut mutated_stack = crate::pending::strip_declined_live_resources(
         mutated_stack,
         &config.input_values,
         &persisted_gate_answers,
         &frozen_gating,
         current.platform,
     )?;
+    alien_core::remove_declined_live_resources(&mut mutated_stack, &unused_identities);
+    // The update installs nothing for a frozen input reference that resolves to no value; the
+    // recorded target must not keep it (a later answer listing values would compare equal).
+    alien_preflights::compatibility::resolve_empty_frozen_input_references(
+        old_stack_for_comparison
+            .as_deref()
+            .unwrap_or(&nothing_installed),
+        &mut mutated_stack,
+        &config,
+    );
 
     if current.runtime_metadata.as_ref().is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup

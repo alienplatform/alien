@@ -196,7 +196,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_live_storage_or_queue_alone_gets_a_verifier_because_its_controller_writes_through_it() {
+    async fn a_live_storage_or_queue_alone_gets_a_verifier_because_its_controller_writes_through_it(
+    ) {
         let live_storage = Stack::new("shop".to_string())
             .add(
                 Storage::new("assets".to_string()).build(),

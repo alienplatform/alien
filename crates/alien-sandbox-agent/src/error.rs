@@ -8,12 +8,17 @@ pub enum ErrorData {
     /// The sandbox has not proved it can reach the internet only through the gateway.
     #[error(
         code = "EGRESS_PATH_UNEXPECTED",
-        message = "EGRESS_PATH_UNEXPECTED: sandbox egress path is not verified",
+        message = "EGRESS_PATH_UNEXPECTED: sandbox egress path is not verified (step {step}: {cause})",
         retryable = "false",
         internal = "false",
         http_status_code = 503
     )]
-    EgressPathUnexpected,
+    EgressPathUnexpected {
+        /// The check that failed, such as `direct-connect` or `gateway-policy-check`
+        step: String,
+        /// Why it failed. Never contains a token or a secret.
+        cause: String,
+    },
     /// A file path was refused before any filesystem access.
     #[error(
         code = "PATH_REFUSED",
@@ -228,3 +233,14 @@ pub enum ErrorData {
 
 /// This crate's Result type.
 pub type Result<T> = alien_error::Result<T, ErrorData>;
+
+impl ErrorData {
+    /// The egress path is not verified: `step` names the failed check and `cause` says why.
+    /// Both appear in the response body because logs of isolated pods may not be readable.
+    pub fn egress_unverified(step: &str, cause: impl Into<String>) -> Self {
+        Self::EgressPathUnexpected {
+            step: step.into(),
+            cause: cause.into(),
+        }
+    }
+}

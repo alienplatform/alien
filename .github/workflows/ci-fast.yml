@@ -111,6 +111,7 @@ jobs:
             # A dependency bump can break the full client, which workspace builds don't compile.
             platform_sdk:
               - 'client-sdks/platform/rust/**'
+              - 'crates/alien-core/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
             # Build inputs of the Node addon (Rust changes trigger the job through `rust`).
@@ -171,6 +172,10 @@ jobs:
               - 'crates/alien-bindings-node/**'
               - 'crates/alien-bindings/**'
               - 'crates/alien-build/**'
+              # packages/permissions/generated is compiled from this crate. The
+              # check that the generated files are committed runs in the
+              # TypeScript job, so a Rust-only change here has to select it.
+              - 'crates/alien-permissions/**'
 
   rust:
     name: Rust crates

@@ -153,7 +153,10 @@ impl ImageProcess {
         }
         match *status {
             ImageStatus::AwaitingActivation => {
-                return Err(AlienError::new(ErrorData::EgressPathUnexpected))
+                return Err(AlienError::new(ErrorData::egress_unverified(
+                    "image-activation",
+                    "the image command waits for activation",
+                )))
             }
             ImageStatus::Pending => (),
             ImageStatus::Failed => return Err(monitor_failed()),
