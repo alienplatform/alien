@@ -93,7 +93,7 @@ except Exception as e:
     print("DIRECT-NONE", type(e).__name__, round(time.time() - t, 1)); sys.exit(0)
 try:
     s.settimeout(15)
-    s.sendall(b"HEAD / HTTP/1.0\r\n\r\n")
+    s.sendall(b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
     data = s.recv(60)
     print("DIRECT-DATA", data[:60] if data else b"")
 except Exception as e:
@@ -494,9 +494,16 @@ async fn live_internet_proof() {
 
     if let Ok(name) = std::env::var("AZURE_INTERNET_RESULT_SECRET") {
         let vault = provider.load_vault("secrets").await.expect("vault");
-        let verdict = if proof.failures.is_empty() { "PASS" } else { "FAIL" };
+        let verdict = if proof.failures.is_empty() {
+            "PASS"
+        } else {
+            "FAIL"
+        };
         let body = format!("{verdict}\n{}", proof.log.join("\n"));
-        vault.set_secret(&name, &body).await.expect("publish the proof log");
+        vault
+            .set_secret(&name, &body)
+            .await
+            .expect("publish the proof log");
     }
     assert!(proof.failures.is_empty(), "failed: {:#?}", proof.failures);
 }

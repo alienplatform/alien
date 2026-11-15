@@ -17,30 +17,30 @@ use std::path::PathBuf;
 #[tokio::test]
 #[ignore = "writes files for the live proof; see the module docs"]
 async fn render_the_azure_internet_live_module() {
-    let out = PathBuf::from(
-        std::env::var("AZURE_INTERNET_OUT").expect("AZURE_INTERNET_OUT must be set"),
-    );
+    let out =
+        PathBuf::from(std::env::var("AZURE_INTERNET_OUT").expect("AZURE_INTERNET_OUT must be set"));
     let image = std::env::var("AZURE_INTERNET_IMAGE").expect("AZURE_INTERNET_IMAGE must be set");
     assert!(
         !out.exists() || std::fs::read_dir(&out).expect("readable").next().is_none(),
         "{} must be empty",
         out.display()
     );
+    // The image is assembled with the agent and ends as root, which a release records as the
+    // image's uid; without it the sandbox keeps the legacy native boot and no agent runs.
+    let mut sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image,
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::Internet)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    sandbox.image_user = Some(0);
     let stack = Stack::new("azint".to_string())
-        .add(
-            Sandbox::new("agents".to_string())
-                .code(SandboxCode::Image {
-                    image,
-                    bundled_from: None,
-                })
-                .egress(SandboxEgress::Internet)
-                .lifecycle(SandboxLifecyclePolicy {
-                    max_lifetime_seconds: None,
-                    idle_pause_seconds: None,
-                })
-                .build(),
-            ResourceLifecycle::Frozen,
-        )
+        .add(sandbox, ResourceLifecycle::Frozen)
         .build();
     let prepared = prepare_for_target(stack, TerraformTarget::Azure).await;
     let module = render(&prepared, TerraformTarget::Azure, StackSettings::default());

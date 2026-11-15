@@ -23,12 +23,12 @@
 
 use alien_core::{
     import::ImportContext, AzureClientConfig, AzureCredentials, ClientConfig, DeploymentConfig,
-    EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus, Stack,
-    StackSettings, StackState,
+    EnvironmentVariablesSnapshot, ExternalBindings, InitialSetupAuthority, Platform,
+    ResourceLifecycle, ResourceStatus, Stack, StackSettings, StackState,
 };
 use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackResourceStateExt};
-use std::time::Duration;
 use serde_json::Value;
+use std::time::Duration;
 
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set"))
@@ -37,9 +37,8 @@ fn env(name: &str) -> String {
 /// Terraform renders some payload fields as JSON text and some as objects.
 fn json_field(registration: &Value, field: &str) -> Value {
     match &registration[field] {
-        Value::String(text) => serde_json::from_str(text).unwrap_or_else(|error| {
-            panic!("registration field {field} is not JSON: {error}")
-        }),
+        Value::String(text) => serde_json::from_str(text)
+            .unwrap_or_else(|error| panic!("registration field {field} is not JSON: {error}")),
         other => other.clone(),
     }
 }
@@ -57,10 +56,9 @@ fn report(state: &StackState) {
 #[tokio::test]
 #[ignore = "runs against a real subscription with the setup module applied; see the module docs"]
 async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
-    let stack: Stack = serde_json::from_slice(
-        &std::fs::read(env("AZURE_INTERNET_STACK")).expect("stack file"),
-    )
-    .expect("the prepared stack deserializes");
+    let stack: Stack =
+        serde_json::from_slice(&std::fs::read(env("AZURE_INTERNET_STACK")).expect("stack file"))
+            .expect("the prepared stack deserializes");
     let registration: Value = serde_json::from_slice(
         &std::fs::read(env("AZURE_INTERNET_REGISTRATION")).expect("registration file"),
     )
@@ -153,7 +151,10 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
         if settled(&state, ResourceLifecycle::Frozen) {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(result.suggested_delay_ms.unwrap_or(500))).await;
+        tokio::time::sleep(Duration::from_millis(
+            result.suggested_delay_ms.unwrap_or(500),
+        ))
+        .await;
     }
     assert!(
         settled(&state, ResourceLifecycle::Frozen),
@@ -180,7 +181,10 @@ async fn the_executor_publishes_the_internet_binding_on_the_applied_setup() {
         if settled(&state, ResourceLifecycle::Live) {
             break;
         }
-        tokio::time::sleep(Duration::from_millis(result.suggested_delay_ms.unwrap_or(500))).await;
+        tokio::time::sleep(Duration::from_millis(
+            result.suggested_delay_ms.unwrap_or(500),
+        ))
+        .await;
     }
     assert!(
         settled(&state, ResourceLifecycle::Live),
