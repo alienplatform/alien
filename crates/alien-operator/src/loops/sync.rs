@@ -262,6 +262,26 @@ pub(super) async fn refresh_running_secrets(
     Ok(())
 }
 
+/// Save the target bundle set from a sync response. When it differs from the stored one, wake
+/// the sync loop at once: the bundles load (and are reported as loaded) in the next sync, not
+/// after a full sync interval.
+pub(crate) async fn store_target_bundle_set(
+    db: &crate::db::OperatorDb,
+    target: &alien_core::sync::TargetOperationsBundleSet,
+) {
+    let changed = match db.get_target_operations_bundle_set().await {
+        Ok(previous) => previous.as_ref() != Some(target),
+        Err(_) => true,
+    };
+    if let Err(e) = db.set_target_operations_bundle_set(target).await {
+        error!(error = %e, "Failed to persist target_operations_bundle_set");
+        return;
+    }
+    if changed {
+        db.request_sync();
+    }
+}
+
 async fn sync_with_manager(
     state: &OperatorState,
     client: &Client,
@@ -557,13 +577,7 @@ async fn sync_with_manager(
     // extra tick — the sync_bundles() call above (built from THIS response,
     // used on the NEXT request) reads it back via get_target_operations_bundle_set.
     if let Some(ref target_bundle_set) = sync_response.target_operations_bundle_set {
-        if let Err(e) = state
-            .db
-            .set_target_operations_bundle_set(target_bundle_set)
-            .await
-        {
-            error!(error = %e, "Failed to persist target_operations_bundle_set");
-        }
+        store_target_bundle_set(&state.db, target_bundle_set).await;
     }
     if let Some(ref targets) = sync_response.target_dynamic_containers {
         if !state.config.is_protected() {
@@ -1541,6 +1555,33 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+    async fn woken(db: &crate::db::OperatorDb) -> bool {
+        tokio::time::timeout(std::time::Duration::from_millis(200), db.wait_for_sync())
+            .await
+            .is_ok()
+    }
+
+    /// A changed target bundle set wakes the sync loop at once, so the bundles are loaded and
+    /// reported in the next sync instead of after a full sync interval; the same set again does not.
+    #[tokio::test]
+    async fn a_changed_target_bundle_set_requests_a_sync() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "0".repeat(64);
+        let db = crate::db::OperatorDb::new(dir.path().to_str().unwrap(), &key)
+            .await
+            .unwrap();
+        let set = |hash: &str| alien_core::sync::TargetOperationsBundleSet {
+            hash: hash.to_string(),
+            bundles: Vec::new(),
+        };
+        super::store_target_bundle_set(&db, &set("one")).await;
+        assert!(woken(&db).await, "a first set must request a sync");
+        super::store_target_bundle_set(&db, &set("one")).await;
+        assert!(!woken(&db).await, "the same set must not request a sync");
+        super::store_target_bundle_set(&db, &set("two")).await;
+        assert!(woken(&db).await, "a different set must request a sync");
+    }
+
     /// A manager that sends its own audience keeps it; the stored one (the
     /// manager URL after a join-token enrollment) only fills a config without
     /// one. An old-style enrollment, where both agree, is unchanged.
