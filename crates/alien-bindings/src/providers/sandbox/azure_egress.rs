@@ -6,7 +6,7 @@ use crate::{
 };
 use alien_azure_clients::azure::sandbox_data_plane::{EgressHostRule, EgressPolicy, Sandbox};
 use alien_core::{EgressPolicy as RuntimePolicy, SANDBOX_EXPIRY_LABEL};
-use alien_error::{AlienError, ContextError};
+use alien_error::AlienError;
 use std::{collections::BTreeMap, sync::Arc};
 
 const IDENTITY_LABEL: &str = "alien-egress-identity";
@@ -199,17 +199,18 @@ impl AzureSandbox {
         identity: Option<&str>,
         reason: AlienError<ErrorData>,
     ) -> AlienError<ErrorData> {
-        let reason = if let (Some(manager), Some(identity)) = (&self.egress_manager, identity) {
-            match manager.delete(identity).await {
-                Ok(()) => reason,
-                Err(_) => reason.context(ErrorData::SandboxCommandFailed {
-                    failure: "egressRevocationFailed".into(),
-                    reason: "could not revoke the failed create's gateway identity; terminating its sandbox".into(),
-                }),
+        // A failed revocation is logged, not wrapped around the reason: wrapping would replace the
+        // publish failure's cause and retryability with the cleanup's. The identity is bound to the
+        // sandbox being deleted below and expires with it.
+        if let (Some(manager), Some(identity)) = (&self.egress_manager, identity) {
+            if let Err(error) = manager.delete(identity).await {
+                tracing::warn!(
+                    sandbox = %sandbox_id,
+                    %error,
+                    "could not revoke the gateway identity of a failed create; terminating its sandbox"
+                );
             }
-        } else {
-            reason
-        };
+        }
         self.discard(sandbox_id, reason).await
     }
 }

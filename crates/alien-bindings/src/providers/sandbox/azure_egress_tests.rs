@@ -457,6 +457,28 @@ async fn admin_failure_discards_create_and_does_not_prevent_termination() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_failed_publish_keeps_its_cause_and_retryability_when_the_revocation_also_fails() {
+    let h = Harness::new().await;
+    // Both replicas are away (nothing listens there), so no replica acknowledges the new grant and
+    // the cleanup revocation cannot reach any either.
+    let (sandbox, record, _) = provider(
+        h.reopen_with_replicas(&["127.0.0.1", "127.0.0.2"]).await,
+        false,
+    );
+    let error = sandbox
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect_err("publish refused");
+    assert!(record.lock().unwrap().is_none(), "the sandbox is discarded");
+    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE", "{error:?}");
+    assert!(error.source.is_none(), "no revocation wrapper: {error:?}");
+    assert!(
+        error.retryable,
+        "the publish failure is retryable and the revocation failure must not override it: {error:?}"
+    );
+}
+
 #[tokio::test]
 async fn gateway_readback_refuses_changed_or_unknown_enforcement() {
     let h = Harness::new().await;
