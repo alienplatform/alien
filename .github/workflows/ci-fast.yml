@@ -76,6 +76,8 @@ jobs:
       worker_integration: ${{ steps.filter.outputs.worker_integration }}
       platform_sdk: ${{ steps.filter.outputs.platform_sdk }}
       node_addon: ${{ steps.filter.outputs.node_addon }}
+      python: ${{ steps.filter.outputs.python }}
+      tpm: ${{ steps.filter.outputs.tpm }}
       rust_mode: ${{ steps.rust_selection.outputs.mode }}
       rust_packages: ${{ steps.rust_selection.outputs.packages }}
       rust_features: ${{ steps.rust_selection.outputs.features }}
@@ -191,6 +193,26 @@ jobs:
               - 'examples/pnpm-workspace.yaml'
               - 'examples/basic-worker-ts/**'
               - '.github/workflows/ci-fast.yml'
+            python:
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'mise*.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/alien-bindings/**'
+              - 'crates/alien-ai-gateway/**'
+              - 'crates/alien-core/src/bindings/**'
+              - 'crates/alien-bindings-python/**'
+              - 'crates/alien-local/**'
+              - 'scripts/queue-test-server.py'
+              - 'examples/python-bindings/**'
+              - '.github/workflows/python-bindings.yml'
+            tpm:
+              - 'crates/alien-cli/src/signing/**'
+              - 'crates/alien-cli/src/commands/signing.rs'
+              - 'crates/alien-cli/tests/signing_flow.rs'
+              - 'crates/alien-manager/src/routes/signing.rs'
+              - 'crates/alien-signing/**'
+              - '.github/workflows/tpm-device-key.yml'
             typescript:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
@@ -310,11 +332,9 @@ jobs:
           repo-token: ${{ github.token }}
 
       - name: Install CloudFormation linter
-        if: needs.changes.outputs.full_tier == 'true'
         run: pipx install cfn-lint==1.59.0
 
       - uses: hashicorp/setup-terraform@v4
-        if: needs.changes.outputs.full_tier == 'true'
         with:
           terraform_version: 1.15.3
           terraform_wrapper: false
@@ -343,10 +363,8 @@ jobs:
           echo "ALIEN_TERRAFORM_1_9_DIR=$RUNNER_TEMP/terraform-1.9" >> "$GITHUB_ENV"
 
       - uses: azure/setup-helm@v5
-        if: needs.changes.outputs.full_tier == 'true'
 
       - name: Install kubeconform
-        if: needs.changes.outputs.full_tier == 'true'
         run: |
           case "$(uname -m)" in
             x86_64) KUBECONFORM_ARCH=amd64 ;;
@@ -983,6 +1001,34 @@ jobs:
       - name: Verify glibc floor and load on older base images
         run: packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
 
+  # Reusable workflows that also run nightly. Full tier only, and only when the merge touches
+  # their inputs, so `All tests passed` covers them.
+  python-bindings:
+    name: Python bindings
+    needs: [pr-conventions, changes]
+    if: >-
+      needs.changes.outputs.full_tier == 'true' &&
+      (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.python == 'true')
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/python-bindings.yml
+    secrets: inherit
+    with:
+      linux_only: true
+
+  tpm-device-key:
+    name: TPM device key
+    needs: [pr-conventions, changes]
+    if: >-
+      needs.changes.outputs.full_tier == 'true' &&
+      (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.tpm == 'true')
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/tpm-device-key.yml
+    secrets: inherit
+
   all-tests-passed:
     name: All tests passed
     if: >-
@@ -991,7 +1037,7 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration, node-addon-portability]
+    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area

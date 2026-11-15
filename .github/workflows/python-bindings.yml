@@ -1,9 +1,14 @@
 name: Python bindings
 
-# Pull requests do not run this. The merge queue runs the Linux tests when a merge touches the
-# bindings, and a nightly run (only when main changed) adds macOS and the release wheels matrix.
+# Pull requests do not run this. The merge queue runs the Linux tests through ci-fast.yml
+# (`linux_only`) when a merge touches the bindings, so `All tests passed` covers them. A nightly
+# run (only when main changed) adds macOS and the release wheels matrix.
 on:
-  merge_group:
+  workflow_call:
+    inputs:
+      linux_only:
+        type: boolean
+        default: false
   schedule:
     - cron: "37 2 * * *"
   workflow_dispatch:
@@ -29,44 +34,14 @@ jobs:
       - id: gate
         uses: ./.github/actions/changed-since-last-success
 
-  changes:
-    name: Detect Python binding changes
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    outputs:
-      python: ${{ steps.filter.outputs.python }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          base: ${{ github.event.merge_group.base_sha }}
-          filters: |
-            python:
-              - "Cargo.lock"
-              - "Cargo.toml"
-              - "mise*.toml"
-              - "rust-toolchain.toml"
-              - "crates/alien-bindings/**"
-              - "crates/alien-ai-gateway/**"
-              - "crates/alien-core/src/bindings/**"
-              - "crates/alien-bindings-python/**"
-              - "crates/alien-local/**"
-              - "scripts/queue-test-server.py"
-              - "examples/python-bindings/**"
-              - ".github/workflows/python-bindings.yml"
-
   test:
-    needs: [gate, changes]
-    if: >-
-      needs.gate.outputs.changed == 'true' &&
-      (github.event_name != 'merge_group' || needs.changes.outputs.python == 'true')
+    needs: gate
+    if: needs.gate.outputs.changed == 'true'
     strategy:
       fail-fast: false
       matrix:
         # macOS only nightly and on demand: its minutes are the slow, expensive part.
-        os: ${{ fromJSON(github.event_name == 'merge_group' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-15"]') }}
+        os: ${{ fromJSON(inputs.linux_only && '["ubuntu-latest"]' || '["ubuntu-latest","macos-15"]') }}
         python: ["3.10", "3.13"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -110,7 +85,7 @@ jobs:
   # The release wheels matrix: nightly and on demand only.
   wheels:
     needs: gate
-    if: needs.gate.outputs.changed == 'true' && github.event_name != 'merge_group'
+    if: needs.gate.outputs.changed == 'true' && !inputs.linux_only
     strategy:
       matrix:
         include:
