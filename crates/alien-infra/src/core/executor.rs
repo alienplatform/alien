@@ -178,8 +178,8 @@ pub struct StackExecutor {
     service_provider: Arc<dyn PlatformServiceProvider>,
     deployment_config: alien_core::DeploymentConfig,
     initial_setup_authority: InitialSetupAuthority,
-    /// The rollout this executor works for (the release being applied); empty when unknown.
-    rollout_id: String,
+    /// The rollout this executor works for (the release being applied); none when unknown.
+    rollout_id: Option<String>,
 }
 
 const MAX_RETRIES: u32 = 10;
@@ -520,7 +520,8 @@ pub struct StackExecutorConfig<'a> {
 
     /// Identifies the rollout (the release being applied). A resource that keeps asking for
     /// an update after the one it asked for ran in this rollout stops holding its dependents;
-    /// a later rollout is a new request. Callers without a release leave it unset.
+    /// a later rollout is a new request. Unset when the release is unknown: nothing is then
+    /// recorded as run, and dependents wait for a dependency that keeps asking.
     rollout_id: Option<String>,
 }
 
@@ -755,7 +756,7 @@ impl StackExecutor {
             service_provider,
             deployment_config,
             initial_setup_authority,
-            rollout_id: rollout_id.unwrap_or_default(),
+            rollout_id,
         })
     }
 
@@ -1287,7 +1288,8 @@ impl StackExecutor {
                     state,
                 );
                 if requested
-                    && current.requested_update_ran.as_deref() == Some(self.rollout_id.as_str())
+                    && self.rollout_id.is_some()
+                    && current.requested_update_ran == self.rollout_id
                 {
                     warn!(
                         resource_id,
@@ -2814,7 +2816,7 @@ impl StackExecutor {
                                 let updated_state = update_state.with_updates(|state| {
                                     state.dependency_update_pending = false;
                                     state.requested_update_ran =
-                                        requested_only.then(|| self.rollout_id.clone());
+                                        requested_only.then(|| self.rollout_id.clone()).flatten();
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config =
                                         previous_config_for_update(current_state);

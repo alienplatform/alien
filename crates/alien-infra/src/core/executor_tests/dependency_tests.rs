@@ -1034,7 +1034,7 @@ mod rollout_order {
         assert_all_running(&state, &[dep, app]);
 
         crate::worker::fail_test_worker_update_check(dep, true);
-        let executor = new_executor(&requested_stack(dep, app, "r2", false))?;
+        let executor = rollout_executor(&requested_stack(dep, app, "r2", false), "rel_a")?;
         let plan = executor.plan(&state);
         let rolled = executor.dependency_rolled(dep, &state);
         crate::worker::fail_test_worker_update_check(dep, false);
@@ -1064,7 +1064,7 @@ mod rollout_order {
         assert_all_running(&state, &[dep, app]);
 
         crate::worker::request_test_worker_update(dep, true);
-        let executor = new_executor(&requested_stack(dep, app, "r2", false))?;
+        let executor = rollout_executor(&requested_stack(dep, app, "r2", false), "rel_a")?;
         let mut dep_updated = false;
         let mut app_rolled_after_update = false;
         for _ in 0..80 {
@@ -1093,6 +1093,37 @@ mod rollout_order {
             .deployment_config(&default_deployment_config())
             .rollout_id(rollout.to_string())
             .build()
+    }
+
+    /// Without a release to tell one rollout from the next, nothing is recorded as run, so a
+    /// dependency that keeps asking holds its dependents as it did before the record existed.
+    #[tokio::test]
+    async fn an_unknown_rollout_records_nothing_and_dependents_keep_waiting() -> Result<()> {
+        let (dep, app) = ("dep-no-rollout", "app-no-rollout");
+        let mut state = run_to_synced(
+            &new_executor(&requested_stack(dep, app, "r1", false))?,
+            new_test_state(),
+        )
+        .await?;
+
+        crate::worker::request_test_worker_update(dep, true);
+        let executor = new_executor(&requested_stack(dep, app, "r2", false))?;
+        let mut dep_updated = false;
+        for _ in 0..80 {
+            state = executor.step(state).await?.next_state;
+            dep_updated |= get_status(&state, dep) == Some(ResourceStatus::Updating);
+            assert!(state.resources[dep].requested_update_ran.is_none());
+        }
+        let waits = !executor.dependency_rolled(dep, &state)?;
+        crate::worker::request_test_worker_update(dep, false);
+
+        assert!(dep_updated, "the dependency's update must have run");
+        assert!(
+            waits,
+            "dependents must keep waiting for a check that keeps asking"
+        );
+        assert_eq!(image(&state, app), format!("{app}-r1"));
+        Ok(())
     }
 
     /// An update the dependency asked for in release A, whose check never settled, is not what
@@ -1158,7 +1189,7 @@ mod rollout_order {
         .await?;
 
         crate::worker::request_test_worker_update(dep, true);
-        let executor = new_executor(&requested_stack(dep, app, "r2", false))?;
+        let executor = rollout_executor(&requested_stack(dep, app, "r2", false), "rel_a")?;
         let mut saw_mid_update = false;
         for _ in 0..80 {
             let before = state.clone();
