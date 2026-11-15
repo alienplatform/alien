@@ -39,18 +39,17 @@ struct OtlpServerState {
 
 const MAX_OTLP_BYTES: usize = 10 * 1024 * 1024;
 
-/// Telemetry waiting to be sent to the manager is capped at this many bytes
-/// when connected, so a long outage cannot fill the disk. New batches are
-/// refused with 503 (exporters retry) until the queue drains. An air-gapped
-/// operator drops its oldest batches instead.
-const MAX_QUEUED_TELEMETRY_BYTES: i64 = 256 * 1024 * 1024;
-
 impl OtlpServerState {
+    /// Telemetry waiting to be sent is capped only when the operator was given a
+    /// limit (`OPERATOR_OTLP_MAX_QUEUED_BYTES`). Over it, new batches are refused
+    /// with 503 (exporters retry) until the queue drains. An air-gapped operator
+    /// drops its oldest batches instead and has no limit here.
     async fn store(&self, telemetry_type: &str, data: &[u8]) -> crate::error::Result<()> {
         let cap = self
             .airgap_export_token
             .is_none()
-            .then_some(MAX_QUEUED_TELEMETRY_BYTES);
+            .then(|| self.db.telemetry_queue_cap())
+            .flatten();
         self.db
             .store_telemetry_capped(telemetry_type, data, cap)
             .await
@@ -718,6 +717,39 @@ mod tests {
         db.store_telemetry_capped("logs", &[4; 1000], None)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_queue_cap_applies_only_when_the_operator_is_given_one() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OtlpServerState {
+            db: db.clone(),
+            namespace: None,
+            collector_token: None,
+            airgap_export_token: None,
+        };
+        // No setting: unbounded, as before.
+        state.store("logs", &[1; 1000]).await.unwrap();
+        state.store("logs", &[1; 1000]).await.unwrap();
+        // With a setting, what is already queued counts, and a push frees room.
+        db.set_telemetry_queue_cap(Some(2500));
+        state.store("logs", &[2; 400]).await.unwrap();
+        assert_eq!(
+            state
+                .store("logs", &[2; 400])
+                .await
+                .unwrap_err()
+                .http_status_code,
+            Some(503)
+        );
+        let queued = db.telemetry_after(0, 10).await.unwrap();
+        db.delete_telemetry(&[queued[0].0]).await.unwrap();
+        state.store("logs", &[2; 400]).await.unwrap();
     }
 
     #[tokio::test]

@@ -168,6 +168,13 @@ pub struct OperatorDb {
     /// Where the enrolled identity lives when it is not in this database.
     /// `None` keeps it here.
     identity_store: Option<Arc<dyn crate::identity_store::IdentityStore>>,
+    /// Bytes of telemetry waiting to be sent, once measured. Inserts add to it;
+    /// any deletion forgets it, and the next capped insert measures again, so
+    /// the table is summed once per push cycle instead of once per insert.
+    queued_telemetry_bytes: std::sync::Mutex<Option<i64>>,
+    /// Most bytes of telemetry that may wait to be sent while connected; 0 means
+    /// no limit, which is how every existing install behaves.
+    telemetry_queue_cap: std::sync::atomic::AtomicI64,
 }
 
 impl OperatorDb {
@@ -413,6 +420,8 @@ impl OperatorDb {
             runtime_credentials: Mutex::new(std::collections::HashMap::new()),
             pull_secret_refreshed: std::sync::atomic::AtomicBool::new(false),
             identity_store: None,
+            queued_telemetry_bytes: std::sync::Mutex::new(None),
+            telemetry_queue_cap: std::sync::atomic::AtomicI64::new(0),
         })
     }
 
@@ -1499,23 +1508,30 @@ impl OperatorDb {
         let conn = self.conn.lock().await;
         Self::ensure_telemetry_writable(&conn).await?;
         if let Some(limit) = max_queued_bytes {
-            let mut rows = conn
-                .query("SELECT COALESCE(SUM(length(data)), 0) FROM telemetry", ())
-                .await
-                .into_alien_error()
-                .context(database_error("Measuring queued telemetry"))?;
-            let queued: i64 = match rows
-                .next()
-                .await
-                .into_alien_error()
-                .context(database_error("Reading queued telemetry size"))?
-            {
-                Some(row) => row
-                    .get(0)
-                    .into_alien_error()
-                    .context(database_error("Decoding queued telemetry size"))?,
-                None => 0,
+            let cached = *self.queued_telemetry_bytes.lock().expect("queue size");
+            let queued = match cached {
+                Some(queued) => queued,
+                None => {
+                    let mut rows = conn
+                        .query("SELECT COALESCE(SUM(length(data)), 0) FROM telemetry", ())
+                        .await
+                        .into_alien_error()
+                        .context(database_error("Measuring queued telemetry"))?;
+                    match rows
+                        .next()
+                        .await
+                        .into_alien_error()
+                        .context(database_error("Reading queued telemetry size"))?
+                    {
+                        Some(row) => row
+                            .get(0)
+                            .into_alien_error()
+                            .context(database_error("Decoding queued telemetry size"))?,
+                        None => 0,
+                    }
+                }
             };
+            *self.queued_telemetry_bytes.lock().expect("queue size") = Some(queued);
             if queued.saturating_add(data.len() as i64) > limit {
                 return Err(alien_error::AlienError::new(
                     ErrorData::TelemetryBufferFull { limit_bytes: limit },
@@ -1532,8 +1548,43 @@ impl OperatorDb {
         .context(ErrorData::DatabaseError {
             message: "Failed to store telemetry".to_string(),
         })?;
+        self.queue_grew(data.len());
 
         Ok(())
+    }
+
+    /// Limit the telemetry that may wait to be sent while connected. `None`
+    /// (the default) leaves the queue unbounded, as it always was.
+    pub fn set_telemetry_queue_cap(&self, bytes: Option<i64>) {
+        self.telemetry_queue_cap.store(
+            bytes.unwrap_or(0).max(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    pub(crate) fn telemetry_queue_cap(&self) -> Option<i64> {
+        match self
+            .telemetry_queue_cap
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => None,
+            cap => Some(cap),
+        }
+    }
+
+    fn queue_grew(&self, bytes: usize) {
+        if let Some(queued) = self
+            .queued_telemetry_bytes
+            .lock()
+            .expect("queue size")
+            .as_mut()
+        {
+            *queued = queued.saturating_add(bytes as i64);
+        }
+    }
+
+    fn queue_changed(&self) {
+        *self.queued_telemetry_bytes.lock().expect("queue size") = None;
     }
 
     /// Return the cursor for one container incarnation. Pod UID prevents a
@@ -1765,6 +1816,7 @@ impl OperatorDb {
             .context(ErrorData::DatabaseError {
                 message: "Failed to queue Pod logs".to_string(),
             })?;
+            self.queue_changed();
             conn.execute(
                 "INSERT INTO pod_log_offsets (pod_uid, container, restart_count, timestamp, ordinal) VALUES (?, ?, ?, ?, ?) ON CONFLICT(pod_uid, container, restart_count) DO UPDATE SET timestamp = excluded.timestamp, ordinal = excluded.ordinal",
                 (
@@ -1852,6 +1904,7 @@ impl OperatorDb {
         }
 
         let conn = self.conn.lock().await;
+        self.queue_changed();
 
         for id in ids {
             conn.execute("DELETE FROM telemetry WHERE id = ?", (*id,))
@@ -2396,6 +2449,7 @@ impl OperatorDb {
     /// vendor has acknowledged receiving it.
     pub async fn delete_telemetry_through(&self, through: i64) -> Result<u64> {
         let conn = self.conn.lock().await;
+        self.queue_changed();
         conn.execute("DELETE FROM telemetry WHERE id <= ?", (through,))
             .await
             .into_alien_error()
@@ -2448,6 +2502,7 @@ impl OperatorDb {
             dropped += 1;
         }
         if let Some(through) = through {
+            self.queue_changed();
             conn.execute("DELETE FROM telemetry WHERE id <= ?", (through,))
                 .await
                 .into_alien_error()
