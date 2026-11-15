@@ -140,7 +140,7 @@ fn record_to_subject(
             },
             Role::DeploymentManager,
         ),
-        (TokenType::Setup, _, Some(deployment_id)) => (
+        (TokenType::Setup | TokenType::SetupImport, _, Some(deployment_id)) => (
             Scope::Deployment {
                 project_id: "default".to_string(),
                 deployment_id: deployment_id.to_string(),
@@ -148,7 +148,7 @@ fn record_to_subject(
             Role::DeploymentManager,
         ),
         // A setup key always names its deployment; one that does not is refused.
-        (TokenType::Setup, _, None) => return None,
+        (TokenType::Setup | TokenType::SetupImport, _, None) => return None,
         (TokenType::Deployment, _, None) => {
             // Unscoped deployment token shouldn't exist; fail closed.
             (Scope::Workspace, Role::DeploymentViewer)
@@ -206,6 +206,7 @@ mod tests {
     #[test]
     fn a_setup_key_without_a_deployment_is_refused() {
         assert!(record_to_subject(&record(TokenType::Setup, None), "k".into()).is_none());
+        assert!(record_to_subject(&record(TokenType::SetupImport, None), "k".into()).is_none());
         let subject =
             record_to_subject(&record(TokenType::Setup, Some("dep")), "k".into()).unwrap();
         assert_eq!(subject.role, Role::DeploymentManager);

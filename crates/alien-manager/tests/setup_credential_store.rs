@@ -86,6 +86,7 @@ impl TokenStore for CountingTokens {
     }
     async fn create_setup_token(
         &self,
+        token_type: TokenType,
         deployment_id: &str,
         key_prefix: &str,
         key_hash: &str,
@@ -93,7 +94,7 @@ impl TokenStore for CountingTokens {
     ) -> Result<TokenRecord, alien_error::AlienError> {
         self.setup_keys.fetch_add(1, Ordering::SeqCst);
         self.inner
-            .create_setup_token(deployment_id, key_prefix, key_hash, expires_at)
+            .create_setup_token(token_type, deployment_id, key_prefix, key_hash, expires_at)
             .await
     }
 }
