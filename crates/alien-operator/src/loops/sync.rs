@@ -121,7 +121,12 @@ pub(super) fn sanitize_identity_config(
         ));
     }
     config.deployment_token = None;
-    config.runtime_identity_audience = Some(audience.to_owned());
+    // The manager's own audience wins: it is what its workload receivers check.
+    // The stored one (the manager URL for a join-token enrollment) only fills
+    // a config that carries none.
+    if config.runtime_identity_audience.is_none() {
+        config.runtime_identity_audience = Some(audience.to_owned());
+    }
     let manager = reqwest::Url::parse(manager_url).map_err(|_| {
         alien_error::AlienError::new(crate::error::ErrorData::ConfigurationError {
             message: "Invalid identity manager URL".into(),
@@ -1536,6 +1541,44 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
+    /// A manager that sends its own audience keeps it; the stored one (the
+    /// manager URL after a join-token enrollment) only fills a config without
+    /// one. An old-style enrollment, where both agree, is unchanged.
+    #[test]
+    fn manager_sent_audience_wins_over_the_stored_one() {
+        let config = |audience: Option<&str>| {
+            let mut config = alien_core::DeploymentConfig::builder()
+                .base_platform(Platform::Aws)
+                .stack_settings(Default::default())
+                .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(Default::default())
+                .build();
+            config.runtime_identity_audience = audience.map(str::to_string);
+            config
+        };
+        let url = "https://manager.example.com";
+        let mut sent = config(Some("manager-audience"));
+        super::sanitize_identity_config(&mut sent, url, url).unwrap();
+        assert_eq!(
+            sent.runtime_identity_audience.as_deref(),
+            Some("manager-audience")
+        );
+        let mut absent = config(None);
+        super::sanitize_identity_config(&mut absent, url, url).unwrap();
+        assert_eq!(absent.runtime_identity_audience.as_deref(), Some(url));
+        let mut old_way = config(Some("manager-one"));
+        super::sanitize_identity_config(&mut old_way, url, "manager-one").unwrap();
+        assert_eq!(
+            old_way.runtime_identity_audience.as_deref(),
+            Some("manager-one")
+        );
+    }
+
     /// Turning on protected mode removes the dynamic containers the install ran
     /// before; unprotected installs and installs that never allowed them keep
     /// today's behavior.
