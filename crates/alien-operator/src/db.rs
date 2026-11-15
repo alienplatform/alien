@@ -1705,6 +1705,30 @@ impl OperatorDb {
         }))
     }
 
+    /// Forget one saved cursor (a journal cursor that the journal no longer accepts).
+    pub async fn delete_pod_log_offset(
+        &self,
+        pod_uid: &str,
+        container: &str,
+        restart_count: i32,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "DELETE FROM pod_log_offsets WHERE pod_uid = ? AND container = ? AND restart_count = ?",
+            (
+                pod_uid.to_string(),
+                container.to_string(),
+                i64::from(restart_count),
+            ),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to delete Pod log cursor".to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Return the durable lower bound for a Pod-log handoff. A new installation
     /// starts at Pod creation time; an observed legacy collector advances the
     /// lower bound before it disappears. The marker survives Operator restarts.

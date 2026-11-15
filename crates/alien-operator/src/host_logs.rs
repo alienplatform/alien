@@ -52,17 +52,22 @@ pub struct HostLogsConfig {
 }
 
 /// Parse `OPERATOR_HOST_LOGS`. Unset means Docker logs when the operator runs
-/// in a container with the Docker socket mounted, and nothing otherwise.
+/// in a container with the Docker socket mounted and was given an enrollment
+/// token (a new install), and nothing otherwise: an install that predates this
+/// collector collects nothing new after an upgrade.
 pub fn parse_sources(
     value: Option<&str>,
     in_container: bool,
     socket_present: bool,
+    enrolled_by_token: bool,
 ) -> Result<Option<HostLogsConfig>> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok((in_container && socket_present).then_some(HostLogsConfig {
-            journald: false,
-            docker: true,
-        }));
+        return Ok(
+            (in_container && socket_present && enrolled_by_token).then_some(HostLogsConfig {
+                journald: false,
+                docker: true,
+            }),
+        );
     };
     let mut config = HostLogsConfig::default();
     for source in value.split(',').map(str::trim) {
@@ -84,11 +89,57 @@ pub fn parse_sources(
 
 pub fn config_from_env() -> Result<Option<HostLogsConfig>> {
     let value = std::env::var("OPERATOR_HOST_LOGS").ok();
+    log_units_from_env()?;
+    let enrolled_by_token = [
+        "OPERATOR_ENROLLMENT_TOKEN",
+        "OPERATOR_ENROLLMENT_TOKEN_FILE",
+    ]
+    .iter()
+    .any(|name| {
+        std::env::var(name)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    });
     parse_sources(
         value.as_deref(),
         Path::new("/.dockerenv").exists(),
         Path::new(&crate::host::docker_socket_path()).exists(),
+        enrolled_by_token,
     )
+}
+
+/// `OPERATOR_HOST_LOG_UNITS`: ship the journal of these units only. Unset ships
+/// the whole journal. A name with anything but letters, digits and `_ . @ - :`
+/// refuses to start.
+pub(crate) fn log_units_from_env() -> Result<Vec<String>> {
+    parse_log_units(std::env::var("OPERATOR_HOST_LOG_UNITS").ok().as_deref())
+}
+
+pub(crate) fn parse_log_units(value: Option<&str>) -> Result<Vec<String>> {
+    let mut units = Vec::new();
+    for unit in value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+    {
+        let valid = !unit.is_empty()
+            && unit.len() <= 256
+            && unit
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_.@-:".contains(c))
+            && !unit.starts_with('-');
+        if !valid {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "OPERATOR_HOST_LOG_UNITS has the invalid unit name '{unit}'. Use a comma list of unit names."
+                ),
+            }));
+        }
+        units.push(unit.to_string());
+    }
+    Ok(units)
 }
 
 pub async fn run_loop(state: Arc<OperatorState>, config: HostLogsConfig) {
@@ -192,12 +243,19 @@ fn truncate_line(mut body: String) -> String {
 
 /// The `journalctl` arguments: after the saved cursor, or from now when there
 /// is none.
-pub(crate) fn journalctl_args(saved_cursor: Option<&str>) -> Vec<String> {
+pub(crate) fn journalctl_args(saved_cursor: Option<&str>, units: &[String]) -> Vec<String> {
+    // --all: without it journalctl prints a field over 4 KB as null, and the entry would be lost.
+    // Only the fields the record uses are printed; the cursor and timestamps always are.
     let mut args = vec![
         "--follow".to_string(),
         "--output=json".to_string(),
+        "--all".to_string(),
+        "--output-fields=MESSAGE,_PID,_SYSTEMD_UNIT,SYSLOG_IDENTIFIER,_COMM".to_string(),
         "--no-pager".to_string(),
     ];
+    for unit in units {
+        args.push(format!("--unit={unit}"));
+    }
     match saved_cursor {
         Some(cursor) => args.push(format!("--after-cursor={cursor}")),
         None => args.push("--lines=0".to_string()),
@@ -205,11 +263,40 @@ pub(crate) fn journalctl_args(saved_cursor: Option<&str>) -> Vec<String> {
     args
 }
 
+/// Reader failures in a row, with no entry read, after which a saved cursor is given up.
+const CURSOR_FAILURES_BEFORE_RESET: u32 = 5;
+/// Longest raw journal line read whole. A longer one is cut here and read past.
+const MAX_JOURNAL_LINE_BYTES: usize = 2 * 1024 * 1024;
+/// Distinct journalctl error messages logged; each is logged once.
+const MAX_LOGGED_STDERR_KINDS: usize = 8;
+
 async fn run_journald(state: Arc<OperatorState>, _started_at: DateTime<Utc>) {
+    let units = log_units_from_env().unwrap_or_default();
+    let mut failures = 0u32;
     loop {
-        if let Err(error) = read_journal_once(&state).await {
+        let mut progressed = false;
+        if let Err(error) = read_journal_once(&state, &units, &mut progressed).await {
             if !state.cancel.is_cancelled() {
                 warn!(error = %error, "Journal reader failed; will restart");
+            }
+        }
+        failures = if progressed { 0 } else { failures + 1 };
+        if failures >= CURSOR_FAILURES_BEFORE_RESET {
+            failures = 0;
+            // The journal may no longer accept the saved cursor (rotated away, or corrupt).
+            if matches!(
+                state
+                    .db
+                    .get_pod_log_offset(JOURNALD_KEY, "journal", 0)
+                    .await,
+                Ok(Some(_))
+            ) && state
+                .db
+                .delete_pod_log_offset(JOURNALD_KEY, "journal", 0)
+                .await
+                .is_ok()
+            {
+                warn!("The saved journal position is not accepted by the journal; continuing from now");
             }
         }
         tokio::select! {
@@ -219,7 +306,100 @@ async fn run_journald(state: Arc<OperatorState>, _started_at: DateTime<Utc>) {
     }
 }
 
-async fn read_journal_once(state: &OperatorState) -> Result<()> {
+/// One line read within a size bound.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct BoundedLine {
+    /// At most the bound's bytes of the line (without the newline).
+    pub bytes: Vec<u8>,
+    /// The line was longer than the bound; the rest was read and dropped.
+    pub truncated: bool,
+}
+
+/// Read up to the next newline, keeping at most `max` bytes; the rest of a
+/// longer line is consumed so the next call starts at the next line.
+pub(crate) async fn read_bounded_line<R>(
+    reader: &mut R,
+    max: usize,
+) -> std::io::Result<Option<BoundedLine>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    let mut read_any = false;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(read_any.then_some(BoundedLine { bytes, truncated }));
+        }
+        read_any = true;
+        let (chunk, found_newline) = match available.iter().position(|byte| *byte == b'\n') {
+            Some(index) => (&available[..index], true),
+            None => (available, false),
+        };
+        let room = max.saturating_sub(bytes.len());
+        if chunk.len() > room {
+            truncated = true;
+        }
+        bytes.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        let consumed = chunk.len() + usize::from(found_newline);
+        reader.consume(consumed);
+        if found_newline {
+            return Ok(Some(BoundedLine { bytes, truncated }));
+        }
+    }
+}
+
+/// The value of a string field near the start of a journal JSON line. journalctl
+/// prints `__CURSOR` first, so it survives in the kept part of an oversize line.
+pub(crate) fn leading_string_field(prefix: &str, key: &str) -> Option<String> {
+    let marker = format!("\"{key}\"");
+    let after = &prefix[prefix.find(&marker)? + marker.len()..];
+    let after = after.trim_start().strip_prefix(':')?.trim_start();
+    let after = after.strip_prefix('"')?;
+    let end = after.find('"')?;
+    Some(after[..end].to_string())
+}
+
+/// A record for a journal entry that was too long to read, so the gap is visible.
+fn oversize_entry(prefix: &str) -> Option<JournalEntry> {
+    let cursor = leading_string_field(prefix, "__CURSOR")?;
+    let now = Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    let unit =
+        leading_string_field(prefix, "_SYSTEMD_UNIT").unwrap_or_else(|| "unknown".to_string());
+    Some(JournalEntry {
+        cursor,
+        record: PodLogRecord {
+            namespace: JOURNAL_SCOPE.to_string(),
+            pod: unit.clone(),
+            container: unit,
+            timestamp_unix_nanos: u64::try_from(now).unwrap_or_default(),
+            body: format!(
+                "[journal entry over {} bytes dropped]",
+                MAX_JOURNAL_LINE_BYTES
+            ),
+        },
+    })
+}
+
+/// Log each distinct journalctl error once, so a persistent failure does not
+/// fill the log.
+async fn log_journalctl_stderr(stderr: tokio::process::ChildStderr) {
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    let mut seen: HashSet<String> = HashSet::new();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let line: String = line.chars().take(300).collect();
+        if seen.len() < MAX_LOGGED_STDERR_KINDS && seen.insert(line.clone()) {
+            warn!(message = %line, "journalctl reported");
+        }
+    }
+}
+
+async fn read_journal_once(
+    state: &OperatorState,
+    units: &[String],
+    progressed: &mut bool,
+) -> Result<()> {
     let db = &state.db;
     let deployment_id = db.get_deployment_id().await?.ok_or_else(|| {
         AlienError::new(ErrorData::PodLogReadFailed {
@@ -233,9 +413,10 @@ async fn read_journal_once(state: &OperatorState) -> Result<()> {
         .env_clear()
         .args(journalctl_args(
             saved.as_ref().map(|s| s.timestamp.as_str()),
+            units,
         ))
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     let mut child = command
         .spawn()
@@ -243,12 +424,15 @@ async fn read_journal_once(state: &OperatorState) -> Result<()> {
         .context(ErrorData::PodLogReadFailed {
             message: "could not start journalctl; the operator needs it and membership of the systemd-journal group".to_string(),
         })?;
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(log_journalctl_stderr(stderr));
+    }
     let stdout = child.stdout.take().ok_or_else(|| {
         AlienError::new(ErrorData::PodLogReadFailed {
             message: "journalctl has no output".to_string(),
         })
     })?;
-    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let mut reader = tokio::io::BufReader::new(stdout);
     let own_pid = std::process::id();
     let mut batch: Vec<PodLogRecord> = Vec::new();
     let mut batch_bytes = 0usize;
@@ -265,7 +449,7 @@ async fn read_journal_once(state: &OperatorState) -> Result<()> {
                 flush_cursor_batch(db, &deployment_id, JOURNALD_KEY, "journal", &mut batch, cursor.as_deref()).await?;
                 batch_bytes = 0;
             }
-            line = lines.next_line() => {
+            line = read_bounded_line(&mut reader, MAX_JOURNAL_LINE_BYTES) => {
                 let line = line.into_alien_error().context(ErrorData::PodLogReadFailed {
                     message: "could not read the journal".to_string(),
                 })?;
@@ -275,15 +459,19 @@ async fn read_journal_once(state: &OperatorState) -> Result<()> {
                         message: "journalctl exited".to_string(),
                     }));
                 };
+                *progressed = true;
+                let text = String::from_utf8_lossy(&line.bytes);
+                let entry = if line.truncated {
+                    oversize_entry(&text)
+                } else {
+                    parse_journal_line(&text, own_pid)
+                };
                 // The cursor advances past entries that are skipped too.
-                if let Some(entry) = parse_journal_line(&line, own_pid) {
+                if let Some(entry) = entry {
                     batch_bytes += entry.record.body.len();
                     cursor = Some(entry.cursor);
                     batch.push(entry.record);
-                } else if let Some(skipped) = serde_json::from_str::<Value>(&line)
-                    .ok()
-                    .and_then(|value| value.get("__CURSOR").and_then(Value::as_str).map(str::to_string))
-                {
+                } else if let Some(skipped) = leading_string_field(&text, "__CURSOR") {
                     cursor = Some(skipped);
                 }
                 if batch.len() >= MAX_BATCH_RECORDS || batch_bytes >= MAX_BATCH_BYTES {
@@ -612,24 +800,26 @@ mod tests {
 
     #[test]
     fn sources_parse_and_unknown_values_refuse_to_start() {
-        assert_eq!(parse_sources(None, false, true).unwrap(), None);
-        assert_eq!(parse_sources(None, true, false).unwrap(), None);
+        assert_eq!(parse_sources(None, false, true, true).unwrap(), None);
+        assert_eq!(parse_sources(None, true, false, true).unwrap(), None);
         assert_eq!(
-            parse_sources(None, true, true).unwrap(),
+            parse_sources(None, true, true, true).unwrap(),
             Some(HostLogsConfig {
                 journald: false,
                 docker: true
             })
         );
+        // An install that was not enrolled with a token collects nothing new.
+        assert_eq!(parse_sources(None, true, true, false).unwrap(), None);
         assert_eq!(
-            parse_sources(Some("journald, docker"), false, false).unwrap(),
+            parse_sources(Some("journald, docker"), false, false, false).unwrap(),
             Some(HostLogsConfig {
                 journald: true,
                 docker: true
             })
         );
-        assert_eq!(parse_sources(Some("none"), true, true).unwrap(), None);
-        let error = parse_sources(Some("journald,syslog"), false, false)
+        assert_eq!(parse_sources(Some("none"), true, true, true).unwrap(), None);
+        let error = parse_sources(Some("journald,syslog"), false, false, false)
             .unwrap_err()
             .to_string();
         assert!(error.contains("syslog"), "{error}");
@@ -656,10 +846,52 @@ mod tests {
 
     #[test]
     fn journalctl_resumes_after_the_saved_cursor_and_otherwise_starts_now() {
-        assert!(journalctl_args(None).contains(&"--lines=0".to_string()));
-        let resumed = journalctl_args(Some("s=abc;i=9"));
+        assert!(journalctl_args(None, &[]).contains(&"--lines=0".to_string()));
+        assert!(journalctl_args(None, &[]).contains(&"--all".to_string()));
+        let narrowed = journalctl_args(None, &["nginx.service".to_string()]);
+        assert!(narrowed.contains(&"--unit=nginx.service".to_string()));
+        let resumed = journalctl_args(Some("s=abc;i=9"), &[]);
         assert!(resumed.contains(&"--after-cursor=s=abc;i=9".to_string()));
         assert!(!resumed.iter().any(|arg| arg.starts_with("--lines")));
+    }
+
+    #[tokio::test]
+    async fn a_long_journal_line_is_cut_and_the_next_line_is_read_whole() {
+        let data = format!("{}\nsecond\nlast", "x".repeat(50));
+        let mut reader = tokio::io::BufReader::with_capacity(8, data.as_bytes());
+        let first = read_bounded_line(&mut reader, 10).await.unwrap().unwrap();
+        assert_eq!(first.bytes, b"xxxxxxxxxx");
+        assert!(first.truncated);
+        let second = read_bounded_line(&mut reader, 10).await.unwrap().unwrap();
+        assert_eq!(
+            (second.bytes.as_slice(), second.truncated),
+            (&b"second"[..], false)
+        );
+        let last = read_bounded_line(&mut reader, 10).await.unwrap().unwrap();
+        assert_eq!(last.bytes, b"last");
+        assert!(read_bounded_line(&mut reader, 10).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn an_oversize_entry_keeps_its_cursor_and_says_it_was_dropped() {
+        let prefix = r#"{"__CURSOR" : "s=abc;i=7","__REALTIME_TIMESTAMP":"1","_SYSTEMD_UNIT":"big.service","MESSAGE":"xxxx"#;
+        let entry = oversize_entry(prefix).unwrap();
+        assert_eq!(entry.cursor, "s=abc;i=7");
+        assert_eq!(entry.record.pod, "big.service");
+        assert!(entry.record.body.contains("dropped"));
+        assert!(oversize_entry("no cursor here").is_none());
+    }
+
+    #[test]
+    fn log_units_are_validated() {
+        assert!(parse_log_units(None).unwrap().is_empty());
+        assert_eq!(
+            parse_log_units(Some("nginx.service, ssh@1.service")).unwrap(),
+            vec!["nginx.service", "ssh@1.service"]
+        );
+        for bad in ["a b", "x;y", "--all", "a,,b", "$(id)"] {
+            assert!(parse_log_units(Some(bad)).is_err(), "{bad}");
+        }
     }
 
     fn at(seconds: i64, nanos: u32) -> DateTime<Utc> {
