@@ -6190,7 +6190,7 @@ fn readme_kubernetes_inputs(
         }
         _ => "",
     };
-    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow: delete the deployment with its data erased, wait until that finishes, then run `terraform destroy` again. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, contact your vendor.";
+    let guard_note = " If the deployment still has retained data, `terraform destroy` stops first, before removing anything, and names the order to follow. First delete the deployment and wait until its status is `teardown-required` or `deleted`; this removes the data the runtime owns, erased or kept as you chose. Data this setup owns stays protected from `terraform destroy`: when this README has a section on retaining setup data during uninstall, detach that data as it describes, then run `terraform destroy` again, and erase the detached data afterwards by its recorded IDs if you chose to erase it. A setup installed from an older module needs one `terraform apply` with this module before it has that protection; until then destroy removes the Helm release first and can stop on retained data after the Operator is gone; if destroy was run first, contact your vendor.";
     let helm = if has_registration && helm_install.is_some() {
         if product_remote_operator {
             let collector_token_requirement = if requires_remote_operator_collector_token {

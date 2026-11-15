@@ -880,7 +880,7 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
         assert!(compact.contains("management_url = var.management_url"));
         let readme = module.get("README.md").expect("README.md");
         assert!(
-            readme.contains("delete the deployment with its data erased"),
+            readme.contains("wait until its status is `teardown-required` or `deleted`"),
             "{mode} README names the erase-first order"
         );
         assert!(
@@ -1027,7 +1027,7 @@ fn destroy_guard_is_the_only_change_between_old_and_new_registered_modules() {
         assert!(old
             .iter()
             .all(|(_, contents)| !contents.contains("destroy_guard")
-                && !contents.contains("data erased")));
+                && !contents.contains("teardown-required")));
     }
 }
 
