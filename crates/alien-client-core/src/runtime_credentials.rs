@@ -82,6 +82,7 @@ pub struct RuntimeCredentials {
     client: Client,
     endpoint: Url,
     receiver: Url,
+    manager_url: String,
     audience: String,
     deployment_id: String,
     purpose: Value,
@@ -177,6 +178,7 @@ impl RuntimeCredentials {
             client,
             endpoint,
             receiver: base,
+            manager_url: config.manager_url,
             audience: config.audience,
             deployment_id: config.deployment_id,
             purpose: config.purpose,
@@ -184,6 +186,12 @@ impl RuntimeCredentials {
             clock: Arc::new(Utc::now),
             state: Mutex::new(CredentialState::default()),
         })
+    }
+
+    /// The manager URL these credentials were configured with: where they are
+    /// minted. Callers that need to reach the same manager use this origin.
+    pub fn manager_url(&self) -> &str {
+        &self.manager_url
     }
 
     /// Credentials may only be attached to their configured receiver origin.
@@ -635,6 +643,23 @@ mod tests {
             destination.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
+    }
+
+    #[test]
+    fn manager_url_is_the_configured_manager_not_the_receiver() {
+        let credentials = RuntimeCredentials::new_for_receiver(
+            RuntimeCredentialConfig {
+                manager_url: "https://manager.example/base".into(),
+                audience: "manager-identity".into(),
+                deployment_id: "deployment-one".into(),
+                purpose: json!({"type":"telemetry"}),
+            },
+            Arc::new(Proof(AtomicUsize::new(0))),
+            "/v1/identity/scoped",
+            "https://receiver.example",
+        )
+        .unwrap();
+        assert_eq!(credentials.manager_url(), "https://manager.example/base");
     }
 
     #[test]
