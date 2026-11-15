@@ -33,6 +33,7 @@ pub const DEFAULT_LEASE_WAIT_SECONDS: u64 = 25;
 /// does for any empty answer.
 pub const LEASE_WAIT_HONORED_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Shortest time between two lease request starts after a waited empty answer,
+/// Shortest time between two lease request starts after a waited empty answer
+/// or a non-empty one,
 /// so a misbehaving server cannot make the receiver spin.
 pub const LEASE_WAIT_REPOLL_FLOOR: std::time::Duration = std::time::Duration::from_millis(250);

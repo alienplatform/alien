@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -38,6 +38,7 @@ pub struct FaultInjectingKv {
     fail_next_response_store: AtomicBool,
     idempotency_get_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
     fail_wake_key_writes: AtomicBool,
+    pending_scans: AtomicUsize,
     #[allow(clippy::type_complexity)]
     after_pending_scan: HookSlot,
 }
@@ -62,8 +63,14 @@ impl FaultInjectingKv {
             fail_next_response_store: AtomicBool::new(false),
             idempotency_get_barrier: Mutex::new(None),
             fail_wake_key_writes: AtomicBool::new(false),
+            pending_scans: AtomicUsize::new(0),
             after_pending_scan: HookSlot(Mutex::new(None)),
         }
+    }
+
+    /// Number of pending-index scans made so far (leasing and cleanup).
+    pub fn pending_scans(&self) -> usize {
+        self.pending_scans.load(Ordering::SeqCst)
     }
 
     /// Arm the fault: writes of a target's lease wake key fail.
@@ -173,6 +180,7 @@ impl Kv for FaultInjectingKv {
         }
         let result = self.inner.scan_prefix(prefix, limit, cursor).await;
         if prefix.contains(":pending:") {
+            self.pending_scans.fetch_add(1, Ordering::SeqCst);
             let hook = self
                 .after_pending_scan
                 .0
