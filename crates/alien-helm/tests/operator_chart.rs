@@ -1129,7 +1129,9 @@ fn an_unknown_plugin_name_is_refused_with_the_known_names() {
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(
-        error.contains("operations.plugins") && error.contains("wigets"),
+        error.contains(
+            "operations.plugins.wigets is not a plugin of this chart. Known plugins: kubernetes, widgets"
+        ),
         "{error}"
     );
 }

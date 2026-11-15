@@ -88,7 +88,7 @@ pub fn generate_operator_chart(options: OperatorChartOptions<'_>) -> Result<Helm
     files.insert("values.yaml".to_string(), values_yaml(&options));
     files.insert(
         "values.schema.json".to_string(),
-        values_schema_json(options.plugins).map_err(|error| error.to_string())?,
+        values_schema_json().map_err(|error| error.to_string())?,
     );
     files.insert("templates/_helpers.tpl".to_string(), HELPERS.to_string());
     files.insert(
@@ -292,13 +292,7 @@ extraEnv: []
     )
 }
 
-fn values_schema_json(plugins: &[OperatorChartPlugin<'_>]) -> serde_json::Result<String> {
-    // With the built-in plugins known, an unknown name is refused at install.
-    let plugin_names = if plugins.is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::json!({"enum": plugins.iter().map(|plugin| plugin.name).collect::<Vec<_>>()})
-    };
+fn values_schema_json() -> serde_json::Result<String> {
     let schema = serde_json::json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -345,7 +339,6 @@ fn values_schema_json(plugins: &[OperatorChartPlugin<'_>]) -> serde_json::Result
                 "properties": {
                     "plugins": {
                         "type": "object",
-                        "propertyNames": plugin_names,
                         "additionalProperties": {
                             "type": "object",
                             "properties": {
@@ -503,7 +496,22 @@ fn cluster_role_template(
         }
     }
 
-    let mut yaml = String::from(
+    let mut yaml = String::new();
+    if !plugins.is_empty() {
+        // Helm's own schema wording for a bad property name points at the wrong path, so an
+        // unknown plugin name is refused here with a message the chart owns.
+        let names: Vec<&str> = plugins.iter().map(|plugin| plugin.name).collect();
+        let list = names
+            .iter()
+            .map(|name| serde_json::to_string(name).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join(" ");
+        yaml.push_str(&format!(
+            "{{{{- range $name, $_ := (default dict (.Values.operations).plugins) }}}}\n{{{{- if not (has $name (list {list})) }}}}\n{{{{- fail (printf \"operations.plugins.%s is not a plugin of this chart. Known plugins: %s\" $name {known}) }}}}\n{{{{- end }}}}\n{{{{- end }}}}\n",
+            known = serde_json::to_string(&names.join(", ")).unwrap_or_default()
+        ));
+    }
+    yaml.push_str(
         "apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n  name: {{ include \"operator.clusterRoleName\" . }}\n  labels:\n    {{- include \"operator.labels\" . | nindent 4 }}\nrules:\n",
     );
     for (scope, grant) in &rules {
