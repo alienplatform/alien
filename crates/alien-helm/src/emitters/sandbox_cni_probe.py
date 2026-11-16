@@ -82,6 +82,25 @@ def client_code(url, marker):
     ) % ENFORCEMENT_WINDOW_SECONDS
 
 
+# A successful negative result is only meaningful bracketed by working controls. The clients of
+# a stage do not depend on each other, so a stage starts them together and then waits for each:
+# on a runtime where a pod takes tens of seconds to start (a VM per pod), six one-after-the-other
+# starts do not fit in the install's wait. The `ingress-denied` pod may leave its own node; the
+# listener's ingress allow list is what refuses it.
+STAGES = [
+    [("control", False, False), ("denied", True, False), ("ingress-denied", True, False)],
+    [("control-after", False, False), ("ingress-control-after", False, True)],
+]
+
+
+def run_stages(start_client, wait_client):
+    for stage in STAGES:
+        for role, denied, recover in stage:
+            start_client(role, denied, recover)
+        for role, _, _ in stage:
+            wait_client(role)
+
+
 def main():
     namespace = os.environ["PROBE_NAMESPACE"]
     job = os.environ["PROBE_JOB"]
@@ -267,16 +286,13 @@ def main():
         authority = f"[{ip}]" if ":" in ip else ip
         url = f"http://{authority}:8080/"
         probe = client_code(url, marker)
-        # A successful negative result is only meaningful bracketed by working controls.
-        for role, denied in [("control", False), ("denied", True), ("control-after", False)]:
-            create(pods, pod(role, f"DENIED={denied!r}\n" + probe))
-            wait(role, lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        # An egress-only implementation must not pass the ingress endpoint gate: this pod may
-        # leave its own node, but the listener's ingress allow list does not admit it.
-        create(pods, pod("ingress-denied", "DENIED=True\n" + probe))
-        wait("ingress-denied", lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        create(pods, pod("ingress-control-after", "DENIED=False\nRECOVER=True\n" + probe))
-        wait("ingress-control-after", lambda p: p.get("status", {}).get("phase") == "Succeeded")
+        run_stages(
+            lambda role, denied, recover=False: create(
+                pods,
+                pod(role, f"DENIED={denied!r}\n" + ("RECOVER=True\n" if recover else "") + probe),
+            ),
+            lambda role: wait(role, lambda p: p.get("status", {}).get("phase") == "Succeeded"),
+        )
         print("NetworkPolicy enforced: ingress and egress denied requests; all controls passed")
     finally:
         failures = []

@@ -116,5 +116,34 @@ class ControlClient(unittest.TestCase):
             run(listener, DENIED=False)
 
 
+class Stages(unittest.TestCase):
+    def test_clients_of_a_stage_start_together_before_any_is_awaited(self):
+        events = []
+        probe.run_stages(
+            lambda role, denied, recover: events.append(("start", role)),
+            lambda role: events.append(("wait", role)),
+        )
+        stages = [[role for role, _, _ in stage] for stage in probe.STAGES]
+        position = 0
+        for stage in stages:
+            started = [role for kind, role in events[position:position + len(stage)] if kind == "start"]
+            self.assertEqual(started, stage)
+            position += len(stage)
+            awaited = [role for kind, role in events[position:position + len(stage)] if kind == "wait"]
+            self.assertEqual(awaited, stage)
+            position += len(stage)
+        # Two overlapping stages: pod starts cost three, not five, one after the other.
+        self.assertEqual(len(stages), 2)
+
+    def test_every_probe_role_still_runs(self):
+        roles = [role for stage in probe.STAGES for role, _, _ in stage]
+        self.assertEqual(
+            sorted(roles),
+            sorted(["control", "denied", "control-after", "ingress-denied", "ingress-control-after"]),
+        )
+        denied = {role for stage in probe.STAGES for role, d, _ in stage if d}
+        self.assertEqual(denied, {"denied", "ingress-denied"})
+
+
 if __name__ == "__main__":
     unittest.main()
