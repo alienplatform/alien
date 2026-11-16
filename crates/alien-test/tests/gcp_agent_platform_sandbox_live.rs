@@ -65,7 +65,12 @@ const TTL_SECONDS: u32 = 3600;
 /// The display-name prefix for what this run creates: `ALIEN_TEST_GCP_DISPLAY_PREFIX` when set, so
 /// a shared project can tell one operator's engines apart, else [`LIVE_PREFIX`].
 fn display_prefix() -> String {
-    std::env::var("ALIEN_TEST_GCP_DISPLAY_PREFIX").unwrap_or_else(|_| LIVE_PREFIX.to_string())
+    // An empty value counts as unset: an empty prefix would make the sweep match every engine.
+    std::env::var("ALIEN_TEST_GCP_DISPLAY_PREFIX")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| LIVE_PREFIX.to_string())
 }
 
 /// The credentials a client needs, from the same `GOOGLE_TARGET_*` variables the rest of the E2E
