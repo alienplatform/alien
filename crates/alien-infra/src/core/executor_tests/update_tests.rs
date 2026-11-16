@@ -738,8 +738,8 @@ async fn imported_kubernetes_compute_retries_namespace_verification() -> Result<
 /// Kubernetes controller, which only checks the namespace, and create no cloud fleet.
 #[cfg(feature = "kubernetes")]
 #[tokio::test]
-async fn direct_setup_frozen_pass_verifies_kubernetes_compute_without_creating_a_fleet() -> Result<()>
-{
+async fn direct_setup_frozen_pass_verifies_kubernetes_compute_without_creating_a_fleet(
+) -> Result<()> {
     let mut deployments = MockDeploymentApi::new();
     deployments
         .expect_list_deployments()

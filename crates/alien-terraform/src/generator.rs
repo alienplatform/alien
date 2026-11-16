@@ -425,11 +425,13 @@ pub(crate) fn render_terraform_module(
             stack_settings.network.clone(),
             kubernetes_network_gate.clone(),
         ) {
-            let json = serde_json::to_string(&settings).into_alien_error().map_err(|err| {
-                AlienError::new(ErrorData::JsonSerializationFailed {
-                    reason: format!("failed to serialize the network setting: {err}"),
-                })
-            })?;
+            let json = serde_json::to_string(&settings)
+                .into_alien_error()
+                .map_err(|err| {
+                    AlienError::new(ErrorData::JsonSerializationFailed {
+                        reason: format!("failed to serialize the network setting: {err}"),
+                    })
+                })?;
             conditional_network_setting = Some((gate, json));
             stack_settings.network = None;
         }

@@ -320,12 +320,14 @@ fn dynamic_topology(label: &str, cidr: Option<String>, targets_kubernetes: bool)
                 "count",
                 expr::raw(format!("{mode} != \"create-new\" ? 1 : 0")),
             ),
-            attr("name", expr::raw(format!("{mode} == \"use-default\" ? \"default\" : {subnet}"))),
-            attr("project", expr::raw("var.gcp_project")),
             attr(
-                "region",
-                expr::raw(region_expr),
+                "name",
+                expr::raw(format!(
+                    "{mode} == \"use-default\" ? \"default\" : {subnet}"
+                )),
             ),
+            attr("project", expr::raw("var.gcp_project")),
+            attr("region", expr::raw(region_expr)),
         ],
     ));
 

@@ -1207,7 +1207,10 @@ fn verifier_function_network(ctx: &EmitContext<'_>) -> Option<Expression> {
                 ("securityGroupIds", Expression::Array(Vec::new())),
                 (
                     "egress",
-                    crate::emitters::gcp::network::function_egress(&network.settings, ctx.targets_kubernetes),
+                    crate::emitters::gcp::network::function_egress(
+                        &network.settings,
+                        ctx.targets_kubernetes,
+                    ),
                 ),
             ]))),
             _ => None,

@@ -1927,7 +1927,10 @@ async fn gke_and_aks_create_and_register_a_default_network_only_with_a_created_c
                 .expect("default_network.tf"),
         );
         assert!(network.contains(NETWORK_GATE), "{target:?}: {network}");
-        assert_terraform_valid(&module, &format!("{target:?}_network_gated_on_cluster_mode"));
+        assert_terraform_valid(
+            &module,
+            &format!("{target:?}_network_gated_on_cluster_mode"),
+        );
     }
 }
 
@@ -2202,7 +2205,12 @@ async fn plan_existing_cluster(target: TerraformTarget, source: Source, asserts:
         .blocks()
         .filter(|block| block.identifier() == "variable")
         .filter(|block| !block.body().attributes().any(|a| a.key() == "default"))
-        .filter_map(|block| block.labels().first().map(|label| label.as_str().to_string()))
+        .filter_map(|block| {
+            block
+                .labels()
+                .first()
+                .map(|label| label.as_str().to_string())
+        })
         .filter(|name| name != "kubernetes_cluster_mode" && !name.contains("cluster_"))
         .map(|name| format!("{name} = \"xx\""))
         .collect::<Vec<_>>()
