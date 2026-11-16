@@ -243,6 +243,9 @@ pub(crate) fn sandbox_pod_with_labels(
             containers: vec![Container {
                 name: "sandbox".to_string(),
                 image: Some(image.clone()),
+                // A root pod runs the staged copy inside the read-only mount, not the image's own.
+                command: root_boot
+                    .then(|| vec![alien_core::sandbox_image::STAGED_AGENT_PATH.to_string()]),
                 env: container_env(sandbox, capability_public_key, root_boot),
                 volume_mounts: Some(
                     [
@@ -379,23 +382,17 @@ fn stage_protected_files(image: &str) -> Container {
     }
 }
 
+/// One directory mount, never a single-file mount: a VM-based runtime does not list a single-file
+/// bind mount in the guest's mount table, so the agent could not prove it read-only there. The
+/// agent binary sits inside this directory and the container starts it from there.
 fn protected_mounts() -> Vec<VolumeMount> {
-    vec![
-        VolumeMount {
-            name: PROTECTED_VOLUME.to_string(),
-            mount_path: alien_core::sandbox_image::AGENT_PATH.to_string(),
-            sub_path: Some(alien_core::sandbox_image::STAGED_AGENT_NAME.to_string()),
-            read_only: Some(true),
-            ..Default::default()
-        },
-        VolumeMount {
-            name: PROTECTED_VOLUME.to_string(),
-            mount_path: PROTECTED_METADATA_PATH.to_string(),
-            sub_path: Some(alien_core::sandbox_image::STAGED_METADATA_NAME.to_string()),
-            read_only: Some(true),
-            ..Default::default()
-        },
-    ]
+    vec![VolumeMount {
+        name: PROTECTED_VOLUME.to_string(),
+        mount_path: PROTECTED_METADATA_PATH.to_string(),
+        sub_path: Some(alien_core::sandbox_image::STAGED_METADATA_NAME.to_string()),
+        read_only: Some(true),
+        ..Default::default()
+    }]
 }
 
 fn plain_env(name: &str, value: String) -> EnvVar {
@@ -903,17 +900,26 @@ mod tests {
             value("ALIEN_SANDBOX_PROTECTED_MOUNTS").as_deref(),
             Some("true")
         );
-        // The agent binary and /opt/alien come from a volume mounted read-only, filled by an
-        // init container that holds no capability.
+        // The agent binary lives in /opt/alien, a directory from a volume mounted read-only and
+        // filled by an init container that holds no capability. Only directories are mounted
+        // (a VM runtime does not list single-file mounts), and the agent runs from the directory.
         let mounts = container.volume_mounts.as_ref().expect("mounts");
-        for path in ["/usr/local/bin/alien-sandbox-agent", "/opt/alien"] {
-            let mount = mounts
+        let mount = mounts
+            .iter()
+            .find(|mount| mount.mount_path == "/opt/alien")
+            .expect("/opt/alien is mounted");
+        assert_eq!(mount.read_only, Some(true));
+        assert_eq!(mount.sub_path.as_deref(), Some("opt"));
+        assert!(
+            !mounts
                 .iter()
-                .find(|mount| mount.mount_path == path)
-                .unwrap_or_else(|| panic!("{path} is mounted"));
-            assert_eq!(mount.read_only, Some(true), "{path}");
-            assert!(mount.sub_path.is_some(), "{path}");
-        }
+                .any(|mount| mount.mount_path == "/usr/local/bin/alien-sandbox-agent"),
+            "no single-file mount"
+        );
+        assert_eq!(
+            container.command,
+            Some(vec!["/opt/alien/alien-sandbox-agent".to_string()])
+        );
         let init = &spec.init_containers.expect("the staging init container")[0];
         let init_security = init.security_context.as_ref().expect("init security");
         assert_eq!(init_security.read_only_root_filesystem, Some(true));
@@ -950,6 +956,7 @@ mod tests {
                 assert_ne!(variable.name, "ALIEN_SANDBOX_PROTECTED_MOUNTS");
             }
             assert!(spec.init_containers.is_none());
+            assert!(container.command.is_none(), "a non-root pod runs the image's own entrypoint");
             assert_eq!(container.volume_mounts.as_ref().unwrap().len(), 2);
         }
     }

@@ -2,9 +2,12 @@
 //!
 //! A pod's default seccomp profile blocks `unshare`, so the agent cannot build the private mount
 //! namespace [`crate::protected_files::protect`] uses elsewhere. The Kubernetes backend instead
-//! mounts the agent binary and `/opt/alien` read-only from a volume an init container filled
-//! (see [`stage`]). The agent trusts neither the flag that selects this path nor the pod: it
-//! reads its own mount table and refuses to start unless both paths are separate read-only mounts.
+//! mounts `/opt/alien` read-only from a volume an init container filled with the image's metadata
+//! and a copy of the agent binary (see [`stage`]), and starts the agent from that directory. Only a
+//! directory is mounted: a VM-based runtime lists a directory mount in the guest's mount table but
+//! not a single-file bind mount. The agent trusts neither the flag that selects this path nor the
+//! pod: it reads its own mount table and refuses to start unless it is running from a path inside
+//! a read-only mount point.
 
 use std::{
     fs, io,
@@ -15,7 +18,7 @@ use std::{
 /// First argument that switches the binary into [`stage`] (run by the init container).
 pub use alien_core::sandbox_image::STAGE_PROTECTED_FILES_ARGUMENT as STAGE_ARGUMENT;
 use alien_core::sandbox_image::{
-    STAGED_AGENT_NAME as STAGED_BINARY, STAGED_METADATA_NAME as STAGED_METADATA,
+    STAGED_AGENT_FILE as STAGED_BINARY, STAGED_METADATA_NAME as STAGED_METADATA,
 };
 
 /// Called while single-threaded, before the supervisor's capabilities are reduced.
@@ -34,9 +37,17 @@ pub fn require(binary: &Path, metadata: &Path) -> io::Result<()> {
     })
 }
 
-/// Pure check over a `mountinfo` table: each path is exactly a mount point with the read-only flag.
+/// Pure check over a `mountinfo` table: `metadata` is exactly a mount point with the read-only
+/// flag, and the agent binary lives directly inside it.
 fn check(table: &str, binary: &Path, metadata: &Path) -> Result<(), String> {
-    for path in [binary, metadata] {
+    if binary.parent() != Some(metadata) {
+        return Err(format!(
+            "{} does not run from inside {}",
+            binary.display(),
+            metadata.display()
+        ));
+    }
+    for path in [metadata] {
         let mut found = None;
         // Later entries cover earlier ones at the same point; the last one is what is visible.
         for line in table.lines() {
@@ -76,19 +87,23 @@ fn unescape(field: &str) -> Vec<u8> {
     out
 }
 
-/// Copies this binary and the contents of `metadata` into `destination`, for the pod to mount
-/// read-only over the originals. Symlinks are refused rather than followed.
+/// Copies the contents of `metadata` and this binary into one directory of `destination`, for the
+/// pod to mount read-only at `/opt/alien`. Symlinks are refused rather than followed, and an image
+/// that already has a file where the agent goes is refused rather than overwritten.
 pub fn stage(destination: &Path, metadata: &Path) -> io::Result<()> {
-    let binary = std::env::current_exe()?;
-    fs::copy(&binary, destination.join(STAGED_BINARY))?;
-    fs::set_permissions(
-        destination.join(STAGED_BINARY),
-        fs::Permissions::from_mode(0o755),
-    )?;
     let target = destination.join(STAGED_METADATA);
     fs::create_dir_all(&target)?;
     fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
-    copy_tree(metadata, &target)
+    copy_tree(metadata, &target)?;
+    let staged = target.join(STAGED_BINARY);
+    if fs::symlink_metadata(&staged).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} already exists in the image's metadata", staged.display()),
+        ));
+    }
+    fs::copy(std::env::current_exe()?, &staged)?;
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))
 }
 
 fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
@@ -125,30 +140,38 @@ fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
 
-    const AGENT: &str = "/usr/local/bin/alien-sandbox-agent";
+    const AGENT: &str = "/opt/alien/alien-sandbox-agent";
     const META: &str = "/opt/alien";
 
-    fn table(agent: &str, meta: &str) -> String {
+    fn table(meta: &str) -> String {
         format!(
             "1 0 0:1 / / rw - overlay overlay rw\n\
-             2 1 0:2 /agent {AGENT} {agent},relatime - ext4 /dev/vda rw\n\
              3 1 0:2 /opt {META} {meta},relatime - ext4 /dev/vda rw\n"
         )
     }
 
     #[test]
-    fn both_paths_read_only_are_accepted() {
-        assert!(check(&table("ro", "ro"), Path::new(AGENT), Path::new(META)).is_ok());
+    fn the_directory_mounted_read_only_is_accepted() {
+        assert!(check(&table("ro"), Path::new(AGENT), Path::new(META)).is_ok());
+    }
+
+    #[test]
+    fn an_agent_running_from_outside_the_mount_is_refused() {
+        let error = check(
+            &table("ro"),
+            Path::new("/usr/local/bin/alien-sandbox-agent"),
+            Path::new(META),
+        )
+        .unwrap_err();
+        assert!(error.contains("does not run from inside"), "{error}");
+        assert!(check(&table("ro"), Path::new("/opt/alien/x/agent"), Path::new(META)).is_err());
     }
 
     #[test]
     fn a_writable_mount_or_a_missing_mount_is_refused() {
         let agent = Path::new(AGENT);
         let meta = Path::new(META);
-        assert!(check(&table("rw", "ro"), agent, meta)
-            .unwrap_err()
-            .contains("writable"));
-        assert!(check(&table("ro", "rw"), agent, meta)
+        assert!(check(&table("rw"), agent, meta)
             .unwrap_err()
             .contains("writable"));
         let bare = "1 0 0:1 / / ro - overlay overlay ro\n";
@@ -159,8 +182,8 @@ mod tests {
 
     #[test]
     fn a_later_writable_mount_over_a_read_only_one_is_refused() {
-        let mut stacked = table("ro", "ro");
-        stacked.push_str(&format!("4 1 0:3 / {AGENT} rw - tmpfs tmpfs rw\n"));
+        let mut stacked = table("ro");
+        stacked.push_str(&format!("4 1 0:3 / {META} rw - tmpfs tmpfs rw\n"));
         assert!(check(&stacked, Path::new(AGENT), Path::new(META)).is_err());
     }
 
@@ -184,7 +207,7 @@ mod tests {
         .unwrap();
         fs::write(meta.join("sub/x"), b"x").unwrap();
         stage(&out, &meta).unwrap();
-        assert!(out.join(STAGED_BINARY).is_file());
+        assert!(out.join(STAGED_METADATA).join(STAGED_BINARY).is_file());
         let staged = out.join(STAGED_METADATA).join("image-command.json");
         assert_eq!(fs::read(&staged).unwrap(), b"{}");
         assert_eq!(
@@ -196,5 +219,17 @@ mod tests {
         let out2 = temp.path().join("out2");
         fs::create_dir(&out2).unwrap();
         assert!(stage(&out2, &meta).is_err());
+    }
+
+    #[test]
+    fn an_image_file_where_the_agent_goes_is_not_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let meta = temp.path().join("meta");
+        let out = temp.path().join("out");
+        fs::create_dir_all(&meta).unwrap();
+        fs::create_dir(&out).unwrap();
+        fs::write(meta.join(STAGED_BINARY), b"image file").unwrap();
+        let error = stage(&out, &meta).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
     }
 }
