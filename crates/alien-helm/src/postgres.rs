@@ -12,7 +12,10 @@ pub(crate) fn values(stack: &Stack) -> Value {
         Some((id.clone(), json!({
             "enabled": false,
             "existingPasswordSecret": "",
-            "recordedImage": "",
+            // Defaults to the image this chart ships, so a render without cluster
+            // access (Argo CD) needs no value. Set it to the retained volume's
+            // `alien.dev/postgres-image` annotation to pin another image.
+            "recordedImage": format!("pgvector/pgvector:pg{}-bookworm", database.version),
             "image": {"repository": "pgvector/pgvector", "tag": format!("pg{}-bookworm", database.version)},
             "storage": kubernetes_size(&database.storage, false),
             "storageClassName": "",
@@ -93,6 +96,13 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
+{{- /* Without cluster access the installed image can't be read, so recordedImage
+(default: the image this chart ships) stands in for it. A wrong image cannot corrupt
+data: the database server reads PG_VERSION in the data directory at start and exits
+with "database files are incompatible with server" when the major version differs
+(the image entrypoint only initialises a directory that has no PG_VERSION). The Pod
+crash-loops with the data intact. With cluster access the PVC annotation check above
+applies unchanged. */ -}}
 {{- if not (lookup "v1" "Secret" $.Release.Namespace "") }}
   {{- $recordedImage := required (printf "Cannot verify the installed Postgres image offline; set postgres.%s.recordedImage to the retained PVC alien.dev/postgres-image annotation (for a fresh database, pin the initial image)" $id) $database.recordedImage }}
   {{- if ne (first (splitList "@" $recordedImage)) (first (splitList "@" $desiredImage)) }}
@@ -212,7 +222,7 @@ pub(crate) const README: &str = r#"
 
 Set `postgres.<resource>.enabled: true` to provision a Frozen Postgres resource as a single-instance StatefulSet with pgvector and a persistent volume. Database provisioning is off by default so existing database bindings remain in use. Enable it only when no database is supplied by your installation or management configuration. Helm owns these databases; application releases do not replace them. The cluster needs a default StorageClass, or set `postgres.<resource>.storageClassName` before installing. Storage encryption comes from that StorageClass. For high availability or a separately managed encryption key, use your own database.
 
-The Operator creates the database password once in its own Secret (`<release>-operator`) and reuses it; the chart renders no password, so the same values render the same manifests with or without cluster access. The database Pod starts once that Secret exists. To manage the password yourself, set `postgres.<resource>.existingPasswordSecret` to a Secret with a `password` key; create it before the database starts, and the chart never rewrites it. Renders without cluster access (Argo CD) also require `postgres.<resource>.recordedImage`: copy the retained PVC’s `alien.dev/postgres-image` annotation into this value and keep it unchanged across releases. For a fresh database, pin the initial `repository:tag`. The desired image must match this pin (digest-only refreshes of the same tag remain allowed). Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
+The Operator creates the database password once in its own Secret (`<release>-operator`) and reuses it; the chart renders no password, so the same values render the same manifests with or without cluster access. The database Pod starts once that Secret exists. To manage the password yourself, set `postgres.<resource>.existingPasswordSecret` to a Secret with a `password` key; create it before the database starts, and the chart never rewrites it. Renders without cluster access (Argo CD) compare the image with `postgres.<resource>.recordedImage`, which defaults to the image this chart ships; if the retained PVC runs another image, copy its `alien.dev/postgres-image` annotation into this value and keep it unchanged across releases. The desired image must match this pin (digest-only refreshes of the same tag remain allowed). Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
 
 To use your own PostgreSQL, create its password Secret in the installation namespace first, then set an external binding:
 

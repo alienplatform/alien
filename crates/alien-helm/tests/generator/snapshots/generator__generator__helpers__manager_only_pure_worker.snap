@@ -771,7 +771,7 @@ postgres: {}
         "properties": {
           "enabled": { "type": "boolean", "description": "Run this database in the cluster as a StatefulSet. Off by default: supply an infrastructure binding instead." },
           "existingPasswordSecret": { "type": "string", "description": "Secret you manage, with a `password` key, used instead of the password the Operator creates for this database." },
-          "recordedImage": { "type": "string", "description": "The retained PVC's alien.dev/postgres-image annotation. Required for offline rendering." },
+          "recordedImage": { "type": "string", "description": "The retained PVC's alien.dev/postgres-image annotation. Defaults to the shipped image; set it when the retained volume runs another image and the chart is rendered without cluster access." },
           "image": {
             "type": "object",
             "additionalProperties": false,
@@ -3588,6 +3588,13 @@ WARNING: the management URL {{ $managementUrl }} is not https. The Operator send
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
+{{- /* Without cluster access the installed image can't be read, so recordedImage
+(default: the image this chart ships) stands in for it. A wrong image cannot corrupt
+data: the database server reads PG_VERSION in the data directory at start and exits
+with "database files are incompatible with server" when the major version differs
+(the image entrypoint only initialises a directory that has no PG_VERSION). The Pod
+crash-loops with the data intact. With cluster access the PVC annotation check above
+applies unchanged. */ -}}
 {{- if not (lookup "v1" "Secret" $.Release.Namespace "") }}
   {{- $recordedImage := required (printf "Cannot verify the installed Postgres image offline; set postgres.%s.recordedImage to the retained PVC alien.dev/postgres-image annotation (for a fresh database, pin the initial image)" $id) $database.recordedImage }}
   {{- if ne (first (splitList "@" $recordedImage)) (first (splitList "@" $desiredImage)) }}

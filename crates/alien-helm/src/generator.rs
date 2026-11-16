@@ -5390,7 +5390,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "properties": {
           "enabled": { "type": "boolean", "description": "Run this database in the cluster as a StatefulSet. Off by default: supply an infrastructure binding instead." },
           "existingPasswordSecret": { "type": "string", "description": "Secret you manage, with a `password` key, used instead of the password the Operator creates for this database." },
-          "recordedImage": { "type": "string", "description": "The retained PVC's alien.dev/postgres-image annotation. Required for offline rendering." },
+          "recordedImage": { "type": "string", "description": "The retained PVC's alien.dev/postgres-image annotation. Defaults to the shipped image; set it when the retained volume runs another image and the chart is rendered without cluster access." },
           "image": {
             "type": "object",
             "additionalProperties": false,
@@ -10189,20 +10189,27 @@ mod tests {
             "app",
         )
         .assert_ok("same image tag with a refreshed digest");
+        // No recordedImage: offline rendering pins the shipped image and needs no value.
         values["postgres"]["database"]
             .as_object_mut()
             .unwrap()
             .remove("recordedImage");
-        let missing = crate::test_utils::helm_template_for_release(
+        values["postgres"]["database"]["image"]["tag"] = "pg17-bookworm".into();
+        crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(&values.to_string()),
+            "app",
+        )
+        .assert_ok("offline render of the shipped image without recordedImage");
+        // Changing the image without recordedImage is still refused.
+        values["postgres"]["database"]["image"]["tag"] = "pg18-bookworm".into();
+        let moved = crate::test_utils::helm_template_for_release(
             &chart.files,
             Some(&values.to_string()),
             "app",
         );
-        assert!(
-            !missing.is_ok(),
-            "offline render needs an explicit recorded image"
-        );
-        assert!(missing.stderr.contains("recordedImage"));
+        assert!(!moved.is_ok(), "an image change offline must be refused");
+        assert!(moved.stderr.contains("recordedImage"));
     }
 
     #[test]
