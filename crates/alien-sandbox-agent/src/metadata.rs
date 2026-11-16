@@ -496,32 +496,32 @@ fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &st
     else {
         return broken("an unparseable status line");
     };
-    // A reply counts only when it is complete. When more than the read limit arrived the rest is
-    // not read on purpose, and the reply is judged on what came (data stays data).
-    let limit_reached = raw.len() >= MAX_REPLY;
-    if !limit_reached {
-        // A read error or timeout after the headers means the body may be cut off.
-        if let Err(error) = read {
-            return Reply::Broken(format!("the reply was cut off after its headers ({error})"));
-        }
-        let body_complete = match framing(&head) {
-            Framing::Length(Some(length)) => body_bytes.len() == length,
-            Framing::Length(None) => true, // delimited by a clean end of stream
-            Framing::Chunked => dechunk(body_bytes).is_some(),
-            Framing::Invalid => false,
-        };
-        if !body_complete {
-            return broken("a body that does not match its declared framing");
-        }
+    // A reply counts only when it is complete. One that fills the read limit is not: the rest was
+    // never seen, so it cannot be shown to hold nothing.
+    if raw.len() >= MAX_REPLY {
+        return broken("a reply larger than the read limit");
+    }
+    // A read error or timeout after the headers means the body may be cut off.
+    if let Err(error) = read {
+        return Reply::Broken(format!("the reply was cut off after its headers ({error})"));
+    }
+    let body_complete = match framing(&head) {
+        Framing::Length(Some(length)) => body_bytes.len() == length,
+        Framing::Length(None) => true, // delimited by a clean end of stream
+        Framing::Chunked => dechunk(body_bytes).is_some(),
+        Framing::Invalid => false,
+    };
+    if !body_complete {
+        return broken("a body that does not match its declared framing");
     }
     let body = match framing(&head) {
-        Framing::Chunked if !limit_reached => dechunk(body_bytes).unwrap_or_default(),
+        Framing::Chunked => dechunk(body_bytes).unwrap_or_default(),
         _ => body_bytes.to_vec(),
     };
     Reply::Status(code, String::from_utf8_lossy(&body).to_string(), head)
 }
 
-/// The most of a reply that is read.
+/// The most of a reply that is read; a reply that reaches it fails the check.
 const MAX_REPLY: usize = 64 * 1024;
 
 enum Framing {
@@ -1369,5 +1369,35 @@ mod tests {
         assert_eq!(dechunk(b"3\r\nabc\r\n"), None);
         assert_eq!(dechunk(b"zz\r\nabc\r\n0\r\n\r\n"), None);
         assert_eq!(dechunk(b"5\r\nabc\r\n0\r\n\r\n"), None);
+    }
+
+    #[test]
+    fn a_reply_that_fills_the_read_limit_fails_closed() {
+        // A 2xx listing that is only `placement/` lines but does not fit the limit: the rest was
+        // never seen.
+        let body = "placement/\n".repeat(MAX_REPLY / 11 + 10);
+        let reply: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+        let found = check(raw_server(reply, false)).unwrap_err();
+        assert!(found.unexpected.unwrap().contains("read limit"));
+        // A refusal that large fails too.
+        let reply: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+        assert!(check(raw_server(reply, false))
+            .unwrap_err()
+            .unexpected
+            .is_some());
     }
 }
