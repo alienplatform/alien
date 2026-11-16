@@ -302,6 +302,8 @@ fn blank_images(stack: &Stack) -> Stack {
         set_commands_capability_file(&mut blanked, &id, false);
         set_worker_identity_exchange(&mut blanked, &id, false);
         set_compute_image(&mut blanked, &id, String::new());
+        // Each partial records only the architectures it built.
+        crate::built_architectures::set(&mut blanked, &id, Vec::new());
     }
     blanked
 }
@@ -944,6 +946,51 @@ mod tests {
         );
         assert!(merged_dir.join("linux-aarch64.oci.tar").exists());
         assert!(merged_dir.join("linux-x64.oci.tar").exists());
+    }
+
+    #[test]
+    fn merges_partials_that_record_different_built_architectures() {
+        let root = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        write_partial(
+            root.path(),
+            "arm",
+            "kubernetes",
+            "web",
+            "web-aaaa1111",
+            &[("linux-aarch64.oci.tar", b"arm")],
+        );
+        write_partial(
+            root.path(),
+            "x64",
+            "kubernetes",
+            "web",
+            "web-bbbb2222",
+            &[("linux-x64.oci.tar", b"x64")],
+        );
+        for (partial, architecture) in [
+            ("arm", alien_core::instance_catalog::Architecture::Arm64),
+            ("x64", alien_core::instance_catalog::Architecture::X86_64),
+        ] {
+            let path = root
+                .path()
+                .join(partial)
+                .join("build/kubernetes/stack.json");
+            let mut stack = read_stack(&path).unwrap();
+            crate::built_architectures::set(&mut stack, "web", vec![architecture]);
+            write_stack(&path, &stack).unwrap();
+        }
+
+        merge_build_outputs(root.path(), out.path()).unwrap();
+
+        let merged = read_stack(&out.path().join("build/kubernetes/stack.json")).unwrap();
+        assert_eq!(
+            crate::built_architectures::recorded(&merged, "web"),
+            vec![
+                alien_core::instance_catalog::Architecture::Arm64,
+                alien_core::instance_catalog::Architecture::X86_64
+            ]
+        );
     }
 
     #[test]
