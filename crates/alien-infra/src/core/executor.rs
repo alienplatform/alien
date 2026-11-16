@@ -253,7 +253,7 @@ fn controller_platform_for_entry(
 /// bindings and links to them, cloud permissions), so its API or identity is required. A
 /// Kubernetes stack with only Kubernetes-native resources (containers, pools, sandboxes) is
 /// plain Kubernetes: the base cloud is only a label.
-pub(crate) fn stack_needs_base_cloud(
+pub fn stack_needs_base_cloud(
     stack: &alien_core::Stack,
     stack_platform: Platform,
     base_platform: Option<Platform>,

@@ -8,7 +8,7 @@ mod registry;
 pub use registry::*;
 mod executor;
 pub use executor::{
-    allow_denied_replaces_to_retry, PlanResult, RunningObservation, RunningResourcePolicy,
+    allow_denied_replaces_to_retry, stack_needs_base_cloud, PlanResult, RunningObservation, RunningResourcePolicy,
     StackExecutor, StepResult, REPLACE_DELETE_DENIED_CODE,
 };
 

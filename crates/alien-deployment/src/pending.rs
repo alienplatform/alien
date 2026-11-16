@@ -188,8 +188,13 @@ pub async fn handle_pending(
     // on base cloud infrastructure; collect the base cloud environment while
     // keeping the deployment stack platform as Kubernetes.
     let environment_info =
-        collect_deployment_environment_info(current.platform, config.base_platform, &client_config)
-            .await?;
+        collect_deployment_environment_info(
+            current.platform,
+            config.base_platform,
+            &client_config,
+            alien_infra::stack_needs_base_cloud(&target_stack, current.platform, config.base_platform),
+        )
+        .await?;
 
     // Step 2.5: Record the frozen-gate answers, then drop gated setup
     // resources the deployer declined, BEFORE the mutations: a declined
@@ -718,9 +723,32 @@ async fn collect_deployment_environment_info(
     platform: Platform,
     base_platform: Option<Platform>,
     client_config: &ClientConfig,
+    stack_needs_base_cloud: bool,
 ) -> Result<Option<EnvironmentInfo>> {
     if !should_collect_environment_info(platform, base_platform) {
         return Ok(None);
+    }
+
+    // The Operator runs a Kubernetes stack as plain Kubernetes when it could not build the base
+    // cloud's client (`ClientConfig::Kubernetes`). That is fine while the stack has no resource on
+    // the base cloud: there is no cloud environment to collect. When the stack needs the cloud,
+    // say what is missing instead of a bare "client config missing".
+    if let (Some(base), ClientConfig::Kubernetes(_)) = (base_platform, client_config) {
+        if !stack_needs_base_cloud {
+            info!(
+                base_platform = ?base,
+                "Base cloud client unavailable and the stack has no resource on it; \
+                 skipping base cloud environment collection"
+            );
+            return Ok(None);
+        }
+        return Err(AlienError::new(alien_infra::ErrorData::BaseCloudUnavailable {
+            required_platform: base,
+        }))
+        .context(ErrorData::EnvironmentInfoCollectionFailed {
+            platform: format!("{:?}", base),
+            reason: "The base cloud client is unavailable".to_string(),
+        });
     }
 
     let (environment_platform, environment_client_config) =
@@ -2065,6 +2093,7 @@ mod tests {
             Platform::Kubernetes,
             Some(Platform::Test),
             &client_config,
+            false,
         )
         .await
         .expect("cloud-backed Kubernetes should collect its base environment");
@@ -2074,7 +2103,7 @@ mod tests {
     #[tokio::test]
     async fn machines_skips_environment_collection() {
         let environment_info =
-            collect_deployment_environment_info(Platform::Machines, None, &ClientConfig::Test)
+            collect_deployment_environment_info(Platform::Machines, None, &ClientConfig::Test, false)
                 .await
                 .expect("machines should not require a cloud client config");
 
@@ -2088,10 +2117,45 @@ mod tests {
             additional_headers: None,
         }));
         let environment_info =
-            collect_deployment_environment_info(Platform::Kubernetes, None, &client_config)
+            collect_deployment_environment_info(Platform::Kubernetes, None, &client_config, false)
                 .await
                 .expect("external Kubernetes has no backing cloud environment");
 
         assert!(environment_info.is_none());
+    }
+
+    fn plain_kubernetes() -> ClientConfig {
+        ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+            namespace: Some("alien-test".to_string()),
+            additional_headers: None,
+        }))
+    }
+
+    #[tokio::test]
+    async fn a_base_cloud_without_a_client_is_skipped_when_the_stack_has_no_cloud_resource() {
+        let info = collect_deployment_environment_info(
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &plain_kubernetes(),
+            false,
+        )
+        .await
+        .expect("a containers-only stack runs as plain Kubernetes");
+        assert!(info.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_base_cloud_without_a_client_fails_with_what_to_set_when_the_stack_needs_it() {
+        let error = collect_deployment_environment_info(
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &plain_kubernetes(),
+            true,
+        )
+        .await
+        .expect_err("a stack with cloud resources needs the cloud");
+        let json = serde_json::to_string(&error).unwrap();
+        assert!(json.contains("BASE_CLOUD_UNAVAILABLE"), "{json}");
+        assert!(json.contains("basePlatformConfig.aws.region"), "{json}");
     }
 }
