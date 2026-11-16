@@ -1216,29 +1216,37 @@ mod base_cloud_client_tests {
 
     /// A Kubernetes deployment whose base cloud has no project, region or credentials
     /// still gets a Kubernetes client: nothing in a plain Kubernetes stack needs the cloud.
-    #[tokio::test]
-    async fn a_base_cloud_without_credentials_runs_as_plain_kubernetes() {
-        for name in [
-            "GCP_PROJECT_ID",
-            "GOOGLE_CLOUD_PROJECT",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-            "GCP_SERVICE_ACCOUNT_KEY",
-            "GOOGLE_SERVICE_ACCOUNT_KEY",
-        ] {
-            std::env::remove_var(name);
-        }
-        // Don't wait for a metadata server that is not there.
-        std::env::set_var("GCE_METADATA_HOST", "127.0.0.1:9");
-        let config = resolve_client_config(
-            Platform::Kubernetes,
-            Some(Platform::Gcp),
-            "/tmp/unused",
-            Some("alien".to_string()),
-            None,
-        )
-        .await
-        .expect("a missing base cloud must not stop the deployment");
-        assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+    #[test]
+    fn a_base_cloud_without_credentials_runs_as_plain_kubernetes() {
+        // `with_vars` holds a process-wide lock and restores the variables, so this cannot
+        // race another test that sets environment variables.
+        temp_env::with_vars(
+            [
+                ("GCP_PROJECT_ID", None),
+                ("GOOGLE_CLOUD_PROJECT", None),
+                ("GOOGLE_APPLICATION_CREDENTIALS", None),
+                ("GCP_SERVICE_ACCOUNT_KEY", None),
+                ("GOOGLE_SERVICE_ACCOUNT_KEY", None),
+                // Don't wait for a metadata server that is not there.
+                ("GCE_METADATA_HOST", Some("127.0.0.1:9")),
+            ],
+            || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let config = runtime
+                    .block_on(resolve_client_config(
+                        Platform::Kubernetes,
+                        Some(Platform::Gcp),
+                        "/tmp/unused",
+                        Some("alien".to_string()),
+                        None,
+                    ))
+                    .expect("a missing base cloud must not stop the deployment");
+                assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+            },
+        );
     }
 }
 
