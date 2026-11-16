@@ -7,7 +7,7 @@ use alien_core::{
 };
 use alien_error::AlienError;
 use alien_error::Context;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Prepare a re-runnable direct setup without replacing the existing cloud
 /// state. The caller must hold the deployment lock and supply setup credentials.
@@ -759,20 +759,32 @@ async fn collect_deployment_environment_info(
         });
     }
 
-    let (environment_platform, environment_client_config) =
-        environment_collection_context(platform, base_platform, client_config)?;
-    let environment_info =
+    let collected = async {
+        let (environment_platform, environment_client_config) =
+            environment_collection_context(platform, base_platform, client_config)?;
         crate::helpers::collect_environment_info(environment_platform, &environment_client_config)
             .await
             .context(ErrorData::EnvironmentInfoCollectionFailed {
                 platform: format!("{:?}", environment_platform),
                 reason: "Failed to collect cloud environment details".to_string(),
-            })?;
+            })
+    }
+    .await;
+    let environment_info = match collected {
+        Ok(info) => info,
+        // A Kubernetes stack with nothing on the base cloud does not need its environment
+        // details (for example when the cloud identity is configured but does not authenticate).
+        Err(error) if platform == Platform::Kubernetes && !stack_needs_base_cloud => {
+            warn!(
+                error = %error,
+                "Could not collect the base cloud environment; the stack has no resource on it, continuing as plain Kubernetes"
+            );
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
 
-    info!(
-        "Collected environment info for platform {:?}",
-        environment_platform
-    );
+    info!("Collected environment info for the base platform");
 
     Ok(Some(environment_info))
 }
@@ -2169,5 +2181,29 @@ mod tests {
         let json = serde_json::to_string(&error).unwrap();
         assert!(json.contains("BASE_CLOUD_UNAVAILABLE"), "{json}");
         assert!(json.contains("basePlatformConfig.aws.region"), "{json}");
+    }
+
+    #[tokio::test]
+    async fn a_cloud_that_does_not_resolve_is_skipped_when_the_stack_has_no_cloud_resource() {
+        // The client config carries no config for the base cloud: collection fails.
+        let broken = ClientConfig::Test;
+        let skipped = collect_deployment_environment_info(
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &broken,
+            false,
+        )
+        .await
+        .expect("a stack with nothing on the cloud continues");
+        assert!(skipped.is_none());
+
+        collect_deployment_environment_info(
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &broken,
+            true,
+        )
+        .await
+        .expect_err("a stack that needs the cloud still fails");
     }
 }
