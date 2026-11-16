@@ -258,9 +258,36 @@ async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Durat
         }
         Err(e) => {
             error!(error = %e, "Deployment failed");
+            if let Err(report_error) = record_pass_error(state, &e).await {
+                warn!(error = %report_error, "Could not record the deployment error");
+            }
             interval
         }
     }
+}
+
+/// Make an error raised outside the step loop visible in the deployment's state, so
+/// it reaches the manager and the API. Errors inside the step loop already do: they
+/// fail the deployment. The status is kept, so the next pass retries.
+async fn record_pass_error(state: &OperatorState, error: &AlienError<ErrorData>) -> Result<()> {
+    let Some(mut current) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    if current.target_release.is_none()
+        || current.status.is_failed()
+        || matches!(current.status, DeploymentStatus::Running)
+    {
+        return Ok(());
+    }
+    let recorded = error.clone().into_generic();
+    if current.error.as_ref().map(|e| (&e.code, &e.message)) == Some((&recorded.code, &recorded.message))
+    {
+        return Ok(());
+    }
+    current.error = Some(recorded);
+    state.db.set_deployment_state(&current).await?;
+    state.db.request_sync();
+    Ok(())
 }
 
 /// Run deployment steps continuously until synced or long delay.
@@ -1084,6 +1111,48 @@ pub(super) async fn enrich_config(
     Ok(config)
 }
 
+/// How long a failed base cloud client resolution is remembered. Resolving the AWS
+/// region from IMDS waits for a timeout, and every deployment pass would pay it again.
+const BASE_CLOUD_RETRY_AFTER: Duration = Duration::from_secs(300);
+
+static BASE_CLOUD_FAILURE: std::sync::Mutex<Option<(Platform, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+
+/// The base cloud client, or `None` when its region or credentials cannot be resolved.
+/// The reason is logged once per failure window.
+async fn base_cloud_client(base_platform: Platform) -> Option<ClientConfig> {
+    let recently_failed = BASE_CLOUD_FAILURE
+        .lock()
+        .ok()
+        .and_then(|failure| *failure)
+        .is_some_and(|(platform, at)| {
+            platform == base_platform && at.elapsed() < BASE_CLOUD_RETRY_AFTER
+        });
+    if recently_failed {
+        return None;
+    }
+    match ClientConfig::from_std_env(base_platform).await {
+        Ok(cloud) => {
+            if let Ok(mut failure) = BASE_CLOUD_FAILURE.lock() {
+                *failure = None;
+            }
+            Some(cloud)
+        }
+        Err(error) => {
+            warn!(
+                base_platform = %base_platform,
+                error = %error,
+                retry_after_secs = BASE_CLOUD_RETRY_AFTER.as_secs(),
+                "Base cloud client unavailable; running as plain Kubernetes"
+            );
+            if let Ok(mut failure) = BASE_CLOUD_FAILURE.lock() {
+                *failure = Some((base_platform, std::time::Instant::now()));
+            }
+            None
+        }
+    }
+}
+
 /// Resolve client config based on platform
 pub(super) async fn resolve_client_config(
     platform: Platform,
@@ -1098,19 +1167,18 @@ pub(super) async fn resolve_client_config(
                     namespace,
                     additional_headers: None,
             };
+            // The base cloud is a label for the cluster until a resource needs the
+            // cloud's API. Without its region or credentials the deployment still
+            // runs as plain Kubernetes; a resource that needs the cloud fails with
+            // `BaseCloudUnavailable`, which reaches the manager as the deployment's error.
             if let Some(base_platform) = base_platform {
-                let cloud = ClientConfig::from_std_env(base_platform)
-                    .await
-                    .context(ErrorData::ConfigurationError {
-                        message: format!(
-                            "Failed to create {} base client config for Kubernetes deployment",
-                            base_platform
-                        ),
-                    })?;
-                Ok(ClientConfig::KubernetesCloud {
-                    kubernetes: Box::new(kubernetes),
-                    cloud: Box::new(cloud),
-                })
+                match base_cloud_client(base_platform).await {
+                    Some(cloud) => Ok(ClientConfig::KubernetesCloud {
+                        kubernetes: Box::new(kubernetes),
+                        cloud: Box::new(cloud),
+                    }),
+                    None => Ok(ClientConfig::Kubernetes(Box::new(kubernetes))),
+                }
             } else {
                 Ok(ClientConfig::Kubernetes(Box::new(kubernetes)))
             }
@@ -1138,6 +1206,39 @@ pub(super) async fn resolve_client_config(
                     ),
                 })
         }
+    }
+}
+
+#[cfg(test)]
+mod base_cloud_client_tests {
+    use super::resolve_client_config;
+    use alien_core::{ClientConfig, Platform};
+
+    /// A Kubernetes deployment whose base cloud has no project, region or credentials
+    /// still gets a Kubernetes client: nothing in a plain Kubernetes stack needs the cloud.
+    #[tokio::test]
+    async fn a_base_cloud_without_credentials_runs_as_plain_kubernetes() {
+        for name in [
+            "GCP_PROJECT_ID",
+            "GOOGLE_CLOUD_PROJECT",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GCP_SERVICE_ACCOUNT_KEY",
+            "GOOGLE_SERVICE_ACCOUNT_KEY",
+        ] {
+            std::env::remove_var(name);
+        }
+        // Don't wait for a metadata server that is not there.
+        std::env::set_var("GCE_METADATA_HOST", "127.0.0.1:9");
+        let config = resolve_client_config(
+            Platform::Kubernetes,
+            Some(Platform::Gcp),
+            "/tmp/unused",
+            Some("alien".to_string()),
+            None,
+        )
+        .await
+        .expect("a missing base cloud must not stop the deployment");
+        assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
     }
 }
 
@@ -2348,6 +2449,39 @@ mod tests {
             .iter()
             .any(|v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN
                 || v.name == alien_core::ENV_ALIEN_COMMANDS_URL));
+    }
+
+    /// An error raised before the step loop (client setup, enrichment) leaves no step to
+    /// fail. It is recorded in the deployment state, so the manager and the API show it
+    /// instead of a deployment that waits with nothing to explain why.
+    #[tokio::test]
+    async fn an_error_before_the_step_loop_is_recorded_in_the_deployment_state() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        let mut current = state.db.get_deployment_state().await.unwrap().unwrap();
+        current.status = DeploymentStatus::Pending;
+        current.error = None;
+        current.target_release = current.current_release.clone();
+        assert!(current.target_release.is_some(), "the fixture has a release");
+        state.db.set_deployment_state(&current).await.unwrap();
+
+        let error = AlienError::new(ErrorData::ConfigurationError {
+            message: "No region for the base cloud".to_string(),
+        });
+        record_pass_error(&state, &error).await.unwrap();
+
+        let recorded = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(recorded.status, DeploymentStatus::Pending, "it keeps retrying");
+        let message = recorded.error.clone().expect("the error is visible").message;
+        assert!(message.contains("No region for the base cloud"), "{message}");
+
+        // A Running deployment keeps its health reporting; the error is not recorded there.
+        let mut running = recorded;
+        running.status = DeploymentStatus::Running;
+        running.error = None;
+        state.db.set_deployment_state(&running).await.unwrap();
+        record_pass_error(&state, &error).await.unwrap();
+        let unchanged = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(unchanged.error.is_none());
     }
 
     /// An installed Test deployment whose `worker` fails its first health refresh.

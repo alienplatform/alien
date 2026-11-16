@@ -1391,10 +1391,10 @@ impl ResourceControllerContext<'_> {
                     found_platform: cloud.platform(),
                 })),
             },
-            _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
-                required_platform: alien_core::Platform::Aws,
-                found_platform: self.client_config.platform(),
-            })),
+            _ => Err(mismatch_or_missing_base_cloud(
+                &self.client_config,
+                alien_core::Platform::Aws,
+            )),
         }
     }
 
@@ -1409,10 +1409,10 @@ impl ResourceControllerContext<'_> {
                     found_platform: cloud.platform(),
                 })),
             },
-            _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
-                required_platform: alien_core::Platform::Gcp,
-                found_platform: self.client_config.platform(),
-            })),
+            _ => Err(mismatch_or_missing_base_cloud(
+                &self.client_config,
+                alien_core::Platform::Gcp,
+            )),
         }
     }
 
@@ -1427,10 +1427,10 @@ impl ResourceControllerContext<'_> {
                     found_platform: cloud.platform(),
                 })),
             },
-            _ => Err(AlienError::new(ErrorData::ClientConfigMismatch {
-                required_platform: alien_core::Platform::Azure,
-                found_platform: self.client_config.platform(),
-            })),
+            _ => Err(mismatch_or_missing_base_cloud(
+                &self.client_config,
+                alien_core::Platform::Azure,
+            )),
         }
     }
 
@@ -1543,9 +1543,41 @@ impl ResourceControllerContext<'_> {
     }
 }
 
+/// The error for a controller that asked for a cloud client the context does not hold.
+/// A plain Kubernetes client means the Operator could not build the base cloud client.
+fn mismatch_or_missing_base_cloud(
+    client_config: &ClientConfig,
+    required_platform: alien_core::Platform,
+) -> AlienError<ErrorData> {
+    match client_config {
+        ClientConfig::Kubernetes(_) => AlienError::new(ErrorData::BaseCloudUnavailable {
+            required_platform,
+        }),
+        other => AlienError::new(ErrorData::ClientConfigMismatch {
+            required_platform,
+            found_platform: other.platform(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_plain_kubernetes_client_names_the_missing_base_cloud() {
+        let config = ClientConfig::Kubernetes(Box::new(
+            alien_core::KubernetesClientConfig::InCluster {
+                namespace: None,
+                additional_headers: None,
+            },
+        ));
+        let error = mismatch_or_missing_base_cloud(&config, Platform::Aws);
+        let message = error.to_string();
+        assert!(message.contains("base cloud"), "{message}");
+        assert!(message.contains("IRSA"), "{message}");
+        assert!(message.contains("Terraform"), "{message}");
+    }
 
     #[cfg(feature = "aws")]
     #[tokio::test]

@@ -200,6 +200,12 @@ impl KubernetesManifestTestHarness {
         self
     }
 
+    /// A cluster whose base cloud client could not be built: plain Kubernetes.
+    pub(crate) fn without_cloud(mut self) -> Self {
+        self.cloud = None;
+        self
+    }
+
     pub(crate) fn with_cloud(mut self, cloud: ClientConfig) -> Self {
         self.cloud = Some(cloud);
         self

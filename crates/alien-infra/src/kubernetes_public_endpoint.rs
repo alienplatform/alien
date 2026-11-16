@@ -4228,6 +4228,27 @@ mod tests {
             harness
         }
 
+        /// An EKS cluster whose Operator has no AWS region or credentials: importing the
+        /// certificate into ACM fails with the way to fix it, which ends in the deployment's error.
+        #[tokio::test]
+        async fn managed_acm_without_a_cloud_identity_fails_with_what_to_set() {
+            let harness = harness(MockAcmApi::new()).without_cloud();
+            let mut state = KubernetesPublicEndpointState::default();
+
+            let error = reconcile_kubernetes_public_endpoint(
+                &harness.ctx(),
+                endpoint_target(),
+                &mut state,
+            )
+            .await
+            .expect_err("no cloud identity");
+
+            assert_eq!(error.code, "BASE_CLOUD_UNAVAILABLE");
+            assert!(error.message.contains("basePlatformConfig"), "{}", error.message);
+            assert!(error.message.contains("IRSA"), "{}", error.message);
+            assert!(error.message.contains("Terraform"), "{}", error.message);
+        }
+
         fn import_token(tags: &[Tag]) -> Option<&str> {
             tags.iter()
                 .find(|tag| tag.key == "CreateAttempt")
