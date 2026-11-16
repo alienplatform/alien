@@ -655,6 +655,10 @@ mod tests {
     use regex::Regex;
     use serde_json::json;
 
+    /// Tests that set or depend on the Operator Service variable take this, so a value set by one
+    /// does not reach another running at the same time.
+    static OPERATOR_SERVICE_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     #[tokio::test]
     async fn gateway_configuration_reuses_keys_and_bootstrap_waits_for_owned_service() {
         let sandbox = Sandbox::new("subject".into())
@@ -1287,6 +1291,7 @@ mod tests {
     #[tokio::test]
     async fn the_policy_canary_is_the_operator_service_cluster_ip() {
         use crate::sandbox::{kubernetes::resolve_operator_address, kubernetes_spec};
+        let _env = OPERATOR_SERVICE_ENV.lock().await;
         let sandbox = internet_sandbox("subject");
         let stack = Stack::new("test".into())
             .add(sandbox.clone(), ResourceLifecycle::Frozen)
@@ -1986,6 +1991,8 @@ mod tests {
     /// variable, so an idle pod made with it no longer matches and is replaced.
     #[tokio::test]
     async fn an_idle_pod_made_for_internet_is_replaced_when_the_sandbox_has_no_egress() {
+        let _env = OPERATOR_SERVICE_ENV.lock().await;
+        unsafe { std::env::remove_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) };
         let mut none = internet_sandbox("subject");
         none.egress = SandboxEgress::None;
         let stack = Stack::new("test".into())
@@ -2018,6 +2025,8 @@ mod tests {
     /// serve it, and an idle pod without the gateway variable must not stay claimable meanwhile.
     #[tokio::test]
     async fn an_idle_pod_without_the_gateway_is_replaced_for_an_internet_sandbox() {
+        let _env = OPERATOR_SERVICE_ENV.lock().await;
+        unsafe { std::env::remove_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) };
         let sandbox = internet_sandbox("subject");
         let stack = Stack::new("test".into())
             .add(sandbox.clone(), ResourceLifecycle::Frozen)
