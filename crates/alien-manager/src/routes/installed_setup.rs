@@ -24,18 +24,18 @@ use super::AppState;
 use crate::auth::{Scope, Subject};
 use crate::traits::deployment_store::{DeploymentRecord, UpdateImportedDeploymentParams};
 
-/// Whether a `helm upgrade` carries a frozen resource of this type: it is realized in the
-/// cluster by the chart or the Operator, with no cloud credentials. A compute cluster always
-/// is (the chart renders it). A service account and a vault are only without a base cloud
-/// (the Operator keeps the vault as Kubernetes Secrets); with one, their controllers create a
-/// cloud identity or secret store, which needs cloud credentials.
-fn chart_renders(resource_type: &str, base_platform: Option<Platform>) -> bool {
+/// Whether a frozen resource of this type is realized in the cluster, with no cloud
+/// credentials, so a `helm upgrade` alone carries a change to it. A compute cluster and a
+/// sandbox always are: the chart renders the cluster, and a sandbox is a pod and gateway in the
+/// cluster whatever cloud it runs in (setup emits no cloud resource for one on a Kubernetes
+/// target, and its controller is always the Kubernetes one). A service account and a vault
+/// are only without a base cloud (the Operator keeps the vault as Kubernetes Secrets); with
+/// one, their controllers create a cloud identity or secret store, which needs cloud
+/// credentials.
+fn realized_in_the_cluster(resource_type: &str, base_platform: Option<Platform>) -> bool {
     match resource_type {
-        "compute-cluster" => true,
-        "service-account" => base_platform.is_none(),
-        // Without a base cloud the Operator keeps a vault as Kubernetes Secrets in the
-        // install's namespace; with one, setup creates the cloud's secret store.
-        "vault" => base_platform.is_none(),
+        "compute-cluster" | "sandbox" => true,
+        "service-account" | "vault" => base_platform.is_none(),
         _ => false,
     }
 }
@@ -180,7 +180,7 @@ fn changes_needing_cloud_setup(
         if unchanged {
             continue;
         }
-        if !chart_renders(entry.config.resource_type().as_ref(), base_platform) {
+        if !realized_in_the_cluster(entry.config.resource_type().as_ref(), base_platform) {
             return Some(format!(
                 "This release adds or changes '{id}', which lives in your cloud account"
             ));
@@ -1095,6 +1095,77 @@ pub(super) mod tests {
             reason.contains("run your cloud setup, then upgrade"),
             "{reason}"
         );
+    }
+
+    /// The release a sandbox app ships, with its one Frozen sandbox set to `egress`.
+    fn sandbox_release(egress: alien_core::SandboxEgress) -> crate::traits::ReleaseRecord {
+        let stack = Stack::new("app".to_string())
+            .add(
+                alien_core::Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "python:3.13-slim".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(egress)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        crate::traits::ReleaseRecord {
+            id: "rel_2".to_string(),
+            workspace_id: "workspace".to_string(),
+            project_id: "project".to_string(),
+            stacks: std::collections::HashMap::from([(Platform::Kubernetes, stack)]),
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
+            git_commit_sha: None,
+            git_commit_ref: None,
+            git_commit_message: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// Switching a Frozen sandbox's egress between `none` and `internet` changes what the
+    /// preflights add around it (the gateway and its links). Both stacks are what the manager
+    /// prepares, not hand-built, and a chart upgrade alone carries the switch: nothing in
+    /// the change lives in a cloud account.
+    #[tokio::test]
+    async fn a_frozen_sandbox_switching_egress_either_way_is_a_chart_upgrade() {
+        use alien_core::SandboxEgress::{Internet, None as NoEgress};
+
+        let settings = alien_core::StackSettings::default();
+        let state = StackState::new(Platform::Kubernetes);
+        for (from, to) in [(Internet, NoEgress), (NoEgress, Internet)] {
+            let mut record = deployment(baseline());
+            let prepared = prepare_target(&sandbox_release(from), &record, &settings, &state)
+                .await
+                .unwrap();
+            record.runtime_metadata.as_mut().unwrap().prepared_stack = Some(prepared);
+            let target = prepare_target(&sandbox_release(to), &record, &settings, &state)
+                .await
+                .unwrap();
+            let decision = decide(&record, &report("rel_2"), &target, None);
+            assert!(
+                matches!(decision, ReportDecision::Mint(_)),
+                "expected a mint, got {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sandbox_is_realized_in_the_cluster_on_every_base_cloud() {
+        for base in [
+            None,
+            Some(Platform::Aws),
+            Some(Platform::Gcp),
+            Some(Platform::Azure),
+        ] {
+            assert!(realized_in_the_cluster("sandbox", base));
+        }
     }
 
     #[test]
