@@ -154,11 +154,30 @@ pub struct GcpAgentPlatformSandbox {
 }
 
 /// Mints the credential the sandbox edge requires on every ingress request: a JWT signed by a
-/// service account that may execute against the engine. It gates the agent port only; it is
-/// never the preview boundary.
+/// service account that may execute against the engine.
+///
+/// It is not scoped to a port: the edge routes it to any declared port, the agent's included, and
+/// Google accepts it for `:execute`. Holding one is command access, so preview on GCP is owner
+/// access and the agent's per-port capability is a second check, never the boundary.
 #[async_trait]
 pub trait EdgeTokenSigner: Send + Sync + std::fmt::Debug {
-    async fn sign(&self) -> Result<String>;
+    async fn sign(&self) -> Result<SignedEdgeToken>;
+}
+
+/// An edge credential and when it stops working. Never log it.
+pub struct SignedEdgeToken {
+    pub jwt: String,
+    /// Unix seconds.
+    pub expires_at: i64,
+}
+
+impl std::fmt::Debug for SignedEdgeToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignedEdgeToken")
+            .field("jwt", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -216,9 +235,10 @@ impl IamEdgeTokenSigner {
 
 #[async_trait]
 impl EdgeTokenSigner for IamEdgeTokenSigner {
-    async fn sign(&self) -> Result<String> {
+    async fn sign(&self) -> Result<SignedEdgeToken> {
+        let now = chrono::Utc::now().timestamp();
         let request = alien_gcp_clients::gcp::iam::SignJwtRequest {
-            payload: self.claims(chrono::Utc::now().timestamp()),
+            payload: self.claims(now),
         };
         let response = self
             .iam
@@ -227,11 +247,63 @@ impl EdgeTokenSigner for IamEdgeTokenSigner {
             .context(ErrorData::Other {
                 message: "Failed to sign the sandbox edge credential".to_string(),
             })?;
-        Ok(response.signed_jwt)
+        Ok(SignedEdgeToken {
+            jwt: response.signed_jwt,
+            expires_at: now + EDGE_JWT_LIFETIME_SECONDS,
+        })
     }
 }
 
 impl GcpAgentPlatformSandbox {
+    async fn delete_until_gone(&self, sandbox_id: &str) -> Result<()> {
+        Self::checked_sandbox_id(TERMINATE, sandbox_id)?;
+        // Accepted, not completed: the client returns before the sandbox is gone. Returning here
+        // would report containment while the code may still run, which is the whole point of
+        // terminate — so the delete is confirmed by polling to not-found.
+        // A sandbox that is already gone is the state terminate exists to reach, so not-found is
+        // success. Narrowed to exactly that: mapping any failure to `Ok` would report containment
+        // for a sandbox another deployment owns and this one was refused.
+        if let Err(error) = self.client.delete_sandbox(&self.engine, sandbox_id).await {
+            if !is_not_found(&error) {
+                return Err(error.context(ErrorData::SandboxUnreachable {
+                    operation: TERMINATE.to_string(),
+                    reason: format!("the delete of sandbox '{sandbox_id}' was not accepted"),
+                }));
+            }
+            return Ok(());
+        }
+
+        for _ in 0..TERMINATE_POLL_ATTEMPTS {
+            match self.client.get_sandbox(&self.engine, sandbox_id).await {
+                Err(error) if is_not_found(&error) => return Ok(()),
+                // A read that fails is not a sandbox that is gone, and one throttled response must
+                // not end the poll: the attempt budget decides.
+                Err(error) => {
+                    warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone")
+                }
+                Ok(_) => {}
+            }
+            tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
+        }
+
+        Err(AlienError::new(ErrorData::SandboxUnreachable {
+            operation: TERMINATE.to_string(),
+            reason: format!(
+                "deletion of '{sandbox_id}' was accepted but the sandbox was still present after \
+                 {}s; it may still be running",
+                TERMINATE_POLL_ATTEMPTS as u64 * TERMINATE_POLL_INTERVAL.as_secs()
+            ),
+        }))
+    }
+
+    /// Drops every cached grant of one sandbox.
+    fn forget_grants(&self, sandbox_id: &str) {
+        self.grants
+            .lock()
+            .expect("grant cache lock")
+            .retain(|(sandbox, _), _| sandbox != sandbox_id);
+    }
+
     /// Enables preview: every request to the sandbox's edge carries a JWT this signer mints.
     pub fn with_preview_signer(mut self, signer: Arc<dyn EdgeTokenSigner>) -> Self {
         self.preview_signer = Some(signer);
@@ -1095,16 +1167,22 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
         let now = chrono::Utc::now().timestamp();
         let key = (sandbox_id.to_string(), port);
-        let cached = self
-            .grants
-            .lock()
-            .expect("grant cache lock")
-            .get(&key)
-            .filter(|grant| grant.expires_at - now > GRANT_REFRESH_MARGIN_SECONDS)
-            .cloned();
+        let cached = {
+            let mut grants = self.grants.lock().expect("grant cache lock");
+            // An expired entry is never read again, so it goes whenever the cache is touched.
+            grants.retain(|_, grant| grant.expires_at > now);
+            grants
+                .get(&key)
+                .filter(|grant| grant.expires_at - now > GRANT_REFRESH_MARGIN_SECONDS)
+                .cloned()
+        };
         let grant = match cached {
             Some(grant) => grant,
             None => {
+                // The grant is requested over `:execute` with this caller's own credentials, so a
+                // caller that may not run commands in the sandbox stops here: no edge credential
+                // is signed and no header is returned. The same right opens the edge, which is why
+                // preview on GCP is owner access.
                 let body = self
                     .execute_op(
                         sandbox_id,
@@ -1118,7 +1196,15 @@ impl Sandbox for GcpAgentPlatformSandbox {
                             "declaredPorts": self.preview_ports,
                         }),
                     )
-                    .await?;
+                    .await
+                    .context(ErrorData::SandboxCommandFailed {
+                        failure: "previewNeedsExecute".to_string(),
+                        reason: format!(
+                            "{PREVIEW}: preview is gated by the right to run commands in this \
+                             sandbox, and that call was not accepted. {}",
+                            alien_core::GCP_PREVIEW_IS_COMMAND_ACCESS
+                        ),
+                    })?;
                 let reply: PreviewGrantReply = serde_json::from_slice(&body).map_err(|_| {
                     AlienError::new(ErrorData::SandboxCommandFailed {
                         failure: "agentRefused".to_string(),
@@ -1138,7 +1224,8 @@ impl Sandbox for GcpAgentPlatformSandbox {
             }
         };
 
-        let edge_jwt = signer.sign().await?;
+        let edge = signer.sign().await?;
+        let edge_jwt = edge.jwt;
         let agent_port = alien_core::sandbox_image::AGENT_PORT.to_string();
         let mut headers = BTreeMap::new();
         headers.insert("Authorization".to_string(), format!("Bearer {edge_jwt}"));
@@ -1153,15 +1240,23 @@ impl Sandbox for GcpAgentPlatformSandbox {
             port.to_string(),
         );
 
+        // Measured when the response is built, after the signing round trip, so time spent
+        // getting here is not promised to the caller. Whichever of the grant and the edge
+        // credential ends first is what the caller can rely on; the edge credential lives 300
+        // seconds whatever the grant says, so callers refresh. The agent's clock decides when a
+        // grant ends and this host's may read a few seconds behind it, so the grant is also
+        // capped at the longest one the agent issues.
+        let built = chrono::Utc::now().timestamp();
+        let expires_in_seconds = (grant.expires_at - built)
+            .min(edge.expires_at - built)
+            .clamp(0, alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS)
+            as u64;
+
         Ok(PreviewCapability {
             endpoint: format!("https://{host}/v1/preview/{port}"),
             headers,
             allowed_ports: vec![port],
-            // The agent's clock decides when a grant ends; this host's may read a few seconds
-            // behind it, so the remaining time is capped at the longest a grant can live.
-            expires_in_seconds: (grant.expires_at - now)
-                .clamp(0, alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS)
-                as u64,
+            expires_in_seconds,
             // The edge consumes `Authorization` for its own credential, so the caller's bearer
             // travels in this header and the agent re-emits it towards the daemon.
             caller_authorization_header: alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER
@@ -1221,44 +1316,13 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
-        Self::checked_sandbox_id(TERMINATE, sandbox_id)?;
-        // Accepted, not completed: the client returns before the sandbox is gone. Returning here
-        // would report containment while the code may still run, which is the whole point of
-        // terminate — so the delete is confirmed by polling to not-found.
-        // A sandbox that is already gone is the state terminate exists to reach, so not-found is
-        // success. Narrowed to exactly that: mapping any failure to `Ok` would report containment
-        // for a sandbox another deployment owns and this one was refused.
-        if let Err(error) = self.client.delete_sandbox(&self.engine, sandbox_id).await {
-            if !is_not_found(&error) {
-                return Err(error.context(ErrorData::SandboxUnreachable {
-                    operation: TERMINATE.to_string(),
-                    reason: format!("the delete of sandbox '{sandbox_id}' was not accepted"),
-                }));
-            }
-            return Ok(());
+        let outcome = self.delete_until_gone(sandbox_id).await;
+        if outcome.is_ok() {
+            // Nothing can use a grant for a sandbox that is gone, and a long-lived binding that
+            // creates sandboxes continually would otherwise hold every one it ever granted.
+            self.forget_grants(sandbox_id);
         }
-
-        for _ in 0..TERMINATE_POLL_ATTEMPTS {
-            match self.client.get_sandbox(&self.engine, sandbox_id).await {
-                Err(error) if is_not_found(&error) => return Ok(()),
-                // A read that fails is not a sandbox that is gone, and one throttled response must
-                // not end the poll: the attempt budget decides.
-                Err(error) => {
-                    warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone")
-                }
-                Ok(_) => {}
-            }
-            tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
-        }
-
-        Err(AlienError::new(ErrorData::SandboxUnreachable {
-            operation: TERMINATE.to_string(),
-            reason: format!(
-                "deletion of '{sandbox_id}' was accepted but the sandbox was still present after \
-                 {}s; it may still be running",
-                TERMINATE_POLL_ATTEMPTS as u64 * TERMINATE_POLL_INTERVAL.as_secs()
-            ),
-        }))
+        outcome
     }
 }
 

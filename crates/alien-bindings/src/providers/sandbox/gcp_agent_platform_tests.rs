@@ -1844,19 +1844,41 @@ async fn terminate_of_a_sandbox_this_deployment_cannot_reach_is_still_refused() 
 
 // ---- preview ----------------------------------------------------------------------------------
 
+/// Signs a fixed credential that lives `lifetime` seconds from the call, and counts the calls so a
+/// test can prove nothing was signed for a caller that was refused first.
 #[derive(Debug)]
-struct FixedSigner;
+struct FixedSigner {
+    lifetime: i64,
+    signed: Arc<AtomicUsize>,
+}
+
+impl FixedSigner {
+    fn new() -> Self {
+        Self::living(300)
+    }
+
+    fn living(lifetime: i64) -> Self {
+        Self {
+            lifetime,
+            signed: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+}
 
 #[async_trait]
 impl EdgeTokenSigner for FixedSigner {
-    async fn sign(&self) -> Result<String> {
-        Ok("edge.jwt".to_string())
+    async fn sign(&self) -> Result<SignedEdgeToken> {
+        self.signed.fetch_add(1, Ordering::SeqCst);
+        Ok(SignedEdgeToken {
+            jwt: "edge.jwt".to_string(),
+            expires_at: chrono::Utc::now().timestamp() + self.lifetime,
+        })
     }
 }
 
 fn preview_provider(client: MockAgentPlatformApi) -> GcpAgentPlatformSandbox {
     provider(client)
-        .with_preview_signer(Arc::new(FixedSigner))
+        .with_preview_signer(Arc::new(FixedSigner::new()))
         .with_preview_ports(vec![8080, 8081, 9, 8090])
 }
 
@@ -2084,7 +2106,11 @@ async fn iam_edge_signer_signs_claims_for_the_edge_audience_with_the_service_acc
             })
         });
     let signer = IamEdgeTokenSigner::new(Arc::new(iam), "sa@p.iam.gserviceaccount.com");
-    assert_eq!(signer.sign().await.unwrap(), "signed.jwt");
+    let signed = signer.sign().await.unwrap();
+    assert_eq!(signed.jwt, "signed.jwt");
+    // The edge credential ends when its `exp` claim says, which is what the caller is told.
+    let remaining = signed.expires_at - chrono::Utc::now().timestamp();
+    assert!((295..=300).contains(&remaining), "{remaining}");
 }
 
 /// A port the declaration did not name is refused before any call to the cloud or the agent.
@@ -2114,7 +2140,13 @@ async fn preview_never_reports_more_than_the_longest_grant() {
         }))
         .unwrap())
     });
-    let preview = preview_provider(client).preview("s1", 8080).await.unwrap();
+    // A signer whose credential outlives the cap, so the cap is what ends the report.
+    let preview = provider(client)
+        .with_preview_signer(Arc::new(FixedSigner::living(5000)))
+        .with_preview_ports(vec![8080])
+        .preview("s1", 8080)
+        .await
+        .unwrap();
     assert_eq!(
         preview.expires_in_seconds,
         alien_core::sandbox_image::PREVIEW_CAPABILITY_MAX_SECONDS as u64
@@ -2201,4 +2233,140 @@ async fn a_controller_binding_mints_a_grant() {
     let preview = mint_from_binding_json(serde_json::to_value(binding).unwrap()).await;
     assert_eq!(preview.headers["Authorization"], "Bearer signed.jwt");
     assert_eq!(preview.allowed_ports, vec![8081]);
+}
+
+// ---- owner access ------------------------------------------------------------------------------
+
+/// Counts every sandbox grant the mock agent is asked for and answers with a capability of
+/// `grant_seconds`.
+fn grant_agent(grant_seconds: i64, grants: Arc<AtomicUsize>) -> MockAgentPlatformApi {
+    let expire = far_future();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    client.expect_execute().returning(move |_, _, _| {
+        grants.fetch_add(1, Ordering::SeqCst);
+        Ok(serde_json::to_vec(&json!({
+            "capability": "cap",
+            "expiresAt": chrono::Utc::now().timestamp() + grant_seconds,
+        }))
+        .unwrap())
+    });
+    client
+}
+
+/// The reported time is the sooner of the grant and the edge credential, which lives 300 seconds
+/// whatever the grant says. A caller that trusted the grant's 900 would be refused by the edge
+/// five minutes in.
+#[tokio::test]
+async fn preview_reports_the_sooner_of_the_grant_and_the_edge_credential() {
+    let preview = preview_provider(grant_agent(850, Default::default()))
+        .preview("s1", 8080)
+        .await
+        .unwrap();
+    assert!(
+        (295..=300).contains(&preview.expires_in_seconds),
+        "the 300 second edge credential ends first: {}",
+        preview.expires_in_seconds
+    );
+
+    let short = provider(grant_agent(120, Default::default()))
+        .with_preview_signer(Arc::new(FixedSigner::new()))
+        .with_preview_ports(vec![8080]);
+    let preview = short.preview("s1", 8080).await.unwrap();
+    assert!(
+        (115..=120).contains(&preview.expires_in_seconds),
+        "the grant ends first: {}",
+        preview.expires_in_seconds
+    );
+}
+
+/// Preview is gated by the same `:execute` that runs commands. A caller that may not execute is
+/// refused, names the rule, and is never signed an edge credential or handed a header.
+#[tokio::test]
+async fn a_caller_without_execute_is_refused_and_is_never_signed_for() {
+    let expire = far_future();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(running_with_route(id, &expire)));
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(execute_refused()));
+    let signer = FixedSigner::new();
+    let signed = signer.signed.clone();
+    let provider = provider(client)
+        .with_preview_signer(Arc::new(signer))
+        .with_preview_ports(vec![8080]);
+    let error = provider
+        .preview("s1", 8080)
+        .await
+        .expect_err("a caller refused by :execute gets no preview");
+    assert_eq!(signed.load(Ordering::SeqCst), 0, "nothing was signed");
+    assert!(
+        error
+            .to_string()
+            .contains(alien_core::GCP_PREVIEW_IS_COMMAND_ACCESS),
+        "{error}"
+    );
+    assert!(provider.grants.lock().unwrap().is_empty());
+}
+
+/// An expired grant is never read again, so it leaves the cache whenever a grant is added, and a
+/// terminated sandbox takes every grant it had.
+#[tokio::test]
+async fn grants_are_pruned_when_expired_and_dropped_when_the_sandbox_is_terminated() {
+    let provider = preview_provider(grant_agent(900, Default::default()));
+    provider.preview("s1", 8080).await.unwrap();
+    provider.preview("s2", 8080).await.unwrap();
+    assert_eq!(provider.grants.lock().unwrap().len(), 2);
+
+    // An entry past its end goes the next time the cache is touched.
+    provider.grants.lock().unwrap().insert(
+        ("old".to_string(), 8080),
+        CachedGrant {
+            capability: "dead".to_string(),
+            expires_at: chrono::Utc::now().timestamp() - 1,
+        },
+    );
+    provider.preview("s1", 8081).await.unwrap();
+    {
+        let grants = provider.grants.lock().unwrap();
+        assert!(
+            !grants.contains_key(&("old".to_string(), 8080)),
+            "{grants:?}"
+        );
+        assert_eq!(grants.len(), 3);
+    }
+
+    provider.forget_grants("s1");
+    let grants = provider.grants.lock().unwrap();
+    assert_eq!(grants.len(), 1, "{grants:?}");
+    assert!(grants.contains_key(&("s2".to_string(), 8080)));
+}
+
+/// A terminate that is confirmed drops the sandbox's grants; one that was refused keeps them,
+/// because the sandbox may still be there to preview.
+#[tokio::test]
+async fn terminate_drops_the_grants_of_a_sandbox_that_is_gone() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_delete_sandbox().returning(|_, _| Ok(()));
+    client
+        .expect_get_sandbox()
+        .returning(|_, _| Err(not_found()));
+    let provider = preview_provider(client);
+    for sandbox in ["s1", "s2"] {
+        provider.grants.lock().unwrap().insert(
+            (sandbox.to_string(), 8080),
+            CachedGrant {
+                capability: "cap".to_string(),
+                expires_at: chrono::Utc::now().timestamp() + 600,
+            },
+        );
+    }
+    provider.terminate("s1").await.unwrap();
+    let grants = provider.grants.lock().unwrap();
+    assert_eq!(grants.len(), 1, "{grants:?}");
+    assert!(grants.contains_key(&("s2".to_string(), 8080)));
 }

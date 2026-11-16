@@ -143,10 +143,10 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
 fn stack_grants_execute(stack: &Stack, sandbox_id: &str) -> bool {
     stack.permission_profiles().values().any(|profile| {
         [sandbox_id, "*"].iter().any(|key| {
-            profile
-                .0
-                .get(*key)
-                .is_some_and(|refs| refs.iter().any(|reference| reference.id() == "sandbox/execute"))
+            profile.0.get(*key).is_some_and(|refs| {
+                refs.iter()
+                    .any(|reference| reference.id() == "sandbox/execute")
+            })
         })
     })
 }
@@ -306,7 +306,8 @@ mod tests {
             let mut owned = stack.clone();
             owned.permissions.profiles.insert(
                 "worker".to_string(),
-                alien_core::permissions::PermissionProfile::new().resource(key, ["sandbox/execute"]),
+                alien_core::permissions::PermissionProfile::new()
+                    .resource(key, ["sandbox/execute"]),
             );
             let accepted = SandboxPlatformSupportCheck
                 .check(&owned, Platform::Gcp)
