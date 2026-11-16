@@ -126,7 +126,13 @@ const TERMINATE: &str = "sandbox.terminate";
 /// Where `pause` leaves the generation the sandbox had, inside the sandbox. A resume reads it back,
 /// so a pause in one process and a resume in another compare the same two things. A replaced
 /// container starts from its image and has no such file.
-const PAUSE_MARKER: &str = "/.alien-pause-generation";
+///
+/// Written by a command rather than through the file API: the agent places every file path inside
+/// the session root, which is the workload's own folder, where a `git clean` or a tidy-up of the
+/// working tree would delete it and read as lost memory. `/dev/shm` is memory itself, so the file
+/// is kept exactly when the memory is; `/tmp` is the fallback for an image without it.
+const PAUSE_MARKER_DIRS: [&str; 2] = ["/dev/shm", "/tmp"];
+const PAUSE_MARKER_NAME: &str = ".alien-pause-generation";
 const PAUSE: &str = "sandbox.pause";
 const RESUME: &str = "sandbox.resume";
 
@@ -504,7 +510,7 @@ impl GcpAgentPlatformSandbox {
             // replaced: the sandbox keeps starting either way, so a second one beside it would
             // run with nobody holding its id. A slow data plane is answered with the failure.
             Ok(Some(sandbox)) if sandbox.state == SandboxState::Starting => {
-                let generation = self.settle(id).await?;
+                let generation = self.settle(CREATE, id).await?;
                 Ok(Some(SandboxInstance {
                     sandbox_id: id.to_string(),
                     state: SandboxState::Running,
@@ -656,7 +662,7 @@ impl GcpAgentPlatformSandbox {
             }
             SandboxState::Terminated => return Ok(None),
         }
-        match self.settle(id).await {
+        match self.settle(CREATE, id).await {
             Ok(generation) => Ok(Some(SandboxInstance {
                 sandbox_id: id.to_string(),
                 state: SandboxState::Running,
@@ -924,16 +930,18 @@ impl GcpAgentPlatformSandbox {
     ///
     /// The running record is judged, not the create accept: a sandbox still coming up need not be
     /// addressable yet, and reading that as a failure would delete every one that answered early.
-    async fn settle(&self, sandbox_id: &str) -> Result<u64> {
+    async fn settle(&self, operation: &str, sandbox_id: &str) -> Result<u64> {
         for _ in 0..SANDBOX_READY_ATTEMPTS {
-            let Some(sandbox) = self.read_sandbox(CREATE, sandbox_id).await? else {
+            let Some(sandbox) = self.read_sandbox(operation, sandbox_id).await? else {
                 return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "sandboxGone".to_string(),
                     reason: format!("sandbox '{sandbox_id}' disappeared while it was coming up"),
                 }));
             };
-            match sandbox_state(CREATE, sandbox.state.as_deref())? {
-                SandboxState::Running => return self.wait_until_servable(sandbox_id).await,
+            match sandbox_state(operation, sandbox.state.as_deref())? {
+                SandboxState::Running => {
+                    return self.wait_until_servable(operation, sandbox_id).await
+                }
                 SandboxState::Terminated => {
                     return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                         failure: "sandboxTerminated".to_string(),
@@ -950,7 +958,7 @@ impl GcpAgentPlatformSandbox {
             tokio::time::sleep(SANDBOX_READY_INTERVAL).await;
         }
         Err(AlienError::new(ErrorData::SandboxUnreachable {
-            operation: CREATE.to_string(),
+            operation: operation.to_string(),
             reason: format!(
                 "sandbox '{sandbox_id}' was not running after {}s",
                 SANDBOX_READY_ATTEMPTS as u64 * SANDBOX_READY_INTERVAL.as_secs()
@@ -961,12 +969,12 @@ impl GcpAgentPlatformSandbox {
     /// Probes a RUNNING sandbox's agent until it answers or [`AGENT_READY_TIMEOUT`] passes, returning
     /// the generation or the timeout over the last finished probe's cause. Every failure is retried,
     /// a 404 included: the proxy answers a not-yet-listening container with a relayed 404.
-    async fn wait_until_servable(&self, sandbox_id: &str) -> Result<u64> {
+    async fn wait_until_servable(&self, operation: &str, sandbox_id: &str) -> Result<u64> {
         let deadline = tokio::time::Instant::now() + AGENT_READY_TIMEOUT;
         let mut last_error = None;
         loop {
             // Bounded by the deadline too, since one probe's own budget is as long as the wait.
-            match tokio::time::timeout_at(deadline, self.probe_agent(CREATE, sandbox_id)).await {
+            match tokio::time::timeout_at(deadline, self.probe_agent(operation, sandbox_id)).await {
                 Ok(Ok(generation)) => return Ok(generation),
                 Ok(Err(error)) => {
                     last_error = Some(error);
@@ -979,7 +987,7 @@ impl GcpAgentPlatformSandbox {
             }
         }
         let timed_out = ErrorData::SandboxUnreachable {
-            operation: CREATE.to_string(),
+            operation: operation.to_string(),
             reason: format!(
                 "sandbox '{sandbox_id}' was running but its agent did not become servable within {}s",
                 AGENT_READY_TIMEOUT.as_secs()
@@ -989,6 +997,101 @@ impl GcpAgentPlatformSandbox {
             Some(error) => error.context(timed_out),
             None => AlienError::new(timed_out),
         })
+    }
+
+    /// Runs a short `/bin/sh` script inside the sandbox and returns what it printed. A script that
+    /// exits non-zero, and every transport failure, is an error: the callers below must tell "the
+    /// marker is absent" from "the marker could not be read".
+    async fn marker_script(
+        &self,
+        operation: &str,
+        sandbox_id: &str,
+        script: String,
+    ) -> Result<String> {
+        let request = RunCommandRequest {
+            command: "/bin/sh".to_string(),
+            args: vec!["-c".to_string(), script],
+            cwd: None,
+            env: BTreeMap::new(),
+            timeout: Duration::from_secs(20),
+        };
+        use futures::StreamExt;
+        let mut frames = self.run_synchronous(sandbox_id, &request).await?;
+        let mut stdout = Vec::new();
+        let mut exit = None;
+        while let Some(frame) = frames.next().await {
+            match frame? {
+                CommandOutput::Stdout { data, .. } => stdout.extend(data),
+                CommandOutput::Exit { code, .. } => exit = Some(code),
+                _ => {}
+            }
+        }
+        if exit != Some(0) {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "pauseMarkerFailed".to_string(),
+                reason: format!(
+                    "{operation}: the pause marker script in sandbox '{sandbox_id}' did not \
+                     succeed (exit {exit:?}); it needs /bin/sh in the image"
+                ),
+            }));
+        }
+        Ok(String::from_utf8_lossy(&stdout).trim().to_string())
+    }
+
+    /// Leaves `generation` in the sandbox for a later `resume`, replacing any earlier marker.
+    async fn write_pause_marker(&self, sandbox_id: &str, generation: u64) -> Result<()> {
+        let candidates = PAUSE_MARKER_DIRS
+            .iter()
+            .map(|dir| format!("{dir}/{PAUSE_MARKER_NAME}"))
+            .collect::<Vec<_>>();
+        let script = format!(
+            "rm -f {all} 2>/dev/null; for f in {all}; do d=$(dirname \"$f\"); \
+             if [ -d \"$d\" ] && [ -w \"$d\" ] && printf %s '{generation}' > \"$f\"; then exit 0; fi; \
+             done; exit 1",
+            all = candidates.join(" ")
+        );
+        self.marker_script(PAUSE, sandbox_id, script)
+            .await
+            .map(|_| ())
+    }
+
+    /// The generation `pause` left, or `None` when no marker exists. A marker that cannot be read
+    /// is an error, not an absent marker.
+    async fn read_pause_marker(&self, sandbox_id: &str) -> Result<Option<u64>> {
+        let candidates = PAUSE_MARKER_DIRS
+            .iter()
+            .map(|dir| format!("{dir}/{PAUSE_MARKER_NAME}"))
+            .collect::<Vec<_>>();
+        let script = format!(
+            "for f in {all}; do if [ -f \"$f\" ]; then cat \"$f\"; exit 0; fi; done; echo none",
+            all = candidates.join(" ")
+        );
+        // The agent that has just come back can refuse a call or two; reading is safe to repeat.
+        let mut attempt = 1;
+        let text = loop {
+            match self.marker_script(RESUME, sandbox_id, script.clone()).await {
+                Ok(text) => break text,
+                Err(_) if attempt < 3 => {
+                    attempt += 1;
+                    tokio::time::sleep(LIFECYCLE_POLL_INTERVAL).await;
+                }
+                Err(error) => return Err(error),
+            }
+        };
+        Ok(text.parse::<u64>().ok())
+    }
+
+    async fn clear_pause_marker(&self, sandbox_id: &str) {
+        let all = PAUSE_MARKER_DIRS
+            .iter()
+            .map(|dir| format!("{dir}/{PAUSE_MARKER_NAME}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        // Best effort: a marker left behind is compared again by the next resume, which a
+        // generation that matches or a missing marker both pass.
+        let _ = self
+            .marker_script(RESUME, sandbox_id, format!("rm -f {all}; echo ok"))
+            .await;
     }
 
     /// Runs a command inside the proxy's synchronous window, streaming the buffered NDJSON body.
@@ -1143,7 +1246,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
         let sandbox_id = sandbox_id.to_string();
 
         // Past here a sandbox exists the caller has no id for, so every failure deletes it.
-        match self.settle(&sandbox_id).await {
+        match self.settle(CREATE, &sandbox_id).await {
             Ok(generation) => Ok(SandboxInstance {
                 sandbox_id,
                 state: SandboxState::Running,
@@ -1639,7 +1742,9 @@ impl Sandbox for GcpAgentPlatformSandbox {
     ///
     /// Google offers no switch that stops a paused sandbox from waking: any request to it, a
     /// command or a preview call included, resumes it, so a paused sandbox stays paused only while
-    /// nothing talks to it. The sandbox's generation is read first and kept for `resume`.
+    /// nothing talks to it. A wake by a command or a preview call skips the memory check `resume`
+    /// makes; a caller who needs it compares the sandbox's `generation` itself. The sandbox's
+    /// generation is read first and kept, inside the sandbox, for `resume`.
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id(PAUSE, sandbox_id)?;
         let Some(sandbox) = self.read_sandbox(PAUSE, sandbox_id).await? else {
@@ -1668,23 +1773,29 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // Read and written before the call: after a pause the agent is not reachable to ask. The
         // marker lives in the sandbox, so whichever process resumes it can compare.
         let generation = self.probe_agent(PAUSE, sandbox_id).await?;
-        self.write_files(
-            sandbox_id,
-            BTreeMap::from([(
-                PAUSE_MARKER.to_string(),
-                generation.to_string().into_bytes(),
-            )]),
-        )
-        .await?;
+        self.write_pause_marker(sandbox_id, generation).await?;
 
-        let started = self
-            .client
-            .pause_sandbox(&self.engine, sandbox_id)
-            .await
-            .context(ErrorData::SandboxCommandFailed {
-                failure: "pauseFailed".to_string(),
-                reason: format!("{PAUSE}: sandbox '{sandbox_id}' could not be paused"),
-            })?;
+        let started = match self.client.pause_sandbox(&self.engine, sandbox_id).await {
+            Ok(started) => started,
+            Err(error) => {
+                // A second pause of the same sandbox can lose the race for the first one's
+                // `:pause`: it was accepted, so the sandbox is on its way to paused and this call
+                // waits for that rather than reporting a failure.
+                let raced = self
+                    .read_sandbox(PAUSE, sandbox_id)
+                    .await?
+                    .is_some_and(|s| {
+                        matches!(s.state.as_deref(), Some("STATE_PAUSING" | "STATE_PAUSED"))
+                    });
+                if raced {
+                    return self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await;
+                }
+                return Err(error.context(ErrorData::SandboxCommandFailed {
+                    failure: "pauseFailed".to_string(),
+                    reason: format!("{PAUSE}: sandbox '{sandbox_id}' could not be paused"),
+                }));
+            }
+        };
         self.await_operation(PAUSE, started).await?;
         self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await
     }
@@ -1699,6 +1810,9 @@ impl Sandbox for GcpAgentPlatformSandbox {
         Self::checked_sandbox_id(RESUME, sandbox_id)?;
 
         let mut attempt = 0;
+        // Whether the sandbox was up when the call began. Nothing paused it then, so a missing
+        // marker is not a sign of lost memory.
+        let mut running_on_entry = None;
         loop {
             let Some(sandbox) = self.read_sandbox(RESUME, sandbox_id).await? else {
                 return Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -1706,6 +1820,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
                     reason: format!("{RESUME}: sandbox '{sandbox_id}' does not exist"),
                 }));
             };
+            running_on_entry.get_or_insert(sandbox.state.as_deref() == Some("STATE_RUNNING"));
             match sandbox.state.as_deref() {
                 // Already up, or being woken by a request that reached it first.
                 Some("STATE_RUNNING" | "STATE_RESUMING") => break,
@@ -1755,27 +1870,34 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
         self.wait_for_state(RESUME, sandbox_id, "STATE_RUNNING")
             .await?;
-        let generation = self.settle(sandbox_id).await?;
+        let generation = self.settle(RESUME, sandbox_id).await?;
 
         // The container that answers must be the one that was paused. Its generation is compared
         // with the one `pause` left inside the sandbox; a replaced container has no such file.
-        let paused_as = self
-            .read_file(sandbox_id, PAUSE_MARKER)
-            .await
-            .ok()
-            .and_then(|contents| String::from_utf8(contents).ok())
-            .and_then(|text| text.trim().parse::<u64>().ok());
-        if paused_as == Some(generation) {
-            return Ok(());
+        let memory_lost = |reason: &str| {
+            AlienError::new(ErrorData::SandboxMemoryLost {
+                sandbox_id: sandbox_id.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+        match self.read_pause_marker(sandbox_id).await? {
+            Some(paused_as) if paused_as == generation => {
+                self.clear_pause_marker(sandbox_id).await;
+                Ok(())
+            }
+            Some(_) => Err(memory_lost(
+                "the container that answers is not the one that was paused; it runs a container \
+                 that holds only what its image provides",
+            )),
+            // Up when the call began and never paused by this binding: there is no memory to
+            // lose, and a resume before every use stays a no-op, as on the other backends.
+            None if running_on_entry == Some(true) => Ok(()),
+            None => Err(memory_lost(
+                "it restarted while it was paused, or was not paused by this binding, so its \
+                 memory cannot be confirmed kept; it runs a container that holds only what its \
+                 image provides",
+            )),
         }
-        Err(AlienError::new(ErrorData::SandboxCommandFailed {
-            failure: "memoryLost".to_string(),
-            reason: format!(
-                "{RESUME}: sandbox '{sandbox_id}' restarted while it was paused, or was not paused \
-                 by this binding, so its memory and running processes cannot be confirmed kept; \
-                 it is running a container that holds only what its image provides"
-            ),
-        }))
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {

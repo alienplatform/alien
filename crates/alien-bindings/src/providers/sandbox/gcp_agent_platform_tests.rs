@@ -1556,8 +1556,10 @@ fn http_error(status: u16, message: &str) -> AlienError<AgentPlatformErrorData> 
 struct PausableSandbox {
     state: std::sync::Mutex<&'static str>,
     boot_id: std::sync::Mutex<&'static str>,
-    /// The one file the pause marker lands in; a replaced container starts without it.
+    /// The pause marker's contents; a replaced container starts without it.
     file: std::sync::Mutex<Option<Vec<u8>>>,
+    /// Makes reading the marker fail the way an agent that is not ready does.
+    fail_marker_reads: std::sync::atomic::AtomicBool,
 }
 
 impl PausableSandbox {
@@ -1566,6 +1568,7 @@ impl PausableSandbox {
             state: std::sync::Mutex::new("STATE_RUNNING"),
             boot_id: std::sync::Mutex::new(boot_id),
             file: std::sync::Mutex::new(None),
+            fail_marker_reads: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -1574,20 +1577,40 @@ impl PausableSandbox {
         let value: serde_json::Value = serde_json::from_slice(input).unwrap();
         match op_of(input).as_str() {
             "health" => Ok(health_reply_with_boot(*self.boot_id.lock().unwrap())),
-            "writeFile" => {
-                let contents = BASE64
-                    .decode(value["contentsBase64"].as_str().unwrap())
-                    .unwrap();
-                *self.file.lock().unwrap() = Some(contents);
-                Ok(Vec::new())
+            // The marker travels as a shell command, so the fake reads the script the way a
+            // shell would: the paths it names must be outside the session root, and what it
+            // prints is what a real `cat` would.
+            "exec" => {
+                let script = value["command"][2].as_str().expect("a /bin/sh -c script");
+                if self.fail_marker_reads.load(Ordering::SeqCst) && script.contains("cat ") {
+                    return Err(http_error(503, "the agent is not ready"));
+                }
+                let paths: Vec<&str> = script
+                    .split_whitespace()
+                    .filter(|word| word.contains(".alien-pause-generation"))
+                    .collect();
+                assert!(!paths.is_empty(), "{script}");
+                assert!(
+                    paths
+                        .iter()
+                        .all(|p| p.starts_with("/dev/shm/") || p.starts_with("/tmp/")),
+                    "the marker must stay out of the workload's folder: {script}"
+                );
+                let output: String = if let Some(rest) = script.split("printf %s '").nth(1) {
+                    let generation = rest.split('\'').next().unwrap();
+                    *self.file.lock().unwrap() = Some(generation.as_bytes().to_vec());
+                    String::new()
+                } else if script.contains("cat ") {
+                    match self.file.lock().unwrap().as_ref() {
+                        Some(contents) => String::from_utf8(contents.clone()).unwrap(),
+                        None => "none".to_string(),
+                    }
+                } else {
+                    *self.file.lock().unwrap() = None;
+                    "ok".to_string()
+                };
+                Ok(ndjson(&[stdout_frame(0, output.as_bytes()), exit_frame(0)]))
             }
-            "readFile" => match self.file.lock().unwrap().as_ref() {
-                Some(contents) => Ok(serde_json::to_vec(
-                    &serde_json::json!({ "contentsBase64": BASE64.encode(contents) }),
-                )
-                .unwrap()),
-                None => Err(execute_refused()),
-            },
             other => panic!("fake agent: unexpected op {other}"),
         }
     }
@@ -1684,7 +1707,7 @@ async fn a_resume_that_finds_a_new_container_is_an_error_not_a_kept_sandbox() {
         .await
         .expect_err("a fresh container is not a resume");
 
-    assert_eq!(lost.code, "SANDBOX_COMMAND_FAILED", "{lost}");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
     assert!(!lost.retryable, "a retry cannot bring the memory back");
     assert!(
         lost.message.contains("memory") && lost.message.contains("restarted"),
@@ -1710,7 +1733,7 @@ async fn a_resume_in_another_process_still_compares_with_the_pause() {
 
         assert_eq!(outcome.is_ok(), kept, "{outcome:?}");
         if let Err(lost) = outcome {
-            assert_eq!(lost.code, "SANDBOX_COMMAND_FAILED", "{lost}");
+            assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
             assert!(!lost.retryable);
         }
     }
@@ -1726,7 +1749,95 @@ async fn a_resume_without_a_pause_marker_is_not_reported_as_kept() {
         .resume("s1")
         .await
         .expect_err("nothing says the memory was kept");
-    assert_eq!(lost.code, "SANDBOX_COMMAND_FAILED", "{lost}");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+    assert!(!lost.retryable);
+}
+
+/// A marker that cannot be read is not a missing marker: the sandbox may well have kept its memory,
+/// and saying it lost it would be a false report. The failure passes through as it is.
+#[tokio::test]
+async fn a_resume_whose_marker_read_fails_does_not_claim_lost_memory() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.paused_with_marker();
+    fake.fail_marker_reads.store(true, Ordering::SeqCst);
+    let error = provider(pausing_client(&fake, "boot-a"))
+        .resume("s1")
+        .await
+        .expect_err("the marker could not be read");
+    assert_ne!(error.code, "SANDBOX_MEMORY_LOST", "{error}");
+}
+
+/// A resume of a sandbox that is simply running, and was never paused, changes nothing.
+#[tokio::test]
+async fn a_resume_of_a_running_sandbox_is_a_no_op() {
+    let fake = PausableSandbox::running("boot-a");
+    let mut client = pausing_client(&fake, "boot-a");
+    client.checkpoint();
+    {
+        let state = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *state.state.lock().unwrap())));
+        let agent = fake.clone();
+        client
+            .expect_execute()
+            .returning(move |_, _, input| agent.agent_reply(input));
+    }
+    client.expect_resume_sandbox().never();
+    provider(client)
+        .resume("s1")
+        .await
+        .expect("nothing was paused, so nothing is lost");
+}
+
+/// Two pauses of one sandbox: the one whose `:pause` is refused because the other's was accepted
+/// waits for the pause instead of reporting that it failed.
+#[tokio::test]
+async fn a_pause_that_loses_the_race_waits_for_the_winner() {
+    let fake = PausableSandbox::running("boot-a");
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let state = fake.clone();
+        let reads = Arc::new(AtomicUsize::new(0));
+        client.expect_get_sandbox().returning(move |_, id| {
+            // Running for the first read; after the refused `:pause` the other pause shows.
+            match reads.fetch_add(1, Ordering::SeqCst) {
+                0 => {}
+                1 => state.set_state("STATE_PAUSING"),
+                _ => state.set_state("STATE_PAUSED"),
+            }
+            Ok(sandbox_in_state(id, *state.state.lock().unwrap()))
+        });
+        let agent = fake.clone();
+        client
+            .expect_execute()
+            .returning(move |_, _, input| agent.agent_reply(input));
+    }
+    client
+        .expect_pause_sandbox()
+        .returning(|_, _| Err(http_error(400, "Sandbox environment is already pausing")));
+    provider(client)
+        .pause("s1")
+        .await
+        .expect("the pause already under way is waited for");
+}
+
+/// A resume whose agent never answers reports the resume, not a create.
+#[tokio::test(start_paused = true)]
+async fn a_resume_whose_agent_never_answers_is_reported_under_resume() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(http_error(503, "not ready")));
+    let error = provider(client)
+        .resume("s1")
+        .await
+        .expect_err("the agent never serves");
+    assert!(error.to_string().contains("sandbox.resume"), "{error}");
+    assert!(!error.to_string().contains("sandbox.create"), "{error}");
 }
 
 /// `:resume` is refused with a 400 while the pause is under way; that is waited out.

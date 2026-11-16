@@ -523,15 +523,20 @@ Limits the plan refuses with a message, rather than discovering them at the firs
   pause the sandbox explicitly with `pause()` instead.
 
 `pause()` and `resume()` keep the sandbox's memory and running processes (`pause_resume` is on).
-Before pausing, the binding writes the container's generation to
-`/.alien-pause-generation` inside the sandbox, and `resume()` reads it back and fails when it is
-missing or differs, saying the sandbox restarted and its memory was lost. A fresh container has no
-such file, so a pause in one process and a resume in another are checked the same way, and a fresh
-container never reaches a caller as a kept one. A sandbox not paused by `pause()` has no marker,
-so resuming it reports the same error. Any request to a paused
-sandbox, a command or a preview call included, wakes it: Google offers no way to turn that off, so
-a paused sandbox stays paused only while nothing talks to it. A `resume()` after such a wake
-returns once the sandbox answers and changes nothing.
+Before pausing, the binding runs a short `/bin/sh` command that writes the container's generation to
+`/dev/shm/.alien-pause-generation` (`/tmp` where an image has no `/dev/shm`), outside the session
+root so that tidying the working tree cannot delete it. `/dev/shm` is memory, so the file survives
+exactly when the memory does. `resume()` reads it back and fails with `SANDBOX_MEMORY_LOST` (not
+retryable) when it is missing after a pause or differs from the container that answers; a read that
+fails for another reason is reported as that failure, never as lost memory. A fresh container has no
+such file, so a pause in one process and a resume in another are checked the same way. The marker
+needs `/bin/sh` in the image. `resume()` on a sandbox that was running and never paused is a no-op.
+Any request to a paused sandbox, a command or a preview call included, wakes it: Google offers no
+way to turn that off, so a paused sandbox stays paused only while nothing talks to it. A wake by a
+command or a preview call skips the check above; callers who need it compare the sandbox's
+`generation` before and after. A `resume()` after such a wake returns once the sandbox answers.
+Whether the sandbox's maximum lifetime keeps counting while it is paused is Google's rule and is not
+tested; a sandbox that expired while paused reports `sandboxTerminated` from `resume()`.
 
 Images must be linux/amd64 and their container must keep running in the foreground: a template
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
