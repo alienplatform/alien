@@ -794,6 +794,7 @@ fn gcp_network_import_derives_subnetwork_name() {
         router_self_link: None,
         nat_name: None,
         is_byo_vpc: false,
+        sandbox_network: None,
     };
     let state = run_through_registry(
         &Network::RESOURCE_TYPE,

@@ -127,7 +127,8 @@ pub fn egress_control_config(
 
     Ok(EgressControlConfig {
         internet_access: Some(internet_access),
-        extra: Default::default(),
+        network_attachment: None,
+            extra: Default::default(),
     })
 }
 

@@ -78,6 +78,8 @@ mod local;
 pub use local::*;
 
 #[cfg(feature = "gcp")]
+mod gcp_placement;
+#[cfg(feature = "gcp")]
 mod gcp_agent_platform_template;
 #[cfg(feature = "gcp")]
 pub use gcp_agent_platform_template::*;

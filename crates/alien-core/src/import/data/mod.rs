@@ -31,7 +31,7 @@ pub use azure::{
 pub use gcp::{
     GcpAgentPlatformEngineImportData, GcpAiImportData, GcpArtifactRegistryImportData,
     GcpBuildImportData, GcpComputeClusterImportData, GcpKeyImportData, GcpKvImportData,
-    GcpMemorystoreImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData,
+    GcpMemorystoreImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData, GcpSandboxNetwork,
     GcpRemoteBindingsImportData, GcpRemoteStackManagementImportData, GcpSandboxImportData,
     GcpServiceAccountImportData, GcpServiceActivationImportData, GcpStorageImportData,
     GcpVaultImportData, GcpWorkerImportData,

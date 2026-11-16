@@ -116,6 +116,12 @@ pub trait ComputeApi: Send + Sync + Debug {
     async fn delete_subnetwork(&self, region: String, subnetwork_name: String)
         -> Result<Operation>;
 
+    // --- Network Attachment Operations ---
+
+    /// Lists the network attachments in a region, following every page.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/networkAttachments/list
+    async fn list_network_attachments(&self, region: String) -> Result<Vec<NetworkAttachment>>;
+
     // --- Router Operations ---
 
     /// Lists routers in a region.
@@ -851,6 +857,37 @@ impl ComputeApi for ComputeClient {
                 &subnetwork_name,
             )
             .await
+    }
+
+    // --- Network Attachment Operations ---
+
+    async fn list_network_attachments(&self, region: String) -> Result<Vec<NetworkAttachment>> {
+        let path = format!(
+            "projects/{}/regions/{}/networkAttachments",
+            self.project_id, region
+        );
+        let mut attachments = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let query = page_token
+                .take()
+                .map(|token| vec![("pageToken", token)]);
+            let page: NetworkAttachmentList = self
+                .base
+                .execute_request(
+                    Method::GET,
+                    &path,
+                    query,
+                    Option::<()>::None,
+                    "networkAttachments",
+                )
+                .await?;
+            attachments.extend(page.items);
+            match page.next_page_token.filter(|token| !token.is_empty()) {
+                Some(token) => page_token = Some(token),
+                None => return Ok(attachments),
+            }
+        }
     }
 
     // --- Router Operations ---
@@ -3288,6 +3325,73 @@ pub enum NetworkTier {
     Premium,
     /// Standard tier.
     Standard,
+}
+
+/// A Private Service Connect network attachment. A producer (here Google's sandbox tenant)
+/// connects to it and draws interface addresses from its subnetwork.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/networkAttachments
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAttachment {
+    /// Name of the attachment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Server-defined URL of the attachment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_link: Option<String>,
+
+    /// `ACCEPT_AUTOMATIC`, `ACCEPT_MANUAL` or `INVALID`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_preference: Option<String>,
+
+    /// URLs of the subnetworks producers draw addresses from.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subnetworks: Vec<String>,
+
+    /// Producer connections. Empty until a producer connects.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connection_endpoints: Vec<NetworkAttachmentConnectedEndpoint>,
+
+    /// Type of resource (always "compute#networkAttachment").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+/// One producer interface connected to a network attachment.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAttachmentConnectedEndpoint {
+    /// `ACCEPTED`, `PENDING`, `REJECTED`, `CLOSED`, ...
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+
+    /// The interface's address in the attachment's subnetwork.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
+
+    /// Project number of the producer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id_or_num: Option<String>,
+
+    /// URL of the subnetwork the address comes from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subnetwork: Option<String>,
+}
+
+/// One page of network attachments.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAttachmentList {
+    /// Attachments on this page.
+    #[serde(default)]
+    pub items: Vec<NetworkAttachment>,
+
+    /// Token for the next page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
 }
 
 /// List of routers.
@@ -6378,6 +6482,28 @@ pub struct SerialPortOutput {
 
 #[cfg(test)]
 mod tests {
+    /// The shape Compute answered for a connected attachment in a live project: a connected
+    /// attachment lists its producer interfaces, an unconnected one lists none.
+    #[test]
+    fn a_network_attachment_reads_its_producer_connections() {
+        let connected: NetworkAttachment = serde_json::from_value(serde_json::json!({
+            "kind": "compute#networkAttachment",
+            "name": "att",
+            "connectionPreference": "ACCEPT_AUTOMATIC",
+            "subnetworks": ["https://www.googleapis.com/compute/v1/projects/p/regions/us-central1/subnetworks/att"],
+            "connectionEndpoints": [
+                {"status": "ACCEPTED", "projectIdOrNum": "123", "subnetwork": "s", "ipAddress": "10.30.0.2"},
+                {"status": "ACCEPTED", "projectIdOrNum": "123", "subnetwork": "s", "ipAddress": "10.30.0.3"}
+            ]
+        }))
+        .expect("a connected attachment reads");
+        assert_eq!(connected.connection_endpoints.len(), 2);
+        assert_eq!(connected.connection_endpoints[0].status.as_deref(), Some("ACCEPTED"));
+        let idle: NetworkAttachment =
+            serde_json::from_value(serde_json::json!({"name": "idle"})).expect("an idle one reads");
+        assert!(idle.connection_endpoints.is_empty());
+    }
+
     use super::*;
 
     const SERVICE_ATTACHMENT: &str =

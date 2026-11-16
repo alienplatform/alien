@@ -45,6 +45,10 @@ pub struct GcpNetworkController {
     pub(crate) region: Option<String>,
     pub cidr_block: Option<String>,
     pub is_byo_vpc: bool,
+    /// Network attachment and gateway VMs setup created for Internet sandboxes. Stack state
+    /// written before they existed has none, which reads as "no gateway".
+    #[serde(default)]
+    pub sandbox_network: Option<alien_core::import::data::GcpSandboxNetwork>,
 
     // Operation tracking
     pub(crate) pending_operation_name: Option<String>,
@@ -180,6 +184,7 @@ impl GcpNetworkController {
             region: Some(region),
             cidr_block: Some("10.0.0.0/16".to_string()),
             is_byo_vpc: false,
+            sandbox_network: None,
             pending_operation_name: None,
             pending_operation_region: None,
             _internal_stay_count: None,

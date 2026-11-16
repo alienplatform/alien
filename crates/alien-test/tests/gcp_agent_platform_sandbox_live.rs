@@ -213,6 +213,7 @@ fn template_body(image: &str, internet_access: bool) -> SandboxEnvironmentTempla
         }),
         egress_control_config: Some(EgressControlConfig {
             internet_access: Some(internet_access),
+            network_attachment: None,
             extra: Default::default(),
         }),
         state: None,

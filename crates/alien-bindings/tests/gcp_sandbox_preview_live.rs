@@ -347,7 +347,8 @@ impl Live {
                     }),
                     egress_control_config: Some(EgressControlConfig {
                         internet_access: Some(false),
-                        extra: Default::default(),
+                        network_attachment: None,
+            extra: Default::default(),
                     }),
                     state: None,
                     extra: Default::default(),
