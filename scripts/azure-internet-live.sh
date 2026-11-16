@@ -202,8 +202,10 @@ default_network_sandbox_gateway_vm_size = "$VM_SIZE"
 EOF
 export ARM_SUBSCRIPTION_ID="$SUB" ARM_TENANT_ID="$AZURE_TARGET_TENANT_ID" ARM_CLIENT_ID="$AZURE_TARGET_CLIENT_ID" ARM_CLIENT_SECRET="$AZURE_TARGET_CLIENT_SECRET"
 # Azure occasionally resets a connection mid-apply; apply is idempotent, so one retry continues it.
+# One at a time: with three in parallel the azurerm provider flaked on the NSG and its rules
+# ("Root object was present, but now absent").
 (cd "$module" && terraform init -input=false >/dev/null \
-  && { terraform apply -input=false -auto-approve -parallelism=3 || terraform apply -input=false -auto-approve -parallelism=3; }) | tee "$WORK/apply.log"
+  && { terraform apply -input=false -auto-approve -parallelism=1 || terraform apply -input=false -auto-approve -parallelism=1; }) | tee "$WORK/apply.log"
 
 # 4. Facts from the applied module.
 tf=$(cd "$module" && terraform show -json)
