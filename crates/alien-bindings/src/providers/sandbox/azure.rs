@@ -606,9 +606,20 @@ impl Sandbox for AzureSandbox {
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         Self::checked_sandbox_id("sandbox.get", sandbox_id)?;
-        if !can_name_a_sandbox(sandbox_id) {
-            return Ok(None);
-        }
+        // A caller's own key is not an id Azure knows: it names the sandbox through the label
+        // `get_or_create` stamped on it, so the id read below is the one that lookup finds.
+        let found;
+        let sandbox_id = if can_name_a_sandbox(sandbox_id) {
+            sandbox_id
+        } else {
+            match self.oldest_with_request_key(sandbox_id).await? {
+                Some(id) => {
+                    found = id;
+                    found.as_str()
+                }
+                None => return Ok(None),
+            }
+        };
         // A 404 is "gone", which is a valid answer. Anything else is a real failure and must not
         // be flattened into None, or a throttle would read as an expired sandbox.
         let Some(sandbox) = self.read_sandbox("sandbox.get", sandbox_id).await? else {
@@ -1101,6 +1112,24 @@ impl Sandbox for AzureSandbox {
 }
 
 impl AzureSandbox {
+    /// The id of the oldest live sandbox carrying a caller key's request-key label.
+    async fn oldest_with_request_key(&self, requested_id: &str) -> Result<Option<String>> {
+        let key = request_key(requested_id);
+        Ok(self
+            .client
+            .list_sandboxes(&self.sandbox_group)
+            .await
+            .map_err(|error| Self::failed("sandbox.get", error))?
+            .into_iter()
+            .filter(|listed| {
+                listed.labels.get(REQUEST_KEY_LABEL) == Some(&key)
+                    && !listed.state.eq_ignore_ascii_case("Deleting")
+                    && !listed.state.eq_ignore_ascii_case("Failed")
+            })
+            .min_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)))
+            .map(|listed| listed.id))
+    }
+
     /// Brings a sandbox the caller named back into service, or says why it cannot be.
     ///
     /// The one path that replaces rather than only refusing: `get_or_create` asked for a usable
@@ -3665,8 +3694,8 @@ mod tests {
         assert!(!resolved.created, "found, not created");
     }
 
-    /// A caller's own key is not a sandbox id, so neither verb reads it from the data plane: `get`
-    /// answers none and `get_or_create` goes straight to the request-key lookup.
+    /// A caller's own key is not a sandbox id, so neither verb reads it from the data plane: both
+    /// find the sandbox by the key's request-key label, and `get` answers none when there is none.
     #[tokio::test]
     async fn a_key_that_is_not_a_guid_is_never_read_as_a_sandbox_id() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -3680,7 +3709,9 @@ mod tests {
             .returning(|_| Ok(vec![listed("azure-7", "ask-1", 30)]));
         client.expect_create_sandbox().never();
         let sandbox = sandbox_with(client);
-        assert!(sandbox.get("ask-1").await.unwrap().is_none());
+        let got = sandbox.get("ask-1").await.unwrap().expect("the key finds its sandbox");
+        assert_eq!(got.sandbox_id, "azure-7");
+        assert!(sandbox.get("ask-2").await.unwrap().is_none(), "an unused key finds nothing");
         let resolved = sandbox.get_or_create(asks_for("ask-1")).await.unwrap();
         assert_eq!(resolved.sandbox.sandbox_id, "azure-7");
         assert!(!resolved.created);
