@@ -1553,14 +1553,14 @@ fn http_error(status: u16, message: &str) -> AlienError<AgentPlatformErrorData> 
 
 /// What a fake Agent Platform holds for one sandbox: the state the API reports and the boot id its
 /// agent answers with.
-struct FakeSandbox {
+struct PausableSandbox {
     state: std::sync::Mutex<&'static str>,
     boot_id: std::sync::Mutex<&'static str>,
     /// The one file the pause marker lands in; a replaced container starts without it.
     file: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
-impl FakeSandbox {
+impl PausableSandbox {
     fn running(boot_id: &'static str) -> Arc<Self> {
         Arc::new(Self {
             state: std::sync::Mutex::new("STATE_RUNNING"),
@@ -1614,7 +1614,7 @@ impl FakeSandbox {
 /// A client whose `:pause` and `:resume` move the fake between states, with `boot_after_resume` the
 /// boot id the agent answers with once it has been resumed.
 fn pausing_client(
-    fake: &Arc<FakeSandbox>,
+    fake: &Arc<PausableSandbox>,
     boot_after_resume: &'static str,
 ) -> MockAgentPlatformApi {
     let mut client = MockAgentPlatformApi::new();
@@ -1650,15 +1650,23 @@ fn the_capability_row_offers_pause_and_resume() {
 /// A pause is `:pause` to `STATE_PAUSED`, and a resume that finds the container it paused returns.
 #[tokio::test]
 async fn pause_then_resume_keeps_the_generation() {
-    let fake = FakeSandbox::running("boot-a");
+    let fake = PausableSandbox::running("boot-a");
     let provider = provider(pausing_client(&fake, "boot-a"));
-    let before = provider.get("s1").await.unwrap().unwrap().generation;
+    let before = provider
+        .get("1234567890123456789")
+        .await
+        .unwrap()
+        .unwrap()
+        .generation;
 
-    provider.pause("s1").await.expect("pause");
+    provider.pause("1234567890123456789").await.expect("pause");
     assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
-    provider.resume("s1").await.expect("resume");
+    provider
+        .resume("1234567890123456789")
+        .await
+        .expect("resume");
 
-    let after = provider.get("s1").await.unwrap().unwrap();
+    let after = provider.get("1234567890123456789").await.unwrap().unwrap();
     assert_eq!(after.state, SandboxState::Running);
     assert_eq!(after.generation, before, "the same container is back");
 }
@@ -1667,7 +1675,7 @@ async fn pause_then_resume_keeps_the_generation() {
 /// reach a caller as a kept one.
 #[tokio::test]
 async fn a_resume_that_finds_a_new_container_is_an_error_not_a_kept_sandbox() {
-    let fake = FakeSandbox::running("boot-a");
+    let fake = PausableSandbox::running("boot-a");
     let provider = provider(pausing_client(&fake, "boot-b"));
 
     provider.pause("s1").await.expect("pause");
@@ -1691,7 +1699,7 @@ async fn a_resume_that_finds_a_new_container_is_an_error_not_a_kept_sandbox() {
 #[tokio::test]
 async fn a_resume_in_another_process_still_compares_with_the_pause() {
     for (boot_after, kept) in [("boot-a", true), ("boot-b", false)] {
-        let fake = FakeSandbox::running("boot-a");
+        let fake = PausableSandbox::running("boot-a");
         let client: Arc<dyn AgentPlatformApi> = Arc::new(pausing_client(&fake, boot_after));
 
         provider_from(client.clone())
@@ -1712,7 +1720,7 @@ async fn a_resume_in_another_process_still_compares_with_the_pause() {
 /// memory cannot be confirmed kept, so a resume does not claim it.
 #[tokio::test]
 async fn a_resume_without_a_pause_marker_is_not_reported_as_kept() {
-    let fake = FakeSandbox::running("boot-a");
+    let fake = PausableSandbox::running("boot-a");
     fake.set_state("STATE_PAUSED");
     let lost = provider(pausing_client(&fake, "boot-a"))
         .resume("s1")
@@ -1724,7 +1732,7 @@ async fn a_resume_without_a_pause_marker_is_not_reported_as_kept() {
 /// `:resume` is refused with a 400 while the pause is under way; that is waited out.
 #[tokio::test]
 async fn a_resume_refused_during_pausing_is_retried() {
-    let fake = FakeSandbox::running("boot-a");
+    let fake = PausableSandbox::running("boot-a");
     let calls = Arc::new(AtomicUsize::new(0));
     let mut client = MockAgentPlatformApi::new();
     {
@@ -1766,7 +1774,7 @@ async fn a_resume_refused_during_pausing_is_retried() {
 /// resume waits for it instead of failing.
 #[tokio::test]
 async fn a_503_while_paused_is_a_wake_in_progress_and_is_waited_out() {
-    let fake = FakeSandbox::running("boot-a");
+    let fake = PausableSandbox::running("boot-a");
     fake.paused_with_marker();
     let probes = Arc::new(AtomicUsize::new(0));
     let mut client = MockAgentPlatformApi::new();
@@ -2893,6 +2901,12 @@ impl AgentPlatformApi for FakeEngine {
         unimplemented!()
     }
     async fn list_templates(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironmentTemplate>> {
+        unimplemented!()
+    }
+    async fn pause_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn resume_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
         unimplemented!()
     }
     async fn snapshot(
