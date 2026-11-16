@@ -89,12 +89,27 @@ async fn request(
     bearer: Option<&str>,
     body: Option<serde_json::Value>,
 ) -> (u16, String) {
+    request_with(preview, method, path, bearer, body, &[]).await
+}
+
+/// [`request`] with headers of the daemon's own besides.
+async fn request_with(
+    preview: &PreviewCapability,
+    method: reqwest::Method,
+    path: &str,
+    bearer: Option<&str>,
+    body: Option<serde_json::Value>,
+    extra: &[(&str, &str)],
+) -> (u16, String) {
     let mut request = reqwest::Client::new().request(method, format!("{}{path}", preview.endpoint));
     for (name, value) in &preview.headers {
         request = request.header(name, value);
     }
     if let Some(bearer) = bearer {
         request = request.header(&preview.caller_authorization_header, bearer);
+    }
+    for (name, value) in extra {
+        request = request.header(*name, *value);
     }
     if let Some(body) = body {
         request = request.json(&body);
@@ -562,7 +577,8 @@ async fn live_preview_is_owner_access() {
 /// The workload's own daemon, which authenticates in its own way: the caller's bearer over HTTP,
 /// and a credential carried in a subprotocol of its own over WebSocket, which it answers with a
 /// protocol of its choosing. The names come from the environment so the test knows no daemon:
-/// `GCP_IMAGE`, `GCP_APP_BEARER`, `GCP_APP_HTTP_PATH` (POSTed), `GCP_APP_WS_PATH`,
+/// `GCP_IMAGE`, `GCP_APP_BEARER`, `GCP_APP_HTTP_HEADER` (default `Authorization`),
+/// `GCP_APP_HTTP_PATH` (POSTed), `GCP_APP_WS_PATH`,
 /// `GCP_APP_SUBPROTOCOLS` (comma separated, offered first) and `GCP_APP_PICKS` (the one the daemon
 /// answers with). The daemon listens on 8080.
 #[tokio::test]
@@ -576,17 +592,22 @@ async fn live_preview_reaches_a_daemon_with_its_own_protocol() {
             .preview(&live.sandbox_id, 8080)
             .await
             .expect("owner preview");
-        let bearer = format!("Bearer {}", env("GCP_APP_BEARER"));
+        // The caller's bearer, under the header the daemon reads it from (`Authorization` unless
+        // `GCP_APP_HTTP_HEADER` names another), sent with the caller's own header and no other.
+        let header =
+            std::env::var("GCP_APP_HTTP_HEADER").unwrap_or_else(|_| "Authorization".into());
+        let credential = env("GCP_APP_BEARER");
         let path = env("GCP_APP_HTTP_PATH");
-        let post = |bearer: String| {
-            let (preview, path) = (&preview, &path);
+        let post = |credential: String| {
+            let (preview, path, header) = (&preview, &path, &header);
             async move {
-                request(
+                request_with(
                     preview,
                     reqwest::Method::POST,
                     path,
-                    Some(&bearer),
+                    None,
                     Some(serde_json::json!({})),
+                    &[(header.as_str(), credential.as_str())],
                 )
                 .await
             }
@@ -594,7 +615,7 @@ async fn live_preview_reaches_a_daemon_with_its_own_protocol() {
         // The daemon starts after the agent; the agent answers 502 until it listens.
         let mut answer = (0, String::new());
         for _ in 0..60 {
-            answer = post(bearer.clone()).await;
+            answer = post(credential.clone()).await;
             if answer.0 != 502 {
                 break;
             }
@@ -605,7 +626,7 @@ async fn live_preview_reaches_a_daemon_with_its_own_protocol() {
             "the daemon must accept the caller's own bearer: {}",
             answer.0
         );
-        let (wrong, _) = post("Bearer wrong".to_string()).await;
+        let (wrong, _) = post("wrong".to_string()).await;
         assert!(
             refused(wrong),
             "the daemon, not the broker, checks the bearer: {wrong}"
