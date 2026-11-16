@@ -483,6 +483,7 @@ mod tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         }
     }
 
@@ -523,6 +524,21 @@ mod tests {
         assert_eq!(b.read().await.unwrap().unwrap().current, "key-from-a");
         b.write(&state("dep_1", "key-from-b")).await.unwrap();
         assert!(fake.current_text().contains("key-from-b"));
+    }
+
+    #[tokio::test]
+    async fn a_write_of_state_read_before_another_writer_won_is_refused() {
+        let fake = FakeSecretsManager::with_value("{}");
+        let (a, b) = (store(&fake), store(&fake));
+        a.persist_enrolled(&state("dep_1", "key-a")).await.unwrap();
+        // B reads the state, A rotates, then B writes the state it read.
+        let mut read_by_b = b.read().await.unwrap().unwrap();
+        read_by_b.current = "key-from-b".into();
+        a.write(&state("dep_1", "key-from-a")).await.unwrap();
+        let error = b.write(&read_by_b).await.unwrap_err();
+        assert!(matches!(error.error, Some(ErrorData::IdentityConflict)));
+        assert!(fake.current_text().contains("key-from-a"));
+        assert!(fake.private_labels().is_empty());
     }
 
     #[tokio::test]
