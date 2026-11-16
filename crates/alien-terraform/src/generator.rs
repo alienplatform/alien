@@ -1052,6 +1052,12 @@ pub(crate) fn render_terraform_module(
     // catch it in the rendered output instead of shipping it.
     crate::gating::scan_rendered_for_unindexed(&files, &gated)?;
 
+    if let Some(guard) = existing_cluster_network_guard(stack, &stack_settings, target) {
+        files.insert(
+            "existing-cluster-network-guard.tf".into(),
+            render_body(guard)?,
+        );
+    }
     // Inventory entries are literal addresses, never Terraform references. Add
     // this metadata after the reference audit so a counted address is not
     // mistaken for an unindexed traversal or rewritten into an instance.
@@ -2800,6 +2806,83 @@ fn effective_gate(
     Some(crate::emitters::enabled::kubernetes_network_gate(
         &database_gates,
     ))
+}
+
+/// Plan-time refusal of a database or cache that an existing cluster could not reach.
+///
+/// One module serves a created and an existing cluster and the deployer picks the mode at apply
+/// time, so the build cannot always refuse. The module fails the plan instead, with the same
+/// message the build gives (see `alien_core::existing_cluster_network_hosts`). A deployer who
+/// brings a network (`network_mode = "use-existing"`) names the cluster's own, so that is theirs
+/// to choose; a network fixed in the stack settings is likewise the deployer's.
+fn existing_cluster_network_guard(
+    stack: &Stack,
+    stack_settings: &StackSettings,
+    target: TerraformTarget,
+) -> Option<Body> {
+    if !target.is_kubernetes() {
+        return None;
+    }
+    let cloud = target.cloud_platform();
+    let network_mode_variable = match target {
+        TerraformTarget::Eks => has_dynamic_aws_network_settings(stack_settings.network.as_ref()),
+        TerraformTarget::Gke => has_dynamic_gcp_network_settings(stack_settings.network.as_ref()),
+        _ => false,
+    };
+    if !network_mode_variable
+        && matches!(
+            stack_settings.network,
+            Some(
+                NetworkSettings::ByoVpcAws { .. }
+                    | NetworkSettings::ByoVpcGcp { .. }
+                    | NetworkSettings::ByoVnetAzure { .. }
+            )
+        )
+    {
+        return None;
+    }
+    let hint = network_mode_variable
+        .then_some("set network_mode to use-existing and name the cluster's own network");
+    let existing = if network_mode_variable {
+        "var.kubernetes_cluster_mode == \"existing\" && var.network_mode != \"use-existing\""
+    } else {
+        "var.kubernetes_cluster_mode == \"existing\""
+    };
+    let preconditions: Vec<Structure> = stack
+        .resources()
+        .filter(|(_, entry)| !alien_core::existing_cluster_network_hosts(entry, cloud))
+        .map(|(id, entry)| {
+            let accepted = match entry.enabled_when.as_deref() {
+                None => "true".to_string(),
+                Some(input) => format!("var.{}", stack_input_variable_name(input)),
+            };
+            nested(block(
+                "precondition",
+                [
+                    attr(
+                        "condition",
+                        expr::raw(format!("!({existing} && {accepted})")),
+                    ),
+                    attr(
+                        "error_message",
+                        Expression::String(alien_core::existing_cluster_network_refusal(
+                            entry.config.resource_type().as_ref(),
+                            id,
+                            hint,
+                        )),
+                    ),
+                ],
+            ))
+        })
+        .collect();
+    if preconditions.is_empty() {
+        return None;
+    }
+    Some(Body::from(vec![nested(resource_block(
+        "terraform_data",
+        "existing_cluster_network_guard",
+        [nested(block("lifecycle", preconditions))],
+    ))]))
 }
 
 /// Variable name for a stack input id. Shared with the gating helpers, which

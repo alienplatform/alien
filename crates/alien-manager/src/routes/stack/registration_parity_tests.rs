@@ -128,6 +128,17 @@ fn cloud(format: Format) -> Platform {
 /// The stack as the CLI prepares it before rendering a setup artifact: template preflights, then
 /// mutations for the deployment's settings.
 async fn prepared_for_render(source: &Stack, format: Format, settings: &StackSettings) -> Stack {
+    try_prepared_for_render(source, format, settings)
+        .await
+        .expect("template mutations apply")
+}
+
+/// [`prepared_for_render`], returning the refusal the preflights give instead of panicking.
+async fn try_prepared_for_render(
+    source: &Stack,
+    format: Format,
+    settings: &StackSettings,
+) -> Result<Stack, String> {
     let mut stack = source.clone();
     alien_core::remove_off_platform_gated_resources(&mut stack, Platform::Kubernetes, None);
     let runner = alien_preflights::runner::PreflightRunner::new();
@@ -155,7 +166,7 @@ async fn prepared_for_render(source: &Stack, format: Format, settings: &StackSet
     runner
         .apply_mutations(stack, &StackState::new(Platform::Kubernetes), &config)
         .await
-        .expect("template mutations apply")
+        .map_err(|error| format!("{error:?}"))
 }
 
 /// Every `{ id, type }` pair in a rendered registration, found by shape wherever the artifact
@@ -524,14 +535,64 @@ async fn every_kubernetes_setup_registers_what_the_manager_expects() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Known gap, not a skipped case: an existing AKS cluster with a cloud database still gets a new
-/// VNet the cluster cannot reach (the Private Endpoint needs its own subnet in the cluster's
-/// VNet). GKE and EKS are covered by the network tests in `alien-terraform`. A follow-up changes
-/// the AKS module; this test is the place to turn on when it lands, and it fails until then.
+/// Setup puts a database or cache on an existing cluster's network only for a GCP Postgres.
+/// Every other combination would land the endpoint on a network the cluster is not on, so the
+/// build refuses it with a message that says what to do instead. A created cluster keeps all of
+/// them, and the supported cell (Postgres on an existing GKE cluster) is not refused.
 #[tokio::test]
-#[ignore = "known gap: AKS existing cluster with a database creates a VNet the cluster cannot reach"]
-async fn an_existing_aks_cluster_with_a_database_uses_the_cluster_network() {
-    panic!("not implemented: the AKS module creates its own VNet for the database endpoint");
+async fn a_database_an_existing_cluster_cannot_reach_is_refused_in_every_format() {
+    for format in MATRIX {
+        for resource in ["postgres", "redis"] {
+            let mut source = source_stack();
+            source.resources.insert(
+                resource.to_string(),
+                alien_core::ResourceEntry {
+                    config: if resource == "postgres" {
+                        alien_core::Resource::new(
+                            alien_core::Postgres::new(resource.to_string()).build(),
+                        )
+                    } else {
+                        alien_core::Resource::new(
+                            alien_core::Redis::new(resource.to_string()).build(),
+                        )
+                    },
+                    lifecycle: ResourceLifecycle::Frozen,
+                    dependencies: Vec::new(),
+                    display_name: None,
+                    description: None,
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+            let supported =
+                matches!(format, Format::Terraform(TerraformTarget::Gke)) && resource == "postgres";
+            let existing = try_prepared_for_render(
+                &source,
+                format,
+                &settings(KubernetesClusterOwnership::Existing),
+            )
+            .await;
+            if supported {
+                existing.unwrap_or_else(|error| panic!("{format:?} {resource}: {error}"));
+            } else {
+                let message = existing.expect_err(&format!("{format:?} {resource} is refused"));
+                assert!(
+                    message.contains(&format!(
+                        "Setup cannot yet place the {resource} '{resource}' on an existing cluster's network"
+                    )) && message.contains("Use a cluster that setup creates")
+                        && message.contains(&format!("or remove the {resource}")),
+                    "{format:?} {resource}: {message}"
+                );
+            }
+            try_prepared_for_render(
+                &source,
+                format,
+                &settings(KubernetesClusterOwnership::Managed),
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{format:?} {resource} on a created cluster: {error}"));
+        }
+    }
 }
 
 /// Customers already hold modules generated before this rule moved into one place. They never registered a `compute` for a Kubernetes target,

@@ -159,6 +159,40 @@ pub fn is_network_database(entry: &ResourceEntry) -> bool {
     resource_type == crate::Postgres::RESOURCE_TYPE || resource_type == crate::Redis::RESOURCE_TYPE
 }
 
+/// Whether setup can put this resource's private endpoint on the network of an existing
+/// Kubernetes cluster, so that the cluster's workloads reach it.
+///
+/// Only a GCP Postgres can: the module looks the cluster's own network up. A Memorystore
+/// instance cannot move to another network after creation, and on AWS and Azure the module keeps
+/// a network of its own that the cluster is not attached to. A resource that is not a cloud
+/// database needs no network, so the answer for it is `true`.
+///
+/// The network preflight (at build time) and the generated modules (at plan time, where the
+/// cluster mode is chosen) both ask this, so they refuse the same cases.
+pub fn existing_cluster_network_hosts(entry: &ResourceEntry, cloud_platform: Platform) -> bool {
+    if !is_network_database(entry) {
+        return true;
+    }
+    entry.config.resource_type() == crate::Postgres::RESOURCE_TYPE
+        && cloud_platform == Platform::Gcp
+}
+
+/// The message for a database or cache that setup cannot place on an existing cluster's network.
+/// `network_hint`, when the deployer can bring the cluster's own network, names how in the
+/// caller's terms.
+pub fn existing_cluster_network_refusal(
+    resource_type: &str,
+    resource_id: &str,
+    network_hint: Option<&str>,
+) -> String {
+    let hint = network_hint
+        .map(|hint| format!(" {hint},"))
+        .unwrap_or_default();
+    format!(
+        "Setup cannot yet place the {resource_type} '{resource_id}' on an existing cluster's network, so the cluster could not reach it. Use a cluster that setup creates,{hint} or remove the {resource_type}."
+    )
+}
+
 /// Whether setup emits this resource and registers it with the manager.
 ///
 /// This is the one rule. Both setup generators render exactly the resources it accepts, and the

@@ -92,6 +92,12 @@ impl StackMutation for NetworkMutation {
         } else {
             stack_state.platform
         };
+        refuse_databases_an_existing_cluster_cannot_reach(
+            &stack,
+            stack_state,
+            config,
+            target_platform,
+        )?;
         if let Some(settings) = &config.stack_settings.network {
             let matches_platform = matches!(
                 (settings, target_platform),
@@ -163,6 +169,59 @@ impl StackMutation for NetworkMutation {
 
         Ok(stack)
     }
+}
+
+/// An existing cluster reaches a database or cache only on its own network. Setup puts a GCP
+/// Postgres there; every other database and cache would land on a network the cluster is not on,
+/// so refuse it here, where the deployer first learns it, rather than hand over a setup that
+/// installs and then cannot be used. A network the deployer names in the stack settings is
+/// theirs to choose, so it is not second-guessed.
+fn refuse_databases_an_existing_cluster_cannot_reach(
+    stack: &Stack,
+    stack_state: &StackState,
+    config: &DeploymentConfig,
+    cloud_platform: Platform,
+) -> Result<()> {
+    if stack_state.platform != Platform::Kubernetes || config.stack_settings.network.is_some() {
+        return Ok(());
+    }
+    // A cluster the source stack declares fixes the mode; otherwise the settings do.
+    let ownership = stack
+        .resources()
+        .filter(|(id, entry)| !alien_core::is_prepared_cluster(id, entry))
+        .find_map(|(_, entry)| entry.config.downcast_ref::<alien_core::KubernetesCluster>())
+        .map(|cluster| cluster.ownership)
+        .or_else(|| {
+            config
+                .stack_settings
+                .kubernetes
+                .as_ref()
+                .and_then(|settings| settings.cluster.as_ref())
+                .map(|cluster| cluster.ownership)
+        });
+    let existing = ownership
+        .is_some_and(|ownership| ownership != alien_core::KubernetesClusterOwnership::Managed);
+    if !existing {
+        return Ok(());
+    }
+    for (id, entry) in stack.resources() {
+        // A resource the deployer can decline is checked by the generated module's plan instead,
+        // once its input is known.
+        if entry.enabled_when.is_none()
+            && !alien_core::existing_cluster_network_hosts(entry, cloud_platform)
+        {
+            return Err(AlienError::new(ErrorData::StackMutationFailed {
+                mutation_name: "Add Network resource for VPC networking".to_string(),
+                message: alien_core::existing_cluster_network_refusal(
+                    entry.config.resource_type().as_ref(),
+                    id,
+                    Some("set the stack's network to the cluster's own network"),
+                ),
+                resource_id: Some(id.to_string()),
+            }));
+        }
+    }
+    Ok(())
 }
 
 /// Kubernetes workloads and logical compute pools use the existing cluster network.
@@ -652,6 +711,7 @@ mod tests {
     #[tokio::test]
     async fn borrowed_compute_and_existing_kubernetes_do_not_create_cloud_network() {
         for provider in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let hosts_database = provider == Platform::Gcp;
             let state = create_stack_state(Platform::Kubernetes);
             let config = create_deployment_config_with_base(None, provider);
             let compute_only = Stack::new("existing".to_string())
@@ -678,6 +738,10 @@ mod tests {
                 alien_core::Postgres::new("database".to_string()).build(),
             );
             assert!(NetworkMutation.should_run(&database, &state, &config));
+            if !hosts_database {
+                // The cluster could not reach a database on a network of its own: refused.
+                continue;
+            }
             let stack = NetworkMutation
                 .mutate(database, &state, &config)
                 .await
@@ -719,6 +783,74 @@ mod tests {
                 NetworkMutation.should_run(&stack, &state, &config),
                 "{provider:?}: Redis needs a network"
             );
+        }
+    }
+
+    /// Setup puts a database or cache on an existing cluster's network only for a GCP Postgres.
+    /// Every other cell is refused at build time, with the message naming what to do instead,
+    /// unless the stack settings name the network (then it is the deployer's choice).
+    #[tokio::test]
+    async fn a_database_an_existing_cluster_cannot_reach_is_refused_with_a_clear_message() {
+        for (provider, redis, refused) in [
+            (Platform::Gcp, false, false),
+            (Platform::Gcp, true, true),
+            (Platform::Aws, false, true),
+            (Platform::Aws, true, true),
+            (Platform::Azure, false, true),
+            (Platform::Azure, true, true),
+        ] {
+            let state = create_stack_state(Platform::Kubernetes);
+            let config = create_deployment_config_with_base(None, provider);
+            let mut stack = create_stack_with_container();
+            add_frozen(
+                &mut stack,
+                alien_core::KubernetesCluster::new("kubernetes".to_string())
+                    .provider(alien_core::KubernetesClusterProvider::Generic)
+                    .ownership(alien_core::KubernetesClusterOwnership::Existing)
+                    .namespace("application".to_string())
+                    .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApi)
+                    .build(),
+            );
+            if redis {
+                add_frozen(
+                    &mut stack,
+                    alien_core::Redis::new("cache".to_string()).build(),
+                );
+            } else {
+                add_frozen(
+                    &mut stack,
+                    alien_core::Postgres::new("database".to_string()).build(),
+                );
+            }
+            let result = NetworkMutation.mutate(stack, &state, &config).await;
+            if refused {
+                let message = format!("{:?}", result.expect_err("refused"));
+                assert!(
+                    message.contains("cannot yet place the")
+                        && message.contains("Use a cluster that setup creates")
+                        && message.contains("or remove the"),
+                    "{provider:?} redis={redis}: {message}"
+                );
+            } else {
+                result.unwrap_or_else(|error| panic!("{provider:?}: {error:?}"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_managed_cluster_keeps_every_database() {
+        for provider in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = create_stack_state(Platform::Kubernetes);
+            let config = create_deployment_config_with_base(None, provider);
+            let mut stack = create_stack_with_container();
+            add_frozen(
+                &mut stack,
+                alien_core::Redis::new("cache".to_string()).build(),
+            );
+            NetworkMutation
+                .mutate(stack, &state, &config)
+                .await
+                .unwrap_or_else(|error| panic!("{provider:?}: {error:?}"));
         }
     }
 

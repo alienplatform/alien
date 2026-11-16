@@ -1782,6 +1782,7 @@ fn declared_cluster(ownership: KubernetesClusterOwnership) -> KubernetesCluster 
 }
 
 /// What the source stack adds to the one workload every case here deploys.
+#[derive(Clone, Copy)]
 enum Source {
     Workload,
     Database,
@@ -2247,7 +2248,24 @@ async fn plan_existing_cluster_with(
             r#"aks_cluster_name = "c"
   aks_cluster_resource_group_name = "rg""#,
         ),
-        other => panic!("not a GKE or AKS target: {other:?}"),
+        TerraformTarget::Eks => (
+            r#"mock_provider "aws" {
+  mock_data "aws_availability_zones" {
+    defaults = { names = ["us-east-1a", "us-east-1b", "us-east-1c"] }
+  }
+  mock_data "aws_eks_cluster" {
+    defaults = { identity = [{ oidc = [{ issuer = "https://oidc.eks.example.com/id/ABC" }] }] }
+  }
+}
+mock_provider "tls" {
+  mock_data "tls_certificate" {
+    defaults = { certificates = [{ sha1_fingerprint = "0000000000000000000000000000000000000000" }] }
+  }
+}"#
+            .to_string(),
+            r#"eks_cluster_name = "c""#,
+        ),
+        other => panic!("not an EKS, GKE or AKS target: {other:?}"),
     };
     let module = render_prepared(source, target).await;
     let mut files: indexmap::IndexMap<String, String> = module
@@ -2578,13 +2596,77 @@ async fn a_declined_redis_leaves_the_database_on_the_clusters_network() {
         Source::DatabaseWithGatedRedis,
         cluster,
         "input_redis_enabled = true",
+        "  expect_failures = [terraform_data.existing_cluster_network_guard]",
+    )
+    .await;
+    // A deployer who brings the network names the cluster's own: that is theirs to choose.
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::DatabaseWithGatedRedis,
+        cluster,
+        "input_redis_enabled = true\n  network_mode = \"use-existing\"\n  network_name = \"cluster-net\"\n  subnet_name = \"cluster-subnet\"",
         r#"  assert {
-    condition = local.effective_network_mode == "create-new" && length(google_compute_network.default_network) == 1
-    error_message = "with Redis accepted the module's own network inputs apply"
-  }
-  assert {
-    condition = local.deployment_settings.network.type == "create"
-    error_message = "the settings describe the network the module creates"
+    condition = local.effective_network_mode == "use-existing" && length(google_compute_network.default_network) == 0
+    error_message = "the network the deployer names is used and none is created"
+  }"#,
+    )
+    .await;
+}
+
+/// Setup cannot put a cache or database endpoint on an existing cluster's network except a GCP
+/// Postgres, so the module fails the plan for every other cell with the message that says what
+/// to do instead. A cell that stays supported plans clean: Postgres on an existing GKE cluster.
+#[tokio::test]
+async fn every_database_an_existing_cluster_cannot_reach_is_refused_at_plan() {
+    let cluster = (
+        "projects/p/global/networks/cluster-net",
+        "projects/p/regions/europe-west1/subnetworks/cluster-subnet",
+    );
+    for (target, source, resource) in [
+        (TerraformTarget::Gke, Source::Redis, "redis"),
+        (TerraformTarget::Gke, Source::DatabaseWithGatedRedis, "redis"),
+        (TerraformTarget::Aks, Source::Redis, "redis"),
+        (TerraformTarget::Aks, Source::Database, "postgres"),
+        (TerraformTarget::Eks, Source::Redis, "redis"),
+        (TerraformTarget::Eks, Source::Database, "postgres"),
+    ] {
+        let module = render_prepared(source, target).await;
+        let guard = whole_module(&module);
+        assert!(
+            guard.contains("Setup cannot yet place the")
+                && guard.contains("Use a cluster that setup creates"),
+            "{target:?} {resource}: the module carries the refusal"
+        );
+        let gated = matches!(source, Source::DatabaseWithGatedRedis);
+        plan_existing_cluster_with(
+            target,
+            source,
+            cluster,
+            if gated { "input_redis_enabled = true" } else { "" },
+            "  expect_failures = [terraform_data.existing_cluster_network_guard]",
+        )
+        .await;
+    }
+}
+
+/// The refusal does not touch a created cluster, nor the supported cell.
+#[tokio::test]
+async fn a_created_cluster_and_a_gke_postgres_are_not_refused() {
+    for (target, source) in [
+        (TerraformTarget::Gke, Source::Database),
+        (TerraformTarget::Gke, Source::Workload),
+        (TerraformTarget::Aks, Source::Workload),
+        (TerraformTarget::Eks, Source::Workload),
+    ] {
+        let module = render_prepared(source, target).await;
+        assert_terraform_valid(&module, &format!("{target:?}_supported_cell"));
+    }
+    plan_existing_cluster(
+        TerraformTarget::Gke,
+        Source::Database,
+        r#"  assert {
+    condition = local.effective_network_mode == "use-existing"
+    error_message = "the database goes on the cluster's network"
   }"#,
     )
     .await;
