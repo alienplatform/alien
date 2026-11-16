@@ -456,6 +456,68 @@ impl SingleControllerExecutor {
         Ok(step_result)
     }
 
+    /// Carries out one step of an operator request on the controller under test, the way the
+    /// stack executor does: any resource status, no planning, no status change.
+    pub async fn step_operator_request(
+        &mut self,
+        request: &alien_core::OperatorRequest,
+    ) -> Result<alien_core::OperatorRequestProgress> {
+        let desired_config = self
+            .stack_state
+            .resources
+            .get(&self.resource_id)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceNotFound {
+                    resource_id: self.resource_id.clone(),
+                    available_resources: self.stack_state.resources.keys().cloned().collect(),
+                })
+            })?
+            .config
+            .clone();
+        let context = ResourceControllerContext {
+            desired_config: &desired_config,
+            platform: self.platform,
+            client_config: self.client_config.clone(),
+            state: &self.stack_state,
+            resource_prefix: &self.resource_prefix,
+            registry: &self.registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &DeploymentConfig::builder()
+                .stack_settings(self.stack_settings.clone())
+                .maybe_release_statements(self.release_statements.clone())
+                .maybe_signed_config(self.signed_config.clone())
+                .input_values(self.input_values.clone())
+                .setup_run(self.setup_run)
+                .maybe_setup_run_id(self.setup_run_id.clone())
+                .maybe_management_config(self.management_config.clone())
+                .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
+                .maybe_compute_backend(self.compute_backend.clone())
+                .environment_variables(self.environment_variables.clone())
+                .maybe_monitoring(self.monitoring.clone())
+                .external_bindings(self.external_bindings.clone())
+                .allow_frozen_changes(false)
+                .maybe_domain_metadata(self.domain_metadata.clone())
+                .maybe_public_endpoints(self.public_endpoints.clone())
+                .maybe_runtime_identity_audience(self.runtime_identity_audience.clone())
+                .volume_restores(self.volume_restores.clone())
+                .deletion_policy(self.deletion_policy)
+                .manager_url("https://manager.example.test".to_string())
+                .deployment_token("test-deployment-token".to_string())
+                .build(),
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: HeartbeatCollector::default(),
+        };
+        let outcome = self.controller.step_operator_request(&context, request).await;
+        if let Some(resource_state) = self.stack_state.resources.get_mut(&self.resource_id) {
+            resource_state.internal_state = Some(
+                crate::core::serialize_controller(&*self.controller)
+                    .expect("controller serialization"),
+            );
+        }
+        outcome
+    }
+
     /// Every delay the controller suggested between steps, in order. Tests assert on these
     /// to pin polling behavior; with the default [`DelayMode::Record`] they are not slept.
     pub fn suggested_delays(&self) -> &[Duration] {
