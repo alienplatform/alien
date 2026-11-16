@@ -4963,6 +4963,15 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
       "required": ["token", "updates", "telemetry", "healthChecks"],
       "properties": {
         "token": { "type": "string" },
+        "existingSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Accepted for upgrades from an earlier chart only: the Secret that holds the management token.",
+          "properties": {
+            "name": { "type": "string" },
+            "tokenKey": { "type": "string", "minLength": 1 }
+          }
+        },
         "enrollmentCode": { "type": "string" },
         "enrollmentCodeSecret": {
           "type": "object",
@@ -5056,7 +5065,16 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" }
+            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" },
+            "existingSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Accepted for upgrades from an earlier chart only: the Secret that holds the encryption key.",
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": "string", "minLength": 1 }
+              }
+            }
           }
         },
         "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
@@ -5231,6 +5249,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
       "properties": {
         "enabled": { "type": "boolean" },
         "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
+        "token": { "type": "string", "description": "Accepted for upgrades from an earlier chart only: the collector token that install used." },
         "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
         "imagePullSecrets": {
           "type": "array",
@@ -5402,6 +5421,12 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
           }
         }
       }
+    },
+    "gitops": {
+      "type": "object",
+      "description": "Accepted for upgrades from an earlier chart only. It has no effect.",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
     },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
@@ -5866,7 +5891,7 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
         };
         template.push_str(&format!("{{{{- if not (and (hasKey $conditions {reference:?}) (eq (toJson (get $conditions {reference:?})) {expected:?})) -}}}}{{{{- $_ := unset $values {id:?} -}}}}", reference=when.input, expected=when.equals.to_string(), id=input.id));
         if input.required && input.default.is_none() && !is_deployer_secret_input(input) {
-            template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token (include "deployment.enrollmentCodeSecretName" .)) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
+            template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token (include "deployment.credentialSecretName" .)) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
         }
         template.push_str("{{- end -}}\n");
     }
@@ -6300,7 +6325,8 @@ starts next may be on a node that has not cached its image, and the Operator tha
 recreate the Secret cannot start without it. */ -}}
 {{- if .Release.IsUpgrade }}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.registrySecretName" .) }}
-{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- /* Only a Secret this release owns: one the Operator created has no Helm ownership and Helm would refuse to adopt it. */ -}}
+{{- if and $existing (eq (dig "metadata" "annotations" "meta.helm.sh/release-name" "" $existing) .Release.Name) (hasKey (default dict $existing.data) ".dockerconfigjson") }}
 {{- if $credential }}
 ---
 {{- end }}
@@ -6342,7 +6368,7 @@ fn secret_tpl() -> String {
 {{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
   {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
 {{- end -}}
-{{- $createManagementSecret := not (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- $createManagementSecret := not (include "deployment.credentialSecretName" .) -}}
 {{- if or $createManagementSecret (ne (include "deployment.infrastructure" .) "{}") .Values.inputValues }}
 apiVersion: v1
 kind: Secret
@@ -10199,7 +10225,7 @@ mod tests {
         .unwrap();
         // The password lives in the Secret the Operator creates, so an offline render needs
         // nothing and is the same every time.
-        let owned_values = "postgres:\n  database:\n    enabled: true\n";
+        let owned_values = "postgres:\n  database:\n    enabled: true\n    recordedImage: pgvector/pgvector:pg17-bookworm\n";
         let owned =
             crate::test_utils::helm_template_for_release(&chart.files, Some(owned_values), "app");
         owned.assert_ok("operator-owned database password");
@@ -10828,7 +10854,7 @@ mod tests {
         let template = files.get_mut("templates/registry-secret.yaml").unwrap();
         *template = template.replace(
             "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.registrySecretName\" .)",
-            "(dict \"data\" (dict \".dockerconfigjson\" \"b3BlcmF0b3ItY3JlZGVudGlhbA==\"))",
+            "(dict \"metadata\" (dict \"annotations\" (dict \"meta.helm.sh/release-name\" \"test-release\")) \"data\" (dict \".dockerconfigjson\" \"b3BlcmF0b3ItY3JlZGVudGlhbA==\"))",
         );
         let kept = crate::test_utils::helm_template_as_upgrade(&files, Some(upgrade.as_str()));
         kept.assert_ok("upgrade that keeps the registry Secret");
@@ -11735,10 +11761,6 @@ infrastructureExistingSecret: customer-bindings
         for invalid in [
             captured_endpoint.replace("  ingestUrl: https://ingest.example.test\n", ""),
             missing_inputs.clone(),
-            missing_inputs.replace(
-                "  token: ax_test",
-                "  existingSecret:\n    name: installer-credentials",
-            ),
             values.replace("ingestUrl: https://ingest.example.test", "ingestUrl: 42"),
             values.replace(
                 "ingestUrl: https://ingest.example.test",
@@ -13895,9 +13917,12 @@ logCollector:
             .iter()
             .all(|secret| secret["stringData"]["collector-token"].is_null()
                 && secret["data"]["collector-token"].is_null()));
-        // There is no value for it: the Operator creates the token.
-        let with_token = values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: ignored");
-        assert!(!crate::test_utils::helm_template(&chart.files, Some(&with_token)).is_ok());
+        // An earlier install's collector token is accepted so an upgrade can carry it; a new
+        // install renders it nowhere.
+        let with_token = values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: earlier-token");
+        let accepted = crate::test_utils::helm_template(&chart.files, Some(&with_token));
+        accepted.assert_ok("earlier collector token");
+        assert!(!accepted.stdout.contains("earlier-token"));
 
         let mut remote_files = chart.files.clone();
         remote_files.shift_remove("templates/remote-operator-checks.yaml");
@@ -13974,6 +13999,10 @@ logCollector:
                 "lookup \"v1\" \"Secret\" $.Release.Namespace $database.name",
                 "$database.name",
             ),
+            (
+                "lookup \"v1\" \"Secret\" .Release.Namespace $external",
+                "$external",
+            ),
         ] {
             assert!(template.contains(call), "{call}");
             *template = template.replace(
@@ -14017,7 +14046,7 @@ logCollector:
             .map(|secret| serde_json::to_value(&secret["data"]).unwrap())
     }
 
-    const MIGRATION_VALUES: &str = "management:\n  token: ax_test\n  url: https://manager.example.test\n  deploymentId: dep_test\nlogCollector:\n  enabled: true\n  mode: nodeAgent\n  scope:\n    deploymentLabelValue: shop\npostgres:\n  main:\n    enabled: true\n";
+    const MIGRATION_VALUES: &str = "management:\n  token: ax_test\n  url: https://manager.example.test\n  deploymentId: dep_test\nlogCollector:\n  enabled: true\n  mode: nodeAgent\n  scope:\n    deploymentLabelValue: shop\npostgres:\n  main:\n    enabled: true\n    recordedImage: pgvector/pgvector:pg17-bookworm\n";
 
     #[test]
     fn migration_carries_what_the_earlier_chart_installed_and_generates_nothing() {
@@ -14180,6 +14209,31 @@ logCollector:
                 render_upgrade_with_installed_secrets(&chart, MIGRATION_VALUES, installed);
             assert!(!refused.is_ok(), "{}", refused.stdout);
         }
+    }
+
+    /// An earlier GitOps install keeps its key in a Secret it names in the values. The upgrade
+    /// carries that key unchanged, and its management token Secret is still the credential.
+    #[test]
+    fn migration_reads_the_secret_an_earlier_install_named_and_generates_nothing() {
+        let chart = product_chart_for_stack(&database_stack(), false, None);
+        let values = MIGRATION_VALUES.replace("  token: ax_test\n", "  token: \"\"\n  existingSecret:\n    name: installer-credentials\n    tokenKey: sync-token\n")
+            + "runtime:\n  encryption:\n    existingSecret:\n      name: team-keys\n      key: runtime-key\n";
+        let rendered = render_upgrade_with_installed_secrets(
+            &chart,
+            &values,
+            serde_json::json!({ "team-keys": { "runtime-key": b64(OLD_KEY) } }),
+        );
+        rendered.assert_ok("earlier GitOps install");
+        assert_eq!(
+            migration_data(&rendered),
+            Some(serde_json::json!({ "encryption-key": b64(OLD_KEY) }))
+        );
+        // The credential still comes from the Secret the values name.
+        assert!(rendered.stdout.contains("secretName: installer-credentials"));
+        // Without the Secret nothing is carried, and nothing is made up.
+        let missing = render_upgrade_with_installed_secrets(&chart, &values, serde_json::json!({}));
+        missing.assert_ok("named Secret absent");
+        assert!(migration_data(&missing).is_none());
     }
 
     /// A release with the Remote Operator still has a runtime Operator and its databases, and the

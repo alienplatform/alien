@@ -1,14 +1,14 @@
 {{- define "deployment.validateRuntimeIdentity" -}}
 {{- $storage := .Values.runtime.data.persistence -}}
-{{- $credentialConfigured := or .Values.management.token (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- $credentialConfigured := or .Values.management.token (include "deployment.credentialSecretName" .) -}}
 {{- if and $credentialConfigured (not .Values.management.deploymentId) (not $storage.enabled) -}}
   {{- fail "A bootstrap installation requires persistent runtime storage. Set runtime.data.persistence.enabled=true; ephemeral storage requires an existing deployment ID and its deployment credential." -}}
 {{- end -}}
-{{- if and .Values.management.enrollmentCode (not $storage.enabled) -}}
+{{- if and (or .Values.management.enrollmentCode (include "deployment.enrollmentCodeSecretName" .)) (not $storage.enabled) -}}
   {{- fail "Enrollment keeps the Operator's daily key in runtime storage. Set runtime.data.persistence.enabled=true." -}}
 {{- end -}}
 {{- $name := include "deployment.fullname" . -}}
-{{- if and .Values.management.deploymentId (not .Values.management.enrollmentCode) (not .Values.management.token) (not (include "deployment.enrollmentCodeSecretName" .)) (not (dig "enabled" false (default dict .Values.airgapped))) -}}
+{{- if and .Values.management.deploymentId (not .Values.management.enrollmentCode) (not .Values.management.token) (not (include "deployment.credentialSecretName" .)) (not (dig "enabled" false (default dict .Values.airgapped))) -}}
   {{- /* An enrolled Operator runs on the key stored in its volume, so an
   upgrade needs no code. A new installation with no credential would crash-loop. */ -}}
   {{- $installedSecret := lookup "v1" "Secret" .Release.Namespace $name -}}
@@ -77,8 +77,15 @@ that migration is needed. */ -}}
 {{- dig "name" "" (default dict .Values.management.enrollmentCodeSecret) -}}
 {{- end -}}
 
+{{- /* Migration only (remove one release after migration is reported): an earlier chart took the
+management token from `management.existingSecret`, which old GitOps installs still keep in Git.
+The Secret is still read as the token source. */ -}}
+{{- define "deployment.credentialSecretName" -}}
+{{- default (dig "name" "" (default dict .Values.management.existingSecret)) (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- end -}}
+
 {{- define "deployment.managementSecretName" -}}
-{{- default (include "deployment.fullname" .) (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- default (include "deployment.fullname" .) (include "deployment.credentialSecretName" .) -}}
 {{- end -}}
 
 {{- define "deployment.managementSecretTokenKey" -}}
@@ -86,6 +93,8 @@ that migration is needed. */ -}}
 {{- default "enrollment-code" (dig "key" "" (default dict .Values.management.enrollmentCodeSecret)) -}}
 {{- else if .Values.management.enrollmentCode -}}
 enrollment-code
+{{- else if dig "name" "" (default dict .Values.management.existingSecret) -}}
+{{- default "sync-token" (dig "tokenKey" "" .Values.management.existingSecret) -}}
 {{- else -}}
 sync-token
 {{- end -}}

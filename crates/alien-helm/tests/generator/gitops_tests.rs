@@ -23,7 +23,7 @@ fn chart_files() -> test_utils::LinterFiles {
     render(&stack, StackSettings::default()).files
 }
 
-const CODE_VALUES: &str = "management:\n  url: https://manager.example.com\n  enrollmentCode: ax_enroll_example\n  audience: https://manager.example.com\n  deploymentId: dep_example\nlogCollector:\n  enabled: true\n  mode: nodeAgent\npostgres:\n  metadata:\n    enabled: true\nruntime:\n  image:\n    pullWithManagementToken: true\n";
+const CODE_VALUES: &str = "management:\n  url: https://manager.example.com\n  enrollmentCode: ax_enroll_example\n  audience: https://manager.example.com\n  deploymentId: dep_example\nlogCollector:\n  enabled: true\n  mode: nodeAgent\npostgres:\n  metadata:\n    enabled: true\n    recordedImage: pgvector/pgvector:pg17-bookworm\nruntime:\n  image:\n    pullWithManagementToken: true\n";
 
 fn documents(manifest: &str) -> Vec<serde_yaml::Value> {
     serde_yaml::Deserializer::from_str(manifest)

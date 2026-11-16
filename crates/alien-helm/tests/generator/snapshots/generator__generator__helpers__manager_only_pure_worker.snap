@@ -344,6 +344,15 @@ postgres: {}
       "required": ["token", "updates", "telemetry", "healthChecks"],
       "properties": {
         "token": { "type": "string" },
+        "existingSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Accepted for upgrades from an earlier chart only: the Secret that holds the management token.",
+          "properties": {
+            "name": { "type": "string" },
+            "tokenKey": { "type": "string", "minLength": 1 }
+          }
+        },
         "enrollmentCode": { "type": "string" },
         "enrollmentCodeSecret": {
           "type": "object",
@@ -437,7 +446,16 @@ postgres: {}
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" }
+            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" },
+            "existingSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Accepted for upgrades from an earlier chart only: the Secret that holds the encryption key.",
+              "properties": {
+                "name": { "type": "string" },
+                "key": { "type": "string", "minLength": 1 }
+              }
+            }
           }
         },
         "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
@@ -612,6 +630,7 @@ postgres: {}
       "properties": {
         "enabled": { "type": "boolean" },
         "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
+        "token": { "type": "string", "description": "Accepted for upgrades from an earlier chart only: the collector token that install used." },
         "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
         "imagePullSecrets": {
           "type": "array",
@@ -783,6 +802,12 @@ postgres: {}
           }
         }
       }
+    },
+    "gitops": {
+      "type": "object",
+      "description": "Accepted for upgrades from an earlier chart only. It has no effect.",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean" } }
     },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
     "basePlatformConfig": {
@@ -1210,15 +1235,15 @@ different namespaces of one cluster from colliding. */ -}}
 === templates/_runtime-identity.tpl ===
 {{- define "deployment.validateRuntimeIdentity" -}}
 {{- $storage := .Values.runtime.data.persistence -}}
-{{- $credentialConfigured := or .Values.management.token (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- $credentialConfigured := or .Values.management.token (include "deployment.credentialSecretName" .) -}}
 {{- if and $credentialConfigured (not .Values.management.deploymentId) (not $storage.enabled) -}}
   {{- fail "A bootstrap installation requires persistent runtime storage. Set runtime.data.persistence.enabled=true; ephemeral storage requires an existing deployment ID and its deployment credential." -}}
 {{- end -}}
-{{- if and .Values.management.enrollmentCode (not $storage.enabled) -}}
+{{- if and (or .Values.management.enrollmentCode (include "deployment.enrollmentCodeSecretName" .)) (not $storage.enabled) -}}
   {{- fail "Enrollment keeps the Operator's daily key in runtime storage. Set runtime.data.persistence.enabled=true." -}}
 {{- end -}}
 {{- $name := include "deployment.fullname" . -}}
-{{- if and .Values.management.deploymentId (not .Values.management.enrollmentCode) (not .Values.management.token) (not (include "deployment.enrollmentCodeSecretName" .)) (not (dig "enabled" false (default dict .Values.airgapped))) -}}
+{{- if and .Values.management.deploymentId (not .Values.management.enrollmentCode) (not .Values.management.token) (not (include "deployment.credentialSecretName" .)) (not (dig "enabled" false (default dict .Values.airgapped))) -}}
   {{- /* An enrolled Operator runs on the key stored in its volume, so an
   upgrade needs no code. A new installation with no credential would crash-loop. */ -}}
   {{- $installedSecret := lookup "v1" "Secret" .Release.Namespace $name -}}
@@ -1287,8 +1312,15 @@ that migration is needed. */ -}}
 {{- dig "name" "" (default dict .Values.management.enrollmentCodeSecret) -}}
 {{- end -}}
 
+{{- /* Migration only (remove one release after migration is reported): an earlier chart took the
+management token from `management.existingSecret`, which old GitOps installs still keep in Git.
+The Secret is still read as the token source. */ -}}
+{{- define "deployment.credentialSecretName" -}}
+{{- default (dig "name" "" (default dict .Values.management.existingSecret)) (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- end -}}
+
 {{- define "deployment.managementSecretName" -}}
-{{- default (include "deployment.fullname" .) (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- default (include "deployment.fullname" .) (include "deployment.credentialSecretName" .) -}}
 {{- end -}}
 
 {{- define "deployment.managementSecretTokenKey" -}}
@@ -1296,6 +1328,8 @@ that migration is needed. */ -}}
 {{- default "enrollment-code" (dig "key" "" (default dict .Values.management.enrollmentCodeSecret)) -}}
 {{- else if .Values.management.enrollmentCode -}}
 enrollment-code
+{{- else if dig "name" "" (default dict .Values.management.existingSecret) -}}
+{{- default "sync-token" (dig "tokenKey" "" .Values.management.existingSecret) -}}
 {{- else -}}
 sync-token
 {{- end -}}
@@ -1521,7 +1555,7 @@ roleRef:
 {{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
   {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
 {{- end -}}
-{{- $createManagementSecret := not (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- $createManagementSecret := not (include "deployment.credentialSecretName" .) -}}
 {{- if or $createManagementSecret (ne (include "deployment.infrastructure" .) "{}") .Values.inputValues }}
 apiVersion: v1
 kind: Secret
@@ -1573,7 +1607,8 @@ starts next may be on a node that has not cached its image, and the Operator tha
 recreate the Secret cannot start without it. */ -}}
 {{- if .Release.IsUpgrade }}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.registrySecretName" .) }}
-{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- /* Only a Secret this release owns: one the Operator created has no Helm ownership and Helm would refuse to adopt it. */ -}}
+{{- if and $existing (eq (dig "metadata" "annotations" "meta.helm.sh/release-name" "" $existing) .Release.Name) (hasKey (default dict $existing.data) ".dockerconfigjson") }}
 {{- if $credential }}
 ---
 {{- end }}
@@ -1615,7 +1650,6 @@ carried.
 {{- if and $requested (not (regexMatch "^[a-fA-F0-9]{64}$" $requested)) -}}
   {{- fail "runtime.encryption.key must be exactly 64 hex characters, or empty to let the Operator create it on first start." -}}
 {{- end -}}
-{{- if or .Release.IsUpgrade $requested -}}
 {{- $found := dict -}}
 {{- $own := dict -}}
 {{- $owned := dict -}}
@@ -1626,6 +1660,18 @@ carried.
 {{- /* What the Operator already keeps in its own Secret is not carried again. */ -}}
 {{- $ownedData := default dict (and $owned $owned.data) -}}
 {{- $ownData := default dict (and $own $own.data) -}}
+{{- /* An earlier install may keep its key in a Secret the user named. Its values are still in Git for GitOps installs. */ -}}
+{{- $external := dig "encryption" "existingSecret" "name" "" .Values.runtime -}}
+{{- if $external -}}
+  {{- $externalSecret := lookup "v1" "Secret" .Release.Namespace $external -}}
+  {{- $externalKey := default "encryption-key" (dig "encryption" "existingSecret" "key" "" .Values.runtime) -}}
+  {{- if and $externalSecret (hasKey (default dict $externalSecret.data) $externalKey) -}}
+    {{- $ownData = set $ownData "encryption-key" (index $externalSecret.data $externalKey) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Values.logCollector.token (not (hasKey $ownData "collector-token")) -}}
+  {{- $ownData = set $ownData "collector-token" (.Values.logCollector.token | b64enc) -}}
+{{- end -}}
 {{- if hasKey $ownData "encryption-key" -}}
   {{- $stored := index $ownData "encryption-key" | b64dec -}}
   {{- if not (regexMatch "^[a-fA-F0-9]{64}$" $stored) -}}
@@ -1652,10 +1698,8 @@ carried.
 {{- end -}}
 {{- range $database := include "deployment.ownedPostgres" . | fromJsonArray -}}
   {{- $key := printf "postgres-%s-password" $database.id -}}
-  {{- $installedDatabase := dict -}}
-  {{- if $.Release.IsUpgrade -}}
-    {{- $installedDatabase = lookup "v1" "Secret" $.Release.Namespace $database.name -}}
-  {{- end -}}
+  {{- /* Not gated on upgrade: an uninstall keeps the database volume and its password Secret, so a reinstall must carry that password too. */ -}}
+  {{- $installedDatabase := lookup "v1" "Secret" $.Release.Namespace $database.name -}}
   {{- if and $installedDatabase (hasKey (default dict $installedDatabase.data) "password") (not (hasKey $ownedData $key)) -}}
     {{- $_ := set $found $key (index $installedDatabase.data "password") -}}
   {{- end -}}
@@ -1672,7 +1716,6 @@ data:
   {{- range $key, $value := $found }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
-{{- end }}
 {{- end }}
 
 === templates/configmap.yaml ===
@@ -3545,7 +3588,7 @@ WARNING: the management URL {{ $managementUrl }} is not https. The Operator send
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
-{{- if and $database.existingPasswordSecret (not (lookup "v1" "Secret" $.Release.Namespace "")) }}
+{{- if not (lookup "v1" "Secret" $.Release.Namespace "") }}
   {{- $recordedImage := required (printf "Cannot verify the installed Postgres image offline; set postgres.%s.recordedImage to the retained PVC alien.dev/postgres-image annotation (for a fresh database, pin the initial image)" $id) $database.recordedImage }}
   {{- if ne (first (splitList "@" $recordedImage)) (first (splitList "@" $desiredImage)) }}
     {{- fail (printf "Postgres image differs from postgres.%s.recordedImage; retain the recorded image or migrate the database before changing the pin" $id) }}
