@@ -742,22 +742,26 @@ def http(url):
     except Exception as e:
         return "fail:" + type(e).__name__
 import os
-rows = [
-    ("dns_example_com", dns("example.com")),
-    ("dns_storage_googleapis_com", dns("storage.googleapis.com")),
-    ("dns_metadata_google_internal", dns("metadata.google.internal")),
-    ("https_example_com", http("https://example.com")),
-    ("http_example_com", http("http://example.com")),
-    ("tcp_1_1_1_1_443", tcp("1.1.1.1", 443)),
-    ("tcp_8_8_8_8_53", tcp("8.8.8.8", 53)),
-    ("tcp_metadata_ip_80", tcp("169.254.169.254", 80)),
-    ("https_storage_googleapis_com", http("https://storage.googleapis.com")),
+from concurrent.futures import ThreadPoolExecutor
+checks = [
+    ("dns_example_com", lambda: dns("example.com")),
+    ("dns_storage_googleapis_com", lambda: dns("storage.googleapis.com")),
+    ("dns_metadata_google_internal", lambda: dns("metadata.google.internal")),
+    ("https_example_com", lambda: http("https://example.com")),
+    ("http_example_com", lambda: http("http://example.com")),
+    ("tcp_1_1_1_1_443", lambda: tcp("1.1.1.1", 443)),
+    ("tcp_8_8_8_8_53", lambda: tcp("8.8.8.8", 53)),
+    ("tcp_metadata_ip_80", lambda: tcp("169.254.169.254", 80)),
+    ("https_storage_googleapis_com", lambda: http("https://storage.googleapis.com")),
 ]
 listener = os.environ.get("ALIEN_PROBE_LISTENER")
 if listener:
     host, port = listener.rsplit(":", 1)
-    rows.append(("tcp_listener_in_customer_vpc", tcp(host, int(port))))
-for name, value in rows:
+    checks.append(("tcp_listener_in_customer_vpc", lambda: tcp(host, int(port))))
+# A closed network answers each lookup only after about 20 s, so the rows run side by side.
+with ThreadPoolExecutor(len(checks)) as pool:
+    results = list(pool.map(lambda c: c[1](), checks))
+for (name, _), value in zip(checks, results):
     print(name + "=" + value)
 "#;
 
