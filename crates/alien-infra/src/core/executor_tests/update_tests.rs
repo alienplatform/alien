@@ -772,6 +772,20 @@ async fn direct_setup_frozen_pass_verifies_kubernetes_compute_without_creating_a
                 .build(),
             ResourceLifecycle::Frozen,
         )
+        .add(
+            alien_core::Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "registry.example.com/agent:latest".to_string(),
+                    bundled_from: None,
+                })
+                .egress(alien_core::SandboxEgress::None)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Live,
+        )
         .build();
     let mut config = default_deployment_config();
     config.allow_frozen_changes = true;
@@ -783,6 +797,7 @@ async fn direct_setup_frozen_pass_verifies_kubernetes_compute_without_creating_a
         })),
     )
     .deployment_config(&config)
+    .lifecycle_filter(vec![ResourceLifecycle::Frozen])
     .service_provider(Arc::new(provider))
     .build()?;
     let mut state = StackState::new(Platform::Kubernetes);
@@ -798,6 +813,14 @@ async fn direct_setup_frozen_pass_verifies_kubernetes_compute_without_creating_a
         Some(Platform::Kubernetes)
     );
     assert!(state.resources["compute"].outputs.is_none());
+    // The Frozen pass leaves the Live sandbox to the runtime: setup neither expects nor creates it.
+    assert!(
+        state
+            .resources
+            .get("agents")
+            .is_none_or(|resource| resource.status == ResourceStatus::Pending),
+        "the Frozen pass must not provision the sandbox"
+    );
     Ok(())
 }
 
