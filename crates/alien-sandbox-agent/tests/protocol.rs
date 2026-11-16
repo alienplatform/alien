@@ -2103,6 +2103,72 @@ async fn transport_preview_forwards_the_callers_authorization_and_hides_the_capa
     assert_eq!(seen.lock().unwrap().len(), 1, "refused calls reach nothing");
 }
 
+/// A backend whose template cannot carry the environment names the declared ports in the grant.
+/// Only the ports named there are granted, and the capability then reaches the daemon.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn transport_preview_takes_declared_ports_from_the_grant_when_the_environment_has_none() {
+    let _env = PREVIEW_ENV.lock().await;
+    std::env::remove_var("ALIEN_SANDBOX_PREVIEW_PORTS");
+    let (base, _dir) = transport_agent().await;
+    let (port, seen) = upstream_server().await;
+    let (other, _) = upstream_server().await;
+    let client = reqwest::Client::new();
+    let grant_with = |sandbox: &'static str, port: u16, declared: Vec<u16>| {
+        let client = client.clone();
+        let base = base.clone();
+        async move {
+            client
+                .post(format!("{base}/"))
+                .json(&json!({"v": 1, "op": "previewGrant", "sandbox": sandbox, "port": port, "declaredPorts": declared}))
+                .send()
+                .await
+                .expect("responds")
+        }
+    };
+
+    // Named in neither the environment nor the request: refused.
+    assert_eq!(grant_with("sandbox-a", port, vec![]).await.status(), 403);
+    // A port the request does not name is refused even when another one is.
+    assert_eq!(
+        grant_with("sandbox-a", other, vec![port]).await.status(),
+        403
+    );
+    // The agent's own port is never grantable, whatever the request names.
+    assert_eq!(
+        grant_with("sandbox-a", 8971, vec![8971]).await.status(),
+        403
+    );
+
+    let granted: serde_json::Value = grant_with("sandbox-a", port, vec![port])
+        .await
+        .json()
+        .await
+        .unwrap();
+    let capability = granted["capability"].as_str().expect("a capability");
+    let ok = client
+        .get(format!("{base}/v1/preview/{port}/x"))
+        .header("authorization", "Bearer daemon-secret")
+        .header("x-alien-preview-port", port.to_string())
+        .header("x-alien-preview-capability", capability)
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(ok.status(), 200);
+    assert!(seen.lock().unwrap()[0]
+        .to_ascii_lowercase()
+        .contains("authorization: bearer daemon-secret"));
+    // The capability is for that port only.
+    let other_port = client
+        .get(format!("{base}/v1/preview/{other}/x"))
+        .header("x-alien-preview-port", other.to_string())
+        .header("x-alien-preview-capability", capability)
+        .send()
+        .await
+        .expect("responds");
+    assert!(matches!(other_port.status().as_u16(), 401 | 403));
+}
+
 /// The caller puts its bearer under the header its backend names (`caller_authorization_header`).
 /// Whichever it is, the daemon sees it as `Authorization` and never sees an `x-alien-*` header.
 #[tokio::test]
@@ -2228,6 +2294,62 @@ async fn transport_preview_upgrade_reaches_the_daemon_with_the_callers_authoriza
     let seen = head_rx.await.unwrap().to_ascii_lowercase();
     assert!(seen.contains("authorization: bearer daemon-secret"));
     assert!(!seen.contains("x-alien-preview"));
+}
+
+/// A daemon that answers a close frame and drops the connection at once (most do) must not lose
+/// that last frame: the bytes it wrote before closing reach the client, then the client sees EOF.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn transport_preview_delivers_the_daemons_last_bytes_when_it_closes_at_once() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _env = PREVIEW_ENV.lock().await;
+    let (base, _dir) = transport_agent().await;
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind upstream");
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buffer = vec![0u8; 4096];
+        let _ = stream.read(&mut buffer).await.unwrap();
+        stream
+            .write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+            .await
+            .unwrap();
+        let _ = stream.read(&mut buffer).await.unwrap();
+        stream.write_all(b"close-frame").await.unwrap();
+        // Dropped here: the daemon closes right after its last write.
+    });
+    std::env::set_var("ALIEN_SANDBOX_PREVIEW_PORTS", port.to_string());
+    let granted: serde_json::Value = grant(&base, "sandbox-a", port).await.json().await.unwrap();
+    let capability = granted["capability"].as_str().unwrap();
+    let address = base.trim_start_matches("http://").to_string();
+    let mut client = tokio::net::TcpStream::connect(&address).await.unwrap();
+    client
+        .write_all(
+            format!(
+                "GET /v1/preview/{port}/socket HTTP/1.1\r\nHost: {address}\r\nX-Alien-Preview-Capability: {capability}\r\nX-Alien-Preview-Port: {port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut head = vec![0u8; 512];
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), client.read(&mut head))
+        .await
+        .expect("a response")
+        .unwrap();
+    assert!(String::from_utf8_lossy(&head[..read]).starts_with("HTTP/1.1 101"));
+    client.write_all(b"close").await.unwrap();
+    let mut rest = Vec::new();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.read_to_end(&mut rest),
+    )
+    .await
+    .expect("the stream ends")
+    .unwrap();
+    assert_eq!(rest, b"close-frame");
 }
 
 /// A refused preview call, plain or upgrade, must not open a connection to the daemon: not one

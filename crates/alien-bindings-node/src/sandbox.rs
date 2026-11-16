@@ -68,7 +68,8 @@ pub struct SandboxPreviewJs {
     pub expires_in_seconds: i64,
     /// Header to carry the caller's own bearer so it reaches the daemon unchanged.
     pub caller_authorization_header: String,
-    /// WebSocket subprotocols to offer, in order, by a client that cannot set headers.
+    /// WebSocket subprotocols to offer, in order and after the client's own, in addition to
+    /// every header, where the backend's edge needs them (GCP). Empty where headers are enough.
     pub subprotocols: Vec<String>,
 }
 

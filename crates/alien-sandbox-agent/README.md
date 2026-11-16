@@ -483,14 +483,45 @@ Sandboxes run under gVisor. The image's ENTRYPOINT starts once per boot as the i
 root, with Docker's default capabilities minus NET_RAW, only when the image sets no user or sets
 root; an image with a non-root USER starts as that user with no capabilities. Exec and jobs always
 stay non-root. Sandboxes use the project's
-default network placement and are reached through `:execute`.
+default network placement. Alien's own calls go through `:execute`, which Agent Platform sends to
+the FIRST port the template declares, so the template lists the agent's port (8971) first and the
+declared preview ports after it.
+
+Preview is owner access; see "Preview on GCP" below. `preview(id, port)` asks the agent over
+`:execute`, with the caller's own credentials, for a capability signed for that one sandbox, port and
+boot (at most 15 minutes, never past the sandbox's deadline), then signs the edge's JWT as a
+setup-created identity that holds the execute verb on the engine, and returns the sandbox's own edge
+host with `/v1/preview/<port>`. The edge consumes `Authorization` for its JWT, so the caller puts its
+own bearer in `x-alien-caller-authorization` (the field `callerAuthorizationHeader`) and the agent
+hands it to the workload as `Authorization`. A WebSocket upgrade is refused by the edge unless its
+credentials are offered as subprotocols, so a client offers the app's own protocol first and then the
+contract's `subprotocols` list, in order, and still sends the `x-alien-*` headers. A client that can
+only set headers cannot open a WebSocket on this backend. The agent keeps the client side of an
+upgraded stream open for a quarter second after the workload closes, because the edge loses the last
+frame (the close reply) of a daemon that drops the connection at once.
+
+The edge JWT lives 300 seconds, so `expiresInSeconds` is the shorter of the grant and the JWT,
+measured when the answer is built, and a caller asks again before it ends.
+
+Deployment requirements for preview: the sandbox is declared Frozen, so setup creates the signing
+identity next to the engine and passes it to the template controller through the import data; the
+controller publishes it, with the declared ports, in the binding a deployed app reads. Setup lets
+only the permission profiles that hold `sandbox/execute` on the sandbox sign as that identity. A Live
+sandbox with preview ports is refused at plan time, and so are preview ports that no profile holds
+`sandbox/execute` for. A manager-resolved (remote) binding refuses `preview()` with a message saying
+so, because its lease cannot sign the edge credential. The calling identity needs `sandbox/execute`
+to preview and `sandbox/management` to create sandboxes.
 
 Limits the plan refuses with a message, rather than discovering them at the first session:
 - a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
-- `internet` egress and preview ports (not built or proven on GCP yet; declare `none` and no
-  preview ports);
-- an idle pause policy (the platform has no idle policy and Alien does not watch for idleness on
-  GCP). `pause_resume` is off: a resume was seen returning a fresh container.
+- `internet` egress: there is no enforcement point outside the guest without PSC-I or VPC Service
+  Controls, so a `host:port` policy could not be enforced. Declare `none`. It can be lifted when
+  Google ships an egress allowlist for Agent Platform, or when a deployment accepts VPC Service
+  Controls;
+- a preview port equal to the agent's own (8971);
+- an idle pause policy. `pause_resume` is off: on the default network placement every
+  `:pause`/`:resume` cycle measured returned a fresh container (new boot id, process gone, uptime
+  reset), with the agent and with a bare workload alike, so a paused sandbox keeps nothing.
 
 Images must be linux/amd64 and their container must keep running in the foreground: a template
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
@@ -498,18 +529,25 @@ Alien stops the create at the FAILED state and names this as the likely cause.
 
 ## Preview on GCP
 
-Preview is refused at plan time on GCP Agent Platform (declare no preview ports). For a root-supervisor
-workload the preview boundary has to be a capability that the sandbox agent itself verifies, and the
-platform gives no place to anchor one:
-- Google's edge JWT is scoped to the whole sandbox, not to a port, and the same token is accepted on
-  `:execute`. Holding it is command access, so it cannot stand in for a port-scoped capability.
-- The Agent Platform sandbox template has no env, args, label, volume or secret field, and a sandbox
-  carries no metadata the guest can read. There is no channel to hand a per-deployment trust root
-  (a signing key or a public key) to the agent at boot.
-- Egress `none` blocks DNS, so the agent cannot fetch a trust root (for example a key set) at runtime.
+On Google Cloud, preview access equals command access; port-scoped preview sharing is not
+available. Preview is offered as owner access: it succeeds only for a caller that already holds
+`sandbox/execute` on the sandbox, and one right gates both. Google's edge JWT is scoped to the
+whole sandbox, not to a port, and the same token is accepted on `:execute` and on the agent's own
+port, so whoever can mint one can run commands. Alien does not pretend otherwise:
+- there is no preview-only identity. The identity that signs the edge JWT may be used only by the
+  profiles that hold `sandbox/execute`, and `preview()` asks `:execute` first, with the caller's
+  own credentials, so a caller that may not execute gets no header and no signature;
+- a declaration that would give preview to someone without execute is refused at plan time;
+- the agent's per-port capability stays as a second check on the route. It is not the boundary: a
+  holder of the edge JWT can reach the agent's other routes.
 
-Preview can be offered once the platform adds a per-deployment value that the guest can read and a
-preview holder cannot write.
+Pick another cloud if a preview must be shareable, for example handed to a browser or a third
+party. On AWS the preview credential reaches one port and never runs commands.
+
+The Agent Platform sandbox template has no env, args, label, volume or secret field, and a sandbox
+carries no metadata the guest can read, so there is no channel to hand the agent a per-deployment
+trust root at boot, and egress `none` blocks DNS, so it cannot fetch one. A boundary that lives
+inside the sandbox is not available until Google adds such a value.
 
 Egress `none` (`internetAccess: false`) blocks TCP to public addresses, the metadata server and DNS
 resolution, measured on the default network placement. The platform has no client token on create,

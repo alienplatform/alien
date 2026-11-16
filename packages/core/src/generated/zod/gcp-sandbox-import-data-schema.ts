@@ -6,10 +6,11 @@
 import * as z from "zod";
 
 /**
- * @description GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup\ncreates no template, so this carries only the region the stack applied in. The engine registers\nits own id, and the template controller reads it from that dependency.
+ * @description GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup\ncreates no template, so this carries the region the stack applied in and, when preview is declared, the\nsigning identity setup created. The engine registers its own id, and the template controller\nreads it from that dependency.
  */
 export const GcpSandboxImportDataSchema = z.object({
-    "region": z.string().describe("Region the setup stack applied in; selects the regional Agent Platform endpoint.")
-    }).describe("GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup\ncreates no template, so this carries only the region the stack applied in. The engine registers\nits own id, and the template controller reads it from that dependency.")
+    "previewServiceAccount": z.string().describe("Service account setup created to sign the edge credential for preview. Present only when\nthe sandbox declares preview ports; the controller carries it into the binding.").nullish(),
+"region": z.string().describe("Region the setup stack applied in; selects the regional Agent Platform endpoint.")
+    }).describe("GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup\ncreates no template, so this carries the region the stack applied in and, when preview is declared, the\nsigning identity setup created. The engine registers its own id, and the template controller\nreads it from that dependency.")
 
 export type GcpSandboxImportData = z.infer<typeof GcpSandboxImportDataSchema>
