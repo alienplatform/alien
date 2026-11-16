@@ -1901,6 +1901,9 @@ mod persistence_tests {
         struct ReadOnly(Secret);
         #[async_trait::async_trait]
         impl SecretBackend for ReadOnly {
+            fn restore_hint(&self, name: &str) -> String {
+                format!("Restore the Secret '{name}'.")
+            }
             async fn get(&self) -> Result<Option<Secret>> {
                 Ok(Some(self.0.clone()))
             }

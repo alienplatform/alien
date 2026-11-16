@@ -180,6 +180,13 @@ fn record(version: &str, values: BTreeMap<String, String>) -> Secret {
 
 #[async_trait]
 impl SecretBackend for AwsSecret {
+    fn restore_hint(&self, _name: &str) -> String {
+        format!(
+            "Restore the Secrets Manager secret '{}' (an empty secret of that name; updating the CloudFormation stack that created it recreates it) \
+             and allow the task role `secretsmanager:GetSecretValue`, `PutSecretValue`, `DescribeSecret` and `UpdateSecretVersionStage` on it.",
+            self.secret_id
+        )
+    }
     async fn get(&self) -> Result<Option<Secret>> {
         let response = match self
             .client
@@ -641,6 +648,14 @@ mod tests {
         assert!(matches!(error.error, Some(ErrorData::IdentityConflict)));
         assert!(fake.current_text().contains("key-a"));
         assert!(fake.private_labels().is_empty());
+    }
+
+    #[test]
+    fn the_repair_advice_names_the_aws_secret_not_helm() {
+        let hint = AwsSecret::new(Arc::new(FakeSecretsManager::default()), "identity")
+            .restore_hint("identity");
+        assert!(hint.contains("Secrets Manager") && hint.contains("UpdateSecretVersionStage"));
+        assert!(!hint.contains("helm") && !hint.contains("Kubernetes"));
     }
 
     #[tokio::test]

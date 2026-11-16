@@ -783,7 +783,10 @@ async fn run_operator_cli(
         // observe-only environment starts as running, as it does when it
         // registers itself.
         if starts_observe_only(
-            args.identity_secret.is_some(),
+            has_identity_store(
+                args.identity_secret.as_deref(),
+                args.identity_aws_secret.as_deref(),
+            ),
             join_token.is_some(),
             args.initial_desired_release,
         ) && db.get_deployment_state().await?.is_none()
@@ -2298,6 +2301,12 @@ fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<Operat
         .map(|()| Some(report))
 }
 
+/// Whether the identity lives in a store outside the database (a Kubernetes Secret or an
+/// AWS Secrets Manager secret).
+fn has_identity_store(secret: Option<&str>, aws_secret: Option<&str>) -> bool {
+    secret.is_some() || aws_secret.is_some()
+}
+
 /// Whether a start with no deployment state writes the observe-only one: with the
 /// Secret identity store when no release is wanted (as before), and for every install
 /// enrolled by a join token, which has no Secret on a machine or a Docker host. The initial
@@ -2556,6 +2565,16 @@ mod tests {
     fn the_observe_only_start_state_is_kept_for_the_secret_store_and_added_for_join_tokens() {
         use super::InitialDesiredReleaseArg::{Active, None as NoRelease};
         // A Kubernetes install with the identity Secret that wants no release, as before.
+        // Both store kinds count as a store: an ECS task (AWS secret) with no release wanted
+        // and no token starts observe-only, like the Kubernetes Secret.
+        assert!(super::has_identity_store(Some("a"), None));
+        assert!(super::has_identity_store(None, Some("arn")));
+        assert!(!super::has_identity_store(None, None));
+        assert!(super::starts_observe_only(
+            super::has_identity_store(None, Some("arn")),
+            false,
+            NoRelease
+        ));
         assert!(super::starts_observe_only(true, false, NoRelease));
         assert!(super::starts_observe_only(true, true, NoRelease));
         // A Secret install that asks for the active release registers and runs it itself.
