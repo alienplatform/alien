@@ -494,7 +494,8 @@ pub async fn check_gcp_template_runs_a_command(
     region: &str,
     credentials_json: &str,
     engine_display_prefix: &str,
-) -> anyhow::Result<()> {
+    expected_marker: &str,
+) -> anyhow::Result<String> {
     use alien_bindings::providers::sandbox::gcp_agent_platform::GcpAgentPlatformSandbox;
     use alien_bindings::traits::{
         CommandOutput, CreateSandboxRequest, RunCommandRequest, Sandbox, SandboxState,
@@ -601,14 +602,12 @@ pub async fn check_gcp_template_runs_a_command(
             "exit {exit:?}, stdout {out:?}, stderr {:?}",
             String::from_utf8_lossy(&stderr)
         );
-        ensure!(
-            out.ends_with("sandbox-remote v1"),
-            "unexpected output {out:?}"
-        );
+        ensure!(out.ends_with(expected_marker), "unexpected output {out:?}");
         eprintln!("exec output: {out}");
         Ok::<_, anyhow::Error>(())
     }
     .await;
     let _ = provider.terminate(&created.sandbox_id).await;
-    outcome
+    outcome?;
+    Ok(image)
 }

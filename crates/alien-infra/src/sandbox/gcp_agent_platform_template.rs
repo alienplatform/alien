@@ -1067,6 +1067,19 @@ impl GcpAgentPlatformTemplateController {
                 Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
             )
         );
+        // The runtime identity of a direct install is not granted delete on the repository; the
+        // delete would be refused on every retry and hold the whole teardown. It is reported,
+        // not retried.
+        if let Err(e) = &deleted {
+            if matches!(
+                e.error,
+                Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
+            ) {
+                warn!(id = %sandbox_id, repository = %repository, error = %e, "could not delete the sandbox image repository during teardown: access denied; it stays in the project");
+                self.created_image_repository = None;
+                return Ok(());
+            }
+        }
         if !gone {
             deleted.map(|_| ()).context(ErrorData::CloudPlatformError {
                 message: format!("Failed to delete the sandbox image repository '{repository}'"),
@@ -2307,7 +2320,7 @@ mod tests {
             client: Arc<MockAgentPlatformApi>,
             repository_creates: usize,
         ) -> Arc<MockPlatformServiceProvider> {
-            provider_with(client, repository_creates, false, 0)
+            provider_with(client, repository_creates, false, 0, false)
         }
 
         /// `exists`: setup already created the repository (the Terraform install).
@@ -2317,13 +2330,25 @@ mod tests {
             repository_creates: usize,
             exists: bool,
             deletes: usize,
+            refused: bool,
         ) -> Arc<MockPlatformServiceProvider> {
             let mut registry = MockArtifactRegistryApi::new();
             registry
                 .expect_delete_repository()
                 .withf(|project, _, id| project == "test-project-123" && id == "test-agent-sbx-img")
                 .times(deletes)
-                .returning(|_, _, _| Ok(Default::default()));
+                .returning(move |_, _, _| {
+                    if refused {
+                        Err(alien_error::AlienError::new(
+                            alien_client_core::ErrorData::RemoteAccessDenied {
+                                resource_type: "repository".to_string(),
+                                resource_name: "r".to_string(),
+                            },
+                        ))
+                    } else {
+                        Ok(Default::default())
+                    }
+                });
             // The repository is missing at first and there after its create.
             let created = Arc::new(Mutex::new(exists));
             let seen = created.clone();
@@ -2447,7 +2472,27 @@ mod tests {
                 SOURCE_IMAGE,
                 &source,
                 &dest,
-                provider_with(Arc::new(healthy_client()), 1, false, 1),
+                provider_with(Arc::new(healthy_client()), 1, false, 1, false),
+            )
+            .await;
+            executor.run_until_terminal().await.expect("create runs");
+            executor.delete().expect("delete accepted");
+            executor.run_until_terminal().await.expect("delete runs");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+        }
+
+        /// A runtime identity that may not delete the repository must not hold the teardown.
+        #[tokio::test]
+        async fn a_refused_repository_delete_does_not_hold_the_teardown() {
+            let (body, _) = manifest();
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            serve_source(&source, &body);
+            serve_destination(&dest);
+            let mut executor = executor(
+                SOURCE_IMAGE,
+                &source,
+                &dest,
+                provider_with(Arc::new(healthy_client()), 1, false, 1, true),
             )
             .await;
             executor.run_until_terminal().await.expect("create runs");
@@ -2467,7 +2512,7 @@ mod tests {
                 SOURCE_IMAGE,
                 &source,
                 &dest,
-                provider_with(Arc::new(healthy_client()), 0, true, 0),
+                provider_with(Arc::new(healthy_client()), 0, true, 0, false),
             )
             .await;
             executor.run_until_terminal().await.expect("create runs");
