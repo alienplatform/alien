@@ -152,7 +152,7 @@ where
 
 #[tokio::test]
 async fn redirects_preserve_status_location_cookies_body_and_never_replay() {
-    let client = create_forward_client();
+    let client = create_forward_client(std::time::Duration::from_secs(300));
     assert_application_redirects_are_returned(|method, app_port| {
         let client = client.clone();
         async move {
@@ -184,7 +184,7 @@ async fn normal_response_is_preserved() {
     })))
     .await;
     let response = forward_http_request(
-        &create_forward_client(),
+        &create_forward_client(std::time::Duration::from_secs(300)),
         Request::new(Body::empty()),
         app.port,
         CancellationToken::new(),
@@ -211,7 +211,7 @@ async fn streaming_is_progressive_and_disconnect_releases_upstream() {
     let mut response = timeout(
         Duration::from_secs(5),
         forward_http_request(
-            &create_forward_client(),
+            &create_forward_client(std::time::Duration::from_secs(300)),
             Request::new(Body::empty()),
             app.port,
             CancellationToken::new(),
@@ -319,4 +319,70 @@ async fn transports_return_application_redirects_over_http() {
         assert_eq!(location.unwrap(), "/destination");
         assert_eq!(body, "redirect from app");
     }
+}
+
+async fn silent_upstream(silence: Duration) -> Server {
+    Server::start(Router::new().fallback(any(move || async move {
+        tokio::time::sleep(silence).await;
+        "late answer"
+    })))
+    .await
+}
+
+#[tokio::test]
+async fn a_silent_upstream_longer_than_the_read_timeout_fails() {
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client(Duration::from_millis(300)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn a_silent_upstream_within_the_read_timeout_is_answered() {
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client(Duration::from_secs(5)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "late answer"
+    );
+}
+
+#[tokio::test]
+async fn a_response_that_keeps_sending_outlives_the_read_timeout() {
+    // Total time (1.8 s) is longer than the read timeout (0.5 s); no gap is.
+    let app = Server::start(Router::new().fallback(any(|| async {
+        let (tx, rx) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+        tokio::spawn(async move {
+            for _ in 0..6 {
+                tx.send(Ok(Bytes::from_static(b"x"))).await.ok();
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+        });
+        Body::from_stream(ReceiverStream::new(rx))
+    })))
+    .await;
+    let response = forward_http_request(
+        &create_forward_client(Duration::from_millis(500)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes().len(),
+        6
+    );
 }

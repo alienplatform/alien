@@ -92,7 +92,7 @@ impl ContainerAppTransport {
             control_server: self.control_server,
             app_http_port: self.app_http_port,
             command_timeout: self.command_timeout,
-            http_client: create_forward_client(),
+            http_client: create_forward_client(self.command_timeout),
             proxy_shutdown: proxy_shutdown.clone(),
         };
 
@@ -611,7 +611,7 @@ mod tests {
                 control_server: control.clone(),
                 app_http_port: None,
                 command_timeout: Duration::from_secs(30),
-                http_client: create_forward_client(),
+                http_client: create_forward_client(std::time::Duration::from_secs(300)),
                 proxy_shutdown: CancellationToken::new(),
             };
             let request = Request::builder()
@@ -681,7 +681,7 @@ mod tests {
             control_server: control.clone(),
             app_http_port: None,
             command_timeout: Duration::from_secs(600),
-            http_client: create_forward_client(),
+            http_client: create_forward_client(std::time::Duration::from_secs(300)),
             proxy_shutdown: CancellationToken::new(),
         };
         assert_eq!(health(&state).await, StatusCode::SERVICE_UNAVAILABLE);
@@ -746,7 +746,7 @@ mod tests {
                 control_server: control.clone(),
                 app_http_port: None,
                 command_timeout: Duration::from_secs(30),
-                http_client: create_forward_client(),
+                http_client: create_forward_client(std::time::Duration::from_secs(300)),
                 proxy_shutdown: CancellationToken::new(),
             };
             let request = |key: &str| {

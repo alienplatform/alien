@@ -287,12 +287,16 @@ async fn process_command_with_budget(
 /// and disabled TCP user timeout (gVisor on Cloud Run Gen2 can prematurely
 /// close idle connections with the default settings).
 ///
+/// `read_timeout` is the longest a request may wait without receiving a byte (including the wait
+/// for response headers). Callers pass the Worker's configured timeout, so a request the Worker is
+/// allowed to run is not cut short by the proxy in front of it.
+///
 /// # Panics
 ///
 /// Panics if the forwarding client cannot be initialized, like [reqwest::Client::new].
-pub fn create_forward_client() -> reqwest::Client {
+pub fn create_forward_client(read_timeout: std::time::Duration) -> reqwest::Client {
     forward_client_builder()
-        .read_timeout(std::time::Duration::from_secs(300))
+        .read_timeout(read_timeout)
         .build()
         .expect("Failed to configure application HTTP forwarding")
 }
