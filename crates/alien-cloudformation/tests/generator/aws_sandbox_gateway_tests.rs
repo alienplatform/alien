@@ -226,10 +226,7 @@ async fn an_internet_sandbox_setup_template_carries_the_gateway_network() {
         let mut proxy_rules = 0;
         let document: serde_json::Value = serde_yaml::from_str(&yaml).expect("template parses");
         collect_ports(&document, &mut proxy_rules);
-        assert!(
-            proxy_rules > 0,
-            "{description}: no gateway proxy rule found"
-        );
+        assert!(proxy_rules > 0, "{description}: no gateway proxy rule found");
         cfn_lint(&yaml).assert_ok(&description);
         for (kind, name) in [
             ("resource", "SandboxGatewaySubnet1"),
@@ -794,9 +791,7 @@ fn collect_ports(value: &serde_json::Value, rules: &mut usize) {
             }
             map.values().for_each(|inner| collect_ports(inner, rules));
         }
-        serde_json::Value::Array(items) => {
-            items.iter().for_each(|inner| collect_ports(inner, rules))
-        }
+        serde_json::Value::Array(items) => items.iter().for_each(|inner| collect_ports(inner, rules)),
         _ => {}
     }
 }

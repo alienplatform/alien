@@ -83,6 +83,7 @@ pub(crate) fn gate_fragment(
         .iter()
         .map(|block| fragment.is_shared(block))
         .collect();
+    let mut moves: Vec<(String, String)> = Vec::new();
     for (block, is_shared) in fragment.resource_blocks.iter_mut().zip(shared) {
         if block.identifier.as_str() != "resource" || is_shared {
             continue;
@@ -112,8 +113,33 @@ pub(crate) fn gate_fragment(
             }));
         }
 
+        let had_count = block
+            .body
+            .attributes()
+            .any(|attribute| attribute.key.as_str() == "count");
         enabled::gate(block, Some(input_id))?;
+        if !had_count && enabled::is_kubernetes_network_gate(input_id) {
+            // A module that created this block before the gate existed holds it unindexed in
+            // state. Moving it to the first instance keeps a regenerated module from
+            // destroying and recreating the network under a running cluster.
+            moves.push((provider_type.clone(), label.clone()));
+        }
         gated.addresses.insert((provider_type, label));
+    }
+    for (provider_type, label) in moves {
+        fragment.moved_blocks.push(crate::block::block(
+            "moved",
+            [
+                crate::block::attr(
+                    "from",
+                    crate::expr::traversal([provider_type.as_str(), label.as_str()]),
+                ),
+                crate::block::attr(
+                    "to",
+                    crate::expr::parse(&format!("{provider_type}.{label}[0]"))?,
+                ),
+            ],
+        ));
     }
     for block in &mut fragment.ephemeral_blocks {
         let (Some(provider), Some(label)) = (block.labels.first(), block.labels.get(1)) else {

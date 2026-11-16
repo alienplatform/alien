@@ -179,12 +179,22 @@ fn collect_json_entries(value: &serde_json::Value, found: &mut Vec<(String, Stri
     }
 }
 
-/// The registration a Terraform module sends: the entries of its `deployment_resources` local.
+/// What the module sends once a deployer has applied it: the registered resources, and whether
+/// the registered settings carry a `network` setting.
+struct TerraformRegistration {
+    resources: Vec<(String, String)>,
+    settings_network: bool,
+}
+
+/// The registration a Terraform module sends, with every condition in it evaluated for the
+/// cluster mode the deployer applies the module in. Evaluating (not collecting both branches of
+/// each conditional) is what lets this catch a gate that registers the wrong thing in one mode.
 fn terraform_registration(
     prepared: &Stack,
     target: TerraformTarget,
     settings: &StackSettings,
-) -> Vec<(String, String)> {
+    mode: KubernetesClusterOwnership,
+) -> TerraformRegistration {
     let registry = TfRegistry::built_in();
     let module = alien_terraform::generate_terraform_module(
         prepared,
@@ -207,14 +217,99 @@ fn terraform_registration(
         .map(|(_, body)| body.to_string())
         .expect("locals.tf");
     let body: hcl::Body = hcl::parse(&locals).expect("locals.tf parses");
-    let local = body
-        .blocks()
-        .flat_map(|block| block.body().attributes())
-        .find(|attribute| attribute.key() == "deployment_resources")
-        .expect("the module registers its resources in `local.deployment_resources`");
-    let mut found = Vec::new();
-    collect_hcl_entries(local.expr(), &mut found);
-    found
+    let local = |name: &str| {
+        body.blocks()
+            .flat_map(|block| block.body().attributes())
+            .find(|attribute| attribute.key() == name)
+            .unwrap_or_else(|| panic!("the module has no `local.{name}`"))
+    };
+    let env = Env { mode };
+    let mut resources = Vec::new();
+    collect_hcl_entries(local("deployment_resources").expr(), &env, &mut resources);
+    let mut settings_network = false;
+    collect_settings_network(
+        local("deployment_settings").expr(),
+        &env,
+        &mut settings_network,
+    );
+    TerraformRegistration {
+        resources,
+        settings_network,
+    }
+}
+
+/// The values a deployer's inputs take for one cell. Anything a condition reads beyond these is
+/// a new gate this test does not understand yet, which must fail loudly rather than be guessed.
+struct Env {
+    mode: KubernetesClusterOwnership,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Value {
+    Bool(bool),
+    Text(String),
+}
+
+fn evaluate(expression: &hcl::Expression, env: &Env) -> Value {
+    use hcl::expr::{BinaryOperator, Operation, UnaryOperator};
+    match expression {
+        hcl::Expression::Bool(value) => Value::Bool(*value),
+        hcl::Expression::Parenthesis(inner) => evaluate(inner, env),
+        hcl::Expression::String(_) | hcl::Expression::TemplateExpr(_) => {
+            Value::Text(hcl_string(expression).expect("a quoted string"))
+        }
+        hcl::Expression::Traversal(traversal) => {
+            let root = match &traversal.expr {
+                hcl::Expression::Variable(variable) => variable.to_string(),
+                other => panic!("unsupported condition operand {other:?}"),
+            };
+            let path: Vec<String> = traversal
+                .operators
+                .iter()
+                .map(|operator| match operator {
+                    hcl::expr::TraversalOperator::GetAttr(name) => name.to_string(),
+                    other => panic!("unsupported traversal {other:?}"),
+                })
+                .collect();
+            match (root.as_str(), path.as_slice()) {
+                ("var", [name]) if name == "kubernetes_cluster_mode" => {
+                    Value::Text(match env.mode {
+                        KubernetesClusterOwnership::Existing => "existing".to_string(),
+                        _ => "create".to_string(),
+                    })
+                }
+                // The module's own default; a deployer who picks another network mode is a
+                // different cell (the cluster mode decides whether the module honours it).
+                ("var", [name]) if name == "network_mode" => Value::Text("create-new".to_string()),
+                // The deployer asked for no network of their own in advanced settings.
+                ("local", [name]) if name == "deployment_requests_network" => Value::Bool(false),
+                _ => panic!(
+                    "the module gates on `{root}.{}`, which this parity test does not evaluate; teach it how that input is applied",
+                    path.join(".")
+                ),
+            }
+        }
+        hcl::Expression::Operation(operation) => match operation.as_ref() {
+            Operation::Unary(unary) => match (unary.operator, evaluate(&unary.expr, env)) {
+                (UnaryOperator::Not, Value::Bool(value)) => Value::Bool(!value),
+                other => panic!("unsupported unary condition {other:?}"),
+            },
+            Operation::Binary(binary) => {
+                let (lhs, rhs) = (
+                    evaluate(&binary.lhs_expr, env),
+                    evaluate(&binary.rhs_expr, env),
+                );
+                match (binary.operator, &lhs, &rhs) {
+                    (BinaryOperator::Eq, _, _) => Value::Bool(lhs == rhs),
+                    (BinaryOperator::NotEq, _, _) => Value::Bool(lhs != rhs),
+                    (BinaryOperator::And, Value::Bool(a), Value::Bool(b)) => Value::Bool(*a && *b),
+                    (BinaryOperator::Or, Value::Bool(a), Value::Bool(b)) => Value::Bool(*a || *b),
+                    other => panic!("unsupported binary condition {other:?}"),
+                }
+            }
+        },
+        other => panic!("unsupported condition {other:?}"),
+    }
 }
 
 fn hcl_string(expression: &hcl::Expression) -> Option<String> {
@@ -228,10 +323,17 @@ fn hcl_string(expression: &hcl::Expression) -> Option<String> {
     }
 }
 
-/// Every `{ id, type, importData }` object in an HCL expression, wherever a list builder, a
-/// conditional or a function call nests it. The entries of a gated resource are collected too:
-/// this stack gates none, so every collected entry is sent.
-fn collect_hcl_entries(expression: &hcl::Expression, found: &mut Vec<(String, String)>) {
+fn taken_branch<'a>(conditional: &'a hcl::expr::Conditional, env: &Env) -> &'a hcl::Expression {
+    match evaluate(&conditional.cond_expr, env) {
+        Value::Bool(true) => &conditional.true_expr,
+        Value::Bool(false) => &conditional.false_expr,
+        other => panic!("a condition evaluated to {other:?}, not a boolean"),
+    }
+}
+
+/// Every `{ id, type, importData }` object in an HCL expression, descending only into the branch
+/// of each conditional that the cell's inputs select.
+fn collect_hcl_entries(expression: &hcl::Expression, env: &Env, found: &mut Vec<(String, String)>) {
     match expression {
         hcl::Expression::Object(map) => {
             let field = |name: &str| {
@@ -244,19 +346,47 @@ fn collect_hcl_entries(expression: &hcl::Expression, found: &mut Vec<(String, St
                 field("type").and_then(hcl_string),
                 field("importData"),
             ) {
+                // An entry's `importData` is its own business; only the list builder's
+                // conditionals decide which entries are sent.
                 found.push((id, kind));
+                return;
             }
-            map.values().for_each(|v| collect_hcl_entries(v, found));
+            map.values()
+                .for_each(|v| collect_hcl_entries(v, env, found));
         }
-        hcl::Expression::Array(items) => items.iter().for_each(|v| collect_hcl_entries(v, found)),
-        hcl::Expression::Parenthesis(inner) => collect_hcl_entries(inner, found),
+        hcl::Expression::Array(items) => items
+            .iter()
+            .for_each(|v| collect_hcl_entries(v, env, found)),
+        hcl::Expression::Parenthesis(inner) => collect_hcl_entries(inner, env, found),
         hcl::Expression::Conditional(conditional) => {
-            collect_hcl_entries(&conditional.true_expr, found);
-            collect_hcl_entries(&conditional.false_expr, found);
+            collect_hcl_entries(taken_branch(conditional, env), env, found)
         }
-        hcl::Expression::FuncCall(call) => {
-            call.args.iter().for_each(|v| collect_hcl_entries(v, found))
+        hcl::Expression::FuncCall(call) => call
+            .args
+            .iter()
+            .for_each(|v| collect_hcl_entries(v, env, found)),
+        _ => {}
+    }
+}
+
+/// Whether the settings a module registers carry a `network` key, for the cell's inputs. The
+/// conditionals that choose between settings are evaluated; what goes inside a `jsonencode` (the
+/// network's own fields) is not read, only whether it names `network`.
+fn collect_settings_network(expression: &hcl::Expression, env: &Env, found: &mut bool) {
+    match expression {
+        hcl::Expression::Object(map) => {
+            if map.keys().any(|key| key.to_string() == "network") {
+                *found = true;
+            }
         }
+        hcl::Expression::Parenthesis(inner) => collect_settings_network(inner, env, found),
+        hcl::Expression::Conditional(conditional) => {
+            collect_settings_network(taken_branch(conditional, env), env, found)
+        }
+        hcl::Expression::FuncCall(call) => call
+            .args
+            .iter()
+            .for_each(|v| collect_settings_network(v, env, found)),
         _ => {}
     }
 }
@@ -317,6 +447,10 @@ fn registration_request(
 }
 
 /// Runs one cell of the matrix: the artifact's registration, through the manager's check.
+///
+/// The request carries the settings the module registers for the cell's cluster mode (a `network`
+/// setting only while the module sends one), because the manager prepares the expected stack from
+/// them.
 async fn register(
     format: Format,
     ownership: KubernetesClusterOwnership,
@@ -324,9 +458,15 @@ async fn register(
     let source = source_stack();
     let settings = settings(ownership);
     let prepared = prepared_for_render(&source, format, &settings).await;
-    let registered = match format {
-        Format::Terraform(target) => terraform_registration(&prepared, target, &settings),
-        Format::CloudFormation => cloudformation_registration(&prepared, &source, &settings),
+    let (registered, registered_network) = match format {
+        Format::Terraform(target) => {
+            let registration = terraform_registration(&prepared, target, &settings, ownership);
+            (registration.resources, Some(registration.settings_network))
+        }
+        Format::CloudFormation => (
+            cloudformation_registration(&prepared, &source, &settings),
+            None,
+        ),
     };
     let ids: BTreeSet<String> = registered.iter().map(|(id, _)| id.clone()).collect();
     assert_eq!(
@@ -334,7 +474,14 @@ async fn register(
         registered.len(),
         "{format:?} {ownership:?}: duplicate registration ids {registered:?}"
     );
-    let req = registration_request(&registered, format, &settings);
+    let mut sent_settings = settings.clone();
+    if let Some(sent) = registered_network {
+        sent_settings.network = sent.then(|| alien_core::NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        });
+    }
+    let req = registration_request(&registered, format, &sent_settings);
     let expected_stack = prepare_import_stack(source, &req, &req.stack_settings)
         .await
         .expect("the manager prepares the stack");
@@ -387,8 +534,7 @@ async fn an_existing_aks_cluster_with_a_database_uses_the_cluster_network() {
     panic!("not implemented: the AKS module creates its own VNet for the database endpoint");
 }
 
-/// Customers already hold modules generated before this rule moved into one place (a GKE module
-/// from the 1.0.459 release is one). They never registered a `compute` for a Kubernetes target,
+/// Customers already hold modules generated before this rule moved into one place. They never registered a `compute` for a Kubernetes target,
 /// and the manager must accept exactly what they send, without regenerating them. The ids below
 /// are the ones such a module registers for a GKE cluster that already exists, written out rather
 /// than generated so a later generator change cannot move them.
@@ -431,4 +577,108 @@ async fn a_module_generated_before_the_shared_rule_still_registers() {
         .expect("the stack still declares its compute cluster");
     assert_eq!(compute.lifecycle, ResourceLifecycle::Frozen);
     assert!(!req.resources.iter().any(|r| r.id == "compute"));
+}
+
+/// Only a module generated before Kubernetes compute stopped being registered would send a
+/// `compute` for a Kubernetes target. The manager rejects such a registration, with a message that
+/// names the resource and says to regenerate; it does not accept and ignore it. (No known install
+/// sends one: this test fixes which of the two the manager does.)
+#[tokio::test]
+async fn an_older_registration_that_includes_compute_is_rejected_with_a_clear_message() {
+    let source = source_stack();
+    let settings = settings(KubernetesClusterOwnership::Existing);
+    let registered: Vec<(String, String)> = [
+        ("assets", "storage"),
+        ("app-secrets", "vault"),
+        ("kubernetes", "kubernetes-cluster"),
+        ("app-sa", "service-account"),
+        ("compute", "compute-cluster"),
+    ]
+    .into_iter()
+    .map(|(id, kind)| (id.to_string(), kind.to_string()))
+    .collect();
+    let req = registration_request(
+        &registered,
+        Format::Terraform(TerraformTarget::Gke),
+        &settings,
+    );
+    let prepared = prepare_import_stack(source, &req, &req.stack_settings)
+        .await
+        .expect("the manager prepares the stack");
+    let message = validate_import_handoff(&req, &prepared)
+        .expect_err("a Kubernetes registration with `compute` is refused")
+        .message;
+    assert!(
+        message.contains("compute") && message.contains("Regenerate"),
+        "{message}"
+    );
+}
+
+/// An existing GKE cluster with a database: a module generated before the cluster's own network
+/// was used registered a created network; the module generated now registers the cluster's as
+/// one the deployer brought. Running the new module over the installed deployment is a setup
+/// update, and the manager must take it: the settings change passes the management-permission
+/// check and the registration passes the handoff check.
+#[tokio::test]
+async fn a_setup_update_that_moves_a_gke_database_to_the_clusters_own_network_is_accepted() {
+    let source = Stack::new("parity-db".to_string())
+        .permission("app", PermissionProfile::new())
+        .add(
+            alien_core::Postgres::new("db".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("assets".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let mut installed = settings(KubernetesClusterOwnership::Existing);
+    installed.network = Some(alien_core::NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    });
+    let mut requested = installed.clone();
+    requested.network = Some(alien_core::NetworkSettings::ByoVpcGcp {
+        network_name: "cluster-net".to_string(),
+        subnet_name: "cluster-subnet".to_string(),
+        region: "region".to_string(),
+    });
+    let ids = [
+        ("assets", "storage"),
+        ("default-network", "network"),
+        ("db", "postgres"),
+        ("app-sa", "service-account"),
+        ("enable-cloud-quotas", "service_activation"),
+        ("enable-cloud-sql", "service_activation"),
+        ("enable-cloud-storage", "service_activation"),
+        ("enable-compute-engine", "service_activation"),
+        ("enable-secret-manager", "service_activation"),
+    ];
+    let registered: Vec<(String, String)> = ids
+        .into_iter()
+        .map(|(id, kind)| (id.to_string(), kind.to_string()))
+        .collect();
+    let req = registration_request(
+        &registered,
+        Format::Terraform(TerraformTarget::Gke),
+        &requested,
+    );
+    refuse_management_permission_changes(&source, &installed, &req)
+        .await
+        .expect("moving the database's network to the cluster's is not a management change");
+    let prepared = prepare_import_stack(source, &req, &req.stack_settings)
+        .await
+        .expect("the manager prepares the stack");
+    let network = prepared
+        .resources
+        .get("default-network")
+        .expect("a stack with a database keeps a network in an existing cluster");
+    assert!(matches!(
+        network
+            .config
+            .downcast_ref::<alien_core::Network>()
+            .map(|n| &n.settings),
+        Some(alien_core::NetworkSettings::ByoVpcGcp { .. })
+    ));
+    validate_import_handoff(&req, &prepared).expect("the updated module's registration is taken");
 }

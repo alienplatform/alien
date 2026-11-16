@@ -137,6 +137,17 @@ impl SetupTarget {
     }
 }
 
+/// Whether the resource type is one a Kubernetes target runs on the cluster itself: a
+/// `ComputeCluster` is a set of logical pools the Operator validates and a `Sandbox` is a pod.
+/// Setup creates no cloud infrastructure for either, and runtime provisioning verifies them
+/// through the Kubernetes controllers rather than a cloud controller.
+///
+/// Setup's emit rule ([`emits_package_scaffolding`]) and the executor's choice of controller
+/// both ask this, so they cannot disagree.
+pub fn is_kubernetes_native_resource_type(resource_type: &crate::ResourceType) -> bool {
+    *resource_type == Sandbox::RESOURCE_TYPE || *resource_type == ComputeCluster::RESOURCE_TYPE
+}
+
 /// Whether setup emits this resource and registers it with the manager.
 ///
 /// This is the one rule. Both setup generators render exactly the resources it accepts, and the
@@ -161,10 +172,7 @@ pub fn emits_package_scaffolding(
     target: SetupTarget,
 ) -> bool {
     let resource_type = entry.config.resource_type();
-    if target.is_kubernetes()
-        && (resource_type == Sandbox::RESOURCE_TYPE
-            || resource_type == ComputeCluster::RESOURCE_TYPE)
-    {
+    if target.is_kubernetes() && is_kubernetes_native_resource_type(&resource_type) {
         return false;
     }
     if management == SetupManagement::Automatic {

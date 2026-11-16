@@ -2013,8 +2013,10 @@ fn assert_network_in_every_mode(module: &alien_terraform::ModuleFiles) {
     let network = module
         .get("default_network.tf")
         .expect("default_network.tf");
+    // Kept in every mode: no resource waits on the cluster-mode gate. (The lookups name the
+    // cluster mode only in their preconditions.)
     assert!(
-        !network.contains("var.kubernetes_cluster_mode"),
+        !network.contains("deployment_requests_network"),
         "{network}"
     );
 }
@@ -2162,32 +2164,57 @@ fn destroy_guard_is_destroyed_before_every_other_resource() {
 /// A real plan, with mocked providers, of the module `source` renders for `target` against an
 /// existing cluster. `asserts` are HCL `assert` blocks over the plan.
 async fn plan_existing_cluster(target: TerraformTarget, source: Source, asserts: &str) {
+    plan_existing_cluster_with(
+        target,
+        source,
+        (
+            "projects/p/global/networks/cluster-net",
+            "projects/p/regions/europe-west1/subnetworks/cluster-subnet",
+        ),
+        "",
+        asserts,
+    )
+    .await
+}
+
+/// [`plan_existing_cluster`] with the network and subnetwork the GKE cluster reports, extra
+/// variables, and the body of the `run` block (`expect_failures` or asserts).
+async fn plan_existing_cluster_with(
+    target: TerraformTarget,
+    source: Source,
+    gke_cluster: (&str, &str),
+    extra_variables: &str,
+    asserts: &str,
+) {
+    let (cluster_network, cluster_subnetwork) = gke_cluster;
     let (mocks, variables) = match target {
         TerraformTarget::Gke => (
-            r#"mock_provider "google" {
-  mock_data "google_container_cluster" {
-    defaults = {
-      workload_identity_config = [{ workload_pool = "p.svc.id.goog" }]
-      network = "projects/p/global/networks/cluster-net"
-      subnetwork = "projects/p/regions/europe-west1/subnetworks/cluster-subnet"
-    }
-  }
-  mock_data "google_compute_network" {
-    defaults = { self_link = "https://www.googleapis.com/compute/v1/projects/p/global/networks/cluster-net" }
-  }
-  mock_data "google_compute_subnetwork" {
-    defaults = { self_link = "https://www.googleapis.com/compute/v1/projects/p/regions/europe-west1/subnetworks/cluster-subnet" }
-  }
-}"#,
+            format!(r#"mock_provider "google" {{
+  mock_data "google_container_cluster" {{
+    defaults = {{
+      workload_identity_config = [{{ workload_pool = "p.svc.id.goog" }}]
+      network = "{cluster_network}"
+      subnetwork = "{cluster_subnetwork}"
+    }}
+  }}
+  mock_data "google_compute_network" {{
+    defaults = {{ self_link = "https://www.googleapis.com/compute/v1/projects/p/global/networks/cluster-net" }}
+  }}
+  mock_data "google_compute_subnetwork" {{
+    defaults = {{ self_link = "https://www.googleapis.com/compute/v1/projects/p/regions/europe-west1/subnetworks/cluster-subnet" }}
+  }}
+}}"#),
             r#"gke_cluster_name = "c"
-  gke_cluster_location = "europe-west1-b""#,
+  gke_cluster_location = "europe-west1-b"
+  gcp_project = "p"
+  gcp_region = "europe-west1""#,
         ),
         TerraformTarget::Aks => (
             r#"mock_provider "azurerm" {
   mock_data "azurerm_client_config" {
     defaults = { tenant_id = "00000000-0000-0000-0000-000000000001", object_id = "00000000-0000-0000-0000-000000000001", client_id = "00000000-0000-0000-0000-000000000001" }
   }
-}"#,
+}"#.to_string(),
             r#"aks_cluster_name = "c"
   aks_cluster_resource_group_name = "rg""#,
         ),
@@ -2212,6 +2239,7 @@ async fn plan_existing_cluster(target: TerraformTarget, source: Source, asserts:
                 .map(|label| label.as_str().to_string())
         })
         .filter(|name| name != "kubernetes_cluster_mode" && !name.contains("cluster_"))
+        .filter(|name| !matches!(name.as_str(), "gcp_project" | "gcp_region"))
         .map(|name| format!("{name} = \"xx\""))
         .collect::<Vec<_>>()
         .join("\n  ");
@@ -2224,6 +2252,7 @@ variables {{
   management_url = "https://manager.example.com"
   kubernetes_cluster_mode = "existing"
   {variables}
+  {extra_variables}
 }}
 run "existing_cluster" {{
   command = plan
@@ -2288,4 +2317,111 @@ async fn gke_existing_cluster_with_a_database_uses_the_cluster_network() {
   }"#,
     )
     .await;
+}
+
+/// An install that created its cluster before the network was gated holds the network's blocks
+/// without an index. Gating them adds `count`, which moves every address to `[0]`; without a
+/// `moved` block Terraform would destroy the network under the running cluster on the next apply.
+#[tokio::test]
+async fn gating_the_network_moves_the_addresses_a_created_cluster_already_holds() {
+    for target in [
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+        TerraformTarget::Eks,
+    ] {
+        for (label, source) in [
+            ("workload", Source::Workload),
+            ("database", Source::Database),
+        ] {
+            let module = render_prepared(source, target).await;
+            let mut counted: Vec<String> = Vec::new();
+            let mut moved: Vec<String> = Vec::new();
+            for (name, text) in module.iter() {
+                if !name.ends_with(".tf") {
+                    continue;
+                }
+                let body = hcl::parse(text).expect("module file parses");
+                for block in body.blocks() {
+                    let labels: Vec<&str> = block.labels().iter().map(|l| l.as_str()).collect();
+                    match (block.identifier(), labels.as_slice()) {
+                        ("resource", [kind, label]) => {
+                            let count = block
+                                .body()
+                                .attributes()
+                                .find(|a| a.key() == "count")
+                                .map(|a| a.expr().to_string().replace(' ', ""));
+                            // Only a count that is exactly the gate is new; an emitter's own
+                            // count already indexed the address.
+                            if count.as_deref().is_some_and(|c| {
+                                c.contains("deployment_requests_network")
+                                    && c.ends_with("?1:0")
+                                    && !c.contains("network_mode")
+                            }) {
+                                counted.push(format!("{kind}.{label}"));
+                            }
+                        }
+                        ("moved", []) => {
+                            let attr = |key: &str| {
+                                block
+                                    .body()
+                                    .attributes()
+                                    .find(|a| a.key() == key)
+                                    .map(|a| a.expr().to_string().replace(' ', ""))
+                                    .unwrap_or_default()
+                            };
+                            moved.push(format!("{}->{}", attr("from"), attr("to")));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // EKS and GKE blocks carried their own `count` (the network mode) before the gate,
+            // so their addresses are already indexed. AKS blocks had none.
+            if target == TerraformTarget::Aks && label == "workload" {
+                assert!(
+                    !counted.is_empty(),
+                    "{target:?}/{label}: the AKS network blocks are gated"
+                );
+            } else {
+                // A stack with a database keeps its network in every mode: ungated, unmoved.
+                assert!(counted.is_empty(), "{target:?}/{label}: {counted:?}");
+            }
+            for address in &counted {
+                let expected = format!("{address}->{address}[0]");
+                assert!(
+                    moved.contains(&expected.replace(' ', "")),
+                    "{target:?}: {address} gains a count and needs a moved block; moved = {moved:?}"
+                );
+            }
+        }
+    }
+}
+
+/// An existing GKE cluster on a Shared VPC (its network belongs to a host project) or with its
+/// subnet in another region than `gcp_region` cannot take the database endpoint, which the module
+/// creates in its own project and region. The plan says so, before any lookup, instead of
+/// failing later with a missing network or an endpoint the cluster cannot reach.
+#[tokio::test]
+async fn an_existing_gke_cluster_the_database_cannot_reach_fails_at_plan_with_a_clear_message() {
+    for (network, subnetwork, failing) in [
+        (
+            "projects/host-project/global/networks/shared-net",
+            "projects/host-project/regions/europe-west1/subnetworks/shared-subnet",
+            "data.google_compute_network.default_network, data.google_compute_subnetwork.default_network_existing_subnet",
+        ),
+        (
+            "projects/p/global/networks/cluster-net",
+            "projects/p/regions/us-east1/subnetworks/cluster-subnet",
+            "data.google_compute_subnetwork.default_network_existing_subnet",
+        ),
+    ] {
+        plan_existing_cluster_with(
+            TerraformTarget::Gke,
+            Source::Database,
+            (network, subnetwork),
+            "",
+            &format!("  expect_failures = [{failing}]"),
+        )
+        .await;
+    }
 }

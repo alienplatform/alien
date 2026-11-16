@@ -2196,7 +2196,7 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
     runtime_owned.sort_unstable();
     if !runtime_owned.is_empty() {
         return Err(ErrorData::bad_request(format!(
-            "Setup registration includes resources that setup does not own for {} setup: {}",
+            "Setup registration includes resources that setup does not own for {} setup: {}. Regenerate and rerun the setup artifact.",
             req.stack_settings.setup_management.as_str(),
             runtime_owned.join(", ")
         )));

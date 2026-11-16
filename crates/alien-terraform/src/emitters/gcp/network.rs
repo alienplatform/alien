@@ -58,8 +58,17 @@ fn existing_cluster_network_locals(mut fragment: TfFragment) -> TfFragment {
         ),
         (
             EXISTING_CLUSTER_NETWORK_REGION,
+            // The subnet's own region when the cluster reports the subnet as a path, else the
+            // region of the cluster's location.
             format!(
-                "var.kubernetes_cluster_mode == \"existing\" ? join(\"-\", slice(split(\"-\", {location}), 0, 2)) : (var.network_region == \"\" ? var.gcp_region : var.network_region)"
+                "var.kubernetes_cluster_mode == \"existing\" ? (length(split(\"/\", {cluster}.subnetwork)) >= 6 ? split(\"/\", {cluster}.subnetwork)[3] : join(\"-\", slice(split(\"-\", {location}), 0, 2))) : (var.network_region == \"\" ? var.gcp_region : var.network_region)"
+            ),
+        ),
+        (
+            EXISTING_CLUSTER_NETWORK_PROJECT,
+            // A Shared VPC network belongs to a host project, which the path names.
+            format!(
+                "var.kubernetes_cluster_mode == \"existing\" && length(split(\"/\", {cluster}.network)) >= 5 ? split(\"/\", {cluster}.network)[1] : var.gcp_project"
             ),
         ),
     ] {
@@ -73,6 +82,32 @@ fn existing_cluster_network_locals(mut fragment: TfFragment) -> TfFragment {
 pub const EXISTING_CLUSTER_NETWORK_NAME: &str = "existing_network_name";
 pub const EXISTING_CLUSTER_SUBNET_NAME: &str = "existing_subnet_name";
 pub const EXISTING_CLUSTER_NETWORK_REGION: &str = "existing_network_region";
+pub const EXISTING_CLUSTER_NETWORK_PROJECT: &str = "existing_network_project";
+
+/// Preconditions that fail the plan, before the lookup, when the cluster's network is one this
+/// module cannot put a database endpoint on. They apply only to an existing cluster.
+fn existing_cluster_preconditions(checks: &[(String, &str)]) -> hcl::structure::Structure {
+    nested(block(
+        "lifecycle",
+        checks.iter().map(|(condition, message)| {
+            nested(block(
+                "precondition",
+                [
+                    attr(
+                        "condition",
+                        expr::raw(format!(
+                            "var.kubernetes_cluster_mode != \"existing\" || ({condition})"
+                        )),
+                    ),
+                    attr("error_message", Expression::String(message.to_string())),
+                ],
+            ))
+        }),
+    ))
+}
+
+const SHARED_VPC_MESSAGE: &str = "The existing cluster uses a Shared VPC network owned by another project. This module looks the network up in its own project (gcp_project) and cannot place the database endpoint in a host project's network. Use a cluster on a network in gcp_project, or run the database in a deployment without this cluster.";
+const OTHER_REGION_MESSAGE: &str = "The existing cluster's subnet is in a different region than gcp_region. The database endpoint is created in gcp_region and must be in the cluster's region to reach it. Set gcp_region to the region of the cluster's subnet.";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GcpNetworkEmitter;
@@ -310,7 +345,14 @@ fn dynamic_topology(label: &str, cidr: Option<String>, targets_kubernetes: bool)
                 expr::raw(format!("{mode} == \"use-default\" ? \"default\" : {name}")),
             ),
             attr("project", expr::raw("var.gcp_project")),
-        ],
+        ]
+        .into_iter()
+        .chain(targets_kubernetes.then(|| {
+            existing_cluster_preconditions(&[(
+                format!("local.{EXISTING_CLUSTER_NETWORK_PROJECT} == var.gcp_project"),
+                SHARED_VPC_MESSAGE,
+            )])
+        })),
     ));
     fragment.data_blocks.push(data_block(
         "google_compute_subnetwork",
@@ -328,7 +370,20 @@ fn dynamic_topology(label: &str, cidr: Option<String>, targets_kubernetes: bool)
             ),
             attr("project", expr::raw("var.gcp_project")),
             attr("region", expr::raw(region_expr)),
-        ],
+        ]
+        .into_iter()
+        .chain(targets_kubernetes.then(|| {
+            existing_cluster_preconditions(&[
+                (
+                    format!("local.{EXISTING_CLUSTER_NETWORK_PROJECT} == var.gcp_project"),
+                    SHARED_VPC_MESSAGE,
+                ),
+                (
+                    format!("local.{EXISTING_CLUSTER_NETWORK_REGION} == var.gcp_region"),
+                    OTHER_REGION_MESSAGE,
+                ),
+            ])
+        })),
     ));
 
     fragment
