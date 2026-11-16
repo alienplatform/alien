@@ -24,10 +24,11 @@ use super::AppState;
 use crate::auth::{Scope, Subject};
 use crate::traits::deployment_store::{DeploymentRecord, UpdateImportedDeploymentParams};
 
-/// Whether a `helm upgrade` carries a frozen resource of this type: its
-/// controller only observes a Kubernetes object the chart renders. A compute
-/// cluster always does. A service account does only without a base cloud; with
-/// one, its controller creates a cloud identity, which needs cloud credentials.
+/// Whether a `helm upgrade` carries a frozen resource of this type: it is realized in the
+/// cluster by the chart or the Operator, with no cloud credentials. A compute cluster always
+/// is (the chart renders it). A service account and a vault are only without a base cloud
+/// (the Operator keeps the vault as Kubernetes Secrets); with one, their controllers create a
+/// cloud identity or secret store, which needs cloud credentials.
 fn chart_renders(resource_type: &str, base_platform: Option<Platform>) -> bool {
     match resource_type {
         "compute-cluster" => true,
@@ -185,7 +186,9 @@ fn changes_needing_cloud_setup(
             ));
         }
     }
-    if baseline.permissions.management != target.permissions.management {
+    // The management profile is held by a cloud identity; the chart renders nothing from it,
+    // so with no base cloud there is nothing for a cloud setup to change.
+    if base_platform.is_some() && baseline.permissions.management != target.permissions.management {
         return Some("This release changes what the management identity may do".to_string());
     }
     if base_platform.is_some() && baseline.permissions.profiles != target.permissions.profiles {
@@ -685,7 +688,10 @@ pub(super) mod tests {
         CreateDeploymentGroupParams, CreateImportedDeploymentParams, CreateReleaseParams,
         DeploymentStore, ReleaseStore,
     };
-    use alien_core::{RuntimeMetadata, ServiceAccount, StackState, Storage, Vault};
+    use alien_core::{
+        permissions::PermissionProfile, ManagementPermissions, RuntimeMetadata, ServiceAccount,
+        StackState, Storage, Vault,
+    };
     use axum::{body::to_bytes, http::Method};
     use chrono::Utc;
     use std::{collections::BTreeMap, sync::Arc};
@@ -723,6 +729,14 @@ pub(super) mod tests {
                 )
                 .build()
                 .resources,
+        );
+        next
+    }
+
+    fn with_management_grant(stack: &Stack) -> Stack {
+        let mut next = stack.clone();
+        next.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new().resource("secrets", ["vault/management"]),
         );
         next
     }
@@ -1119,6 +1133,41 @@ pub(super) mod tests {
             };
             assert!(reason.contains("secrets"), "{reason}");
             assert!(reason.contains("run your cloud setup"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_management_grant_change_without_a_base_cloud_is_a_chart_upgrade() {
+        // The chart renders nothing from the management profile and no cloud identity holds it
+        // when there is no base cloud, so changing it needs no cloud setup.
+        let without = baseline();
+        let with = with_management_grant(&without);
+        for (installed, target) in [(&without, &with), (&with, &without)] {
+            let decision = decide(
+                &deployment(installed.clone()),
+                &report("rel_2"),
+                target,
+                None,
+            );
+            assert!(
+                matches!(decision, ReportDecision::Mint(_)),
+                "expected a mint, got {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_management_grant_change_on_a_base_cloud_still_needs_the_cloud_setup() {
+        let without = baseline();
+        let with = with_management_grant(&without);
+        for (installed, target) in [(&without, &with), (&with, &without)] {
+            let mut on_cloud = deployment(installed.clone());
+            on_cloud.base_platform = Some(Platform::Aws);
+            let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), target, None)
+            else {
+                panic!("expected a refusal");
+            };
+            assert!(reason.contains("management identity"), "{reason}");
         }
     }
 
