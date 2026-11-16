@@ -1201,7 +1201,6 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                 Expression::Number(hcl::Number::from(node_pool.node_count)),
             ),
             attr("vm_size", Expression::String(node_pool.vm_size.to_string())),
-            nested(aks_default_upgrade_settings()),
         ];
         if let Some(network_label) = default_network_label(ctx) {
             default_node_pool.push(attr(
@@ -1209,6 +1208,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                 expr::raw(azure_private_subnet_id_expr(ctx, network_label)),
             ));
         }
+        default_node_pool.push(nested(aks_default_upgrade_settings()));
         let mut fragment = TfFragment::default()
             .with_local(
                 format!("{label}_cluster_name"),
