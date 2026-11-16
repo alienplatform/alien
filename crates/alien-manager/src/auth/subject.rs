@@ -340,6 +340,8 @@ pub enum Role {
     OperatorSync,
     /// Pull images without push or generic project access.
     RegistryPull,
+    /// Report decisions on access requests for one deployment; nothing else.
+    OperatorAccessRequests,
     DeploymentViewer,
     DeploymentGroupDeployer,
     /// Local verified setup import only; never generic deployment or sync authority.
