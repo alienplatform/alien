@@ -553,3 +553,20 @@ Egress `none` (`internetAccess: false`) blocks TCP to public addresses, the meta
 resolution, measured on the default network placement. The platform has no client token on create,
 so a retried create can leave an extra sandbox; `get_or_create` reuses a running sandbox with the
 same id.
+
+## Reply limits on GCP
+
+Google Cloud returns at most 2,000,000 bytes for one sandbox call, so on GCP the caller sends a
+`replyBudget` and the agent keeps each reply under it:
+
+- A synchronous command (`run_command` with a deadline of 30 seconds or less) returns about 450 KB
+  of stdout and 450 KB of stderr; less when the output is many short lines, because each line is
+  its own frame. Output past that is dropped, the kept output is a prefix of each stream, and the
+  result is marked `truncated`. Use a job for more.
+- A job keeps the usual 4 MiB per stream; each poll returns what fits in one reply and the rest on
+  the next poll, so the outcome arrives after the last of the output.
+- `readFile` accepts `offset` and `length` and returns the file's `totalBytes`. The GCP client
+  reads a file in 900 KB pages and joins them, so files keep the agent's 32 MiB limit. An image
+  built before paging reads files only up to about 1.1 MB on GCP; rebuild it.
+
+Other clouds send no budget and see no difference.

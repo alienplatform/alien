@@ -155,18 +155,50 @@ impl JobRegistry {
     /// output that was truncated, not a frame lost in transit. The terminal `truncated` flag is
     /// what reports it; a caller must not treat a gap as a frame still to come.
     pub fn poll(&self, id: &str, since_seq: Option<u64>) -> Option<JobSnapshot> {
+        self.poll_within(id, since_seq, None)
+    }
+
+    /// [`poll`](Self::poll) for a caller whose transport limits one reply.
+    ///
+    /// `reply_budget` is the encoded bytes each stream's frames may add to this reply. Frames that
+    /// do not fit are left for the next poll, in order and with nothing dropped, and the outcome is
+    /// withheld until the last of them has been returned, so the job reads as still running and
+    /// the caller polls again. The first frame always fits, so a poll always makes progress.
+    pub fn poll_within(
+        &self,
+        id: &str,
+        since_seq: Option<u64>,
+        reply_budget: Option<usize>,
+    ) -> Option<JobSnapshot> {
         let job = Arc::clone(self.lock().get(id)?);
         let mut buffer = job.buffer.lock().expect("no panic holds a job lock");
-        let frames = buffer
-            .frames
-            .iter()
-            .filter(|frame| match frame_seq(frame) {
+        let mut remaining = reply_budget.map(|bytes| [bytes, bytes]);
+        let mut frames = Vec::new();
+        let mut deferred = false;
+        for frame in &buffer.frames {
+            let wanted = match frame_seq(frame) {
                 Some(seq) => since_seq.is_none_or(|since| seq > since),
                 None => false,
-            })
-            .cloned()
-            .collect();
-        let outcome = buffer.outcome.clone();
+            };
+            if !wanted {
+                continue;
+            }
+            if let Some(remaining) = remaining.as_mut() {
+                let stream = usize::from(matches!(frame, Frame::Stderr { .. }));
+                let cost = crate::exec::frame_wire_cost(frame);
+                if cost > remaining[stream] && !frames.is_empty() {
+                    deferred = true;
+                    break;
+                }
+                remaining[stream] = remaining[stream].saturating_sub(cost);
+            }
+            frames.push(frame.clone());
+        }
+        let outcome = if deferred {
+            None
+        } else {
+            buffer.outcome.clone()
+        };
         // The caller has now seen the terminal result, so the cap may reclaim this slot.
         if outcome.is_some() {
             buffer.terminal_delivered = true;
@@ -346,6 +378,7 @@ mod tests {
             timeout_ms,
             cwd: None,
             env: BTreeMap::new(),
+            reply_budget: None,
         }
     }
 

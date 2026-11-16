@@ -191,6 +191,13 @@ pub struct HealthQuery {
 pub struct FileQuery {
     /// Path inside the session
     pub path: String,
+    /// First byte to return; absent reads from the start
+    #[serde(default)]
+    pub offset: Option<u64>,
+    /// Most bytes to return; absent reads to the end of the file. A caller whose transport limits
+    /// one reply pages a large file with this and `offset`.
+    #[serde(default)]
+    pub length: Option<u64>,
 }
 
 /// File contents on the way out.
@@ -199,6 +206,9 @@ pub struct FileQuery {
 pub struct ReadFileResponse {
     /// Contents, base64 because a file is arbitrary bytes
     pub contents_base64: String,
+    /// The file's size, so a caller paging it knows when it has all of it. Absent from agents
+    /// that predate paging, which return the whole file.
+    pub total_bytes: u64,
 }
 
 /// A file on the way in.
@@ -228,6 +238,10 @@ pub struct JobPollBody {
     /// Return frames strictly after this sequence; absent returns from the first frame
     #[serde(default)]
     pub since_seq: Option<u64>,
+    /// Encoded reply bytes each stream's frames may add to this reply; the rest is returned by
+    /// later polls. Absent returns everything after `sinceSeq` in one reply.
+    #[serde(default)]
+    pub reply_budget: Option<usize>,
 }
 
 /// A job's output so far, and how it ended once it has.
@@ -734,6 +748,7 @@ async fn interactive_start(
                     // fast as the caller takes it.
                     usize::MAX,
                     alien_core::sandbox_process::Framing::Chunks,
+                    None,
                     sender,
                     // The group is forgotten and the id freed once the command exits and before
                     // it is reaped, not when the terminal frame is delivered, which a slow reader
@@ -834,10 +849,17 @@ async fn read_file(
 ) -> std::result::Result<Json<ReadFileResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
-    let contents = files::read(&state.session_root, &query.path).await?;
+    let (contents, total_bytes) = files::read_range(
+        &state.session_root,
+        &query.path,
+        query.offset.unwrap_or(0),
+        query.length,
+    )
+    .await?;
 
     Ok(Json(ReadFileResponse {
         contents_base64: BASE64.encode(contents),
+        total_bytes,
     }))
 }
 
@@ -905,7 +927,7 @@ async fn job_poll(
 
     let snapshot = state
         .jobs
-        .poll(&body.job_id, body.since_seq)
+        .poll_within(&body.job_id, body.since_seq, body.reply_budget)
         .ok_or_else(|| {
             ApiError::from(AlienError::new(ErrorData::JobNotFound {
                 job_id: body.job_id.clone(),

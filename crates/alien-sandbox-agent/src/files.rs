@@ -4,7 +4,7 @@
 //! to reach the filesystem from here, which is the property that makes the escape rules
 //! enforceable rather than merely documented.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::confine;
@@ -17,8 +17,22 @@ use alien_error::{AlienError, Context, IntoAlienError};
 /// to be honest about size — an unbounded read is a memory exhaustion the workload can trigger.
 pub const MAX_TRANSFER_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Reads a file out of the sandbox.
+/// Reads a whole file out of the sandbox.
 pub async fn read(root: &Path, requested: &str) -> Result<Vec<u8>> {
+    Ok(read_range(root, requested, 0, None).await?.0)
+}
+
+/// Reads up to `length` bytes of a file from `offset` (to the end when `length` is `None`), and
+/// returns them with the file's size when it was opened.
+///
+/// A caller whose transport limits one reply pages a large file with this. The transfer limit is
+/// on the file's size, not on a page, so paging cannot move more than a whole read could.
+pub async fn read_range(
+    root: &Path,
+    requested: &str,
+    offset: u64,
+    length: Option<u64>,
+) -> Result<(Vec<u8>, u64)> {
     let root = root.to_path_buf();
     let requested = requested.to_string();
 
@@ -53,22 +67,37 @@ pub async fn read(root: &Path, requested: &str) -> Result<Vec<u8>> {
 
         // Bounded on the descriptor rather than trusting the size read a moment earlier: the file
         // can grow between a stat and a read, and the caller is across a network.
-        let mut contents = Vec::new();
-        let read = (&mut file)
-            .take(MAX_TRANSFER_BYTES + 1)
-            .read_to_end(&mut contents)
-            .into_alien_error()
-            .context(failed("read", &requested, "reading the file contents"))?;
-
-        if read as u64 > MAX_TRANSFER_BYTES {
-            return Err(AlienError::new(ErrorData::RequestInvalid {
+        let over_limit = || {
+            AlienError::new(ErrorData::RequestInvalid {
                 reason: format!(
                     "'{requested}' is over the {MAX_TRANSFER_BYTES} byte transfer limit"
                 ),
-            }));
+            })
+        };
+        let size = metadata.len();
+        if size > MAX_TRANSFER_BYTES {
+            return Err(over_limit());
         }
+        if offset > 0 {
+            file.seek(SeekFrom::Start(offset))
+                .into_alien_error()
+                .context(failed("read", &requested, "seeking in the file"))?;
+        }
+        let wanted = length.map_or(MAX_TRANSFER_BYTES, |l| l.min(MAX_TRANSFER_BYTES));
+        let mut contents = Vec::new();
+        (&mut file)
+            .take(wanted + 1)
+            .read_to_end(&mut contents)
+            .into_alien_error()
+            .context(failed("read", &requested, "reading the file contents"))?;
+        // A file that grew past the limit since the stat is refused when read whole; a page is
+        // cut at its length.
+        if length.is_none() && contents.len() as u64 > MAX_TRANSFER_BYTES {
+            return Err(over_limit());
+        }
+        contents.truncate(wanted as usize);
 
-        Ok(contents)
+        Ok((contents, size))
     })
     .await
     .into_alien_error()

@@ -48,6 +48,7 @@ async fn identity(state: &AgentState) -> Result<()> {
         timeout_ms: PROBE_TIMEOUT_MS,
         cwd: None,
         env: BTreeMap::new(),
+        reply_budget: None,
     };
     let frames = exec::run(
         &request,
