@@ -16,11 +16,18 @@ use alien_core::{
 use serde::{Deserialize, Serialize};
 use std::{any::Any, collections::HashMap};
 
-/// Scan a rendered template for the product name, then run `cfn-lint` on it. Every template a
-/// test renders goes through here, so no scenario skips the white-label scan.
+/// Run `cfn-lint` on a rendered template. `cfn_lint` also scans the template for the product
+/// name, so every template that is linted is scanned.
 pub fn lint(yaml: &str) -> alien_cloudformation::test_utils::LinterRun {
-    alien_core::white_label::assert_white_labeled("template", yaml);
     alien_cloudformation::test_utils::cfn_lint(yaml)
+}
+
+/// Scan a template that a test renders but does not lint (for example one that is only
+/// inspected structurally). Returns the template so it can wrap a render call.
+pub fn scan_template(template: CfTemplate) -> CfTemplate {
+    let yaml = to_yaml(&template).expect("template should serialize");
+    alien_core::white_label::assert_white_labeled("template", &yaml);
+    template
 }
 
 /// Render a stack against the built-in registry and a chosen

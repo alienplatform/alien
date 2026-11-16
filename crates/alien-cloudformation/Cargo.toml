@@ -8,7 +8,7 @@ license-file.workspace = true
 
 [features]
 default = []
-test-utils = []
+test-utils = ["alien-core/test-utils"]
 
 [dependencies]
 alien-signing = { workspace = true }

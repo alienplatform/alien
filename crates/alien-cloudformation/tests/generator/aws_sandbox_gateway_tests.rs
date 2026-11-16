@@ -178,6 +178,7 @@ fn render(
             management_trust: Default::default(),
         },
     )
+    .map(super::helpers::scan_template)
 }
 
 /// The setup template for an internet sandbox carries the gateway's network, whether or not

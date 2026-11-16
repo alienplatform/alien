@@ -390,7 +390,7 @@ fn machine_override_without_a_machine_list_still_converts_to_a_verified_intent()
         ComputeClusterEmitter,
     );
     registry.register(Container::RESOURCE_TYPE, Platform::Aws, ComputeClusterEmitter);
-    let mut template = generate_cloudformation_template(
+    let template = generate_cloudformation_template(
         &stack,
         CloudFormationOptions {
             pins: alien_core::SetupPins::compiled_in(),
@@ -410,6 +410,7 @@ fn machine_override_without_a_machine_list_still_converts_to_a_verified_intent()
         },
     )
     .expect("template should render");
+    let mut template = super::helpers::scan_template(template);
     let machine = &template.parameters["ComputeGeneralMachine"];
     assert!(machine.allowed_values.is_none(), "the list is open here");
     assert!(

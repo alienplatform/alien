@@ -87,6 +87,7 @@ fn small_payload_emits_single_resources_output() {
         },
     )
     .expect("template should render");
+    let template = super::helpers::scan_template(template);
 
     assert!(
         template.outputs.contains_key(OUTPUT_RESOURCES),

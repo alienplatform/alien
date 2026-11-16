@@ -30,16 +30,15 @@ impl Known {
         } else if let Some(exact) = self.token_contains.strip_prefix('=') {
             // A leading `=` means the whole token must equal the text, not contain it.
             token == exact
-        } else if self.token_contains.contains(['=', ':', '/']) {
-            token.contains(self.token_contains)
         } else {
-            // `KEY=https://host.example` is several words: every word that names the product
-            // must itself hold the entry's text, so a hostname after `=` is not covered by
-            // the variable name in front of it.
-            token
-                .split(['=', ':', '/'])
-                .filter(|part| part.to_ascii_lowercase().contains(NEEDLE))
-                .all(|part| part.contains(self.token_contains))
+            // Cut the entry's text out of the token: what is left must not name the product, so
+            // `/opt/alien:https://x.alien.example` is not covered by `/opt/alien`, and a
+            // hostname after `KEY=` is not covered by the variable name in front of it.
+            token.contains(self.token_contains)
+                && !token
+                    .replace(self.token_contains, "")
+                    .to_ascii_lowercase()
+                    .contains(NEEDLE)
         };
         token_matches && self.line_contains.is_none_or(|text| line.contains(text))
     }
@@ -84,6 +83,37 @@ pub const ALLOWLIST: &[Known] = &[
 /// a known gap, not an approval: [`find_pending_renames`] lists them for the scan report as
 /// "rename-follow-up".
 pub const PENDING_RENAMES: &[Known] = &[
+    Known {
+        token_contains: "alienaccessrequests.accessrequests.alien",
+        line_contains: None,
+        reason: "name of the access-request CustomResourceDefinition; installed clusters hold \
+                 objects of this kind, so a new name is a new API and needs a migration",
+    },
+    Known {
+        token_contains: "accessrequests.alien",
+        line_contains: None,
+        reason: "API group of the access-request CustomResourceDefinition (see above)",
+    },
+    Known {
+        token_contains: "alienaccessrequests",
+        line_contains: None,
+        reason: "plural and RBAC resource name of the access-request CustomResourceDefinition",
+    },
+    Known {
+        token_contains: "AlienAccessRequest",
+        line_contains: None,
+        reason: "kind of the access-request CustomResourceDefinition (see above)",
+    },
+    Known {
+        token_contains: "alienaccessrequest",
+        line_contains: None,
+        reason: "singular name of the access-request CustomResourceDefinition",
+    },
+    Known {
+        token_contains: "alienar",
+        line_contains: Some("shortNames"),
+        reason: "short name of the access-request CustomResourceDefinition",
+    },
     Known {
         token_contains: LABEL_KEY,
         line_contains: None,
@@ -308,6 +338,14 @@ mod tests {
             find_mentions("a", "ALIEN_MANAGER_URL=https://host.alien.example").len(),
             1
         );
+    }
+
+    #[test]
+    fn path_entry_does_not_cover_a_second_mention_in_the_same_token() {
+        assert!(find_pending_renames("a", "path: /opt/alien/bin").len() == 1);
+        let both = "path: /opt/alien:https://x.alien.example";
+        assert_eq!(find_pending_renames("a", both).len(), 0);
+        assert_eq!(find_mentions("a", both).len(), 1);
     }
 
     #[test]
