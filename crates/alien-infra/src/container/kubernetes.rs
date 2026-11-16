@@ -3003,6 +3003,10 @@ impl KubernetesContainerController {
                 Some(volumes)
             },
             restart_policy: Some("Always".to_string()),
+            // Kubernetes would otherwise add `<SERVICE>_PORT`-style variables for every Service
+            // in the namespace. They can shadow the workload's own variables (a `PROTOCOL_PORT`
+            // setting becomes `tcp://10.0.0.1:8000`); Alien's bindings carry each address.
+            enable_service_links: Some(false),
             ..Default::default()
         };
         // A workload that links a sandbox calls the session broker with a token projected for it.
@@ -4820,6 +4824,54 @@ mod tests {
             pod_template_checksum_annotation(&deployment.spec.expect("spec").template),
             Some(plan.checksum.clone())
         );
+    }
+
+    /// Service-link variables of the namespace's Services must not reach the container.
+    #[tokio::test]
+    async fn container_pods_do_not_get_service_link_variables() {
+        for stateful in [false, true] {
+            let config = manifest_test_container(&[], stateful);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let controller = manifest_test_controller();
+            let pod = if stateful {
+                controller
+                    .build_statefulset(
+                        &config,
+                        "web",
+                        "test-ns",
+                        "web-sa",
+                        None,
+                        None,
+                        &harness.ctx(),
+                    )
+                    .await
+                    .expect("statefulset manifest")
+                    .spec
+                    .expect("spec")
+                    .template
+                    .spec
+                    .expect("pod spec")
+            } else {
+                controller
+                    .build_deployment(
+                        &config,
+                        "web",
+                        "test-ns",
+                        "web-sa",
+                        None,
+                        None,
+                        &harness.ctx(),
+                    )
+                    .await
+                    .expect("deployment manifest")
+                    .spec
+                    .expect("spec")
+                    .template
+                    .spec
+                    .expect("pod spec")
+            };
+            assert_eq!(pod.enable_service_links, Some(false), "stateful={stateful}");
+        }
     }
 
     #[tokio::test]

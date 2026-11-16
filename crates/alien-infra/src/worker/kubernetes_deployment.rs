@@ -133,6 +133,10 @@ pub(super) async fn build_worker_deployment(
         volumes: (!security.volumes.is_empty()).then_some(security.volumes),
         containers: vec![container],
         restart_policy: Some("Always".to_string()),
+        // Kubernetes would otherwise add `<SERVICE>_PORT`-style variables for every Service
+        // in the namespace. They can shadow the workload's own variables (a `PROTOCOL_PORT`
+        // setting becomes `tcp://10.0.0.1:8000`); Alien's bindings carry each address.
+        enable_service_links: Some(false),
         image_pull_secrets,
         ..Default::default()
     };
@@ -231,6 +235,36 @@ mod tests {
     };
 
     use super::{build_worker_deployment, KubernetesWorkerController};
+
+    /// Service-link variables of the namespace's Services must not reach the worker.
+    #[tokio::test]
+    async fn worker_pod_does_not_get_service_link_variables() {
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(Resource::new(worker.clone()), Vec::new());
+        let pod = build_worker_deployment(
+            &KubernetesWorkerController::default(),
+            &worker,
+            "api",
+            "test-ns",
+            "api-sa",
+            None,
+            None,
+            &harness.ctx(),
+        )
+        .await
+        .unwrap()
+        .spec
+        .unwrap()
+        .template
+        .spec
+        .unwrap();
+        assert_eq!(pod.enable_service_links, Some(false));
+    }
 
     /// A release written before the security profile existed has no `security`
     /// field: its pod gets no security context, volumes or mounts. Only an
