@@ -1023,8 +1023,12 @@ fn refuse_runtime_policy(
         return Ok(());
     };
     super::egress::validate(requested, declaration)?;
+    // `internet` equals what the sandbox already declares, so portable code may pass it.
+    if *requested == alien_core::EgressPolicy::Internet {
+        return Ok(());
+    }
     Err(AlienError::new(
-        ErrorData::SandboxEgressGatewayUnavailable {
+        ErrorData::SandboxEgressAllowlistUnsupported {
             reason: alien_core::GCP_NO_EGRESS_ALLOWLIST.to_string(),
         },
     ))
