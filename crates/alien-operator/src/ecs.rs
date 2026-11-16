@@ -201,6 +201,23 @@ pub(crate) struct LogPosition {
     pub seen: Vec<(i64, String)>,
     /// Events at or before this time count as stored: ids this old were forgotten.
     pub cutoff_ms: i64,
+    /// A read of the group that is not finished: where to go on.
+    pub chain: Option<Chain>,
+}
+
+/// An unfinished read of a group: the query start, the page token and how many
+/// events of that page were already taken. It is what lets a read of any number
+/// of events in one millisecond end without remembering every id: the position
+/// in the result is kept, not the events.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Chain {
+    pub start_ms: i64,
+    pub token: Option<String>,
+    pub skip: usize,
+    /// The newest time whose ids were forgotten during this read. It becomes
+    /// `cutoff_ms` only when the read has reached the end of the result, so the
+    /// cutoff never passes a time that still has unread events.
+    pub forgotten_ms: i64,
 }
 
 impl LogPosition {
@@ -210,16 +227,34 @@ impl LogPosition {
             .iter()
             .map(|(ts, id)| format!("{ts}:{id}"))
             .collect();
-        format!(
+        let mut text = format!(
             "{}|{}|{}",
             self.timestamp_ms,
             seen.join(","),
             self.cutoff_ms
-        )
+        );
+        if let Some(chain) = &self.chain {
+            let token: String = chain
+                .token
+                .as_deref()
+                .unwrap_or_default()
+                .bytes()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            text.push_str(&format!(
+                "|{}~{}~{}~{}~{}",
+                chain.start_ms,
+                chain.skip,
+                chain.forgotten_ms,
+                u8::from(chain.token.is_some()),
+                token
+            ));
+        }
+        text
     }
 
     pub(crate) fn decode(text: &str) -> Option<Self> {
-        let mut fields = text.splitn(3, '|');
+        let mut fields = text.splitn(4, '|');
         let timestamp = fields.next()?;
         let seen = fields.next()?;
         // A position saved before the cutoff existed has two fields.
@@ -232,10 +267,37 @@ impl LogPosition {
             let (ts, id) = entry.split_once(':')?;
             parsed.push((ts.parse().ok()?, id.to_string()));
         }
+        let chain = match fields.next() {
+            Some(chain) => {
+                let mut parts = chain.splitn(5, '~');
+                let start_ms = parts.next()?.parse().ok()?;
+                let skip = parts.next()?.parse().ok()?;
+                let forgotten_ms = parts.next()?.parse().ok()?;
+                let has_token = parts.next()? == "1";
+                let hex = parts.next()?;
+                let token = if has_token {
+                    let bytes: Option<Vec<u8>> = (0..hex.len())
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+                        .collect();
+                    Some(String::from_utf8(bytes?).ok()?)
+                } else {
+                    None
+                };
+                Some(Chain {
+                    start_ms,
+                    token,
+                    skip,
+                    forgotten_ms,
+                })
+            }
+            None => None,
+        };
         Some(Self {
             timestamp_ms: timestamp.parse().ok()?,
             seen: parsed,
             cutoff_ms,
+            chain,
         })
     }
 
@@ -252,7 +314,12 @@ impl LogPosition {
 
     /// Whether an event was stored before (or is older than anything kept).
     pub(crate) fn already_stored(&self, timestamp_ms: i64, event_id: &str) -> bool {
-        timestamp_ms < self.start_time() || self.seen.iter().any(|(_, id)| id == event_id)
+        // Inside a read the query start is the read's own, not the cutoff's.
+        let start = self
+            .chain
+            .as_ref()
+            .map_or(self.start_time(), |c| c.start_ms);
+        timestamp_ms < start || self.seen.iter().any(|(_, id)| id == event_id)
     }
 
     /// The position after storing an event.
@@ -271,7 +338,10 @@ impl LogPosition {
             self.seen.sort_by_key(|(ts, _)| *ts);
             let excess = self.seen.len() - keep;
             if let Some((forgotten, _)) = self.seen[..excess].last() {
-                self.cutoff_ms = self.cutoff_ms.max(*forgotten);
+                match &mut self.chain {
+                    Some(chain) => chain.forgotten_ms = chain.forgotten_ms.max(*forgotten),
+                    None => self.cutoff_ms = self.cutoff_ms.max(*forgotten),
+                }
             }
             self.seen.drain(..excess);
         }
@@ -284,12 +354,25 @@ pub(crate) struct ParsedPage {
     pub records: Vec<PodLogRecord>,
     pub position: LogPosition,
     pub next_token: Option<String>,
-    /// The page was cut at the batch byte limit; read again from `position`.
+    /// The page was cut at the batch byte limit; read the rest of it next.
     pub cut: bool,
+    /// Events of the page taken (stored or skipped): where the rest begins.
+    pub taken: usize,
 }
 
 pub(crate) fn parse_events_page(group: &str, page: &Value, saved: &LogPosition) -> ParsedPage {
+    parse_events_page_from(group, page, saved, 0)
+}
+
+/// Like `parse_events_page`, for a page whose first `skip` events were taken before.
+pub(crate) fn parse_events_page_from(
+    group: &str,
+    page: &Value,
+    saved: &LogPosition,
+    skip: usize,
+) -> ParsedPage {
     let mut position = saved.clone();
+    let mut taken = skip;
     let mut records = Vec::new();
     let mut bytes = 0;
     let mut cut = false;
@@ -298,6 +381,7 @@ pub(crate) fn parse_events_page(group: &str, page: &Value, saved: &LogPosition) 
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
+        .skip(skip)
     {
         let (Some(timestamp), Some(id), Some(message)) = (
             event.get("timestamp").and_then(Value::as_i64),
@@ -349,6 +433,7 @@ pub(crate) fn parse_events_page(group: &str, page: &Value, saved: &LogPosition) 
                 .map(str::to_string)
         },
         cut,
+        taken,
     }
 }
 
@@ -422,36 +507,82 @@ pub(crate) async fn read_group(
     mut position: LogPosition,
 ) -> Result<Vec<LogBatch>> {
     let mut batches = Vec::new();
-    let mut token: Option<String> = None;
     let mut productive_pages = 0;
+    // A read goes on where the saved one stopped; otherwise it starts at the
+    // window. A token the service no longer accepts is given up once, and the
+    // read starts again from its first page: events stored before whose ids
+    // were forgotten may then repeat, none is skipped.
+    let mut chain = position.chain.take().unwrap_or_else(|| Chain {
+        start_ms: position.start_time(),
+        ..Default::default()
+    });
+    // Only the token this call started with can be stale; the ones it was just given are fresh.
+    let mut saved_token = chain.token.is_some();
     for _ in 0..MAX_SCANNED_PAGES {
+        position.chain = Some(chain.clone());
         let mut request = json!({
             "logGroupName": group,
-            "startTime": position.start_time(),
+            "startTime": chain.start_ms,
             "limit": PAGE_LIMIT,
         });
-        if let Some(token) = &token {
+        if let Some(token) = &chain.token {
             request["nextToken"] = json!(token);
         }
-        let page =
-            logs.call("FilterLogEvents", request)
-                .await
-                .context(ErrorData::PodLogReadFailed {
+        let page = match logs.call("FilterLogEvents", request).await {
+            Ok(page) => page,
+            Err(error)
+                if chain.token.is_some()
+                    && saved_token
+                    && (error.code == "INVALID_INPUT"
+                        || matches!(
+                            error.error,
+                            Some(alien_client_core::ErrorData::InvalidInput { .. })
+                        )) =>
+            {
+                warn!(
+                    group,
+                    "A saved page token was refused; reading the group again from its start"
+                );
+                saved_token = false;
+                chain.token = None;
+                chain.skip = 0;
+                continue;
+            }
+            Err(error) => {
+                return Err(error).context(ErrorData::PodLogReadFailed {
                     message: format!("could not read log group {group}"),
-                })?;
-        let parsed = parse_events_page(group, &page, &position);
+                })
+            }
+        };
+        saved_token = false;
+        let parsed = parse_events_page_from(group, &page, &position, chain.skip);
+        let mut after = parsed.position;
+        // The parse updated the forgotten time inside the chain it was given.
+        chain = after.chain.take().unwrap_or(chain);
+        if parsed.cut {
+            // The rest of this page is read next.
+            chain.skip = parsed.taken;
+            after.chain = Some(chain.clone());
+        } else if let Some(next) = page.get("nextToken").and_then(Value::as_str) {
+            chain.token = Some(next.to_string());
+            chain.skip = 0;
+            after.chain = Some(chain.clone());
+        } else {
+            // The end of the result: what was forgotten during the read now
+            // bounds the next one.
+            after.cutoff_ms = after.cutoff_ms.max(chain.forgotten_ms);
+        }
         let productive = !parsed.records.is_empty();
         if productive {
             productive_pages += 1;
             batches.push(LogBatch {
                 records: parsed.records,
-                position: parsed.position.clone(),
+                position: after.clone(),
             });
         }
-        position = parsed.position;
-        token = parsed.next_token;
-        // A cut page is read again from the new position, without a token.
-        if token.is_none() && !parsed.cut {
+        let finished = after.chain.is_none();
+        position = after;
+        if finished {
             break;
         }
         if productive_pages >= MAX_PAGES_PER_POLL {
@@ -755,8 +886,22 @@ mod tests {
             timestamp_ms: 1700,
             seen: vec![(1690, "a".into()), (1700, "b".into())],
             cutoff_ms: 1500,
+            chain: Some(Chain {
+                start_ms: 1600,
+                token: Some("a|b,c~d é".into()),
+                skip: 7,
+                forgotten_ms: 1650,
+            }),
         };
         assert_eq!(LogPosition::decode(&position.encode()), Some(position));
+        let no_token = LogPosition {
+            chain: Some(Chain {
+                start_ms: 5,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(LogPosition::decode(&no_token.encode()), Some(no_token));
         assert_eq!(
             LogPosition::decode("5|"),
             Some(LogPosition {
@@ -1067,6 +1212,111 @@ mod tests {
             stored += batches.iter().map(|b| b.records.len()).sum::<usize>();
         }
         assert_eq!(stored, 700, "every event is stored exactly once");
+    }
+
+    /// Every event shares one millisecond; pages are cut by a token that is an
+    /// index, like a real group's opaque cursor.
+    #[derive(Debug)]
+    struct OneMillisecond {
+        total: usize,
+        at_ms: i64,
+    }
+
+    #[async_trait::async_trait]
+    impl EcsApi for OneMillisecond {
+        async fn call(&self, _op: &str, request: Value) -> alien_client_core::Result<Value> {
+            if request["startTime"].as_i64().unwrap() > self.at_ms {
+                return Ok(json!({"events": []}));
+            }
+            let first: usize = request
+                .get("nextToken")
+                .and_then(Value::as_str)
+                .map_or(0, |token| token.parse().unwrap());
+            let end = (first + PAGE_LIMIT as usize).min(self.total);
+            let events: Vec<Value> = (first..end)
+                .map(|i| json!({"timestamp": self.at_ms, "eventId": format!("e{i}"), "message": format!("m{i}"), "logStreamName": "s"}))
+                .collect();
+            let mut page = json!({ "events": events });
+            if end < self.total {
+                page["nextToken"] = json!(end.to_string());
+            }
+            Ok(page)
+        }
+    }
+
+    #[tokio::test]
+    async fn more_events_than_ids_kept_in_one_millisecond_are_each_delivered_once_across_restarts()
+    {
+        let total = MAX_SEEN_EVENTS_IN_BURST + 500;
+        let group = OneMillisecond {
+            total,
+            at_ms: 50_000,
+        };
+        let mut position = LogPosition::default();
+        let mut delivered: Vec<String> = Vec::new();
+        for poll in 0..400 {
+            let batches = read_group(&group, "g", position.clone()).await.unwrap();
+            if batches.is_empty() && poll > 5 {
+                break;
+            }
+            for batch in &batches {
+                delivered.extend(batch.records.iter().map(|r| r.body.clone()));
+            }
+            if let Some(last) = batches.last() {
+                // Saved and read back, as a restart does.
+                position = LogPosition::decode(&last.position.encode()).unwrap();
+            }
+        }
+        let unique: std::collections::BTreeSet<_> = delivered.iter().collect();
+        assert_eq!(
+            delivered.len(),
+            unique.len(),
+            "an event was delivered twice"
+        );
+        assert_eq!(unique.len(), total, "an event was never delivered");
+    }
+
+    /// A group that refuses one saved page token, as a service does with an old one.
+    #[derive(Debug)]
+    struct RefusesTokens(OneMillisecond);
+
+    #[async_trait::async_trait]
+    impl EcsApi for RefusesTokens {
+        async fn call(&self, op: &str, request: Value) -> alien_client_core::Result<Value> {
+            if request.get("nextToken").and_then(Value::as_str) == Some("old") {
+                return Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::InvalidInput {
+                        message: "Invalid nextToken".to_string(),
+                        field_name: None,
+                    },
+                ));
+            }
+            self.0.call(op, request).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_page_token_reads_the_group_again_from_its_start_and_loses_nothing() {
+        let group = RefusesTokens(OneMillisecond {
+            total: 250,
+            at_ms: 50_000,
+        });
+        // Saved mid-read, with a token the service no longer accepts.
+        let saved = LogPosition {
+            timestamp_ms: 50_000,
+            chain: Some(Chain {
+                start_ms: 49_000,
+                token: Some("old".into()),
+                skip: 0,
+                forgotten_ms: 0,
+            }),
+            ..Default::default()
+        };
+        let batches = read_group(&group, "g", saved).await.unwrap();
+        // Three pages are read per poll, from the first page.
+        let delivered: usize = batches.iter().map(|b| b.records.len()).sum();
+        assert_eq!(delivered, 250);
+        assert!(batches.last().unwrap().position.chain.is_none());
     }
 
     #[tokio::test]
