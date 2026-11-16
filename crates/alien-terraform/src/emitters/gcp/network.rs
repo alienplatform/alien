@@ -101,6 +101,26 @@ pub const EXISTING_CLUSTER_SUBNET_NAME: &str = "existing_subnet_name";
 pub const EXISTING_CLUSTER_NETWORK_REGION: &str = "existing_network_region";
 pub const EXISTING_CLUSTER_NETWORK_PROJECT: &str = "existing_network_project";
 
+/// Whether an existing GKE cluster's network serves this stack: the stack declares the cluster,
+/// and keeps no Memorystore instance.
+///
+/// A Memorystore instance takes its consumer network at creation and replaces itself when it
+/// changes, which its deletion protection refuses. A stack with one keeps the module's network
+/// inputs in every cluster mode, as installed modules do, so regenerating never moves it.
+pub fn uses_cluster_network(stack: &alien_core::Stack) -> bool {
+    let mut has_cluster = false;
+    for (_, entry) in stack.resources() {
+        if entry.config.resource_type() == alien_core::Redis::RESOURCE_TYPE {
+            return false;
+        }
+        has_cluster |= entry
+            .config
+            .downcast_ref::<alien_core::KubernetesCluster>()
+            .is_some();
+    }
+    has_cluster
+}
+
 /// Preconditions that fail the plan, before the lookup, when the cluster's network is one this
 /// module cannot put a database endpoint on. They apply only to an existing cluster.
 fn existing_cluster_preconditions(checks: &[(String, &str)]) -> hcl::structure::Structure {
@@ -185,15 +205,7 @@ impl TfEmitter for GcpNetworkEmitter {
             NetworkSettings::Create { cidr, .. } => {
                 let fragment = dynamic_topology(label, cidr.clone(), ctx.targets_kubernetes);
                 Ok(if ctx.targets_kubernetes {
-                    existing_cluster_network_locals(
-                        fragment,
-                        ctx.stack.resources().any(|(_, entry)| {
-                            entry
-                                .config
-                                .downcast_ref::<alien_core::KubernetesCluster>()
-                                .is_some()
-                        }),
-                    )
+                    existing_cluster_network_locals(fragment, uses_cluster_network(ctx.stack))
                 } else {
                     fragment
                 })

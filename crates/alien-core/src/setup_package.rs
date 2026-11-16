@@ -148,6 +148,17 @@ pub fn is_kubernetes_native_resource_type(resource_type: &crate::ResourceType) -
     *resource_type == Sandbox::RESOURCE_TYPE || *resource_type == ComputeCluster::RESOURCE_TYPE
 }
 
+/// Whether this resource is a cloud database (Postgres or Redis) whose private endpoint needs a
+/// network of the cloud's own. On a Kubernetes target a stack keeps a network for it in every
+/// cluster mode; without one an existing cluster's own network serves the workloads.
+///
+/// The network preflight and the setup generators both ask this, so "this stack needs a network"
+/// has one answer.
+pub fn is_network_database(entry: &ResourceEntry) -> bool {
+    let resource_type = entry.config.resource_type();
+    resource_type == crate::Postgres::RESOURCE_TYPE || resource_type == crate::Redis::RESOURCE_TYPE
+}
+
 /// Whether setup emits this resource and registers it with the manager.
 ///
 /// This is the one rule. Both setup generators render exactly the resources it accepts, and the

@@ -536,8 +536,9 @@ async fn an_existing_aks_cluster_with_a_database_uses_the_cluster_network() {
 
 /// Customers already hold modules generated before this rule moved into one place. They never registered a `compute` for a Kubernetes target,
 /// and the manager must accept exactly what they send, without regenerating them. The ids below
-/// are the ones such a module registers for a GKE cluster that already exists, written out rather
-/// than generated so a later generator change cannot move them.
+/// are the ones the v3.3.68 Terraform generator registers for this stack on a GKE cluster that
+/// already exists (generated from that tag and copied here), written out rather than generated so a
+/// later generator change cannot move them.
 #[tokio::test]
 async fn a_module_generated_before_the_shared_rule_still_registers() {
     let source = source_stack();

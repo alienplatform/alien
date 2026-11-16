@@ -1787,6 +1787,8 @@ enum Source {
     Database,
     /// A cloud database and nothing that runs on the cluster, so no cluster is declared.
     DatabaseOnly,
+    /// A Redis instance next to the workload.
+    Redis,
     GatedDatabase,
 }
 
@@ -1812,6 +1814,10 @@ async fn render_prepared(source: Source, target: TerraformTarget) -> alien_terra
     }
     builder = match source {
         Source::Workload => builder,
+        Source::Redis => builder.add(
+            alien_core::Redis::new("cache".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        ),
         Source::Database | Source::DatabaseOnly => builder.add(
             Postgres::new("db".to_string()).build(),
             ResourceLifecycle::Frozen,
@@ -2442,4 +2448,84 @@ async fn a_gke_stack_with_only_a_database_has_no_cluster_lookup() {
         "no cluster is declared, so nothing may read its lookup"
     );
     assert_terraform_valid(&module, "gke_database_only");
+}
+
+/// A stack with only a Redis instance (no Postgres) still needs a network in every mode on every
+/// cloud: the Redis private endpoint refers to its subnet. One predicate answers it for the
+/// preflight and both generators.
+#[tokio::test]
+async fn a_redis_only_stack_keeps_the_default_network_in_every_mode() {
+    for target in [
+        TerraformTarget::Eks,
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+    ] {
+        let module = render_prepared(Source::Redis, target).await;
+        assert_network_in_every_mode(&module);
+        assert_terraform_valid(&module, &format!("{target:?}_redis_only"));
+    }
+}
+
+/// An existing GKE cluster with a Redis instance keeps the module's own network inputs (as
+/// installed modules do): Memorystore replaces itself when its network changes, and its deletion
+/// protection refuses that. No cluster lookup is read for it.
+#[tokio::test]
+async fn an_existing_gke_cluster_with_redis_keeps_the_module_network_inputs() {
+    let module = render_prepared(Source::Redis, TerraformTarget::Gke).await;
+    let locals: String = whole_module(&module)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        locals.contains("effective_network_mode=var.network_mode"),
+        "{locals}"
+    );
+    assert!(
+        !locals.contains("kubernetes_existing[0].network"),
+        "{locals}"
+    );
+}
+
+/// Existing cluster, no database: the cluster may sit in another project (Shared VPC) and region
+/// than the module's. Nothing needs a network, so no lookup runs and no precondition fires.
+#[tokio::test]
+async fn an_existing_gke_cluster_in_another_project_and_region_plans_with_no_database() {
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::Workload,
+        (
+            "projects/host-project/global/networks/shared-net",
+            "projects/host-project/regions/us-east1/subnetworks/shared-subnet",
+        ),
+        "",
+        r#"  assert {
+    condition = length(data.google_compute_network.default_network) == 0 && length(data.google_compute_subnetwork.default_network_existing_subnet) == 0
+    error_message = "no network is kept, so no lookup runs"
+  }"#,
+    )
+    .await;
+}
+
+/// A database with no workload declares no cluster. In an existing-cluster mode the module
+/// creates its own network by `network_mode`, and registers exactly that network's settings.
+#[tokio::test]
+async fn a_gke_database_without_a_cluster_registers_the_network_it_creates() {
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::DatabaseOnly,
+        (
+            "projects/p/global/networks/unused",
+            "projects/p/regions/europe-west1/subnetworks/unused",
+        ),
+        "",
+        r#"  assert {
+    condition = length(google_compute_network.default_network) == 1
+    error_message = "the module creates the network"
+  }
+  assert {
+    condition = local.deployment_settings.network.type == "create"
+    error_message = "the registered settings describe the network that was created"
+  }"#,
+    )
+    .await;
 }

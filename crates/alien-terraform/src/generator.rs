@@ -833,6 +833,8 @@ pub(crate) fn render_terraform_module(
             profile,
             conditional_network_setting.as_ref(),
             kubernetes_network_gate.as_ref().map(|gate| gate.as_deref()),
+            target == TerraformTarget::Gke
+                && crate::emitters::gcp::network::uses_cluster_network(stack),
         )?)?,
     );
 
@@ -2787,7 +2789,7 @@ fn effective_gate(
     }
     let mut database_gates = Vec::new();
     for (_, entry) in stack.resources() {
-        if entry.config.resource_type() != alien_core::Postgres::RESOURCE_TYPE {
+        if !alien_core::is_network_database(entry) {
             continue;
         }
         match entry.enabled_when.as_deref() {
@@ -4475,6 +4477,7 @@ fn locals_body(
     profile: alien_core::SetupConfigurationProfile,
     conditional_network_setting: Option<&(String, String)>,
     kubernetes_network_gate: Option<Option<&str>>,
+    gke_cluster_network: bool,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
@@ -4621,6 +4624,7 @@ fn locals_body(
             profile,
             conditional_network_setting,
             kubernetes_network_gate,
+            gke_cluster_network,
         )
     };
     // A protected install registers as protected: the signing settings the module pins ride in
@@ -4738,6 +4742,7 @@ fn stack_settings_expression(
     profile: alien_core::SetupConfigurationProfile,
     conditional_network_setting: Option<&(String, String)>,
     kubernetes_network_gate: Option<Option<&str>>,
+    gke_cluster_network: bool,
 ) -> Expression {
     let operational = if profile == alien_core::SetupConfigurationProfile::Advanced {
         "var"
@@ -4772,7 +4777,7 @@ fn stack_settings_expression(
   endpointAccess = var.endpoint_access
 {network_in_object}}}{network_argument})"#,
                 network_in_object = network_in_object(target, &network),
-                network_argument = network_argument(target, &network, None),
+                network_argument = network_argument(target, &network, None, false),
             ));
         }
         alien_core::Platform::Gcp
@@ -4801,7 +4806,7 @@ fn stack_settings_expression(
   endpointAccess = var.endpoint_access
 {network_in_object}}}{network_argument})"#,
                 network_in_object = network_in_object(target, &network),
-                network_argument = network_argument(target, &network, kubernetes_network_gate),
+                network_argument = network_argument(target, &network, kubernetes_network_gate, gke_cluster_network),
             ));
         }
         _ if target.is_kubernetes() => {
@@ -4855,6 +4860,7 @@ fn network_argument(
     target: TerraformTarget,
     network: &str,
     existing_cluster_network_gate: Option<Option<&str>>,
+    cluster_network: bool,
 ) -> String {
     if !target.is_kubernetes() {
         return String::new();
@@ -4862,16 +4868,25 @@ fn network_argument(
     // An existing GKE cluster keeps a network only for a stack that needs one, and it is the
     // cluster's own: the registration describes it as one the deployer brought.
     let existing = match (target, existing_cluster_network_gate) {
-        (TerraformTarget::Gke, Some(gate)) => format!(
-            "{gate_expr} && !local.deployment_requests_network ? jsonencode({{ network = {{ type = \"byo-vpc-gcp\", networkName = local.{name}, subnetName = local.{subnet}, region = local.{region} }} }}) : \"{{}}\"",
-            gate_expr = gate.map_or_else(
+        (TerraformTarget::Gke, Some(gate)) => {
+            let gate_expr = gate.map_or_else(
                 || "true".to_string(),
-                crate::emitters::enabled::gate_variable
-            ),
-            name = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_NAME,
-            subnet = crate::emitters::gcp::network::EXISTING_CLUSTER_SUBNET_NAME,
-            region = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_REGION,
-        ),
+                crate::emitters::enabled::gate_variable,
+            );
+            if cluster_network {
+                format!(
+                    "{gate_expr} && !local.deployment_requests_network ? jsonencode({{ network = {{ type = \"byo-vpc-gcp\", networkName = local.{name}, subnetName = local.{subnet}, region = local.{region} }} }}) : \"{{}}\"",
+                    name = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_NAME,
+                    subnet = crate::emitters::gcp::network::EXISTING_CLUSTER_SUBNET_NAME,
+                    region = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_REGION,
+                )
+            } else {
+                // The module's own network inputs apply: the setting follows `network_mode`.
+                format!(
+                    "{gate_expr} && !local.deployment_requests_network ? jsonencode({{ network = {network} }}) : \"{{}}\""
+                )
+            }
+        }
         _ => "\"{}\"".to_string(),
     };
     format!(

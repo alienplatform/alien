@@ -126,6 +126,20 @@ pub(crate) fn gate_fragment(
         }
         gated.addresses.insert((provider_type, label));
     }
+    // The lookups the network reads (an existing cluster's network and subnet) run only while
+    // the network does. They already carry a `count` that every reader indexes, so composing the
+    // gate with it changes no address.
+    if enabled::is_kubernetes_network_gate(input_id) {
+        for block in &mut fragment.data_blocks {
+            let has_count = block
+                .body
+                .attributes()
+                .any(|attribute| attribute.key.as_str() == "count");
+            if has_count {
+                enabled::gate(block, Some(input_id))?;
+            }
+        }
+    }
     for (provider_type, label) in moves {
         fragment.moved_blocks.push(crate::block::block(
             "moved",
