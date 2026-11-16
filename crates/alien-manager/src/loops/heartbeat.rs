@@ -94,7 +94,11 @@ impl HeartbeatLoop {
     /// One heartbeat tick: acquire running deployments and run one health-check step.
     pub(super) async fn tick(&self) {
         let mut filter = DeploymentFilter {
-            statuses: Some(vec!["running".to_string(), "refresh-failed".to_string()]),
+            statuses: Some(vec![
+                "running".to_string(),
+                "refresh-failed".to_string(),
+                "update-failed".to_string(),
+            ]),
             platforms: if self.config.targets.is_empty() {
                 None
             } else {
@@ -255,7 +259,14 @@ mod tests {
             move |_, _, filter, limit| {
                 assert_eq!(
                     filter.statuses.as_deref(),
-                    Some(["running".to_string(), "refresh-failed".to_string()].as_slice())
+                    Some(
+                        [
+                            "running".to_string(),
+                            "refresh-failed".to_string(),
+                            "update-failed".to_string()
+                        ]
+                        .as_slice()
+                    )
                 );
                 assert_eq!(filter.deployment_model, Some(DeploymentModel::Push));
                 assert_eq!(limit, MAX_CONCURRENT_DEPLOYMENTS as u32);

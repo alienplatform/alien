@@ -431,7 +431,9 @@ async fn run_step_loop_body(
                 && step_count == 1
                 && matches!(
                     state.status,
-                    DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+                    DeploymentStatus::Running
+                        | DeploymentStatus::RefreshFailed
+                        | DeploymentStatus::UpdateFailed
                 );
             if let Some(result) = classify_status(&state.status, policy.operation) {
                 if !should_run_initial_running_refresh {
