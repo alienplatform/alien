@@ -4131,15 +4131,13 @@ runtime:
     repository: registry.example.com/deployment/operator
     tag: latest
     # Set to run the Operator by digest (sha256:...); it wins over the tag.
-    # The chart runs its own Operator version. A tag set here is used only if it
-    # is a newer version or not a version at all (a custom build); an older
-    # version tag is ignored, because an older Operator cannot run this chart.
-    # A digest is used as given and must be an Operator at least as new as the chart.
+    # A chart that embeds its own Operator image runs that tag and digest, whatever
+    # earlier values (helm upgrade --reuse-values) carry; only the repository is taken
+    # from here, so a mirror that copies by digest works. To run a different Operator
+    # tag, set pin: true.
     digest: ""
     # Set true to run exactly the repository and tag (with its @sha256 digest) given here, for
-    # example a newer Operator or a hotfix build of the same repository. Left false, a package
-    # that carries its own Operator image runs that image instead of a different tag@digest
-    # on the same repository.
+    # example a newer Operator or a hotfix build.
     pin: false
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
@@ -7866,7 +7864,7 @@ spec:
 /// the levels to those instead and leave `create` off. Values stay well below the
 /// system-cluster-critical range so these never compete with Kubernetes components.
 fn priorityclass_tpl() -> String {
-    r#"{{- if .Values.runtime.workloadPriority.create }}
+    r#"{{- if dig "workloadPriority" "create" false .Values.runtime }}
 {{- $classes := include "deployment.priorityClassMap" . | fromJson }}
 {{- $values := dict "critical" 1000000 "high" 100000 "normal" 0 "low" -100 }}
 {{- range $level := list "critical" "high" "normal" "low" }}
@@ -7930,16 +7928,18 @@ spec:
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
 {{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+{{- /* Values carried from an earlier chart (--reuse-values) may lack dns; same defaults as values.yaml. */}}
+{{- $dns := default dict (dig "dns" dict .Values.runtime.networkPolicy) }}
     # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
     # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
+              kubernetes.io/metadata.name: {{ dig "namespace" "kube-system" $dns }}
           podSelector:
             matchLabels:
-              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
-        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
+              {{- toYaml (dig "podLabels" (dict "k8s-app" "kube-dns") $dns) | nindent 14 }}
+        {{- range (dig "clusterIPs" (list) $dns) }}
         - ipBlock:
             cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
         {{- end }}
@@ -10272,7 +10272,7 @@ mod tests {
     }
 
     #[test]
-    fn an_operator_tag_older_than_the_operator_release_is_ignored() {
+    fn a_package_with_an_embedded_operator_image_overrides_the_carried_tag() {
         let stack = Stack::new("database-stack".into())
             .add(
                 alien_core::Postgres::new("database".into()).build(),
@@ -10333,29 +10333,18 @@ mod tests {
                 .to_string()
         };
         let repository = "registry.example.com/deployment/operator";
-        // What `helm upgrade --reuse-values` carries over from the earlier chart.
-        assert_eq!(
-            operator_image("v3.3.65", ""),
-            format!("{repository}:v3.3.66")
-        );
-        assert_eq!(operator_image("3.3.65", ""), format!("{repository}:3.3.66"));
-        assert_eq!(
-            operator_image("v3.3.66", ""),
-            format!("{repository}:v3.3.66")
-        );
-        assert_eq!(operator_image("v3.4.0", ""), format!("{repository}:v3.4.0"));
-        assert_eq!(operator_image("latest", ""), format!("{repository}:latest"));
-        assert_eq!(
-            operator_image("my-build-7", ""),
-            format!("{repository}:my-build-7")
-        );
-        let digest = format!("sha256:{}", "a".repeat(64));
-        assert_eq!(
-            operator_image("v3.3.65", &digest),
-            format!("{repository}@{digest}")
-        );
-        // A product chart tags by its own version with a digest. A carried older default for
-        // the same repository is replaced; a mirror repository is honoured as set.
+        // The package embeds v3.3.66: whatever tag a carried values file holds (an older
+        // default from --reuse-values, a newer or custom tag, a digest) gives way to it.
+        for carried in ["v3.3.65", "3.3.65", "v3.3.66", "v3.4.0", "latest", "my-build-7"] {
+            assert_eq!(
+                operator_image(carried, ""),
+                format!("{repository}:v3.3.66"),
+                "carried tag {carried}"
+            );
+        }
+        // A product chart tags by its own version with a digest. The tag and digest always
+        // come from the package; only the repository comes from values (a mirror copies by
+        // digest).
         let product = {
             let mut chart = crate::package::apply_package_defaults(
                 generated.clone(),
@@ -10398,7 +10387,7 @@ mod tests {
         );
         assert_eq!(
             product_image("mirror.example.com/operator", "1.3.0@sha256:old"),
-            "mirror.example.com/operator:1.3.0@sha256:old"
+            "mirror.example.com/operator:1.4.0@sha256:new"
         );
         // `runtime.image.pin` runs exactly the repository and tag given, for a newer or hotfix
         // build of the same repository.
@@ -10416,15 +10405,14 @@ mod tests {
             "{}",
             pinned.stdout
         );
-        // A build without an Operator release version applies no override.
-        let dev = package("latest");
+        // A chart without an embedded Operator image (a dev build) runs the values as given.
         let rendered = crate::test_utils::helm_template_for_release(
-            &dev.files,
+            &generated.files,
             Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\nruntime:\n  image:\n    tag: \"v3.3.65\"\n"),
             "app",
         );
         rendered.assert_ok("dev build");
-        assert!(rendered.stdout.contains("deployment/operator:v3.3.65"));
+        assert!(rendered.stdout.contains("/operator:v3.3.65"), "{}", rendered.stdout);
     }
 
     #[test]
@@ -12055,6 +12043,37 @@ infrastructureExistingSecret: customer-bindings
             .into_iter()
             .find(|document| document["kind"] == "NetworkPolicy")
             .expect("the chart renders a NetworkPolicy")
+    }
+
+    /// `helm upgrade --reuse-values` renders this chart with the values an earlier chart
+    /// shipped as its defaults. Keys added since are missing from them; the chart must not
+    /// crash on that. The fixtures are the values.yaml an earlier release generated for the
+    /// same stack.
+    #[test]
+    fn the_chart_renders_with_the_defaults_of_earlier_releases() {
+        let mut files = sample_chart_files();
+        let enrolled = "management:\n  enrollmentCode: test-code\n  audience: test-audience\n  deploymentId: dp_test\n  url: https://manager.example.test\n";
+        let token = "management:\n  token: test-credential\n  url: https://manager.example.test\n";
+        let restricted = format!("{token}runtime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n");
+        for (name, defaults) in [
+            ("v3.3.31", include_str!("../tests/fixtures/values-v3.3.31.yaml")),
+            ("v3.3.65", include_str!("../tests/fixtures/values-v3.3.65.yaml")),
+        ] {
+            files.insert("values.yaml".to_string(), defaults.to_string());
+            for (mode, values) in [
+                ("token", token.to_string()),
+                ("enrolled", enrolled.to_string()),
+                ("restricted network policy", restricted.clone()),
+            ] {
+                let rendered = crate::test_utils::helm_template(&files, Some(&values));
+                rendered.assert_ok(&format!("{name} defaults, {mode}"));
+                if mode == "restricted network policy" {
+                    // DNS keeps working when the carried defaults have no dns block.
+                    assert!(rendered.stdout.contains("k8s-app: kube-dns"), "{name}");
+                    assert!(rendered.stdout.contains("kubernetes.io/metadata.name: kube-system"), "{name}");
+                }
+            }
+        }
     }
 
     #[test]

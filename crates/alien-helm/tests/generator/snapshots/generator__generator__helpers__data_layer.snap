@@ -54,15 +54,13 @@ runtime:
     repository: registry.example.com/deployment/operator
     tag: latest
     # Set to run the Operator by digest (sha256:...); it wins over the tag.
-    # The chart runs its own Operator version. A tag set here is used only if it
-    # is a newer version or not a version at all (a custom build); an older
-    # version tag is ignored, because an older Operator cannot run this chart.
-    # A digest is used as given and must be an Operator at least as new as the chart.
+    # A chart that embeds its own Operator image runs that tag and digest, whatever
+    # earlier values (helm upgrade --reuse-values) carry; only the repository is taken
+    # from here, so a mirror that copies by digest works. To run a different Operator
+    # tag, set pin: true.
     digest: ""
     # Set true to run exactly the repository and tag (with its @sha256 digest) given here, for
-    # example a newer Operator or a hotfix build of the same repository. Left false, a package
-    # that carries its own Operator image runs that image instead of a different tag@digest
-    # on the same repository.
+    # example a newer Operator or a hotfix build.
     pin: false
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
@@ -1381,20 +1379,21 @@ carry an older default, so it is compared here. */ -}}
 {{- define "deployment.operatorImageRepository" -}}{{- end -}}
 {{- define "deployment.operatorImageTag" -}}{{- end -}}
 
-{{- /* The Operator image tag to run. A semver tag older than the Operator version above can only
-be a stale default carried by helm upgrade --reuse-values from an earlier chart, and an older
-Operator cannot run this chart, so it is replaced by that version (keeping the tag's "v" prefix
-style). A newer semver tag and any non-semver tag are kept as set. */ -}}
+{{- /* The Operator image tag to run. A chart that embeds its own Operator image always runs
+that tag (with its digest) unless runtime.image.pin is true: values carried by helm upgrade
+--reuse-values hold the earlier chart's default, and an older Operator cannot run this chart.
+Only the repository comes from values, so a mirror that copies by digest works. Without an
+embedded image (a dev build), a semver tag older than the Operator version above is replaced
+by that version; any other tag is kept as set. */ -}}
 {{- define "deployment.operatorTag" -}}
 {{- $tag := toString .Values.runtime.image.tag -}}
 {{- $bare := (split "@" $tag)._0 | trimPrefix "v" -}}
 {{- $version := include "deployment.operatorVersion" . -}}
 {{- $semver := "^[0-9]+\\.[0-9]+\\.[0-9]+$" -}}
-{{- $embeddedRepository := include "deployment.operatorImageRepository" . -}}
 {{- $embeddedTag := include "deployment.operatorImageTag" . -}}
-{{- if and $embeddedTag (not (dig "pin" false .Values.runtime.image)) (contains "@" $tag) (ne $tag $embeddedTag) (eq (toString .Values.runtime.image.repository) $embeddedRepository) -}}
+{{- if and $embeddedTag (not (dig "pin" false .Values.runtime.image)) -}}
 {{- $embeddedTag -}}
-{{- else if and $version (not (contains "@" $tag)) (regexMatch $semver $bare) (regexMatch $semver $version) (semverCompare (printf "< %s" $version) $bare) -}}
+{{- else if and $version (not $embeddedTag) (not (contains "@" $tag)) (regexMatch $semver $bare) (regexMatch $semver $version) (semverCompare (printf "< %s" $version) $bare) -}}
 {{- if hasPrefix "v" $tag }}v{{ end }}{{ $version }}
 {{- else -}}
 {{- $tag -}}
@@ -3433,7 +3432,7 @@ spec:
 {{- end }}
 
 === templates/priorityclass.yaml ===
-{{- if .Values.runtime.workloadPriority.create }}
+{{- if dig "workloadPriority" "create" false .Values.runtime }}
 {{- $classes := include "deployment.priorityClassMap" . | fromJson }}
 {{- $values := dict "critical" 1000000 "high" 100000 "normal" 0 "low" -100 }}
 {{- range $level := list "critical" "high" "normal" "low" }}
@@ -3494,16 +3493,18 @@ spec:
   {{- if .Values.runtime.networkPolicy.egress.enabled }}
   egress:
 {{- if eq (default "open" .Values.runtime.networkPolicy.mode) "restricted" }}
+{{- /* Values carried from an earlier chart (--reuse-values) may lack dns; same defaults as values.yaml. */}}
+{{- $dns := default dict (dig "dns" dict .Values.runtime.networkPolicy) }}
     # Cluster DNS: the DNS Pods, and the DNS addresses on clusters whose resolver is not a
     # Pod in `dns.namespace` (EKS Auto Mode, node-local DNS).
     - to:
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.runtime.networkPolicy.dns.namespace }}
+              kubernetes.io/metadata.name: {{ dig "namespace" "kube-system" $dns }}
           podSelector:
             matchLabels:
-              {{- toYaml .Values.runtime.networkPolicy.dns.podLabels | nindent 14 }}
-        {{- range .Values.runtime.networkPolicy.dns.clusterIPs }}
+              {{- toYaml (dig "podLabels" (dict "k8s-app" "kube-dns") $dns) | nindent 14 }}
+        {{- range (dig "clusterIPs" (list) $dns) }}
         - ipBlock:
             cidr: {{ . }}/{{ if contains ":" . }}128{{ else }}32{{ end }}
         {{- end }}

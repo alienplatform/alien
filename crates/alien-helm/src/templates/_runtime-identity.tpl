@@ -142,20 +142,21 @@ carry an older default, so it is compared here. */ -}}
 {{- define "deployment.operatorImageRepository" -}}{{- end -}}
 {{- define "deployment.operatorImageTag" -}}{{- end -}}
 
-{{- /* The Operator image tag to run. A semver tag older than the Operator version above can only
-be a stale default carried by helm upgrade --reuse-values from an earlier chart, and an older
-Operator cannot run this chart, so it is replaced by that version (keeping the tag's "v" prefix
-style). A newer semver tag and any non-semver tag are kept as set. */ -}}
+{{- /* The Operator image tag to run. A chart that embeds its own Operator image always runs
+that tag (with its digest) unless runtime.image.pin is true: values carried by helm upgrade
+--reuse-values hold the earlier chart's default, and an older Operator cannot run this chart.
+Only the repository comes from values, so a mirror that copies by digest works. Without an
+embedded image (a dev build), a semver tag older than the Operator version above is replaced
+by that version; any other tag is kept as set. */ -}}
 {{- define "deployment.operatorTag" -}}
 {{- $tag := toString .Values.runtime.image.tag -}}
 {{- $bare := (split "@" $tag)._0 | trimPrefix "v" -}}
 {{- $version := include "deployment.operatorVersion" . -}}
 {{- $semver := "^[0-9]+\\.[0-9]+\\.[0-9]+$" -}}
-{{- $embeddedRepository := include "deployment.operatorImageRepository" . -}}
 {{- $embeddedTag := include "deployment.operatorImageTag" . -}}
-{{- if and $embeddedTag (not (dig "pin" false .Values.runtime.image)) (contains "@" $tag) (ne $tag $embeddedTag) (eq (toString .Values.runtime.image.repository) $embeddedRepository) -}}
+{{- if and $embeddedTag (not (dig "pin" false .Values.runtime.image)) -}}
 {{- $embeddedTag -}}
-{{- else if and $version (not (contains "@" $tag)) (regexMatch $semver $bare) (regexMatch $semver $version) (semverCompare (printf "< %s" $version) $bare) -}}
+{{- else if and $version (not $embeddedTag) (not (contains "@" $tag)) (regexMatch $semver $bare) (regexMatch $semver $version) (semverCompare (printf "< %s" $version) $bare) -}}
 {{- if hasPrefix "v" $tag }}v{{ end }}{{ $version }}
 {{- else -}}
 {{- $tag -}}
