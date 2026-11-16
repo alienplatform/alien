@@ -37,11 +37,11 @@ pub fn network_mode_expr(targets_kubernetes: bool) -> &'static str {
 /// the mode that follows the cluster mode.
 fn existing_cluster_network_locals(
     mut fragment: TfFragment,
-    cluster_network_condition: Option<String>,
+    cluster_network_condition: Option<(String, String)>,
 ) -> TfFragment {
     // A stack with a database but no workload has no cluster to look up: the module's own
     // network inputs apply in every mode.
-    let Some(in_use) = cluster_network_condition else {
+    let Some((in_use, cluster_label)) = cluster_network_condition else {
         for (name, value) in [
             ("effective_network_mode", "var.network_mode"),
             (EXISTING_CLUSTER_NETWORK_NAME, "var.network_name"),
@@ -57,7 +57,7 @@ fn existing_cluster_network_locals(
         }
         return fragment;
     };
-    let cluster = "data.google_container_cluster.kubernetes_existing[0]";
+    let cluster = format!("data.google_container_cluster.{cluster_label}_existing[0]");
     let location = "(var.gke_cluster_location == \"\" ? var.gcp_region : var.gke_cluster_location)";
     for (name, value) in [
         (
@@ -116,8 +116,11 @@ pub const EXISTING_CLUSTER_NETWORK_IN_USE: &str = "existing_cluster_network_in_u
 /// changes, which its deletion protection refuses. While one exists the module keeps its own
 /// network inputs, as installed modules do, so regenerating never moves it. An instance the
 /// deployer can decline (`enabled_when`) only counts while its input is on.
-pub fn cluster_network_condition(stack: &alien_core::Stack) -> Option<String> {
-    let mut has_cluster = false;
+pub fn cluster_network_condition(
+    stack: &alien_core::Stack,
+    names: &indexmap::IndexMap<String, String>,
+) -> Option<(String, String)> {
+    let mut cluster_label = None;
     let mut condition = "var.kubernetes_cluster_mode == \"existing\"".to_string();
     for (_, entry) in stack.resources() {
         if entry.config.resource_type() == alien_core::Redis::RESOURCE_TYPE {
@@ -129,17 +132,26 @@ pub fn cluster_network_condition(stack: &alien_core::Stack) -> Option<String> {
                 )),
             }
         }
-        has_cluster |= entry
+    }
+    for (id, entry) in stack.resources() {
+        if entry
             .config
             .downcast_ref::<alien_core::KubernetesCluster>()
-            .is_some();
+            .is_some()
+        {
+            // The label the cluster emitter gave the cluster's lookup.
+            cluster_label = names.get(id).cloned();
+        }
     }
-    has_cluster.then_some(condition)
+    cluster_label.map(|label| (condition, label))
 }
 
 /// Whether an existing cluster's network can serve the stack at all.
-pub fn uses_cluster_network(stack: &alien_core::Stack) -> bool {
-    cluster_network_condition(stack).is_some()
+pub fn uses_cluster_network(
+    stack: &alien_core::Stack,
+    names: &indexmap::IndexMap<String, String>,
+) -> bool {
+    cluster_network_condition(stack, names).is_some()
 }
 
 /// Preconditions that fail the plan, before the lookup, when the cluster's network is one this
@@ -226,7 +238,10 @@ impl TfEmitter for GcpNetworkEmitter {
             NetworkSettings::Create { cidr, .. } => {
                 let fragment = dynamic_topology(label, cidr.clone(), ctx.targets_kubernetes);
                 Ok(if ctx.targets_kubernetes {
-                    existing_cluster_network_locals(fragment, cluster_network_condition(ctx.stack))
+                    existing_cluster_network_locals(
+                        fragment,
+                        cluster_network_condition(ctx.stack, ctx.names),
+                    )
                 } else {
                     fragment
                 })

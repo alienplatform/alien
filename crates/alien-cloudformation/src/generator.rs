@@ -542,6 +542,27 @@ pub fn generate_cloudformation_template_with_profile(
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut deployer_secrets_vault_binding: Option<CfExpression> = None;
 
+    if options.target.is_kubernetes() {
+        // A database or cache setup creates that an existing cluster could not reach is refused
+        // here; one the installer binds to infrastructure it already has is the deployer's.
+        alien_core::refuse_unreachable_databases(
+            stack,
+            &stack_settings,
+            Platform::Aws,
+            Some("set the stack's network to the cluster's own network"),
+            |entry| {
+                alien_core::emits_package_scaffolding(
+                    entry,
+                    stack_settings.setup_management,
+                    alien_core::SetupTarget::from_cloud(Platform::Aws, true),
+                ) && options
+                    .registry
+                    .emitter(&entry.config.resource_type(), options.target.cloud_platform())
+                    .is_some()
+            },
+        )?;
+    }
+
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
         if !alien_core::emits_package_scaffolding(

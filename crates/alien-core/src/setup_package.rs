@@ -1,6 +1,8 @@
 use crate::{
-    ownership_policy_for_resource_type, ComputeCluster, ErrorData, Key, ManagementPermissions,
-    Platform, ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack, Storage,
+    is_prepared_cluster, ownership_policy_for_resource_type, ComputeCluster, ErrorData, Key,
+    KubernetesCluster, KubernetesClusterOwnership, ManagementPermissions, NetworkSettings,
+    Platform, ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack,
+    StackSettings, Storage,
 };
 use alien_error::AlienError;
 
@@ -191,6 +193,70 @@ pub fn existing_cluster_network_refusal(
     format!(
         "Setup cannot yet place the {resource_type} '{resource_id}' on an existing cluster's network, so the cluster could not reach it. Use a cluster that setup creates,{hint} or remove the {resource_type}."
     )
+}
+
+/// Whether the setup is for an existing Kubernetes cluster: the cluster the source stack declares
+/// decides; with none declared, the stack settings do. A setup that serves both modes (the
+/// deployer picks at apply) is not "existing" here.
+pub fn setup_targets_existing_cluster(stack: &Stack, settings: &StackSettings) -> bool {
+    let ownership = stack
+        .resources()
+        .filter(|(id, entry)| !is_prepared_cluster(id, entry))
+        .find_map(|(_, entry)| entry.config.downcast_ref::<KubernetesCluster>())
+        .map(|cluster| cluster.ownership)
+        .or_else(|| {
+            settings
+                .kubernetes
+                .as_ref()
+                .and_then(|kubernetes| kubernetes.cluster.as_ref())
+                .map(|cluster| cluster.ownership)
+        });
+    ownership.is_some_and(|ownership| ownership != KubernetesClusterOwnership::Managed)
+}
+
+/// The first resource setup would create that an existing cluster could not reach, as the error
+/// a generator returns when it knows the cluster is existing. `creates` says whether setup
+/// creates the resource: one the installer binds to infrastructure it already has is the
+/// deployer's, so it is not refused. A network the deployer names in the settings is theirs to
+/// choose, so nothing is refused for it.
+pub fn refuse_unreachable_databases(
+    stack: &Stack,
+    settings: &StackSettings,
+    cloud_platform: Platform,
+    network_hint: Option<&str>,
+    creates: impl Fn(&ResourceEntry) -> bool,
+) -> Result<()> {
+    if !setup_targets_existing_cluster(stack, settings)
+        || matches!(
+            settings.network,
+            Some(
+                NetworkSettings::ByoVpcAws { .. }
+                    | NetworkSettings::ByoVpcGcp { .. }
+                    | NetworkSettings::ByoVnetAzure { .. }
+            )
+        )
+    {
+        return Ok(());
+    }
+    for (id, entry) in stack.resources() {
+        // A resource the deployer can decline is checked by the module's plan instead, once its
+        // input is known.
+        if entry.enabled_when.is_none()
+            && !existing_cluster_network_hosts(entry, cloud_platform)
+            && creates(entry)
+        {
+            return Err(AlienError::new(ErrorData::SetupPlacementUnsupported {
+                message: existing_cluster_network_refusal(
+                    entry.config.resource_type().as_ref(),
+                    id,
+                    network_hint,
+                ),
+                resource_type: entry.config.resource_type().to_string(),
+                resource_id: id.to_string(),
+            }));
+        }
+    }
+    Ok(())
 }
 
 /// Whether setup emits this resource and registers it with the manager.

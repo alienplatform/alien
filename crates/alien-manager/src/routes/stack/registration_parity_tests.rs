@@ -535,10 +535,114 @@ async fn every_kubernetes_setup_registers_what_the_manager_expects() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// What an embedder registers for a database or cache: a resource setup creates.
+struct EmbedderDatabase;
+
+impl alien_terraform::TfEmitter for EmbedderDatabase {
+    fn emit(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<alien_terraform::TfFragment> {
+        Ok(alien_terraform::TfFragment::default())
+    }
+
+    fn emit_import_ref(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<hcl::expr::Expression> {
+        Ok(hcl::expr::Expression::Object(Default::default()))
+    }
+}
+
+impl alien_cloudformation::CfEmitter for EmbedderDatabase {
+    fn emit_resources(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<Vec<alien_cloudformation::CfResource>> {
+        Ok(Vec::new())
+    }
+
+    fn emit_import_ref(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<alien_cloudformation::CfExpression> {
+        Ok(alien_cloudformation::CfExpression::object([(
+            "id",
+            alien_cloudformation::CfExpression::from("x"),
+        )]))
+    }
+}
+
+/// Render the setup of `prepared` with the embedder's database emitters registered, returning the
+/// generator's refusal if it gives one.
+fn render_with_database_emitters(
+    prepared: &Stack,
+    source: &Stack,
+    format: Format,
+    settings: &StackSettings,
+) -> alien_core::Result<()> {
+    match format {
+        Format::Terraform(target) => {
+            let mut registry = TfRegistry::built_in();
+            for resource_type in [
+                alien_core::Postgres::RESOURCE_TYPE,
+                alien_core::Redis::RESOURCE_TYPE,
+            ] {
+                registry.register(resource_type, target.cloud_platform(), EmbedderDatabase);
+            }
+            alien_terraform::generate_terraform_module(
+                prepared,
+                target,
+                TerraformOptions {
+                    registry: &registry,
+                    display_name: None,
+                    stack_settings: settings.clone(),
+                    registration: None,
+                    setup_identity: None,
+                    helm_install: None,
+                    supported_aws_regions: Vec::new(),
+                    pins: Default::default(),
+                },
+            )
+            .map(|_| ())
+        }
+        Format::CloudFormation => {
+            let mut registry = alien_cloudformation::CfRegistry::built_in();
+            for resource_type in [
+                alien_core::Postgres::RESOURCE_TYPE,
+                alien_core::Redis::RESOURCE_TYPE,
+            ] {
+                registry.register(resource_type, Platform::Aws, EmbedderDatabase);
+            }
+            alien_cloudformation::generate_cloudformation_template(
+                prepared,
+                alien_cloudformation::CloudFormationOptions {
+                    registry: &registry,
+                    target: alien_cloudformation::CloudFormationTarget::Eks,
+                    source_stack: source,
+                    stack_settings: settings.clone(),
+                    setup_target: "kubernetes".to_string(),
+                    setup_fingerprint: "test".to_string(),
+                    setup_fingerprint_version: 1,
+                    registration: alien_cloudformation::RegistrationMode::CustomResource {
+                        lambda_arn: "arn:aws:lambda:us-east-1:111122223333:function:register"
+                            .to_string(),
+                        callback_url: None,
+                    },
+                    description: None,
+                    management_trust: Default::default(),
+                    pins: Default::default(),
+                },
+            )
+            .map(|_| ())
+        }
+    }
+}
+
 /// Setup puts a database or cache on an existing cluster's network only for a GCP Postgres.
 /// Every other combination would land the endpoint on a network the cluster is not on, so the
-/// build refuses it with a message that says what to do instead. A created cluster keeps all of
-/// them, and the supported cell (Postgres on an existing GKE cluster) is not refused.
+/// generator refuses it with a message that says what to do instead. A created cluster keeps all
+/// of them, and the supported cell (Postgres on an existing GKE cluster) is not refused.
 #[tokio::test]
 async fn a_database_an_existing_cluster_cannot_reach_is_refused_in_every_format() {
     for format in MATRIX {
@@ -566,32 +670,30 @@ async fn a_database_an_existing_cluster_cannot_reach_is_refused_in_every_format(
             );
             let supported =
                 matches!(format, Format::Terraform(TerraformTarget::Gke)) && resource == "postgres";
-            let existing = try_prepared_for_render(
-                &source,
-                format,
-                &settings(KubernetesClusterOwnership::Existing),
-            )
-            .await;
+            let existing = settings(KubernetesClusterOwnership::Existing);
+            let prepared = prepared_for_render(&source, format, &existing).await;
+            let result = render_with_database_emitters(&prepared, &source, format, &existing);
             if supported {
-                existing.unwrap_or_else(|error| panic!("{format:?} {resource}: {error}"));
+                result.unwrap_or_else(|error| panic!("{format:?} {resource}: {error:?}"));
             } else {
-                let message = existing.expect_err(&format!("{format:?} {resource} is refused"));
+                let error = result.expect_err(&format!("{format:?} {resource} is refused"));
+                assert_eq!(error.code, "SETUP_PLACEMENT_UNSUPPORTED");
+                assert_eq!(error.http_status_code, Some(422));
+                assert!(!error.retryable);
                 assert!(
-                    message.contains("SETUP_PLACEMENT_UNSUPPORTED")
-                        && message.contains(&format!(
+                    error.message.contains(&format!(
                         "Setup cannot yet place the {resource} '{resource}' on an existing cluster's network"
-                    )) && message.contains("Use a cluster that setup creates")
-                        && message.contains(&format!("or remove the {resource}")),
-                    "{format:?} {resource}: {message}"
+                    )) && error.message.contains("Use a cluster that setup creates")
+                        && error.message.contains(&format!("or remove the {resource}")),
+                    "{format:?} {resource}: {}",
+                    error.message
                 );
             }
-            try_prepared_for_render(
-                &source,
-                format,
-                &settings(KubernetesClusterOwnership::Managed),
-            )
-            .await
-            .unwrap_or_else(|error| panic!("{format:?} {resource} on a created cluster: {error}"));
+            let created = settings(KubernetesClusterOwnership::Managed);
+            let prepared = prepared_for_render(&source, format, &created).await;
+            render_with_database_emitters(&prepared, &source, format, &created).unwrap_or_else(
+                |error| panic!("{format:?} {resource} on a created cluster: {error:?}"),
+            );
         }
     }
 }

@@ -23,7 +23,7 @@ use alien_core::{
 };
 use alien_terraform::{
     generate_product_terraform_module, generate_terraform_module, TerraformHelmInstall,
-    TerraformOptions, TerraformRegistration, TerraformTarget, TfRegistry,
+    TerraformOptions, TerraformRegistration, TerraformTarget, TfEmitter, TfFragment, TfRegistry,
 };
 
 fn storage_data_read_service_account() -> ServiceAccount {
@@ -1781,6 +1781,37 @@ fn declared_cluster(ownership: KubernetesClusterOwnership) -> KubernetesCluster 
         .build()
 }
 
+/// What an embedder registers for a database or cache: a resource setup creates. The module's
+/// content for it does not matter to these tests, only that setup creates it (a type with no
+/// emitter is left to the installer to bind).
+struct EmbedderDatabase;
+
+impl TfEmitter for EmbedderDatabase {
+    fn emit(&self, _ctx: &alien_core::import::EmitContext<'_>) -> alien_core::Result<TfFragment> {
+        Ok(TfFragment::default())
+    }
+
+    fn emit_import_ref(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<hcl::expr::Expression> {
+        Ok(hcl::expr::Expression::Object(Default::default()))
+    }
+}
+
+fn registry_with_database_emitters() -> TfRegistry {
+    let mut registry = TfRegistry::built_in();
+    for platform in [
+        alien_core::Platform::Aws,
+        alien_core::Platform::Gcp,
+        alien_core::Platform::Azure,
+    ] {
+        registry.register(Postgres::RESOURCE_TYPE, platform, EmbedderDatabase);
+        registry.register(alien_core::Redis::RESOURCE_TYPE, platform, EmbedderDatabase);
+    }
+    registry
+}
+
 /// What the source stack adds to the one workload every case here deploys.
 #[derive(Clone, Copy)]
 enum Source {
@@ -1803,6 +1834,30 @@ async fn render_prepared_eks(source: Source) -> alien_terraform::ModuleFiles {
 
 /// [`render_prepared_eks`] for any Kubernetes target.
 async fn render_prepared(source: Source, target: TerraformTarget) -> alien_terraform::ModuleFiles {
+    render_prepared_in(source, target, &TfRegistry::built_in()).await
+}
+
+/// [`render_prepared`] with a registry that has emitters for the databases and caches, as an
+/// embedder's does: setup creates them rather than leaving them to the installer.
+async fn render_prepared_with_emitters(
+    source: Source,
+    target: TerraformTarget,
+) -> alien_terraform::ModuleFiles {
+    render_prepared_in(source, target, &registry_with_database_emitters()).await
+}
+
+async fn render_prepared_in(
+    source: Source,
+    target: TerraformTarget,
+    registry: &TfRegistry,
+) -> alien_terraform::ModuleFiles {
+    let stack = prepared_stack(source, target).await;
+    super::helpers::render_with_registry(&stack, target, StackSettings::default(), registry)
+        .expect("module should render")
+}
+
+/// The source stack for `source`, prepared the way the preflights prepare it for `target`.
+async fn prepared_stack(source: Source, target: TerraformTarget) -> Stack {
     let mut builder =
         Stack::new("k8s-network-gate".to_string()).permission("app", PermissionProfile::new());
     if matches!(source, Source::GatedDatabase) {
@@ -1848,8 +1903,7 @@ async fn render_prepared(source: Source, target: TerraformTarget) -> alien_terra
             "databaseEnabled",
         ),
     };
-    let stack = prepare_for_target(builder.build(), target).await;
-    render(&stack, target, StackSettings::default())
+    prepare_for_target(builder.build(), target).await
 }
 
 /// A stack that declares a cluster and has a `default-network` in it: one the stack declares
@@ -2267,7 +2321,7 @@ mock_provider "tls" {
         ),
         other => panic!("not an EKS, GKE or AKS target: {other:?}"),
     };
-    let module = render_prepared(source, target).await;
+    let module = render_prepared_with_emitters(source, target).await;
     let mut files: indexmap::IndexMap<String, String> = module
         .iter()
         .filter(|(path, _)| path.ends_with(".tf"))
@@ -2624,13 +2678,17 @@ async fn every_database_an_existing_cluster_cannot_reach_is_refused_at_plan() {
     );
     for (target, source, resource) in [
         (TerraformTarget::Gke, Source::Redis, "redis"),
-        (TerraformTarget::Gke, Source::DatabaseWithGatedRedis, "redis"),
+        (
+            TerraformTarget::Gke,
+            Source::DatabaseWithGatedRedis,
+            "redis",
+        ),
         (TerraformTarget::Aks, Source::Redis, "redis"),
         (TerraformTarget::Aks, Source::Database, "postgres"),
         (TerraformTarget::Eks, Source::Redis, "redis"),
         (TerraformTarget::Eks, Source::Database, "postgres"),
     ] {
-        let module = render_prepared(source, target).await;
+        let module = render_prepared_with_emitters(source, target).await;
         let guard = whole_module(&module);
         assert!(
             guard.contains("Setup cannot yet place the")
@@ -2642,7 +2700,11 @@ async fn every_database_an_existing_cluster_cannot_reach_is_refused_at_plan() {
             target,
             source,
             cluster,
-            if gated { "input_redis_enabled = true" } else { "" },
+            if gated {
+                "input_redis_enabled = true"
+            } else {
+                ""
+            },
             "  expect_failures = [terraform_data.existing_cluster_network_guard]",
         )
         .await;
@@ -2670,4 +2732,132 @@ async fn a_created_cluster_and_a_gke_postgres_are_not_refused() {
   }"#,
     )
     .await;
+}
+
+/// A database the installer binds to infrastructure it already has (no emitter registered, as in
+/// the built-in registry) is the deployer's, so setup refuses nothing for it.
+#[tokio::test]
+async fn a_database_the_installer_binds_is_not_refused() {
+    for (target, source) in [
+        (TerraformTarget::Gke, Source::Redis),
+        (TerraformTarget::Aks, Source::Database),
+        (TerraformTarget::Eks, Source::Redis),
+    ] {
+        let module = render_prepared(source, target).await;
+        assert!(
+            module.get("existing-cluster-network-guard.tf").is_none(),
+            "{target:?}: nothing setup creates needs a guard"
+        );
+    }
+}
+
+fn existing_cluster_settings(network: Option<NetworkSettings>) -> StackSettings {
+    StackSettings {
+        kubernetes: Some(KubernetesSettings {
+            cluster: Some(alien_core::KubernetesClusterSettings {
+                ownership: KubernetesClusterOwnership::Existing,
+                namespace: None,
+                cloud: None,
+            }),
+            exposure: None,
+        }),
+        network,
+        ..Default::default()
+    }
+}
+
+/// A setup rendered for an existing cluster refuses at render time, with the error code and the
+/// plain sentence, what setup creates and the cluster could not reach. A database the installer
+/// binds, a supported cell and a network the deployer names are not refused.
+#[tokio::test]
+async fn rendering_for_an_existing_cluster_refuses_what_it_could_not_reach() {
+    for (target, source, refused) in [
+        (TerraformTarget::Gke, Source::Redis, true),
+        (TerraformTarget::Aks, Source::Database, true),
+        (TerraformTarget::Eks, Source::Redis, true),
+        (TerraformTarget::Gke, Source::Database, false),
+    ] {
+        let stack = prepared_stack(source, target).await;
+        let result = super::helpers::render_with_registry(
+            &stack,
+            target,
+            existing_cluster_settings(None),
+            &registry_with_database_emitters(),
+        );
+        if refused {
+            let error = result.expect_err("refused");
+            assert_eq!(error.code, "SETUP_PLACEMENT_UNSUPPORTED", "{target:?}");
+            assert_eq!(error.http_status_code, Some(422));
+            assert!(!error.retryable);
+            assert!(
+                error.message.starts_with("Setup cannot yet place the")
+                    && error.message.contains("Use a cluster that setup creates"),
+                "{target:?}: {}",
+                error.message
+            );
+        } else {
+            result.expect("a supported cell renders");
+        }
+        // Not created by setup: left to the installer.
+        super::helpers::render_with_registry(
+            &stack,
+            target,
+            existing_cluster_settings(None),
+            &TfRegistry::built_in(),
+        )
+        .expect("an installer-bound database is not refused");
+    }
+    // A network the deployer names is theirs to choose.
+    let stack = prepared_stack(Source::Redis, TerraformTarget::Gke).await;
+    super::helpers::render_with_registry(
+        &stack,
+        TerraformTarget::Gke,
+        existing_cluster_settings(Some(NetworkSettings::ByoVpcGcp {
+            network_name: "cluster-net".to_string(),
+            subnet_name: "cluster-subnet".to_string(),
+            region: "europe-west1".to_string(),
+        })),
+        &registry_with_database_emitters(),
+    )
+    .expect("a named network is not refused");
+}
+
+/// A cluster the stack names something other than `kubernetes` is looked up under its own label.
+#[test]
+fn a_gke_cluster_with_its_own_name_has_its_network_looked_up_under_that_name() {
+    let stack = Stack::new("named".to_string())
+        .add(
+            KubernetesCluster::new("primary".to_string())
+                .provider(KubernetesClusterProvider::Gke)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Postgres::new("db".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = super::helpers::render_with_registry(
+        &stack,
+        TerraformTarget::Gke,
+        StackSettings::default(),
+        &registry_with_database_emitters(),
+    )
+    .expect("renders");
+    let text = whole_module(&module);
+    assert!(text.contains("primary_existing[0]"), "{text}");
+    assert!(!text.contains("kubernetes_existing"), "{text}");
+    assert_terraform_valid(&module, "gke_named_cluster_with_database");
 }

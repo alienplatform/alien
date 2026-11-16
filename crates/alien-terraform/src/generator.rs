@@ -451,6 +451,28 @@ pub(crate) fn render_terraform_module(
     // Resources this module doesn't create: the installer supplies their bindings.
     let mut installer_bindings: Vec<(String, String)> = Vec::new();
 
+    // Whether setup creates this resource: it is emitted, and an emitter is registered for it (a
+    // type the installer binds to infrastructure it already has is the deployer's).
+    let creates_resource = |entry: &alien_core::ResourceEntry| {
+        alien_core::emits_package_scaffolding(
+            entry,
+            stack_settings.setup_management,
+            alien_core::SetupTarget::from_cloud(platform, target.is_kubernetes()),
+        ) && options
+            .registry
+            .emitter(&entry.config.resource_type(), platform)
+            .is_some()
+    };
+    if target.is_kubernetes() {
+        alien_core::refuse_unreachable_databases(
+            stack,
+            &stack_settings,
+            platform,
+            Some("set the stack's network to the cluster's own network"),
+            &creates_resource,
+        )?;
+    }
+
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
         if !alien_core::emits_package_scaffolding(
@@ -834,7 +856,7 @@ pub(crate) fn render_terraform_module(
             conditional_network_setting.as_ref(),
             kubernetes_network_gate.as_ref().map(|gate| gate.as_deref()),
             target == TerraformTarget::Gke
-                && crate::emitters::gcp::network::uses_cluster_network(stack),
+                && crate::emitters::gcp::network::uses_cluster_network(stack, &labels),
         )?)?,
     );
 
@@ -1052,7 +1074,9 @@ pub(crate) fn render_terraform_module(
     // catch it in the rendered output instead of shipping it.
     crate::gating::scan_rendered_for_unindexed(&files, &gated)?;
 
-    if let Some(guard) = existing_cluster_network_guard(stack, &stack_settings, target) {
+    if let Some(guard) =
+        existing_cluster_network_guard(stack, &stack_settings, target, &creates_resource)
+    {
         files.insert(
             "existing-cluster-network-guard.tf".into(),
             render_body(guard)?,
@@ -2819,6 +2843,7 @@ fn existing_cluster_network_guard(
     stack: &Stack,
     stack_settings: &StackSettings,
     target: TerraformTarget,
+    creates: &dyn Fn(&alien_core::ResourceEntry) -> bool,
 ) -> Option<Body> {
     if !target.is_kubernetes() {
         return None;
@@ -2850,7 +2875,9 @@ fn existing_cluster_network_guard(
     };
     let preconditions: Vec<Structure> = stack
         .resources()
-        .filter(|(_, entry)| !alien_core::existing_cluster_network_hosts(entry, cloud))
+        .filter(|(_, entry)| {
+            !alien_core::existing_cluster_network_hosts(entry, cloud) && creates(entry)
+        })
         .map(|(id, entry)| {
             let accepted = match entry.enabled_when.as_deref() {
                 None => "true".to_string(),
