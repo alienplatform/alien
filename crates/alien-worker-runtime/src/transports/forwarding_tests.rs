@@ -15,7 +15,7 @@ use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle, time::timeout};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
-use super::{create_forward_client, forward_http_request};
+use super::{create_forward_client, create_forward_client_with_floor, forward_http_request};
 
 struct Server {
     port: u16,
@@ -333,7 +333,7 @@ async fn silent_upstream(silence: Duration) -> Server {
 async fn a_silent_upstream_longer_than_the_read_timeout_fails() {
     let app = silent_upstream(Duration::from_millis(1500)).await;
     let response = forward_http_request(
-        &create_forward_client(Duration::from_millis(300)),
+        &create_forward_client_with_floor(Duration::from_millis(300), Duration::ZERO),
         Request::new(Body::empty()),
         app.port,
         CancellationToken::new(),
@@ -346,7 +346,7 @@ async fn a_silent_upstream_longer_than_the_read_timeout_fails() {
 async fn a_silent_upstream_within_the_read_timeout_is_answered() {
     let app = silent_upstream(Duration::from_millis(1500)).await;
     let response = forward_http_request(
-        &create_forward_client(Duration::from_secs(5)),
+        &create_forward_client_with_floor(Duration::from_secs(5), Duration::ZERO),
         Request::new(Body::empty()),
         app.port,
         CancellationToken::new(),
@@ -374,7 +374,7 @@ async fn a_response_that_keeps_sending_outlives_the_read_timeout() {
     })))
     .await;
     let response = forward_http_request(
-        &create_forward_client(Duration::from_millis(500)),
+        &create_forward_client_with_floor(Duration::from_millis(500), Duration::ZERO),
         Request::new(Body::empty()),
         app.port,
         CancellationToken::new(),
@@ -382,7 +382,55 @@ async fn a_response_that_keeps_sending_outlives_the_read_timeout() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response.into_body().collect().await.unwrap().to_bytes().len(),
+        response
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .len(),
         6
     );
+}
+
+// The floor is scaled down to 300 ms in these two tests (the real one is 300 s).
+#[tokio::test]
+async fn a_worker_configured_below_the_floor_keeps_the_floor() {
+    // Configured 100 ms, floor 3 s, upstream silent 1.5 s: answered, not cut at 100 ms.
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_millis(100), Duration::from_secs(3)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_worker_configured_above_the_floor_waits_for_its_own_timeout() {
+    // Configured 30 s, floor 300 ms, upstream silent 1.5 s: answered, not cut at the floor.
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_secs(30), Duration::from_millis(300)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_floor_cuts_a_silent_upstream_when_configured_is_lower() {
+    let app = silent_upstream(Duration::from_millis(1500)).await;
+    let response = forward_http_request(
+        &create_forward_client_with_floor(Duration::from_millis(100), Duration::from_millis(300)),
+        Request::new(Body::empty()),
+        app.port,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 }
