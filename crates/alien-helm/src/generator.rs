@@ -10348,6 +10348,52 @@ mod tests {
             operator_image("v3.3.65", &digest),
             format!("{repository}@{digest}")
         );
+        // A product chart tags by its own version with a digest. A carried older default for
+        // the same repository is replaced; a mirror repository is honoured as set.
+        let product = {
+            let mut chart = crate::package::apply_package_defaults(
+                generated.clone(),
+                &crate::package::PackageDefaults {
+                    operator_image: Some(crate::package::OperatorImageDefault {
+                        repository: "registry.example.com/deployment/operator",
+                        tag: "1.4.0@sha256:new",
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            chart.files.get_mut("values.yaml").unwrap();
+            chart
+        };
+        let product_image = |repository: &str, tag: &str| {
+            let values = format!(
+                "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\nruntime:\n  image:\n    repository: \"{repository}\"\n    tag: \"{tag}\"\n"
+            );
+            let rendered =
+                crate::test_utils::helm_template_for_release(&product.files, Some(&values), "app");
+            rendered.assert_ok("product operator tag");
+            rendered
+                .stdout
+                .lines()
+                .find_map(|l| {
+                    l.trim()
+                        .strip_prefix("image: ")
+                        .filter(|i| i.contains("/operator"))
+                        .map(|i| i.trim_matches('"').to_string())
+                })
+                .expect("operator image")
+        };
+        assert_eq!(
+            product_image(
+                "registry.example.com/deployment/operator",
+                "1.3.0@sha256:old"
+            ),
+            "registry.example.com/deployment/operator:1.4.0@sha256:new"
+        );
+        assert_eq!(
+            product_image("mirror.example.com/operator", "1.3.0@sha256:old"),
+            "mirror.example.com/operator:1.3.0@sha256:old"
+        );
         // A build without an Operator release version applies no override.
         let dev = package("latest");
         let rendered = crate::test_utils::helm_template_for_release(
