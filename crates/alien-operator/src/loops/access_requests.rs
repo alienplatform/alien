@@ -172,4 +172,39 @@ mod tests {
             .expect("access-request loop should stop after operator cancellation")
             .expect("access-request loop task should not panic");
     }
+
+    /// An installation that connects with a token keeps using it; no
+    /// credential is requested from the manager.
+    #[tokio::test]
+    async fn a_token_install_uses_its_token_for_access_requests() {
+        let data_dir = tempfile::tempdir().expect("create operator data directory");
+        let data_dir_path = data_dir.path().to_string_lossy().into_owned();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = Arc::new(
+            OperatorDb::new(&data_dir_path, encryption_key)
+                .await
+                .expect("create operator database"),
+        );
+        let config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .data_dir(data_dir_path)
+            .encryption_key(encryption_key)
+            .sync(crate::SyncConfig {
+                url: "http://127.0.0.1:1".parse().unwrap(),
+                token: "ax_install_token".to_owned(),
+            })
+            .build();
+        let state = OperatorState {
+            config,
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        assert_eq!(
+            super::access_requests_token(&state).await.unwrap(),
+            "ax_install_token"
+        );
+    }
 }
