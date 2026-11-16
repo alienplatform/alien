@@ -573,10 +573,24 @@ async fn run_command(
 /// Streams frames as NDJSON until the sender is done. Dropping the body drops the receiver, which
 /// is how a departed caller reaches the command.
 fn ndjson_response(receiver: mpsc::Receiver<Frame>) -> std::result::Result<Response, ApiError> {
+    ndjson_stream(receiver, false)
+}
+
+/// Streams frames as NDJSON. With `flush_headers`, the body opens with an empty line, which every
+/// reader of the stream skips, so a proxy that holds a response's headers until its first body
+/// byte answers at once even when the command has printed nothing yet.
+fn ndjson_stream(
+    receiver: mpsc::Receiver<Frame>,
+    flush_headers: bool,
+) -> std::result::Result<Response, ApiError> {
     let frames = futures::stream::unfold(receiver, |mut receiver| async move {
         let frame = receiver.recv().await?;
         Some((encode_frame(&frame), receiver))
     });
+    let preamble = futures::stream::iter(
+        flush_headers.then(|| Ok::<Bytes, std::io::Error>(Bytes::from_static(b"\n"))),
+    );
+    let frames = futures::StreamExt::chain(preamble, frames);
 
     Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/x-ndjson")
@@ -733,7 +747,9 @@ async fn interactive_start(
         }
     }
 
-    ndjson_response(receiver)
+    // The caller writes its input only after this answers, and a program waiting for that input
+    // prints nothing first.
+    ndjson_stream(receiver, true)
 }
 
 async fn interactive_stdin(

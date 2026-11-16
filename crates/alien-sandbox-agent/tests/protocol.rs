@@ -1448,6 +1448,10 @@ impl Interactive {
         self.pending.extend_from_slice(chunk);
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
             let line: Vec<u8> = self.pending.drain(..=end).collect();
+            // The stream opens with an empty line so a proxy answers at once.
+            if line == b"\n" {
+                continue;
+            }
             let frame: serde_json::Value =
                 serde_json::from_slice(&line).expect("every frame is a complete JSON line");
             if frame["t"] == "stdout" {
@@ -2496,4 +2500,58 @@ async fn native_file_preview_is_granted_by_the_boot_token_and_forwards_the_calle
         alone.status()
     );
     assert_eq!(seen.lock().unwrap().len(), 1, "refused calls reach nothing");
+}
+
+/// The count of trailing arguments, and the program's size, must not change whether an
+/// interactive command answers.
+#[tokio::test]
+async fn an_interactive_command_answers_for_any_trailing_argument_count_and_program_size() {
+    let agent = Agent::start().await;
+    for (n, padding) in [
+        (0, 0),
+        (1, 0),
+        (2, 0),
+        (0, 21_000),
+        (1, 21_000),
+        (2, 21_000),
+    ] {
+        let program = format!(
+            ": '{}'; echo args $#; read line; echo got $line",
+            "x".repeat(padding)
+        );
+        let mut command: Vec<&str> = vec!["/bin/sh", "-c", &program, "sh"];
+        let extra = ["one", "two"];
+        command.extend(&extra[..n]);
+        let id = format!("argv-{n}-{padding}");
+        let mut run = Interactive::start(&agent, &id, &command).await;
+        run.read_until(&format!("args {n}\n")).await;
+        assert_eq!(run.accepted(0, b"hi\n").await, 3);
+        run.read_until("got hi\n").await;
+        let (terminal, _, _) = run.finish().await;
+        assert_eq!(terminal["t"], "exit", "{n} args, {padding} padding");
+    }
+}
+
+/// A command that says nothing until it is written to must still be answered at once. A proxy
+/// in front of the agent may hold the response headers until the body has a first byte, and the
+/// caller cannot write its input until the start request has been answered.
+#[tokio::test]
+async fn an_interactive_command_that_is_silent_until_written_to_still_answers_at_once() {
+    let agent = Agent::start().await;
+    let mut run = Interactive::start(
+        &agent,
+        "silent-1",
+        &["/bin/sh", "-c", "read line; echo \"got $line\""],
+    )
+    .await;
+    let first = tokio::time::timeout(std::time::Duration::from_secs(2), run.response.chunk())
+        .await
+        .expect("the stream sends a first byte before the command has printed anything")
+        .expect("the stream reads")
+        .expect("a first chunk");
+    run.take(&first);
+    assert_eq!(run.accepted(0, b"hi\n").await, 3);
+    run.read_until("got hi\n").await;
+    let (terminal, _, _) = run.finish().await;
+    assert_eq!(terminal["t"], "exit");
 }
