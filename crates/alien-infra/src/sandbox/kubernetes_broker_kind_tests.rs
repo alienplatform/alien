@@ -1197,6 +1197,32 @@ spec:
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
+    if !became_ready {
+        // Say why: what the agent logged, what the kubelet saw, and what the CNI enforces.
+        for (title, arguments) in [
+            ("pod", vec!["get", "pod", "gate-agent", "-o", "yaml"]),
+            ("events", vec!["get", "events", "--sort-by=.lastTimestamp"]),
+            (
+                "agent log",
+                vec!["exec", "gate-agent", "--", "sh", "-c", "cat /tmp/agent.log; ps"],
+            ),
+            ("network policies", vec!["get", "networkpolicy", "-o", "yaml"]),
+        ] {
+            let mut all = ns.to_vec();
+            all.extend_from_slice(&arguments);
+            let output = std::process::Command::new("kubectl").args(&all).output();
+            eprintln!(
+                "--- {title} ---\n{}",
+                output
+                    .map(|output| format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    ))
+                    .unwrap_or_else(|error| error.to_string())
+            );
+        }
+    }
     assert!(
         became_ready,
         "Ready once the deny-all egress policy is enforced"
