@@ -589,7 +589,10 @@ async fn run_operator_cli(
     .await?;
     refuse_owned_secret_with_identity_store(
         args.owned_secret.as_deref(),
-        args.identity_secret.as_deref(),
+        has_identity_store(
+            args.identity_secret.as_deref(),
+            args.identity_aws_secret.as_deref(),
+        ),
     )?;
     let owned_values = load_owned_secret(
         args.owned_secret.as_deref(),
@@ -1924,11 +1927,11 @@ fn is_secret_file_mode_allowed(mode: u32) -> bool {
 /// kept outside the cache. Refuse the combination instead.
 fn refuse_owned_secret_with_identity_store(
     owned_secret: Option<&str>,
-    identity_secret: Option<&str>,
+    has_identity_store: bool,
 ) -> Result<()> {
-    if owned_secret.is_some() && identity_secret.is_some() {
+    if owned_secret.is_some() && has_identity_store {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "OPERATOR_OWNED_SECRET and OPERATOR_IDENTITY_SECRET are both set. Set only one: the chart for an install uses either the owned Secret or the identity Secret, not both.".to_string(),
+            message: "OPERATOR_OWNED_SECRET and an identity store (OPERATOR_IDENTITY_SECRET or OPERATOR_IDENTITY_AWS_SECRET) are both set. Set only one: an install uses either the owned Secret or an identity store, not both.".to_string(),
         }));
     }
     Ok(())
@@ -2366,10 +2369,13 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 mod tests {
     #[test]
     fn an_owned_secret_with_an_identity_store_is_refused_not_silently_ignored() {
-        assert!(super::refuse_owned_secret_with_identity_store(Some("owned"), Some("id")).is_err());
-        assert!(super::refuse_owned_secret_with_identity_store(Some("owned"), None).is_ok());
-        assert!(super::refuse_owned_secret_with_identity_store(None, Some("id")).is_ok());
-        assert!(super::refuse_owned_secret_with_identity_store(None, None).is_ok());
+        let refuse = super::refuse_owned_secret_with_identity_store;
+        // The Kubernetes Secret and the AWS secret both count as an identity store.
+        assert!(refuse(Some("owned"), super::has_identity_store(Some("id"), None)).is_err());
+        assert!(refuse(Some("owned"), super::has_identity_store(None, Some("arn"))).is_err());
+        assert!(refuse(Some("owned"), false).is_ok());
+        assert!(refuse(None, true).is_ok());
+        assert!(refuse(None, false).is_ok());
     }
 
     use super::{
