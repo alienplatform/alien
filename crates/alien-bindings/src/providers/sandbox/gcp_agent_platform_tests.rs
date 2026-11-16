@@ -181,7 +181,10 @@ async fn create_waits_for_the_agent_and_deletes_the_sandbox_when_it_never_answer
             .expect_get_sandbox()
             .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
         let probes = AtomicUsize::new(0);
-        client.expect_execute().returning(move |_, _, _| {
+        client.expect_execute().returning(move |_, _, input| {
+            if op_of(input) != "health" {
+                return Ok(marker_script_reply());
+            }
             let seen = probes.fetch_add(1, Ordering::SeqCst);
             match answer_after {
                 Some(after) if seen >= after => Ok(health_reply()),
@@ -228,9 +231,13 @@ async fn a_requested_lifetime_reaches_the_create_body_and_cannot_raise_the_decla
         client
             .expect_get_sandbox()
             .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
-        client
-            .expect_execute()
-            .returning(|_, _, _| Ok(health_reply()));
+        client.expect_execute().returning(|_, _, input| {
+            Ok(if op_of(input) == "health" {
+                health_reply()
+            } else {
+                marker_script_reply()
+            })
+        });
 
         provider(client)
             .create(CreateSandboxRequest {
@@ -240,6 +247,36 @@ async fn a_requested_lifetime_reaches_the_create_body_and_cannot_raise_the_decla
             .await
             .expect("create succeeds");
     }
+}
+
+/// The display name is tagged at create, so a sandbox handed out without its first marker would
+/// later report a healthy container as lost: a marker that cannot be written deletes the sandbox
+/// and fails the create.
+#[tokio::test(start_paused = true)]
+async fn create_deletes_the_sandbox_when_the_first_marker_cannot_be_written() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_create_sandbox()
+        .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") }))));
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_execute().returning(|_, _, input| {
+        if op_of(input) == "health" {
+            Ok(health_reply())
+        } else {
+            Err(execute_refused())
+        }
+    });
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Ok(()));
+
+    provider(client)
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect_err("no marker, no sandbox");
 }
 
 /// Delete-on-create-failure: a probe the agent never answers deletes the sandbox the caller never
@@ -3194,12 +3231,16 @@ impl AgentPlatformApi for FakeEngine {
             .retain(|candidate| candidate.id != sandbox);
         Ok(())
     }
-    async fn execute(&self, _engine: &str, sandbox: &str, _input: &[u8]) -> ClientResult<Vec<u8>> {
+    async fn execute(&self, _engine: &str, sandbox: &str, input: &[u8]) -> ClientResult<Vec<u8>> {
         if let Some(left) = self.silent_probes.lock().unwrap().get_mut(sandbox) {
             if *left > 0 {
                 *left -= 1;
                 return Err(execute_refused());
             }
+        }
+        // A command (the marker script at create) succeeds; anything else is the health probe.
+        if op_of(input) != "health" {
+            return Ok(marker_script_reply());
         }
         Ok(health_reply())
     }

@@ -1318,13 +1318,15 @@ impl Sandbox for GcpAgentPlatformSandbox {
         match self.settle(CREATE, &sandbox_id).await {
             Ok(generation) => {
                 // The first marker, so that a container that later replaces this one is told
-                // from this one by the marker it lacks. Best effort: an image without a shell
-                // cannot be paused either, and says so there.
+                // from this one by the marker it lacks. The display name is already tagged, so a
+                // sandbox handed out without a marker would report a healthy container as lost
+                // at its first resume: a failed write deletes the sandbox and fails the create.
+                // An image without /bin/sh cannot hold a marker, so it cannot be created here.
                 if let Err(error) = self
                     .write_marker_with_retries(CREATE, &sandbox_id, generation)
                     .await
                 {
-                    warn!(sandbox = %sandbox_id, %error, "could not leave the pause marker at create");
+                    return Err(self.discard(&sandbox_id, error).await);
                 }
                 Ok(SandboxInstance {
                     sandbox_id,
