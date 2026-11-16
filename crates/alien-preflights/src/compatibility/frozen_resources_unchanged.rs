@@ -79,7 +79,16 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
             && profile_has_machines_hardware(platform, new_group)
             && validated_machine_profile(platform, new_group)
         {
-            old_group.profile = new_group.profile.clone();
+            // Only the machine's hardware: a disk size is the deployment's own choice and a
+            // difference in it still needs setup.
+            if let (Some(old_profile), Some(new_profile)) =
+                (old_group.profile.as_mut(), new_group.profile.as_ref())
+            {
+                old_profile.cpu = new_profile.cpu.clone();
+                old_profile.memory_bytes = new_profile.memory_bytes;
+                old_profile.architecture = new_profile.architecture;
+                old_profile.gpu = new_profile.gpu.clone();
+            }
         }
     }
     normalized == *new_cluster
@@ -1305,6 +1314,16 @@ mod tests {
         let stale = cluster("Standard_F8s_v2", "Standard_D8s_v5");
         let result = check(stale.clone(), cluster("Standard_F8s_v2", "Standard_F8s_v2")).await;
         assert!(result.success, "{:?}", result.errors);
+        // The profile's hardware is taken from the update, its disk sizes are not: a disk-size
+        // difference alongside the stale hardware still needs setup.
+        let mut with_disk = cluster("Standard_F8s_v2", "Standard_F8s_v2");
+        with_disk.capacity_groups[0]
+            .profile
+            .as_mut()
+            .unwrap()
+            .ephemeral_storage_bytes += 64 * 1024 * 1024 * 1024;
+        let result = check(stale.clone(), with_disk).await;
+        assert!(!result.success);
         // A profile that matches no machine is still a change setup owns.
         let mut invented = cluster("Standard_F8s_v2", "Standard_F8s_v2");
         invented.capacity_groups[0].profile.as_mut().unwrap().cpu = "3.0".to_string();

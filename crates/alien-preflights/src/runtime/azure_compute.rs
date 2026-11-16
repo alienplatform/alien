@@ -611,8 +611,7 @@ mod tests {
         server
             .mock_async(|when, then| {
                 when.method(GET).path_contains("/locations/eastus2/usages");
-                then.status(200)
-                    .json_body(json!({"value": "usage-shape-marker"}));
+                then.status(200).json_body(json!({"value": "usage-shape-marker"}));
             })
             .await;
         let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
