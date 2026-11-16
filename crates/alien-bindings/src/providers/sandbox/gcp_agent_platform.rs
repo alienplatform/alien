@@ -532,10 +532,16 @@ impl GcpAgentPlatformSandbox {
         requested_id: &str,
         operation: &str,
     ) -> Result<Vec<KeyedSandbox>> {
+        // A sandbox made before the pause contract carries the plain name, a newer one the tagged
+        // name; the key finds both.
         let display_name = request_key_display_name(requested_id);
+        let tagged_name = tagged_display_name(&display_name);
         let listed = self
             .client
-            .list_sandboxes_by_display_name(&self.engine, &display_name)
+            .list_sandboxes_by_display_names(
+                &self.engine,
+                &[display_name.clone(), tagged_name.clone()],
+            )
             .await
             .context(ErrorData::SandboxUnreachable {
                 operation: operation.to_string(),
@@ -546,7 +552,10 @@ impl GcpAgentPlatformSandbox {
         let mut candidates: Vec<_> = listed
             .into_iter()
             .filter(|sandbox| {
-                sandbox.display_name.as_deref() == Some(display_name.as_str())
+                sandbox
+                    .display_name
+                    .as_deref()
+                    .is_some_and(|name| name == display_name || name == tagged_name)
                     && sandbox.state.as_deref().is_some_and(is_live_state)
             })
             .filter_map(|sandbox| {
@@ -862,7 +871,7 @@ impl GcpAgentPlatformSandbox {
             // A caller with lifecycle access only (`sandbox/management`) is refused here with a
             // 403, which no retry changes. Name what is missing rather than say the agent is
             // unreachable, which reads as a transient fault.
-            if http_status(&error) == Some(403) && (operation == PAUSE || operation == RESUME) {
+            if is_permission_denied(&error) && (operation == PAUSE || operation == RESUME) {
                 return error.context(ErrorData::SandboxCommandFailed {
                     failure: "executePermissionMissing".to_string(),
                     reason: format!(
@@ -1055,8 +1064,37 @@ impl GcpAgentPlatformSandbox {
         Ok(String::from_utf8_lossy(&stdout).trim().to_string())
     }
 
+    /// [`Self::write_pause_marker`], tried up to three times: the agent that has just come up can
+    /// refuse a call or two, and a marker that is not left reads as a replaced container later.
+    async fn write_marker_with_retries(
+        &self,
+        operation: &str,
+        sandbox_id: &str,
+        generation: u64,
+    ) -> Result<()> {
+        let mut attempt = 1;
+        loop {
+            match self
+                .write_pause_marker(operation, sandbox_id, generation)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(_) if attempt < 3 => {
+                    attempt += 1;
+                    tokio::time::sleep(LIFECYCLE_POLL_INTERVAL).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Leaves `generation` in the sandbox for a later `resume`, replacing any earlier marker.
-    async fn write_pause_marker(&self, sandbox_id: &str, generation: u64) -> Result<()> {
+    async fn write_pause_marker(
+        &self,
+        operation: &str,
+        sandbox_id: &str,
+        generation: u64,
+    ) -> Result<()> {
         let candidates = PAUSE_MARKER_DIRS
             .iter()
             .map(|dir| format!("{dir}/{PAUSE_MARKER_NAME}"))
@@ -1067,7 +1105,7 @@ impl GcpAgentPlatformSandbox {
              done; exit 1",
             all = candidates.join(" ")
         );
-        self.marker_script(PAUSE, sandbox_id, script)
+        self.marker_script(operation, sandbox_id, script)
             .await
             .map(|_| ())
     }
@@ -1080,7 +1118,8 @@ impl GcpAgentPlatformSandbox {
             .map(|dir| format!("{dir}/{PAUSE_MARKER_NAME}"))
             .collect::<Vec<_>>();
         let script = format!(
-            "for f in {all}; do if [ -f \"$f\" ]; then cat \"$f\"; exit 0; fi; done; echo none",
+            "for f in {all}; do if [ -e \"$f\" ]; then v=$(cat \"$f\" 2>/dev/null) || {{ echo unreadable; exit 0; }}; \
+             echo \"gen:$v\"; exit 0; fi; done; echo none",
             all = candidates.join(" ")
         );
         // The agent that has just come back can refuse a call or two; reading is safe to repeat.
@@ -1095,7 +1134,24 @@ impl GcpAgentPlatformSandbox {
                 Err(error) => return Err(error),
             }
         };
-        Ok(text.parse::<u64>().ok())
+        if text == "none" {
+            return Ok(None);
+        }
+        // A marker that is there but cannot be read, or holds something else, is not an absent
+        // marker: absence means the container was replaced.
+        text.strip_prefix("gen:")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(Some)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "pauseMarkerUnreadable".to_string(),
+                    reason: format!(
+                        "{RESUME}: the pause marker in sandbox '{sandbox_id}' exists but cannot \
+                         be read ({}); the sandbox was not reported as kept or lost",
+                        truncated(text.as_bytes())
+                    ),
+                })
+            })
     }
 
     /// Runs a command inside the proxy's synchronous window, streaming the buffered NDJSON body.
@@ -1211,7 +1267,16 @@ impl Sandbox for GcpAgentPlatformSandbox {
             .create_sandbox(
                 &self.engine,
                 SandboxCreateRequest {
-                    display_name: request.sandbox_id.as_deref().map(request_key_display_name),
+                    // Set at create and never changeable after, so it carries the pause contract
+                    // for the sandbox's whole life: `resume` reads it from Google, outside the
+                    // container, to know that this sandbox keeps a marker.
+                    display_name: Some(tagged_display_name(
+                        &request
+                            .sandbox_id
+                            .as_deref()
+                            .map(request_key_display_name)
+                            .unwrap_or_else(|| UNKEYED_DISPLAY_NAME.to_string()),
+                    )),
                     sandbox_environment_template: Some(self.template.clone()),
                     sandbox_environment_snapshot: None,
                     ttl,
@@ -1251,11 +1316,22 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
         // Past here a sandbox exists the caller has no id for, so every failure deletes it.
         match self.settle(CREATE, &sandbox_id).await {
-            Ok(generation) => Ok(SandboxInstance {
-                sandbox_id,
-                state: SandboxState::Running,
-                generation,
-            }),
+            Ok(generation) => {
+                // The first marker, so that a container that later replaces this one is told
+                // from this one by the marker it lacks. Best effort: an image without a shell
+                // cannot be paused either, and says so there.
+                if let Err(error) = self
+                    .write_marker_with_retries(CREATE, &sandbox_id, generation)
+                    .await
+                {
+                    warn!(sandbox = %sandbox_id, %error, "could not leave the pause marker at create");
+                }
+                Ok(SandboxInstance {
+                    sandbox_id,
+                    state: SandboxState::Running,
+                    generation,
+                })
+            }
             Err(error) => Err(self.discard(&sandbox_id, error).await),
         }
     }
@@ -1746,9 +1822,10 @@ impl Sandbox for GcpAgentPlatformSandbox {
     ///
     /// Google offers no switch that stops a paused sandbox from waking: any request to it, a
     /// command or a preview call included, resumes it, so a paused sandbox stays paused only while
-    /// nothing talks to it. A wake by a command or a preview call skips the memory check `resume`
-    /// makes; a caller who needs it compares the sandbox's `generation` itself. The sandbox's
-    /// generation is read first and kept, inside the sandbox, for `resume`.
+    /// nothing talks to it. A wake by a request is still checked: `resume` compares the container
+    /// that answers with the marker `create` left and this call refreshes, so a container that
+    /// replaced the sandbox is reported whoever woke it. The sandbox's generation is read first and
+    /// kept, inside the sandbox, for that comparison.
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id(PAUSE, sandbox_id)?;
         let Some(sandbox) = self.read_sandbox(PAUSE, sandbox_id).await? else {
@@ -1777,7 +1854,8 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // Read and written before the call: after a pause the agent is not reachable to ask. The
         // marker lives in the sandbox, so whichever process resumes it can compare.
         let generation = self.probe_agent(PAUSE, sandbox_id).await?;
-        self.write_pause_marker(sandbox_id, generation).await?;
+        self.write_pause_marker(PAUSE, sandbox_id, generation)
+            .await?;
 
         let started = match self.client.pause_sandbox(&self.engine, sandbox_id).await {
             Ok(started) => started,
@@ -1817,6 +1895,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // Whether the sandbox was up when the call began. Nothing paused it then, so a missing
         // marker is not a sign of lost memory.
         let mut running_on_entry = None;
+        let mut carries_marker: Option<bool> = None;
         loop {
             let Some(sandbox) = self.read_sandbox(RESUME, sandbox_id).await? else {
                 return Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -1825,6 +1904,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 }));
             };
             running_on_entry.get_or_insert(sandbox.state.as_deref() == Some("STATE_RUNNING"));
+            carries_marker.get_or_insert(
+                sandbox
+                    .display_name
+                    .as_deref()
+                    .is_some_and(is_tagged_display_name),
+            );
             match sandbox.state.as_deref() {
                 // Already up, or being woken by a request that reached it first.
                 Some("STATE_RUNNING" | "STATE_RESUMING") => break,
@@ -1893,8 +1978,17 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 "the container that answers is not the one that was paused; it runs a container \
                  that holds only what its image provides",
             )),
-            // Up when the call began and never paused by this binding: there is no memory to
-            // lose, and a resume before every use stays a no-op, as on the other backends.
+            // A sandbox made with the pause contract always holds a marker, from create on, so a
+            // missing one is a container that replaced it, whether it was paused or not and
+            // whatever woke it.
+            None if carries_marker == Some(true) => Err(memory_lost(
+                "the container that answers has no pause marker, so it is not the one this \
+                 sandbox started with; it runs a container that holds only what its image \
+                 provides",
+            )),
+            // A sandbox made before the contract: up when the call began and never paused by
+            // this binding, there is no memory to lose, and a resume before every use stays a
+            // no-op, as on the other backends.
             None if running_on_entry == Some(true) => Ok(()),
             None => Err(memory_lost(
                 "it restarted while it was paused, or was not paused by this binding, so its \
@@ -2502,6 +2596,21 @@ fn request_key_display_name(requested_id: &str) -> String {
     )
 }
 
+/// What a sandbox created without a caller key is named.
+const UNKEYED_DISPLAY_NAME: &str = "alienSandbox";
+/// Ends the display name of every sandbox created with the pause contract (a marker left at
+/// create). Sandboxes take no label and no update after create, so the name is the one record of
+/// the contract that lives outside the container.
+const PAUSE_CONTRACT_SUFFIX: &str = "-pm1";
+
+fn tagged_display_name(display_name: &str) -> String {
+    format!("{display_name}{PAUSE_CONTRACT_SUFFIX}")
+}
+
+fn is_tagged_display_name(display_name: &str) -> bool {
+    display_name.ends_with(PAUSE_CONTRACT_SUFFIX)
+}
+
 /// Google mints numeric ids and answers 400 for anything else, so anything else is a caller's own
 /// key, resolved through the display name rather than sent to Google as an id.
 fn is_google_id(id: &str) -> bool {
@@ -2644,6 +2753,21 @@ fn http_status(error: &AlienError<AgentPlatformErrorData>) -> Option<u16> {
         context = current.context.as_ref();
         layer = current.source.as_deref();
     }
+}
+
+/// Whether a 403 is Google refusing for lack of an IAM permission. Other 403s (an API that is
+/// not enabled, a policy block) are not fixed by granting a permission set, so they must not be
+/// described as that.
+fn is_permission_denied(error: &AlienError<AgentPlatformErrorData>) -> bool {
+    if http_status(error) != Some(403) {
+        return false;
+    }
+    let text = super::refusal::response_text(error)
+        .unwrap_or_default()
+        .to_lowercase();
+    text.contains("permission")
+        && !text.contains("service_disabled")
+        && !text.contains("has not been used")
 }
 
 /// Whether the API answered a request to a paused sandbox with its "resume has been initiated"

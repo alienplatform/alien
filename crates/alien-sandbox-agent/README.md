@@ -523,18 +523,29 @@ Limits the plan refuses with a message, rather than discovering them at the firs
   pause the sandbox explicitly with `pause()` instead.
 
 `pause()` and `resume()` keep the sandbox's memory and running processes (`pause_resume` is on).
-Before pausing, the binding runs a short `/bin/sh` command that writes the container's generation to
-`/dev/shm/.alien-pause-generation` (`/tmp` where an image has no `/dev/shm`), outside the session
-root so that tidying the working tree cannot delete it. `/dev/shm` is memory, so the file survives
-exactly when the memory does. `resume()` reads it back and fails with `SANDBOX_MEMORY_LOST` (not
-retryable) when it is missing after a pause or differs from the container that answers; a read that
-fails for another reason is reported as that failure, never as lost memory. A fresh container has no
-such file, so a pause in one process and a resume in another are checked the same way. The marker
-needs `/bin/sh` in the image. On Google Cloud, pause and resume talk to the sandbox's agent to check that memory survived, so the caller needs `sandbox/execute` (or `sandbox/remote-execute`) as well as `sandbox/management`; a caller with lifecycle access only gets an error naming the missing set. `resume()` on a sandbox that was running and never paused is a no-op.
+A new sandbox leaves a marker as soon as it is created, and `pause()` refreshes it: a short
+`/bin/sh` command writes the container's generation to `/dev/shm/.alien-pause-generation` (`/tmp`
+where an image has no `/dev/shm`), outside the session root so that tidying the working tree
+cannot delete it. `/dev/shm` is memory, so the file survives exactly when the memory does, and a
+container that replaces the sandbox has no such file. A sandbox created with this contract has a
+display name that ends in `-pm1`; Google cannot change a name after create, so that tag is the
+record, outside the container, that a marker belongs there. `resume()` reads the marker back and
+fails with `SANDBOX_MEMORY_LOST` (not retryable) when a tagged sandbox has none, or when the marker
+differs from the container that answers. This holds in whatever state the sandbox is in: a running
+sandbox whose container Google replaced, with no pause at all, gets `SANDBOX_MEMORY_LOST` from a
+routine `resume()`, and so does one that a request woke into a replaced container before `resume()`
+was called. A read that fails for another reason, including an image whose marker script cannot
+run, is reported as that failure (`pauseMarkerFailed`: the marker needs `/bin/sh` and a writable
+`/dev/shm` or `/tmp`), never as lost memory. A sandbox created before this contract has no tag:
+`resume()` on it is a no-op while it is running, and a marker is checked only if one exists.
+Pause in one process and resume in another are checked the same way.
+On Google Cloud, pause and resume talk to the sandbox's agent to check that memory survived, so the
+caller needs `sandbox/execute` (or `sandbox/remote-execute`) as well as `sandbox/management`. A
+caller with lifecycle access only wakes the sandbox with `:resume` and then gets an error naming
+the missing set; the permission cannot be checked before the call.
 Any request to a paused sandbox, a command or a preview call included, wakes it: Google offers no
-way to turn that off, so a paused sandbox stays paused only while nothing talks to it. A wake by a
-command or a preview call skips the check above; callers who need it compare the sandbox's
-`generation` before and after. A `resume()` after such a wake returns once the sandbox answers.
+way to turn that off, so a paused sandbox stays paused only while nothing talks to it. A
+`resume()` after such a wake returns once the sandbox answers, and still checks the marker.
 Whether the sandbox's maximum lifetime keeps counting while it is paused is Google's rule and is not
 tested; a sandbox that expired while paused reports `sandboxTerminated` from `resume()`.
 

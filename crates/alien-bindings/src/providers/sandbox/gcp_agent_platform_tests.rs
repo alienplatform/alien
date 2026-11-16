@@ -78,6 +78,11 @@ fn ndjson(lines: &[serde_json::Value]) -> Vec<u8> {
     body
 }
 
+/// What the agent answers to a marker script that ran and succeeded.
+fn marker_script_reply() -> Vec<u8> {
+    ndjson(&[exit_frame(0)])
+}
+
 fn health_reply() -> Vec<u8> {
     health_reply_with_boot("11111111-1111-1111-1111-111111111111")
 }
@@ -128,6 +133,8 @@ async fn create_awaits_running_probes_the_agent_and_pins_its_arguments() {
             engine == "eng1"
                 && request.sandbox_environment_template.as_deref() == Some(TEMPLATE)
                 && request.ttl.as_deref() == Some("3600s")
+                // Every new sandbox carries the pause contract in its name.
+                && request.display_name.as_deref() == Some("alienSandbox-pm1")
         })
         .times(1)
         .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") }))));
@@ -139,6 +146,12 @@ async fn create_awaits_running_probes_the_agent_and_pins_its_arguments() {
         .expect_execute()
         .withf(|_, sandbox, input| sandbox == "s1" && op_of(input) == "health")
         .returning(|_, _, _| Ok(health_reply()));
+    // The marker the sandbox is left with at create.
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| sandbox == "s1" && op_of(input) == "exec")
+        .times(1)
+        .returning(|_, _, _| Ok(marker_script_reply()));
 
     let sandbox = provider(client)
         .create(CreateSandboxRequest::default())
@@ -341,6 +354,10 @@ async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
         .expect_execute()
         .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "health")
         .returning(|_, _, _| Ok(health_reply()));
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "exec")
+        .returning(|_, _, _| Ok(marker_script_reply()));
 
     client.expect_delete_sandbox().never();
 
@@ -417,6 +434,10 @@ async fn get_or_create_replaces_a_paused_sandbox_without_touching_it() {
         .expect_execute()
         .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "health")
         .returning(|_, _, _| Ok(health_reply()));
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "exec")
+        .returning(|_, _, _| Ok(marker_script_reply()));
     client.expect_delete_sandbox().never();
 
     let resolved = provider(client)
@@ -641,10 +662,10 @@ impl AgentPlatformApi for WedgedAgent {
     async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
         unimplemented!()
     }
-    async fn list_sandboxes_by_display_name(
+    async fn list_sandboxes_by_display_names(
         &self,
         _engine: &str,
-        _display_name: &str,
+        _display_names: &[String],
     ) -> ClientResult<Vec<SandboxEnvironment>> {
         unimplemented!()
     }
@@ -1560,6 +1581,12 @@ struct PausableSandbox {
     file: std::sync::Mutex<Option<Vec<u8>>>,
     /// Makes reading the marker fail the way an agent that is not ready does.
     fail_marker_reads: std::sync::atomic::AtomicBool,
+    /// The marker file is there but `cat` cannot read it.
+    marker_unreadable: std::sync::atomic::AtomicBool,
+    /// The sandbox was created with the pause contract: its display name carries the tag.
+    tagged: std::sync::atomic::AtomicBool,
+    /// The image has no shell, so a marker script exits 127.
+    no_shell: std::sync::atomic::AtomicBool,
 }
 
 impl PausableSandbox {
@@ -1569,6 +1596,9 @@ impl PausableSandbox {
             boot_id: std::sync::Mutex::new(boot_id),
             file: std::sync::Mutex::new(None),
             fail_marker_reads: std::sync::atomic::AtomicBool::new(false),
+            marker_unreadable: std::sync::atomic::AtomicBool::new(false),
+            tagged: std::sync::atomic::AtomicBool::new(false),
+            no_shell: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -1582,6 +1612,9 @@ impl PausableSandbox {
             // prints is what a real `cat` would.
             "exec" => {
                 let script = value["command"][2].as_str().expect("a /bin/sh -c script");
+                if self.no_shell.load(Ordering::SeqCst) {
+                    return Ok(ndjson(&[exit_frame(127)]));
+                }
                 if self.fail_marker_reads.load(Ordering::SeqCst) && script.contains("cat ") {
                     return Err(http_error(503, "the agent is not ready"));
                 }
@@ -1602,7 +1635,12 @@ impl PausableSandbox {
                     String::new()
                 } else if script.contains("cat ") {
                     match self.file.lock().unwrap().as_ref() {
-                        Some(contents) => String::from_utf8(contents.clone()).unwrap(),
+                        Some(_) if self.marker_unreadable.load(Ordering::SeqCst) => {
+                            "unreadable".to_string()
+                        }
+                        Some(contents) => {
+                            format!("gen:{}", String::from_utf8(contents.clone()).unwrap())
+                        }
                         None => "none".to_string(),
                     }
                 } else {
@@ -1644,7 +1682,7 @@ fn pausing_client(
     let state = fake.clone();
     client
         .expect_get_sandbox()
-        .returning(move |_, id| Ok(sandbox_in_state(id, *state.state.lock().unwrap())));
+        .returning(move |_, id| Ok(pausable_sandbox_record(&state, id)));
     let agent = fake.clone();
     client
         .expect_execute()
@@ -1663,6 +1701,15 @@ fn pausing_client(
         Ok(done_op(serde_json::json!({})))
     });
     client
+}
+
+/// The record Google would return for the fake: tagged when it was created with the contract.
+fn pausable_sandbox_record(fake: &PausableSandbox, id: &str) -> SandboxEnvironment {
+    let mut record = sandbox_in_state(id, *fake.state.lock().unwrap());
+    if fake.tagged.load(Ordering::SeqCst) {
+        record.display_name = Some("alienSandbox-pm1".to_string());
+    }
+    record
 }
 
 #[test]
@@ -1827,6 +1874,110 @@ async fn a_resume_whose_marker_read_fails_does_not_claim_lost_memory() {
         .await
         .expect_err("the marker could not be read");
     assert_ne!(error.code, "SANDBOX_MEMORY_LOST", "{error}");
+}
+
+/// A sandbox made with the pause contract that Google replaces with a new container, then woken
+/// by a request, is running on entry to `resume` with nothing in `/dev/shm`. The tag, which lives
+/// outside the container, is what says a marker should be there: the loss is reported.
+#[tokio::test]
+async fn a_tagged_sandbox_woken_into_a_replaced_container_is_lost_on_resume() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    fake.paused_with_marker();
+    // A request woke it into a new container before `resume` was called.
+    fake.replace_container("boot-b");
+    fake.set_state("STATE_RUNNING");
+    let lost = provider(pausing_client(&fake, "boot-b"))
+        .resume("1234567890123456789")
+        .await
+        .expect_err("the container was replaced");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+}
+
+/// A tagged sandbox that is running and untouched is kept: its marker matches.
+#[tokio::test]
+async fn a_tagged_sandbox_that_kept_its_container_resumes() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    // The marker `create` leaves.
+    *fake.file.lock().unwrap() = Some(generation_from_boot_id("boot-a").to_string().into_bytes());
+    let provider = provider(pausing_client(&fake, "boot-a"));
+    provider.resume("1234567890123456789").await.expect("kept");
+    provider.pause("1234567890123456789").await.expect("pause");
+    provider
+        .resume("1234567890123456789")
+        .await
+        .expect("kept across a pause");
+}
+
+/// A sandbox made before the contract, running, with no marker: nothing was promised, a no-op.
+/// (`a_resume_of_a_running_sandbox_is_a_no_op` is the same sandbox without a tag.)
+#[tokio::test]
+async fn an_untagged_sandbox_paused_by_an_older_path_keeps_the_old_answer() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.set_state("STATE_PAUSED");
+    // No marker and no tag: paused outside this binding, so memory cannot be confirmed.
+    let lost = provider(pausing_client(&fake, "boot-a"))
+        .resume("1234567890123456789")
+        .await
+        .expect_err("not confirmable");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+}
+
+/// An image whose marker script cannot run (no shell) is never read as a replaced container: the
+/// script would not run in the replacement either, so nothing was found out. Pause says so by name.
+#[tokio::test]
+async fn a_marker_script_that_cannot_run_is_not_memory_lost() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    fake.no_shell.store(true, Ordering::SeqCst);
+    let provider = provider(pausing_client(&fake, "boot-a"));
+    let resume = provider
+        .resume("1234567890123456789")
+        .await
+        .expect_err("the marker cannot be read");
+    assert_eq!(resume.code, "SANDBOX_COMMAND_FAILED", "{resume}");
+    assert!(resume.to_string().contains("/bin/sh"), "{resume}");
+    let pause = provider
+        .pause("1234567890123456789")
+        .await
+        .expect_err("the marker cannot be left");
+    assert_eq!(pause.code, "SANDBOX_COMMAND_FAILED", "{pause}");
+}
+
+/// A marker that exists but cannot be read is not an absent marker: it must not be taken for a
+/// replaced container, and it must not be taken for a kept one.
+#[tokio::test]
+async fn a_resume_whose_marker_is_unreadable_is_neither_kept_nor_lost() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.paused_with_marker();
+    fake.marker_unreadable.store(true, Ordering::SeqCst);
+    let error = provider(pausing_client(&fake, "boot-a"))
+        .resume("s1")
+        .await
+        .expect_err("the marker could not be read");
+    assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+    assert_ne!(error.code, "SANDBOX_MEMORY_LOST", "{error}");
+}
+
+/// A 403 that is not a missing permission (an API that is not enabled) is not described as one.
+#[tokio::test]
+async fn a_403_that_is_not_a_missing_permission_is_not_labelled_as_one() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_execute().returning(|_, _, _| {
+        Err(http_error(
+            403,
+            "Vertex AI API has not been used in project 1 before or it is disabled",
+        ))
+    });
+    let error = provider(client)
+        .pause("s1")
+        .await
+        .expect_err("the agent call is refused");
+    assert!(!error.to_string().contains("sandbox/execute"), "{error}");
 }
 
 /// A resume of a sandbox that is simply running, and was never paused, changes nothing.
@@ -3018,16 +3169,21 @@ impl AgentPlatformApi for FakeEngine {
             })
             .collect())
     }
-    async fn list_sandboxes_by_display_name(
+    async fn list_sandboxes_by_display_names(
         &self,
         engine: &str,
-        display_name: &str,
+        display_names: &[String],
     ) -> ClientResult<Vec<SandboxEnvironment>> {
         Ok(self
             .list_sandboxes(engine)
             .await?
             .into_iter()
-            .filter(|sandbox| sandbox.display_name.as_deref() == Some(display_name))
+            .filter(|sandbox| {
+                sandbox
+                    .display_name
+                    .as_deref()
+                    .is_some_and(|name| display_names.iter().any(|n| n == name))
+            })
             .collect())
     }
     async fn delete_sandbox(&self, _engine: &str, sandbox: &str) -> ClientResult<()> {
@@ -3147,7 +3303,10 @@ async fn the_raw_key_never_reaches_google() {
     for name in engine.names() {
         let name = name.expect("a keyed create is stamped");
         assert!(!name.contains("engine") && !name.contains('"'), "{name}");
-        assert!(name.ends_with(&request_key(key)), "{name}");
+        assert!(
+            name.ends_with(&format!("{}-pm1", request_key(key))),
+            "{name}"
+        );
     }
 }
 

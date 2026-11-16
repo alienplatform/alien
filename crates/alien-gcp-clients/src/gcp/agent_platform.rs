@@ -468,13 +468,13 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     async fn get_sandbox(&self, engine: &str, sandbox: &str) -> Result<SandboxEnvironment>;
     /// List sandboxes under an engine, following pagination. Retries.
     async fn list_sandboxes(&self, engine: &str) -> Result<Vec<SandboxEnvironment>>;
-    /// List the sandboxes under an engine whose display name is exactly `display_name`, following
-    /// pagination. Retries. The match is made by the service (`display_name="…"`, AIP-160), so an
-    /// engine holding many sandboxes is not read in full to find one caller's.
-    async fn list_sandboxes_by_display_name(
+    /// List the sandboxes under an engine whose display name is exactly one of `display_names`,
+    /// following pagination. Retries. The match is made by the service (`display_name="…" OR …`,
+    /// AIP-160), so an engine holding many sandboxes is not read in full to find one caller's.
+    async fn list_sandboxes_by_display_names(
         &self,
         engine: &str,
-        display_name: &str,
+        display_names: &[String],
     ) -> Result<Vec<SandboxEnvironment>>;
     /// Delete a sandbox. Retries; a not-found is success.
     async fn delete_sandbox(&self, engine: &str, sandbox: &str) -> Result<()>;
@@ -883,16 +883,23 @@ impl AgentPlatformApi for AgentPlatformClient {
         self.list_sandboxes_filtered(engine, None).await
     }
 
-    async fn list_sandboxes_by_display_name(
+    async fn list_sandboxes_by_display_names(
         &self,
         engine: &str,
-        display_name: &str,
+        display_names: &[String],
     ) -> Result<Vec<SandboxEnvironment>> {
-        // A string literal in the filter grammar: `\` and `"` are the only characters that can
-        // end it early, so they are escaped and nothing a caller supplies can add a clause.
-        let literal = display_name.replace('\\', "\\\\").replace('"', "\\\"");
-        self.list_sandboxes_filtered(engine, Some(format!("display_name=\"{literal}\"")))
-            .await
+        // Each name is a string literal in the filter grammar: `\` and `"` are the only characters
+        // that can end it early, so they are escaped and nothing a caller supplies can add a
+        // clause.
+        let filter = display_names
+            .iter()
+            .map(|name| {
+                let literal = name.replace('\\', "\\\\").replace('"', "\\\"");
+                format!("display_name=\"{literal}\"")
+            })
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        self.list_sandboxes_filtered(engine, Some(filter)).await
     }
 
     async fn delete_sandbox(&self, engine: &str, sandbox: &str) -> Result<()> {
@@ -1469,7 +1476,7 @@ mod tests {
     /// A key's sandboxes are asked for by display name, the service does the matching, and a
     /// result that spans pages is read to its end: a first page alone would hide an older sandbox.
     #[tokio::test]
-    async fn list_sandboxes_by_display_name_filters_and_follows_pagination() {
+    async fn list_sandboxes_by_display_names_filters_and_follows_pagination() {
         let server = MockServer::start_async().await;
         server
             .mock_async(|when, then| {
@@ -1500,7 +1507,7 @@ mod tests {
             .await;
 
         let sandboxes = client(&server)
-            .list_sandboxes_by_display_name(ENGINE, "alienRequestKey-abc")
+            .list_sandboxes_by_display_names(ENGINE, &["alienRequestKey-abc".to_string()])
             .await
             .expect("both pages should list");
         let names: Vec<_> = sandboxes.iter().filter_map(|s| s.name.as_deref()).collect();
@@ -1524,9 +1531,28 @@ mod tests {
             })
             .await;
         client(&server)
-            .list_sandboxes_by_display_name(ENGINE, "a\" OR display_name:* \\")
+            .list_sandboxes_by_display_names(ENGINE, &["a\" OR display_name:* \\".to_string()])
             .await
             .expect("an escaped literal is a valid filter");
+        mock.assert_async().await;
+    }
+
+    /// Two names are matched by one request: a key's old and tagged display names.
+    #[tokio::test]
+    async fn two_display_names_are_one_or_filter() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(SANDBOXES_PATH)
+                    .query_param("filter", "display_name=\"k-1\" OR display_name=\"k-1-pm1\"");
+                then.status(200).json_body_obj(&serde_json::json!({}));
+            })
+            .await;
+        client(&server)
+            .list_sandboxes_by_display_names(ENGINE, &["k-1".to_string(), "k-1-pm1".to_string()])
+            .await
+            .expect("an OR filter lists");
         mock.assert_async().await;
     }
 

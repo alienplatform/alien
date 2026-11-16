@@ -715,6 +715,13 @@ export interface Sandbox {
   /**
    * Resumes a paused sandbox. Requires `pauseResume`. Resolves once the sandbox can take a
    * command; a sandbox that has ended rejects with a non-retryable error.
+   *
+   * On Google Cloud it also checks that the container that answers is the one the sandbox
+   * started with, and rejects with the non-retryable `SANDBOX_MEMORY_LOST` when it is not: memory
+   * and running processes are gone, and the sandbox runs a fresh container. That includes a
+   * running sandbox that Google replaced without any pause. The check talks to the sandbox's
+   * agent, so the caller needs `sandbox/execute` as well as `sandbox/management`, and the image
+   * needs `/bin/sh`.
    */
   resume(sandboxId: string): Promise<void>
   /**
