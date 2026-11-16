@@ -538,6 +538,8 @@ was called. A read that fails for another reason, including an image whose marke
 run, is reported as that failure (`pauseMarkerFailed`: the marker needs `/bin/sh` and a writable
 `/dev/shm` or `/tmp`), never as lost memory. A sandbox created before this contract has no tag:
 `resume()` on it is a no-op while it is running, and a marker is checked only if one exists.
+
+On Google Cloud, a resume of a sandbox that was never paused and whose first memory marker could not be written at create reports SANDBOX_MEMORY_LOST; pause first, or recreate.
 Pause in one process and resume in another are checked the same way.
 On Google Cloud, pause and resume talk to the sandbox's agent to check that memory survived, so the
 caller needs `sandbox/execute` (or `sandbox/remote-execute`) as well as `sandbox/management`. A

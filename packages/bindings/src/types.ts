@@ -721,7 +721,7 @@ export interface Sandbox {
    * and running processes are gone, and the sandbox runs a fresh container. That includes a
    * running sandbox that Google replaced without any pause. The check talks to the sandbox's
    * agent, so the caller needs `sandbox/execute` as well as `sandbox/management`, and the image
-   * needs `/bin/sh`.
+   * needs `/bin/sh`. A resume of a sandbox that was never paused and whose first memory marker could not be written at create reports SANDBOX_MEMORY_LOST; pause first, or recreate.
    */
   resume(sandboxId: string): Promise<void>
   /**
