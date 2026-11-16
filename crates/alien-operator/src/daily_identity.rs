@@ -666,16 +666,12 @@ impl DailyIdentity {
             return Ok(Err(response.status()));
         }
         let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| {
-                // A connection dropped mid-body is an outage, like a failed send.
-                AlienError::new(ErrorData::SyncFailed {
-                    message: "Component identity response failed".into(),
-                })
-            })?
-        {
+        while let Some(chunk) = response.chunk().await.map_err(|_| {
+            // A connection dropped mid-body is an outage, like a failed send.
+            AlienError::new(ErrorData::SyncFailed {
+                message: "Component identity response failed".into(),
+            })
+        })? {
             if bytes.len() + chunk.len() > 16 * 1024 {
                 return Err(failed("Component identity response exceeds limit"));
             }
@@ -2474,7 +2470,10 @@ mod lost_enrollment_tests {
             .await
             .err()
             .expect("the body never completes");
-        assert!(error.retryable, "a dropped connection can succeed later: {error:?}");
+        assert!(
+            error.retryable,
+            "a dropped connection can succeed later: {error:?}"
+        );
     }
 
     /// An Operator that is not enrolled has no operations credentials and keeps
