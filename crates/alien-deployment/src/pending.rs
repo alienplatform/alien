@@ -184,17 +184,6 @@ pub async fn handle_pending(
         current.platform
     );
 
-    // Step 2: Collect environment information. Kubernetes deployments may run
-    // on base cloud infrastructure; collect the base cloud environment while
-    // keeping the deployment stack platform as Kubernetes.
-    let environment_info = collect_deployment_environment_info(
-        current.platform,
-        config.base_platform,
-        &client_config,
-        alien_infra::stack_needs_base_cloud(&target_stack, current.platform, config.base_platform),
-    )
-    .await?;
-
     // Step 2.5: Record the frozen-gate answers, then drop gated setup
     // resources the deployer declined, BEFORE the mutations: a declined
     // frozen resource never existed, and leaving it in would derive grants
@@ -241,6 +230,24 @@ pub async fn handle_pending(
         &frozen_gating,
         current.platform,
     )?;
+
+    // Step 4a: Collect environment information on the PREPARED stack, so the answer to
+    // "does this stack need the base cloud" sees the mutations' resources and not the
+    // declined ones. Kubernetes deployments may run
+    // on base cloud infrastructure; collect the base cloud environment while
+    // keeping the deployment stack platform as Kubernetes.
+    let environment_info = collect_deployment_environment_info(
+        current.platform,
+        config.base_platform,
+        &client_config,
+        alien_infra::stack_needs_base_cloud(
+            &mutated_stack,
+            current.platform,
+            config.base_platform,
+            &config.stack_settings,
+        ),
+    )
+    .await?;
 
     // Step 4: Store prepared stack and inject environment variables
     let mut runtime_metadata = alien_core::RuntimeMetadata {

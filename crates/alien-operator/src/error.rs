@@ -41,6 +41,15 @@ pub enum ErrorData {
     )]
     ReleaseRefused { reason: String },
 
+    /// A cloud identity is configured on the Operator pod but could not be used.
+    #[error(
+        code = "BASE_CLOUD_UNREACHABLE",
+        message = "{message}",
+        retryable = "true",
+        internal = "false"
+    )]
+    BaseCloudUnreachable { message: String },
+
     #[error(
         code = "CONFIGURATION_ERROR",
         message = "{message}",

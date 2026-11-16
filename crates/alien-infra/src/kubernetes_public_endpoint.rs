@@ -4235,16 +4235,17 @@ mod tests {
             let harness = harness(MockAcmApi::new()).without_cloud();
             let mut state = KubernetesPublicEndpointState::default();
 
-            let error = reconcile_kubernetes_public_endpoint(
-                &harness.ctx(),
-                endpoint_target(),
-                &mut state,
-            )
-            .await
-            .expect_err("no cloud identity");
+            let error =
+                reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
+                    .await
+                    .expect_err("no cloud identity");
 
             assert_eq!(error.code, "BASE_CLOUD_UNAVAILABLE");
-            assert!(error.message.contains("basePlatformConfig"), "{}", error.message);
+            assert!(
+                error.message.contains("basePlatformConfig"),
+                "{}",
+                error.message
+            );
             assert!(error.message.contains("IRSA"), "{}", error.message);
             assert!(error.message.contains("Terraform"), "{}", error.message);
         }

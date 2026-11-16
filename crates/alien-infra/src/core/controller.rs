@@ -1550,9 +1550,9 @@ pub(crate) fn mismatch_or_missing_base_cloud(
     required_platform: alien_core::Platform,
 ) -> AlienError<ErrorData> {
     match client_config {
-        ClientConfig::Kubernetes(_) => AlienError::new(ErrorData::BaseCloudUnavailable {
-            required_platform,
-        }),
+        ClientConfig::Kubernetes(_) => {
+            AlienError::new(ErrorData::BaseCloudUnavailable { required_platform })
+        }
         other => AlienError::new(ErrorData::ClientConfigMismatch {
             required_platform,
             found_platform: other.platform(),
@@ -1566,12 +1566,11 @@ mod tests {
 
     #[test]
     fn a_plain_kubernetes_client_names_the_missing_base_cloud() {
-        let config = ClientConfig::Kubernetes(Box::new(
-            alien_core::KubernetesClientConfig::InCluster {
+        let config =
+            ClientConfig::Kubernetes(Box::new(alien_core::KubernetesClientConfig::InCluster {
                 namespace: None,
                 additional_headers: None,
-            },
-        ));
+            }));
         let error = mismatch_or_missing_base_cloud(&config, Platform::Aws);
         let message = error.to_string();
         assert!(message.contains("base cloud"), "{message}");

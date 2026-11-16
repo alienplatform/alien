@@ -200,6 +200,28 @@ impl KubernetesManifestTestHarness {
         self
     }
 
+    /// Adds a resource to the prepared stack the context sees (such as the `secrets` vault a
+    /// preflight mutation adds).
+    pub(crate) fn with_stack_resource(
+        mut self,
+        resource: Resource,
+        lifecycle: alien_core::ResourceLifecycle,
+    ) -> Self {
+        self.stack.resources.insert(
+            resource.id().to_string(),
+            alien_core::ResourceEntry {
+                config: resource,
+                lifecycle,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+                display_name: None,
+                description: None,
+            },
+        );
+        self
+    }
+
     /// A cluster whose base cloud client could not be built: plain Kubernetes.
     pub(crate) fn without_cloud(mut self) -> Self {
         self.cloud = None;

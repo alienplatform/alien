@@ -233,9 +233,15 @@ fn observed_identity(
         None if !crate::core::service_account_grants_on(config, base_platform) => {
             Ok(name.to_string())
         }
-        None => Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+        // The release grants this account something on the base cloud, but the account was set
+        // up (or recorded) as a plain Kubernetes ServiceAccount: it has no cloud identity yet,
+        // and only the installation's setup can create one. Say so, so it is neither a bare
+        // "missing annotation" nor a grant that is silently left out.
+        None => Err(AlienError::new(ErrorData::SetupRerunRequired {
             resource_id: config.id().to_string(),
-            message: format!("ServiceAccount {namespace}/{name} is missing {annotation}"),
+            message: format!(
+                "this release grants the service account {namespace}/{name} permissions on {base_platform}, but the account has no cloud identity ({annotation} is not set). Run the installation's setup again (for example helm upgrade with the cloud role for this account) so it gets one"
+            ),
         })),
     }
 }
@@ -315,5 +321,7 @@ mod identity_tests {
             "{}",
             error.message
         );
+        assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
+        assert!(error.message.contains("setup again"), "{}", error.message);
     }
 }

@@ -254,6 +254,9 @@ async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Durat
                 // A running deployment takes a health step every pass; the
                 // terminal-state log reports when its outcome changes.
                 debug!(steps = steps, "Deployment pass completed");
+                if let Err(error) = clear_base_cloud_pass_error(state).await {
+                    warn!(error = %error, "Could not clear the earlier base cloud error");
+                }
             }
             interval.max(suggested_delay)
         }
@@ -287,6 +290,31 @@ async fn record_pass_error(state: &OperatorState, error: &AlienError<ErrorData>)
         return Ok(());
     }
     current.error = Some(recorded);
+    state.db.set_deployment_state(&current).await?;
+    state.db.request_sync();
+    Ok(())
+}
+
+/// Error codes `record_pass_error` stores for the base cloud: the deployment could not start a
+/// pass because the cloud client was not usable.
+const BASE_CLOUD_PASS_ERROR_CODES: [&str; 2] = ["BASE_CLOUD_UNAVAILABLE", "BASE_CLOUD_UNREACHABLE"];
+
+/// Once a pass runs again, a base cloud error recorded by an earlier pass is stale: remove it
+/// so the deployment does not keep showing a problem that is gone. A failed deployment keeps
+/// its error; that one belongs to the failure.
+async fn clear_base_cloud_pass_error(state: &OperatorState) -> Result<()> {
+    let Some(mut current) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    let stale = !current.status.is_failed()
+        && current
+            .error
+            .as_ref()
+            .is_some_and(|error| BASE_CLOUD_PASS_ERROR_CODES.contains(&error.code.as_str()));
+    if !stale {
+        return Ok(());
+    }
+    current.error = None;
     state.db.set_deployment_state(&current).await?;
     state.db.request_sync();
     Ok(())
@@ -1154,21 +1182,28 @@ fn base_cloud_configured(base_platform: Platform, env: &HashMap<String, String>)
                 || set("AWS_PROFILE");
             region && sign_in
         }
+        // The chart writes GCP_PROJECT_ID from basePlatformConfig.gcp.projectId. GKE Workload
+        // Identity needs no credential variable (the metadata server answers), so the project
+        // is what marks the install as configured; explicit credentials count too.
         Platform::Gcp => [
+            "GCP_PROJECT_ID",
+            "GOOGLE_CLOUD_PROJECT",
             "GCP_ACCESS_TOKEN",
             "GOOGLE_SERVICE_ACCOUNT_KEY",
             "GCP_SERVICE_ACCOUNT_KEY",
             "GOOGLE_APPLICATION_CREDENTIALS",
-            "GCP_PROJECT_ID",
-            "GOOGLE_CLOUD_PROJECT",
         ]
         .iter()
         .any(|name| set(name)),
+        // The chart writes AZURE_SUBSCRIPTION_ID (and tenant, region) from
+        // basePlatformConfig.azure; Azure Workload Identity injects the client id and token
+        // file into the pod.
         Platform::Azure => {
             set("AZURE_ACCESS_TOKEN")
-                || set("AZURE_CLIENT_ID")
-                || set("IDENTITY_ENDPOINT")
-                || set("AZURE_FEDERATED_TOKEN_FILE")
+                || (set("AZURE_SUBSCRIPTION_ID")
+                    && (set("AZURE_CLIENT_ID")
+                        || set("AZURE_FEDERATED_TOKEN_FILE")
+                        || set("IDENTITY_ENDPOINT")))
         }
         _ => false,
     }
@@ -1198,7 +1233,7 @@ async fn base_cloud_client(base_platform: Platform) -> Result<Option<ClientConfi
     if let Some((_, _, message)) = recent_failure {
         return match last_good_base_cloud(base_platform) {
             Some(cloud) => Ok(Some(cloud)),
-            None => Err(AlienError::new(ErrorData::ConfigurationError { message })),
+            None => Err(AlienError::new(ErrorData::BaseCloudUnreachable { message })),
         };
     }
     match ClientConfig::from_std_env(base_platform).await {
@@ -1232,7 +1267,7 @@ async fn base_cloud_client(base_platform: Platform) -> Result<Option<ClientConfi
             }
             match last_good {
                 Some(cloud) => Ok(Some(cloud)),
-                None => Err(AlienError::new(ErrorData::ConfigurationError { message })),
+                None => Err(AlienError::new(ErrorData::BaseCloudUnreachable { message })),
             }
         }
     }
@@ -1378,6 +1413,7 @@ mod base_cloud_client_tests {
                 "a configured install whose sign-in fails must not become plain Kubernetes",
             );
             assert!(error.message.contains("configured"), "{}", error.message);
+            assert_eq!(error.code, "BASE_CLOUD_UNREACHABLE");
             // Still failing inside the retry window: the same error, no new wait.
             assert!(try_resolve(Platform::Aws).is_err());
             // The retry window passes and the identity service answers (access keys stand in
@@ -1398,6 +1434,61 @@ mod base_cloud_client_tests {
                     );
                 },
             );
+        });
+        reset_cache();
+    }
+
+    /// GKE: the chart's project id marks the install as configured even though Workload
+    /// Identity sets no credential variable. A failing metadata server is retried, never
+    /// plain Kubernetes; no project at all is plain Kubernetes.
+    #[test]
+    fn gcp_configured_by_the_project_is_retried_and_without_it_is_plain_kubernetes() {
+        let none = [
+            ("GCP_PROJECT_ID", None::<&str>),
+            ("GOOGLE_CLOUD_PROJECT", None),
+            ("GCP_ACCESS_TOKEN", None),
+            ("GOOGLE_SERVICE_ACCOUNT_KEY", None),
+            ("GCP_SERVICE_ACCOUNT_KEY", None),
+            ("GOOGLE_APPLICATION_CREDENTIALS", None),
+            ("GCP_REGION", None),
+            ("GCE_METADATA_HOST", Some("127.0.0.1:9")),
+        ];
+        temp_env::with_vars(none.clone(), || {
+            reset_cache();
+            let config = try_resolve(Platform::Gcp).expect("plain Kubernetes");
+            assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+            temp_env::with_vars([("GCP_PROJECT_ID", Some("my-project"))], || {
+                let error = try_resolve(Platform::Gcp)
+                    .expect_err("a configured install whose metadata call fails is retried");
+                assert_eq!(error.code, "BASE_CLOUD_UNREACHABLE");
+            });
+        });
+        reset_cache();
+    }
+
+    /// AKS: the subscription from the chart plus the Workload Identity client id is
+    /// configured (a failing sign-in is retried); the subscription alone is plain Kubernetes.
+    #[test]
+    fn azure_configured_by_the_identity_is_retried_and_without_it_is_plain_kubernetes() {
+        let base = [
+            ("AZURE_SUBSCRIPTION_ID", Some("sub")),
+            ("AZURE_CLIENT_ID", None::<&str>),
+            ("AZURE_FEDERATED_TOKEN_FILE", None),
+            ("IDENTITY_ENDPOINT", None),
+            ("AZURE_ACCESS_TOKEN", None),
+            ("AZURE_TENANT_ID", None),
+            ("AZURE_CLIENT_SECRET", None),
+        ];
+        temp_env::with_vars(base, || {
+            reset_cache();
+            let config = try_resolve(Platform::Azure).expect("plain Kubernetes");
+            assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+            // The identity is there but the tenant is missing: the client cannot be built.
+            temp_env::with_vars([("AZURE_CLIENT_ID", Some("client"))], || {
+                let error = try_resolve(Platform::Azure)
+                    .expect_err("a configured install that cannot sign in is retried");
+                assert_eq!(error.code, "BASE_CLOUD_UNREACHABLE");
+            });
         });
         reset_cache();
     }
@@ -2755,6 +2846,51 @@ mod tests {
         record_pass_error(&state, &error).await.unwrap();
         let unchanged = state.db.get_deployment_state().await.unwrap().unwrap();
         assert!(unchanged.error.is_none());
+    }
+
+    /// The base cloud error an earlier pass recorded is removed once a pass runs again; any
+    /// other error, and the error of a failed deployment, stay.
+    #[tokio::test]
+    async fn a_base_cloud_error_is_cleared_once_the_deployment_moves_on() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        let mut current = state.db.get_deployment_state().await.unwrap().unwrap();
+        current.status = DeploymentStatus::Pending;
+        current.target_release = current.current_release.clone();
+        state.db.set_deployment_state(&current).await.unwrap();
+
+        let error = AlienError::new(ErrorData::BaseCloudUnreachable {
+            message: "the cloud identity could not be used".to_string(),
+        });
+        record_pass_error(&state, &error).await.unwrap();
+        let recorded = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(recorded.error.is_some());
+
+        clear_base_cloud_pass_error(&state).await.unwrap();
+        let cleared = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(cleared.error.is_none(), "{:?}", cleared.error);
+
+        // An unrelated error stays.
+        let other = AlienError::new(ErrorData::ConfigurationError {
+            message: "something else".to_string(),
+        });
+        record_pass_error(&state, &other).await.unwrap();
+        clear_base_cloud_pass_error(&state).await.unwrap();
+        let kept = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(kept.error.is_some());
+
+        // A failed deployment keeps the error that belongs to its failure.
+        let mut failed = kept;
+        failed.status = DeploymentStatus::InitialSetupFailed;
+        failed.error = Some(
+            AlienError::new(ErrorData::BaseCloudUnreachable {
+                message: "x".to_string(),
+            })
+            .into_generic(),
+        );
+        state.db.set_deployment_state(&failed).await.unwrap();
+        clear_base_cloud_pass_error(&state).await.unwrap();
+        let still = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(still.error.is_some());
     }
 
     /// An installed Test deployment whose `worker` fails its first health refresh.

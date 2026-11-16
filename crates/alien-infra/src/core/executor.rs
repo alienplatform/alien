@@ -300,14 +300,24 @@ fn profile_grants_on(profile: &alien_core::PermissionProfile, platform: Platform
 /// bindings and links to them, cloud permissions), so its API or identity is required. A
 /// Kubernetes stack with only Kubernetes-native resources (containers, pools, sandboxes) is
 /// plain Kubernetes: the base cloud is only a label.
+///
+/// Evaluate it on the PREPARED stack (after the preflight mutations, with declined gated
+/// resources dropped): a mutation can add a Frozen resource (the `secrets` vault), and a
+/// declined one is gone. Pending, the controllers and the pod environment all use this one
+/// answer. `stack_settings` carries what the stack alone does not: a public endpoint whose
+/// certificate is imported into ACM needs the cloud's API.
 pub fn stack_needs_base_cloud(
     stack: &alien_core::Stack,
     stack_platform: Platform,
     base_platform: Option<Platform>,
+    stack_settings: &alien_core::StackSettings,
 ) -> bool {
     let Some(base) = base_platform.filter(|_| stack_platform == Platform::Kubernetes) else {
         return false;
     };
+    if base == Platform::Aws && imports_certificates_into_acm(stack_settings) {
+        return true;
+    }
     // A stack that is not prepared yet has profiles and no service accounts: its profiles
     // become cloud identities exactly when they grant something on the base cloud.
     // (The management profile is handled by remote stack management, not a service account.)
@@ -323,6 +333,30 @@ pub fn stack_needs_base_cloud(
         .profiles
         .iter()
         .any(|(name, profile)| name != "management" && profile_grants_on(profile, base))
+}
+
+/// Whether public endpoints publish their certificate by importing it into AWS ACM
+/// (`managedAcmImport`), which calls the cloud's API from the Operator.
+fn imports_certificates_into_acm(settings: &alien_core::StackSettings) -> bool {
+    use alien_core::{KubernetesCertificateMode, KubernetesExposureSettings};
+    matches!(
+        settings
+            .kubernetes
+            .as_ref()
+            .and_then(|kubernetes| kubernetes.exposure.as_ref()),
+        Some(
+            KubernetesExposureSettings::Generated {
+                certificate: KubernetesCertificateMode::ManagedAcmImport { .. },
+                ..
+            } | KubernetesExposureSettings::Custom {
+                certificate: KubernetesCertificateMode::ManagedAcmImport { .. },
+                ..
+            } | KubernetesExposureSettings::CustomBaseDomain {
+                certificate: KubernetesCertificateMode::ManagedAcmImport { .. },
+                ..
+            }
+        )
+    )
 }
 
 fn controller_platform_for_state(stack_platform: Platform, state: &StackResourceState) -> Platform {
@@ -424,24 +458,28 @@ mod controller_platform_tests {
             assert!(!stack_needs_base_cloud(
                 &plain,
                 Platform::Kubernetes,
-                Some(base)
+                Some(base),
+                &alien_core::StackSettings::default()
             ));
             assert!(stack_needs_base_cloud(
                 &with_storage,
                 Platform::Kubernetes,
-                Some(base)
+                Some(base),
+                &alien_core::StackSettings::default()
             ));
         }
         // No base cloud, or not a Kubernetes stack: nothing to resolve.
         assert!(!stack_needs_base_cloud(
             &with_storage,
             Platform::Kubernetes,
-            None
+            None,
+            &alien_core::StackSettings::default()
         ));
         assert!(!stack_needs_base_cloud(
             &with_storage,
             Platform::Aws,
-            Some(Platform::Aws)
+            Some(Platform::Aws),
+            &alien_core::StackSettings::default()
         ));
     }
 
@@ -523,7 +561,8 @@ mod controller_platform_tests {
         assert!(!stack_needs_base_cloud(
             &stack,
             Platform::Kubernetes,
-            Some(Platform::Aws)
+            Some(Platform::Aws),
+            &alien_core::StackSettings::default()
         ));
 
         let mut grants = alien_core::PermissionProfile::new();
@@ -537,7 +576,8 @@ mod controller_platform_tests {
         assert!(stack_needs_base_cloud(
             &stack,
             Platform::Kubernetes,
-            Some(Platform::Aws)
+            Some(Platform::Aws),
+            &alien_core::StackSettings::default()
         ));
 
         // The same decision on the prepared stack, where the profiles became service accounts.
@@ -548,7 +588,8 @@ mod controller_platform_tests {
         assert!(!stack_needs_base_cloud(
             &prepared,
             Platform::Kubernetes,
-            Some(Platform::Aws)
+            Some(Platform::Aws),
+            &alien_core::StackSettings::default()
         ));
         let prepared = stack_with(vec![(
             service_account("reader-sa", Some("storage/data-read")),
@@ -557,8 +598,84 @@ mod controller_platform_tests {
         assert!(stack_needs_base_cloud(
             &prepared,
             Platform::Kubernetes,
-            Some(Platform::Aws)
+            Some(Platform::Aws),
+            &alien_core::StackSettings::default()
         ));
+    }
+
+    #[test]
+    fn the_secrets_vault_a_mutation_adds_needs_the_cloud_only_with_a_base_cloud() {
+        let vault = || {
+            stack_with(vec![(
+                Resource::new(alien_core::Vault::new("secrets".to_string()).build()),
+                ResourceLifecycle::Frozen,
+            )])
+        };
+        let settings = alien_core::StackSettings::default();
+        // On the stack as written there is no vault; the mutation adds it.
+        assert!(!stack_needs_base_cloud(
+            &stack_with(Vec::new()),
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &settings
+        ));
+        assert!(stack_needs_base_cloud(
+            &vault(),
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &settings
+        ));
+        assert!(!stack_needs_base_cloud(
+            &vault(),
+            Platform::Kubernetes,
+            None,
+            &settings
+        ));
+    }
+
+    #[test]
+    fn a_declined_frozen_storage_is_gone_from_the_prepared_stack() {
+        let settings = alien_core::StackSettings::default();
+        let storage = stack_with(vec![(
+            Resource::new(Storage::new("data".to_string()).build()),
+            ResourceLifecycle::Frozen,
+        )]);
+        assert!(stack_needs_base_cloud(
+            &storage,
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &settings
+        ));
+        // After the decline the prepared stack no longer has it.
+        assert!(!stack_needs_base_cloud(
+            &stack_with(Vec::new()),
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &settings
+        ));
+    }
+
+    #[test]
+    fn importing_certificates_into_acm_needs_the_cloud() {
+        let settings = |certificate: serde_json::Value| -> alien_core::StackSettings {
+            serde_json::from_value(serde_json::json!({
+                "kubernetes": {"exposure": {
+                    "mode": "generated",
+                    "route": {"routeApi": "ingress", "ingressClassName": "alb"},
+                    "certificate": certificate,
+                }}
+            }))
+            .expect("stack settings")
+        };
+        let stack = stack_with(Vec::new());
+        let needs = |settings: &alien_core::StackSettings, base| {
+            stack_needs_base_cloud(&stack, Platform::Kubernetes, base, settings)
+        };
+        let acm = settings(serde_json::json!({"mode": "managedAcmImport"}));
+        assert!(needs(&acm, Some(Platform::Aws)), "an ACM import calls AWS");
+        assert!(!needs(&acm, None));
+        let secret = settings(serde_json::json!({"mode": "none"}));
+        assert!(!needs(&secret, Some(Platform::Aws)));
     }
 
     #[test]

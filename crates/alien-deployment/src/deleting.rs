@@ -1996,7 +1996,10 @@ mod tests {
             "nat-gateway",
             "elastic-ip",
         ] {
-            assert!(last(dependent) < first("vpc"), "{dependent} after vpc: {calls:?}");
+            assert!(
+                last(dependent) < first("vpc"),
+                "{dependent} after vpc: {calls:?}"
+            );
         }
     }
 
