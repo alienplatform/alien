@@ -79,6 +79,14 @@ const JOB_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// round trips to observe that.
 const JOB_POLL_GRACE: Duration = Duration::from_secs(15);
 
+/// How long a caller that created a sandbox for a key waits before it looks once more for an older
+/// one. Longer than a create takes to appear in the list (measured 2 to 9 seconds, from the request
+/// to the sandbox being listed), so a racing older create has been listed by then.
+#[cfg(not(test))]
+const CONVERGENCE_RECHECK_DELAY: Duration = Duration::from_secs(8);
+#[cfg(test)]
+const CONVERGENCE_RECHECK_DELAY: Duration = Duration::from_millis(5);
+
 const CREATE: &str = "sandbox.create";
 const GET: &str = "sandbox.get";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
@@ -461,12 +469,16 @@ impl GcpAgentPlatformSandbox {
         operation: &str,
     ) -> Result<Vec<String>> {
         let display_name = request_key_display_name(requested_id);
-        let listed = self.client.list_sandboxes(&self.engine).await.context(
-            ErrorData::SandboxUnreachable {
+        let listed = self
+            .client
+            .list_sandboxes_by_display_name(&self.engine, &display_name)
+            .await
+            .context(ErrorData::SandboxUnreachable {
                 operation: operation.to_string(),
                 reason: "the Agent Platform API did not answer a sandbox list".to_string(),
-            },
-        )?;
+            })?;
+        // The service matched on the display name; it is checked again here because the sandboxes
+        // below are acted on (waited for, returned, a duplicate deleted for them).
         let mut candidates: Vec<_> = listed
             .into_iter()
             .filter(|sandbox| {
@@ -1055,18 +1067,33 @@ impl Sandbox for GcpAgentPlatformSandbox {
         let created = self.create(request).await?;
         // Two callers can both have looked before either created. The oldest sandbox with the key
         // wins and the other deletes its own, so the pair converge on one.
-        match self
-            .find_by_request_key(&key, Some(&created.sandbox_id))
-            .await
-        {
-            Ok(Some(winner)) if winner.sandbox_id != created.sandbox_id => {
-                if let Err(error) = self.terminate(&created.sandbox_id).await {
-                    warn!(sandbox_id = %created.sandbox_id, %error, "could not delete the losing duplicate create");
+        //
+        // A sandbox is listed only once its create has finished, and that takes between two and
+        // nine seconds: an older sandbox can still be missing from the list when this one is done.
+        // A caller that finds itself the oldest therefore looks once more after a pause, so the
+        // newer of two racing callers is not returned before the older one is visible to it.
+        for attempt in 0..2 {
+            match self
+                .find_by_request_key(&key, Some(&created.sandbox_id))
+                .await
+            {
+                Ok(Some(winner)) if winner.sandbox_id != created.sandbox_id => {
+                    if let Err(error) = self.terminate(&created.sandbox_id).await {
+                        warn!(sandbox_id = %created.sandbox_id, %error, "could not delete the losing duplicate create");
+                    }
+                    return Ok(ResolvedSandbox::found(winner));
                 }
-                Ok(ResolvedSandbox::found(winner))
+                Ok(_) => {}
+                // Not answered, so nothing says an older sandbox exists: this one is returned.
+                Err(error) => {
+                    warn!(sandbox_id = %created.sandbox_id, %error, "could not re-check for an older sandbox with the key");
+                }
             }
-            _ => Ok(ResolvedSandbox::created(created)),
+            if attempt == 0 {
+                tokio::time::sleep(CONVERGENCE_RECHECK_DELAY).await;
+            }
         }
+        Ok(ResolvedSandbox::created(created))
     }
 
     async fn list(&self) -> Result<Vec<SandboxInstance>> {

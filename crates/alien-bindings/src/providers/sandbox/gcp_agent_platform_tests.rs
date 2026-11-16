@@ -641,6 +641,13 @@ impl AgentPlatformApi for WedgedAgent {
     async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
         unimplemented!()
     }
+    async fn list_sandboxes_by_display_name(
+        &self,
+        _engine: &str,
+        _display_name: &str,
+    ) -> ClientResult<Vec<SandboxEnvironment>> {
+        unimplemented!()
+    }
     async fn delete_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<()> {
         self.deletes.fetch_add(1, Ordering::SeqCst);
         Ok(())
@@ -2473,6 +2480,18 @@ impl AgentPlatformApi for FakeEngine {
             .map(|(ordinal, (id, display, st))| Self::record(id, display, st, ordinal as u64))
             .collect())
     }
+    async fn list_sandboxes_by_display_name(
+        &self,
+        engine: &str,
+        display_name: &str,
+    ) -> ClientResult<Vec<SandboxEnvironment>> {
+        Ok(self
+            .list_sandboxes(engine)
+            .await?
+            .into_iter()
+            .filter(|sandbox| sandbox.display_name.as_deref() == Some(display_name))
+            .collect())
+    }
     async fn delete_sandbox(&self, _engine: &str, sandbox: &str) -> ClientResult<()> {
         self.state
             .lock()
@@ -2729,4 +2748,25 @@ async fn a_race_converges_while_the_older_agent_is_still_booting() {
         .unwrap();
     assert_eq!(newer.sandbox.sandbox_id, older.sandbox.sandbox_id);
     assert_eq!(engine.live_ids(), vec![older.sandbox.sandbox_id]);
+}
+
+/// An older sandbox that was not listed yet when the newer caller finished its own create (found
+/// live: a create's visibility lags its start by two to nine seconds). The newer caller looks again
+/// before it answers and yields to it.
+#[tokio::test]
+async fn a_caller_looks_again_for_an_older_sandbox_that_was_not_listed_yet() {
+    let engine = Arc::new(FakeEngine::default());
+    let older = provider_from(engine.clone())
+        .create(keyed("late-listed"))
+        .await
+        .unwrap();
+    // The newer caller's first look and its first re-check both miss the older sandbox.
+    engine.blind_lists.store(2, Ordering::SeqCst);
+    let newer = provider_from(engine.clone())
+        .get_or_create(keyed("late-listed"))
+        .await
+        .unwrap();
+    assert!(!newer.created, "yielded to the older sandbox");
+    assert_eq!(newer.sandbox.sandbox_id, older.sandbox_id);
+    assert_eq!(engine.live_ids(), vec![older.sandbox_id]);
 }
