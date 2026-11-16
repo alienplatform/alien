@@ -466,7 +466,9 @@ pub fn unbind_member(policy: &mut IamPolicy, role: &str, member: &str) -> bool {
         binding.members.retain(|existing| existing != member);
         changed |= binding.members.len() != before;
     }
-    policy.bindings.retain(|binding| !binding.members.is_empty());
+    policy
+        .bindings
+        .retain(|binding| !binding.members.is_empty());
     changed
 }
 
@@ -1700,7 +1702,8 @@ mod tests {
             }));
         });
         let set = server.mock(|when, then| {
-            when.method(POST).path(format!("{ENGINE_PATH}:setIamPolicy"));
+            when.method(POST)
+                .path(format!("{ENGINE_PATH}:setIamPolicy"));
             then.status(200).json_body(serde_json::json!({}));
         });
 
@@ -1721,7 +1724,8 @@ mod tests {
     async fn revoking_on_an_engine_that_is_gone_succeeds() {
         let server = MockServer::start();
         server.mock(|when, then| {
-            when.method(POST).path(format!("{ENGINE_PATH}:getIamPolicy"));
+            when.method(POST)
+                .path(format!("{ENGINE_PATH}:getIamPolicy"));
             then.status(404).json_body(serde_json::json!({
                 "error": {"code": 404, "message": "not found", "status": "NOT_FOUND"}
             }));
@@ -1758,12 +1762,23 @@ mod tests {
             ..Default::default()
         };
         assert!(bind_member(&mut policy, "roles/r", "c"));
-        assert!(!bind_member(&mut policy, "roles/r", "c"), "second bind is a no-op");
-        assert_eq!(policy.bindings[0].members, vec!["a"], "a conditional binding is never extended");
+        assert!(
+            !bind_member(&mut policy, "roles/r", "c"),
+            "second bind is a no-op"
+        );
+        assert_eq!(
+            policy.bindings[0].members,
+            vec!["a"],
+            "a conditional binding is never extended"
+        );
         assert_eq!(policy.bindings[1].members, vec!["b", "c"]);
         assert!(unbind_member(&mut policy, "roles/r", "b"));
         assert!(unbind_member(&mut policy, "roles/r", "c"));
         assert!(!unbind_member(&mut policy, "roles/r", "c"));
-        assert_eq!(policy.bindings.len(), 1, "an emptied binding is dropped, the conditional one stays");
+        assert_eq!(
+            policy.bindings.len(),
+            1,
+            "an emptied binding is dropped, the conditional one stays"
+        );
     }
 }
