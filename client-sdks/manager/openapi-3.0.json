@@ -18801,6 +18801,21 @@
           },
           {
             "type": "object",
+            "description": "Report decisions on access requests for the recorded deployment.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operatorAccessRequests"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Relay commands to one app worker, without dispatch or administrative rights.",
             "required": [
               "target",
@@ -19723,6 +19738,11 @@
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "requestedUpdateRan": {
+            "type": "string",
+            "description": "The rollout in which an update ran because the controller asked for one while the\nconfig was unchanged. While the controller keeps asking in that same rollout, its\ndependents no longer wait for it, so a check that never settles cannot hold them back\nfor good. A later rollout is a new request and is waited for again. Cleared once the\ncontroller stops asking. State written before this field existed (it was a flag then)\nreads as none.",
+            "nullable": true
           },
           "retryAttempt": {
             "type": "integer",
