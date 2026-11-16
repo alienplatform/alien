@@ -12,10 +12,10 @@ use crate::kubernetes_public_endpoint::{
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    deployment_has_ready_replicas, deployment_rollout_complete, deployment_rollout_in_progress,
-    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
-    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    deployment_has_ready_replicas, deployment_rollout, deployment_rollout_complete,
+    emit_kubernetes_workload_heartbeat, label_selector, recovery_check, track_rollout,
+    KubernetesWorkload, KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, RolloutWait,
+    RolloutWatch, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -51,6 +51,12 @@ pub struct KubernetesWorkerController {
     /// Whether the previous health check also found zero ready replicas.
     #[serde(default)]
     pub(crate) zero_ready_observed: bool,
+    /// When the current rollout was first seen unfinished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rollout_watch: Option<RolloutWatch>,
+    /// Consecutive healthy checks since the resource failed a health check.
+    #[serde(default)]
+    pub(crate) recovery_checks: u32,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
@@ -483,12 +489,30 @@ impl KubernetesWorkerController {
             }
 
             let healthy = deployment_has_ready_replicas(&deployment);
-            if !healthy && deployment_rollout_in_progress(&deployment) {
-                self.zero_ready_observed = false;
-                return Err(AlienError::new(ErrorData::ResourceRolloutInProgress {
-                    resource_id: config.id.clone(),
-                    message: "Deployment does not have the requested ready replicas yet".into(),
-                }));
+            let mut rollout_note = String::new();
+            if healthy {
+                self.rollout_watch = None;
+            } else {
+                match track_rollout(
+                    &mut self.rollout_watch,
+                    deployment_rollout(&deployment),
+                    chrono::Utc::now().timestamp(),
+                ) {
+                    RolloutWait::Wait => {
+                        // Still rolling out: check again without using the retry budget.
+                        self.zero_ready_observed = false;
+                        self.recovery_checks = 0;
+                        return Ok(HandlerAction::Stay {
+                            max_times: None,
+                            suggested_delay: Some(Duration::from_secs(10)),
+                        });
+                    }
+                    RolloutWait::TimedOut { elapsed_secs } => {
+                        rollout_note =
+                            format!("; the rollout has not finished after {elapsed_secs} seconds");
+                    }
+                    RolloutWait::NotRolling => {}
+                }
             }
             let zero_ready = deployment
                 .status
@@ -508,7 +532,9 @@ impl KubernetesWorkerController {
             if !healthy {
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
-                    message: "Deployment does not have the requested ready replicas".into(),
+                    message: format!(
+                        "Deployment does not have the requested ready replicas{rollout_note}"
+                    ),
                 }));
             }
 
@@ -1229,7 +1255,28 @@ impl KubernetesWorkerController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        self.ready(ctx).await
+        match self.ready(ctx).await {
+            Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay,
+            }) => {
+                if recovery_check(&mut self.recovery_checks, true) {
+                    Ok(HandlerAction::Continue {
+                        state: Ready,
+                        suggested_delay,
+                    })
+                } else {
+                    Ok(HandlerAction::Stay {
+                        max_times: None,
+                        suggested_delay: Some(Duration::from_secs(10)),
+                    })
+                }
+            }
+            other => {
+                recovery_check(&mut self.recovery_checks, false);
+                other
+            }
+        }
     }
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
@@ -1327,6 +1374,8 @@ impl KubernetesWorkerController {
             public_endpoint: KubernetesPublicEndpointState::default(),
             expected_generation: None,
             zero_ready_observed: false,
+            rollout_watch: None,
+            recovery_checks: 0,
             _internal_stay_count: None,
         }
     }
@@ -1618,6 +1667,92 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn worker_rollout_is_waited_for_inside_its_bound_and_drifts_after_it() {
+        let now = chrono::Utc::now().timestamp();
+        let rolling = serde_json::json!({"replicas":2,"updatedReplicas":2,"readyReplicas":1,
+            "observedGeneration":3,
+            "conditions":[{"type":"Progressing","status":"True","reason":"ReplicaSetUpdated"}]});
+        let settled = serde_json::json!({"replicas":2,"updatedReplicas":2,"readyReplicas":1,
+            "observedGeneration":3,
+            "conditions":[{"type":"Progressing","status":"True","reason":"NewReplicaSetAvailable"}]});
+        // Kubernetes gave up while new pods are missing: drift, not an endless wait.
+        let deadline = serde_json::json!({"replicas":3,"updatedReplicas":1,"readyReplicas":0,
+            "observedGeneration":3,
+            "conditions":[{"type":"Progressing","status":"False","reason":"ProgressDeadlineExceeded"}]});
+        // (status, seconds the rollout has been seen, expected: None = wait, Some = drift)
+        for (status, seen_for, drift) in [
+            (rolling.clone(), 0, false),
+            (rolling.clone(), 100, false),
+            (rolling.clone(), 700, true),
+            (settled, 0, true),
+            (deadline, 0, true),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"apps/v1", "kind":"Deployment",
+                    "metadata":{"name":"worker", "generation":3},
+                    "spec":{"replicas":2,"selector":{"matchLabels":{"app":"worker"}},"template":{"spec":{"containers":[]}}},
+                    "status":status
+                }));
+            });
+            let config = Worker::new("worker".into())
+                .code(WorkerCode::Image {
+                    image: "example.test/worker:1".into(),
+                })
+                .permissions("default".into())
+                .build();
+            let harness =
+                KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+                panic!("Kubernetes client")
+            };
+            let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut()
+            else {
+                panic!("manual client")
+            };
+            *server_url = server.base_url();
+            let mut controller = KubernetesWorkerController {
+                deployment_name: Some("worker".into()),
+                namespace: Some("test-ns".into()),
+                zero_ready_observed: true,
+                ..Default::default()
+            };
+            if seen_for > 0 {
+                controller.rollout_watch = Some(RolloutWatch {
+                    key: "generation-3".into(),
+                    first_seen_unix: now - seen_for,
+                });
+            }
+            // A failed health check is checked again from RefreshFailed, with the same rules.
+            controller.state = KubernetesWorkerState::RefreshFailed;
+            controller.recovery_checks = 2;
+            let result = controller.refresh_failed(&ctx).await;
+            assert_eq!(controller.recovery_checks, 0, "{status}");
+            if drift {
+                let error = result.expect_err("drift");
+                assert_eq!(error.code, "RESOURCE_DRIFT", "{status}");
+                assert!(!error.retryable);
+            } else {
+                assert!(
+                    matches!(
+                        result,
+                        Ok(KubernetesWorkerHandlerAction::Stay {
+                            max_times: None,
+                            ..
+                        })
+                    ),
+                    "{status}: {result:?}"
+                );
+                assert!(controller.rollout_watch.is_some());
+            }
+        }
+    }
+
     #[test]
     fn test_kubernetes_function_name() {
         // Test basic functionality
@@ -1673,6 +1808,8 @@ mod tests {
             public_endpoint,
             expected_generation: None,
             zero_ready_observed: false,
+            rollout_watch: None,
+            recovery_checks: 0,
             _internal_stay_count: None,
         };
 
@@ -1713,6 +1850,8 @@ mod tests {
             public_endpoint,
             expected_generation: None,
             zero_ready_observed: false,
+            rollout_watch: None,
+            recovery_checks: 0,
             _internal_stay_count: None,
         };
 

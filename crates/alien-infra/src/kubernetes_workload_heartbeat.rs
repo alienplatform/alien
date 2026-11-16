@@ -42,6 +42,21 @@ pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
             || status.replicas.unwrap_or(0) != desired)
 }
 
+/// Kubernetes sets `Progressing=False` with this reason when a rollout makes no progress for
+/// the Deployment's `progressDeadlineSeconds`.
+pub(crate) fn deployment_progress_deadline_exceeded(deployment: &Deployment) -> bool {
+    deployment
+        .status
+        .as_ref()
+        .and_then(|status| status.conditions.as_ref())
+        .is_some_and(|conditions| {
+            conditions.iter().any(|condition| {
+                condition.type_ == "Progressing"
+                    && condition.reason.as_deref() == Some("ProgressDeadlineExceeded")
+            })
+        })
+}
+
 /// Whether Kubernetes is still rolling out a new revision of the Deployment, judged from its
 /// own status and not from elapsed time. A stuck rollout ends when Kubernetes sets
 /// `Progressing=False` (ProgressDeadlineExceeded), after which this is false.
@@ -54,6 +69,10 @@ pub(crate) fn deployment_rollout_in_progress(deployment: &Deployment) -> bool {
         .as_ref()
         .and_then(|spec| spec.replicas)
         .unwrap_or(1);
+    if deployment_progress_deadline_exceeded(deployment) {
+        // Kubernetes gave up on this rollout: no pod becoming ready can be waited for.
+        return false;
+    }
     let progressing_on_new_replica_set = status.conditions.iter().flatten().any(|condition| {
         condition.type_ == "Progressing"
             && condition.status == "True"
@@ -77,6 +96,116 @@ pub(crate) fn statefulset_rollout_in_progress(statefulset: &StatefulSet) -> bool
     status.observed_generation.unwrap_or(0) < statefulset.metadata.generation.unwrap_or(1)
         || revision_differs
         || status.updated_replicas.unwrap_or(0) < status.replicas
+}
+
+/// How long a StatefulSet rollout may take. StatefulSets have no progress deadline of their own;
+/// this matches the default `progressDeadlineSeconds` of a Deployment.
+pub(crate) const STATEFULSET_ROLLOUT_DEADLINE_SECS: i64 = 600;
+const DEFAULT_PROGRESS_DEADLINE_SECS: i64 = 600;
+
+/// Consecutive healthy checks a failed resource needs before it returns to Running, so a pod
+/// that crash-loops does not flip the resource between Running and RefreshFailed on every
+/// check. Checks are 10 s apart, so this is about 30 s of continuous health.
+pub(crate) const RECOVERY_HEALTHY_CHECKS: u32 = 3;
+
+/// An unfinished rollout of one revision of a workload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RolloutProbe {
+    /// Identifies the revision being rolled out; a new revision starts a new time bound.
+    pub key: String,
+    pub deadline_secs: i64,
+}
+
+/// When the controller first saw a rollout of one revision.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct RolloutWatch {
+    pub key: String,
+    pub first_seen_unix: i64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RolloutWait {
+    /// Not rolling out (or no longer): judge the workload as it is.
+    NotRolling,
+    /// Still rolling out and inside its time bound.
+    Wait,
+    /// Rolling out for longer than the bound.
+    TimedOut { elapsed_secs: i64 },
+}
+
+/// The rollout of the Deployment's current revision, if it is unfinished.
+pub(crate) fn deployment_rollout(deployment: &Deployment) -> Option<RolloutProbe> {
+    deployment_rollout_in_progress(deployment).then(|| RolloutProbe {
+        key: format!("generation-{}", deployment.metadata.generation.unwrap_or(0)),
+        deadline_secs: deployment
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.progress_deadline_seconds)
+            .map(i64::from)
+            .unwrap_or(DEFAULT_PROGRESS_DEADLINE_SECS),
+    })
+}
+
+/// The rollout of the StatefulSet's current revision, if it is unfinished.
+pub(crate) fn statefulset_rollout(statefulset: &StatefulSet) -> Option<RolloutProbe> {
+    statefulset_rollout_in_progress(statefulset).then(|| RolloutProbe {
+        key: format!(
+            "generation-{}-{}",
+            statefulset.metadata.generation.unwrap_or(0),
+            statefulset
+                .status
+                .as_ref()
+                .and_then(|status| status.update_revision.clone())
+                .unwrap_or_default()
+        ),
+        deadline_secs: STATEFULSET_ROLLOUT_DEADLINE_SECS,
+    })
+}
+
+/// Measures how long the current rollout has been seen, from the first check that saw it.
+/// The count lives in the controller state, so it survives restarts and does not use the
+/// executor's retry budget.
+pub(crate) fn track_rollout(
+    watch: &mut Option<RolloutWatch>,
+    probe: Option<RolloutProbe>,
+    now_unix: i64,
+) -> RolloutWait {
+    let Some(probe) = probe else {
+        *watch = None;
+        return RolloutWait::NotRolling;
+    };
+    let first_seen = match watch {
+        Some(existing) if existing.key == probe.key => existing.first_seen_unix,
+        _ => {
+            *watch = Some(RolloutWatch {
+                key: probe.key.clone(),
+                first_seen_unix: now_unix,
+            });
+            now_unix
+        }
+    };
+    let elapsed_secs = now_unix.saturating_sub(first_seen);
+    if elapsed_secs >= probe.deadline_secs {
+        RolloutWait::TimedOut { elapsed_secs }
+    } else {
+        RolloutWait::Wait
+    }
+}
+
+/// Counts consecutive healthy checks of a `RefreshFailed` resource. Returns true once there
+/// are `RECOVERY_HEALTHY_CHECKS` in a row; any unhealthy check starts the count again.
+pub(crate) fn recovery_check(healthy_checks: &mut u32, healthy: bool) -> bool {
+    if !healthy {
+        *healthy_checks = 0;
+        return false;
+    }
+    *healthy_checks += 1;
+    if *healthy_checks >= RECOVERY_HEALTHY_CHECKS {
+        *healthy_checks = 0;
+        true
+    } else {
+        false
+    }
 }
 
 pub(crate) fn deployment_rollout_complete(
@@ -445,6 +574,86 @@ mod tests {
         assert!(statefulset_has_ready_replicas(&statefulset));
         statefulset.status = None;
         assert!(!statefulset_has_ready_replicas(&statefulset));
+    }
+
+    #[test]
+    fn rollout_time_bound_counts_from_the_first_sighting_of_each_revision() {
+        let probe = |key: &str| {
+            Some(RolloutProbe {
+                key: key.into(),
+                deadline_secs: 600,
+            })
+        };
+        let mut watch = None;
+        assert_eq!(
+            track_rollout(&mut watch, probe("a"), 1000),
+            RolloutWait::Wait
+        );
+        assert_eq!(
+            track_rollout(&mut watch, probe("a"), 1599),
+            RolloutWait::Wait
+        );
+        assert_eq!(
+            track_rollout(&mut watch, probe("a"), 1600),
+            RolloutWait::TimedOut { elapsed_secs: 600 }
+        );
+        // A new revision starts over.
+        assert_eq!(
+            track_rollout(&mut watch, probe("b"), 1700),
+            RolloutWait::Wait
+        );
+        // A finished rollout forgets the watch.
+        assert_eq!(
+            track_rollout(&mut watch, None, 1800),
+            RolloutWait::NotRolling
+        );
+        assert!(watch.is_none());
+    }
+
+    #[test]
+    fn rollout_probe_uses_the_deployment_deadline_and_a_fixed_one_for_statefulsets() {
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 5},
+            "spec": {"replicas": 2, "progressDeadlineSeconds": 120, "selector": {}, "template": {}},
+            "status": {"observedGeneration": 5, "replicas": 2, "updatedReplicas": 2, "readyReplicas": 1,
+                "conditions": [{"type": "Progressing", "status": "True", "reason": "ReplicaSetUpdated"}]}
+        }))
+        .unwrap();
+        assert_eq!(deployment_rollout(&deployment).unwrap().deadline_secs, 120);
+        // Kubernetes ended the rollout: no longer waited for.
+        let mut stuck = deployment.clone();
+        stuck.status.as_mut().unwrap().conditions = Some(vec![DeploymentCondition {
+            type_: "Progressing".into(),
+            status: "False".into(),
+            reason: Some("ProgressDeadlineExceeded".into()),
+            ..Default::default()
+        }]);
+        stuck.status.as_mut().unwrap().updated_replicas = Some(1);
+        assert!(deployment_rollout(&stuck).is_none());
+        let statefulset: StatefulSet = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 2},
+            "spec": {"replicas": 2, "selector": {}, "template": {}, "serviceName": "app"},
+            "status": {"observedGeneration": 2, "replicas": 2, "updatedReplicas": 1, "readyReplicas": 1,
+                "currentRevision": "app-1", "updateRevision": "app-2"}
+        }))
+        .unwrap();
+        let probe = statefulset_rollout(&statefulset).unwrap();
+        assert_eq!(probe.deadline_secs, STATEFULSET_ROLLOUT_DEADLINE_SECS);
+        assert!(probe.key.ends_with("app-2"));
+    }
+
+    #[test]
+    fn recovery_needs_consecutive_healthy_checks() {
+        let mut count = 0;
+        assert!(!recovery_check(&mut count, true));
+        assert!(!recovery_check(&mut count, true));
+        assert!(!recovery_check(&mut count, false));
+        assert_eq!(count, 0);
+        for _ in 0..RECOVERY_HEALTHY_CHECKS - 1 {
+            assert!(!recovery_check(&mut count, true));
+        }
+        assert!(recovery_check(&mut count, true));
+        assert_eq!(count, 0);
     }
 
     /// Reads Deployment objects captured from a real cluster (`kubectl get deploy -o json`).

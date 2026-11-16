@@ -670,20 +670,6 @@ pub enum ErrorData {
         message: String,
     },
 
-    /// A workload is still rolling out, so replicas are not all ready yet.
-    #[error(
-        code = "RESOURCE_ROLLOUT_IN_PROGRESS",
-        message = "Resource '{resource_id}' is still rolling out: {message}",
-        retryable = "true",
-        internal = "false"
-    )]
-    ResourceRolloutInProgress {
-        /// ID of the resource that is rolling out
-        resource_id: String,
-        /// Replica counts observed
-        message: String,
-    },
-
     /// A cloud object with the name a resource uses already exists and this deployment did not create it.
     #[error(
         code = "EXISTING_CLOUD_RESOURCE_NOT_OWNED",
