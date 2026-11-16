@@ -19,6 +19,61 @@ use alien_core::{import::EmitContext, ErrorData, Network, NetworkSettings, Resul
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
+/// The Terraform expression that says whether a created-network module creates its network, uses
+/// one it looks up, or uses the default one.
+///
+/// An existing Kubernetes cluster is already attached to a network, so a module that keeps a
+/// network for it (the stack has a cloud database) looks that network up from the cluster and
+/// creates none, whatever `network_mode` says. Every other module follows `network_mode`.
+pub fn network_mode_expr(targets_kubernetes: bool) -> &'static str {
+    if targets_kubernetes {
+        "local.effective_network_mode"
+    } else {
+        "var.network_mode"
+    }
+}
+
+/// Locals of a Kubernetes module that give the network the existing cluster is attached to, and
+/// the mode that follows the cluster mode.
+fn existing_cluster_network_locals(mut fragment: TfFragment) -> TfFragment {
+    let cluster = "data.google_container_cluster.kubernetes_existing[0]";
+    let location = "(var.gke_cluster_location == \"\" ? var.gcp_region : var.gke_cluster_location)";
+    for (name, value) in [
+        (
+            "effective_network_mode",
+            "var.kubernetes_cluster_mode == \"existing\" ? \"use-existing\" : var.network_mode"
+                .to_string(),
+        ),
+        (
+            EXISTING_CLUSTER_NETWORK_NAME,
+            format!(
+                "var.kubernetes_cluster_mode == \"existing\" ? basename({cluster}.network) : var.network_name"
+            ),
+        ),
+        (
+            EXISTING_CLUSTER_SUBNET_NAME,
+            format!(
+                "var.kubernetes_cluster_mode == \"existing\" ? basename({cluster}.subnetwork) : var.subnet_name"
+            ),
+        ),
+        (
+            EXISTING_CLUSTER_NETWORK_REGION,
+            format!(
+                "var.kubernetes_cluster_mode == \"existing\" ? join(\"-\", slice(split(\"-\", {location}), 0, 2)) : (var.network_region == \"\" ? var.gcp_region : var.network_region)"
+            ),
+        ),
+    ] {
+        fragment.locals.insert(name.to_string(), expr::raw(value));
+    }
+    fragment
+}
+
+/// Locals holding the name and region of the network and subnet a lookup of the existing
+/// network reads: the cluster's own in an existing cluster, the deployer's inputs otherwise.
+pub const EXISTING_CLUSTER_NETWORK_NAME: &str = "existing_network_name";
+pub const EXISTING_CLUSTER_SUBNET_NAME: &str = "existing_subnet_name";
+pub const EXISTING_CLUSTER_NETWORK_REGION: &str = "existing_network_region";
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GcpNetworkEmitter;
 
@@ -75,7 +130,14 @@ impl TfEmitter for GcpNetworkEmitter {
                 ));
                 Ok(fragment)
             }
-            NetworkSettings::Create { cidr, .. } => Ok(dynamic_topology(label, cidr.clone())),
+            NetworkSettings::Create { cidr, .. } => {
+                let fragment = dynamic_topology(label, cidr.clone(), ctx.targets_kubernetes);
+                Ok(if ctx.targets_kubernetes {
+                    existing_cluster_network_locals(fragment)
+                } else {
+                    fragment
+                })
+            }
             NetworkSettings::ByoVpcAws { .. } | NetworkSettings::ByoVnetAzure { .. } => {
                 Err(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "generate_terraform_module".to_string(),
@@ -89,6 +151,7 @@ impl TfEmitter for GcpNetworkEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let network = downcast::<Network>(ctx, Network::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let mode = network_mode_expr(ctx.targets_kubernetes);
         Ok(match &network.settings {
             NetworkSettings::UseDefault | NetworkSettings::ByoVpcGcp { .. } => {
                 let subnet_label = format!("{label}_subnet");
@@ -104,7 +167,7 @@ impl TfEmitter for GcpNetworkEmitter {
                     ),
                     (
                         "subnetSelfLinks",
-                        subnet_self_links(label, &network.settings),
+                        subnet_self_links(label, &network.settings, ctx.targets_kubernetes),
                     ),
                     (
                         "cidrBlock",
@@ -130,35 +193,35 @@ impl TfEmitter for GcpNetworkEmitter {
                     (
                         "vpcSelfLink",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].self_link : data.google_compute_network.{label}[0].self_link"
+                            "{mode} == \"create-new\" ? google_compute_network.{label}[0].self_link : data.google_compute_network.{label}[0].self_link"
                         )),
                     ),
                     (
                         "vpcName",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? google_compute_network.{label}[0].name : data.google_compute_network.{label}[0].name"
+                            "{mode} == \"create-new\" ? google_compute_network.{label}[0].name : data.google_compute_network.{label}[0].name"
                         )),
                     ),
-                    ("subnetSelfLinks", subnet_self_links(label, &network.settings)),
+                    ("subnetSelfLinks", subnet_self_links(label, &network.settings, ctx.targets_kubernetes)),
                     (
                         "cidrBlock",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? google_compute_subnetwork.{subnet_label}[0].ip_cidr_range : data.google_compute_subnetwork.{existing_subnet_label}[0].ip_cidr_range"
+                            "{mode} == \"create-new\" ? google_compute_subnetwork.{subnet_label}[0].ip_cidr_range : data.google_compute_subnetwork.{existing_subnet_label}[0].ip_cidr_range"
                         )),
                     ),
                     (
                         "routerSelfLink",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? google_compute_router.{router_label}[0].self_link : null"
+                            "{mode} == \"create-new\" ? google_compute_router.{router_label}[0].self_link : null"
                         )),
                     ),
                     (
                         "natName",
                         expr::raw(format!(
-                            "var.network_mode == \"create-new\" ? google_compute_router_nat.{nat_label}[0].name : null"
+                            "{mode} == \"create-new\" ? google_compute_router_nat.{nat_label}[0].name : null"
                         )),
                     ),
-                    ("isByoVpc", expr::raw("var.network_mode != \"create-new\"")),
+                    ("isByoVpc", expr::raw(format!("{mode} != \"create-new\""))),
                 ])
             }
             _ => Expression::Null,
@@ -169,10 +232,15 @@ impl TfEmitter for GcpNetworkEmitter {
 /// The self links of the subnets the network `label` with `settings` gives workloads: what
 /// setup reports to the worker controller, which puts unprotected functions there, and what
 /// it gives a protected install's verifier for the same.
-pub fn subnet_self_links(label: &str, settings: &NetworkSettings) -> Expression {
+pub fn subnet_self_links(
+    label: &str,
+    settings: &NetworkSettings,
+    targets_kubernetes: bool,
+) -> Expression {
+    let mode = network_mode_expr(targets_kubernetes);
     match settings {
         NetworkSettings::Create { .. } => expr::raw(format!(
-            "var.network_mode == \"create-new\" ? [google_compute_subnetwork.{label}_workload[0].self_link] : [data.google_compute_subnetwork.{label}_existing_subnet[0].self_link]"
+            "{mode} == \"create-new\" ? [google_compute_subnetwork.{label}_workload[0].self_link] : [data.google_compute_subnetwork.{label}_existing_subnet[0].self_link]"
         )),
         _ => Expression::Array(vec![expr::traversal([
             "data",
@@ -186,24 +254,42 @@ pub fn subnet_self_links(label: &str, settings: &NetworkSettings) -> Expression 
 /// The Direct VPC egress Cloud Run functions in the network `label` with `settings` use, as
 /// the worker controller gives unprotected ones: all traffic, or private ranges only on the
 /// project's default network.
-pub fn function_egress(settings: &NetworkSettings) -> Expression {
+pub fn function_egress(settings: &NetworkSettings, targets_kubernetes: bool) -> Expression {
     match settings {
-        NetworkSettings::Create { .. } => expr::raw(
-            "var.network_mode == \"use-default\" ? \"PRIVATE_RANGES_ONLY\" : \"ALL_TRAFFIC\"",
-        ),
+        NetworkSettings::Create { .. } => expr::raw(format!(
+            "{} == \"use-default\" ? \"PRIVATE_RANGES_ONLY\" : \"ALL_TRAFFIC\"",
+            network_mode_expr(targets_kubernetes)
+        )),
         NetworkSettings::UseDefault => Expression::String("PRIVATE_RANGES_ONLY".to_string()),
         _ => Expression::String("ALL_TRAFFIC".to_string()),
     }
 }
 
-fn dynamic_topology(label: &str, cidr: Option<String>) -> TfFragment {
+fn dynamic_topology(label: &str, cidr: Option<String>, targets_kubernetes: bool) -> TfFragment {
+    let mode = network_mode_expr(targets_kubernetes);
+    // The names and region of the network a lookup reads: the cluster's in an existing cluster.
+    let (name, subnet, region_expr) = if targets_kubernetes {
+        (
+            format!("local.{EXISTING_CLUSTER_NETWORK_NAME}"),
+            format!("local.{EXISTING_CLUSTER_SUBNET_NAME}"),
+            format!(
+                "{mode} == \"use-default\" ? var.gcp_region : local.{EXISTING_CLUSTER_NETWORK_REGION}"
+            ),
+        )
+    } else {
+        (
+            "var.network_name".to_string(),
+            "var.subnet_name".to_string(),
+            "var.network_mode == \"use-default\" || var.network_region == \"\" ? var.gcp_region : var.network_region".to_string(),
+        )
+    };
     let mut fragment = create_topology(label, cidr, true);
     for resource in &mut fragment.resource_blocks {
         let existing = std::mem::take(&mut resource.body);
         resource.body = hcl::structure::Body::from(
             std::iter::once(attr(
                 "count",
-                expr::raw("var.network_mode == \"create-new\" ? 1 : 0"),
+                expr::raw(format!("{mode} == \"create-new\" ? 1 : 0")),
             ))
             .chain(existing.into_iter())
             .collect::<Vec<_>>(),
@@ -217,11 +303,11 @@ fn dynamic_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "count",
-                expr::raw("var.network_mode != \"create-new\" ? 1 : 0"),
+                expr::raw(format!("{mode} != \"create-new\" ? 1 : 0")),
             ),
             attr(
                 "name",
-                expr::raw("var.network_mode == \"use-default\" ? \"default\" : var.network_name"),
+                expr::raw(format!("{mode} == \"use-default\" ? \"default\" : {name}")),
             ),
             attr("project", expr::raw("var.gcp_project")),
         ],
@@ -232,13 +318,13 @@ fn dynamic_topology(label: &str, cidr: Option<String>) -> TfFragment {
         [
             attr(
                 "count",
-                expr::raw("var.network_mode != \"create-new\" ? 1 : 0"),
+                expr::raw(format!("{mode} != \"create-new\" ? 1 : 0")),
             ),
-            attr("name", expr::raw("var.network_mode == \"use-default\" ? \"default\" : var.subnet_name")),
+            attr("name", expr::raw(format!("{mode} == \"use-default\" ? \"default\" : {subnet}"))),
             attr("project", expr::raw("var.gcp_project")),
             attr(
                 "region",
-                expr::raw("var.network_mode == \"use-default\" || var.network_region == \"\" ? var.gcp_region : var.network_region"),
+                expr::raw(region_expr),
             ),
         ],
     ));

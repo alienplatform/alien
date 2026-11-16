@@ -2156,24 +2156,30 @@ fn destroy_guard_is_destroyed_before_every_other_resource() {
     }
 }
 
-/// A real plan of the GKE/AKS module in existing-cluster mode, with mocked providers: the
-/// module creates no network, registers none, and nothing that reads the network's outputs is
-/// evaluated (a gated network has no instance to read).
-#[tokio::test]
-async fn gke_and_aks_existing_cluster_plans_with_no_network() {
-    for (target, mocks, variables) in [
-        (
-            TerraformTarget::Gke,
+/// A real plan, with mocked providers, of the module `source` renders for `target` against an
+/// existing cluster. `asserts` are HCL `assert` blocks over the plan.
+async fn plan_existing_cluster(target: TerraformTarget, source: Source, asserts: &str) {
+    let (mocks, variables) = match target {
+        TerraformTarget::Gke => (
             r#"mock_provider "google" {
   mock_data "google_container_cluster" {
-    defaults = { workload_identity_config = [{ workload_pool = "p.svc.id.goog" }] }
+    defaults = {
+      workload_identity_config = [{ workload_pool = "p.svc.id.goog" }]
+      network = "projects/p/global/networks/cluster-net"
+      subnetwork = "projects/p/regions/europe-west1/subnetworks/cluster-subnet"
+    }
+  }
+  mock_data "google_compute_network" {
+    defaults = { self_link = "https://www.googleapis.com/compute/v1/projects/p/global/networks/cluster-net" }
+  }
+  mock_data "google_compute_subnetwork" {
+    defaults = { self_link = "https://www.googleapis.com/compute/v1/projects/p/regions/europe-west1/subnetworks/cluster-subnet" }
   }
 }"#,
             r#"gke_cluster_name = "c"
-  gke_cluster_location = "us-central1""#,
+  gke_cluster_location = "europe-west1-b""#,
         ),
-        (
-            TerraformTarget::Aks,
+        TerraformTarget::Aks => (
             r#"mock_provider "azurerm" {
   mock_data "azurerm_client_config" {
     defaults = { tenant_id = "00000000-0000-0000-0000-000000000001", object_id = "00000000-0000-0000-0000-000000000001", client_id = "00000000-0000-0000-0000-000000000001" }
@@ -2182,28 +2188,29 @@ async fn gke_and_aks_existing_cluster_plans_with_no_network() {
             r#"aks_cluster_name = "c"
   aks_cluster_resource_group_name = "rg""#,
         ),
-    ] {
-        let module = render_prepared(Source::Workload, target).await;
-        let mut files: indexmap::IndexMap<String, String> = module
-            .iter()
-            .filter(|(path, _)| path.ends_with(".tf"))
-            .map(|(path, body)| (path.to_string(), body.to_string()))
-            .collect();
-        // Every string variable the module requires gets a placeholder.
-        let required = hcl::parse(files.get("variables.tf").expect("variables.tf"))
-            .expect("variables.tf parses")
-            .blocks()
-            .filter(|block| block.identifier() == "variable")
-            .filter(|block| !block.body().attributes().any(|a| a.key() == "default"))
-            .filter_map(|block| block.labels().first().map(|label| label.as_str().to_string()))
-            .filter(|name| name != "kubernetes_cluster_mode" && !name.contains("cluster_"))
-            .map(|name| format!("{name} = \"xx\""))
-            .collect::<Vec<_>>()
-            .join("\n  ");
-        files.insert(
-            "existing.tftest.hcl".to_string(),
-            format!(
-                r#"{mocks}
+        other => panic!("not a GKE or AKS target: {other:?}"),
+    };
+    let module = render_prepared(source, target).await;
+    let mut files: indexmap::IndexMap<String, String> = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .map(|(path, body)| (path.to_string(), body.to_string()))
+        .collect();
+    // Every other variable the module requires gets a placeholder.
+    let required = hcl::parse(files.get("variables.tf").expect("variables.tf"))
+        .expect("variables.tf parses")
+        .blocks()
+        .filter(|block| block.identifier() == "variable")
+        .filter(|block| !block.body().attributes().any(|a| a.key() == "default"))
+        .filter_map(|block| block.labels().first().map(|label| label.as_str().to_string()))
+        .filter(|name| name != "kubernetes_cluster_mode" && !name.contains("cluster_"))
+        .map(|name| format!("{name} = \"xx\""))
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    files.insert(
+        "existing.tftest.hcl".to_string(),
+        format!(
+            r#"{mocks}
 variables {{
   {required}
   management_url = "https://manager.example.com"
@@ -2212,20 +2219,65 @@ variables {{
 }}
 run "existing_cluster" {{
   command = plan
-  assert {{
-    condition = !contains([for r in local.deployment_resources : r.id], "default-network")
-    error_message = "an existing cluster registers no network"
-  }}
+{asserts}
 }}
 "#
-            ),
-        );
-        if std::env::var("DUMP_MOD").is_ok() {
-            for (n, b) in &files {
-                std::fs::write(format!("/tmp/probe/{target:?}-{n}"), b).unwrap();
-            }
-        }
-        let run = super::helpers::test_utils::terraform_test(&files);
-        run.assert_ok(format!("{target:?} existing-cluster plan"));
+        ),
+    );
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok(format!("{target:?} existing-cluster plan"));
+}
+
+/// A real plan of the GKE/AKS module in existing-cluster mode: the module creates no network,
+/// registers none, and nothing that reads the network's outputs is evaluated (a gated network
+/// has no instance to read).
+#[tokio::test]
+async fn gke_and_aks_existing_cluster_plans_with_no_network() {
+    for target in [TerraformTarget::Gke, TerraformTarget::Aks] {
+        plan_existing_cluster(
+            target,
+            Source::Workload,
+            r#"  assert {
+    condition = !contains([for r in local.deployment_resources : r.id], "default-network")
+    error_message = "an existing cluster registers no network"
+  }
+  assert {
+    condition = try(local.deployment_settings.network, null) == null
+    error_message = "an existing cluster registers no network setting"
+  }"#,
+        )
+        .await;
     }
+}
+
+/// A stack with a cloud database keeps a network in an existing cluster, and it is the
+/// cluster's: looked up from the cluster, created by no one, registered as one the deployer
+/// brought, with the settings that name it.
+#[tokio::test]
+async fn gke_existing_cluster_with_a_database_uses_the_cluster_network() {
+    plan_existing_cluster(
+        TerraformTarget::Gke,
+        Source::Database,
+        r#"  assert {
+    condition = length(google_compute_network.default_network) == 0 && length(google_compute_subnetwork.default_network_workload) == 0 && length(google_compute_router.default_network_router) == 0
+    error_message = "an existing cluster must not get a VPC, subnet or router"
+  }
+  assert {
+    condition = data.google_compute_network.default_network[0].name == "cluster-net" || local.existing_network_name == "cluster-net"
+    error_message = "the network is looked up by the cluster's network name"
+  }
+  assert {
+    condition = local.existing_subnet_name == "cluster-subnet" && local.existing_network_region == "europe-west1"
+    error_message = "the subnet and region are the cluster's"
+  }
+  assert {
+    condition = [for r in local.deployment_resources : r if r.id == "default-network"][0].importData.isByoVpc == true
+    error_message = "the cluster's network is registered as one setup does not own"
+  }
+  assert {
+    condition = local.deployment_settings.network.type == "byo-vpc-gcp" && local.deployment_settings.network.networkName == "cluster-net" && local.deployment_settings.network.subnetName == "cluster-subnet"
+    error_message = "the settings name the cluster's network"
+  }"#,
+    )
+    .await;
 }

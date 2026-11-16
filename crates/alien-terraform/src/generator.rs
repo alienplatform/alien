@@ -406,28 +406,32 @@ pub(crate) fn render_terraform_module(
             availability_zones: 2,
         });
     }
+    // The condition under which a Kubernetes module keeps a network (see `effective_gate`):
+    // `None` when the stack has none, `Some(None)` when it keeps one in every mode.
+    let kubernetes_network_gate: Option<Option<String>> = if target.is_kubernetes() {
+        stack.resources().find_map(|(id, entry)| {
+            (entry.config.resource_type() == Network::RESOURCE_TYPE)
+                .then(|| effective_gate(stack, id, entry, target))
+        })
+    } else {
+        None
+    };
     // An AKS module has no `network_mode` variable: the network setting it registers is a fixed
-    // default. For an existing cluster the manager prepares the stack with no network, so that
-    // default is registered only while the module expects the network (see `effective_gate`).
+    // default. For an existing cluster the manager prepares the stack with no network unless the
+    // stack needs one, so that default is registered only while the module expects the network.
     let mut conditional_network_setting: Option<(String, String)> = None;
     if target == TerraformTarget::Aks {
-        if let Some(settings) = stack_settings.network.clone() {
-            let gate = stack.resources().find_map(|(id, entry)| {
-                if entry.config.resource_type() != Network::RESOURCE_TYPE {
-                    return None;
-                }
-                effective_gate(stack, id, entry, target)
-                    .filter(|_| alien_core::is_prepared_network(id, entry))
-            });
-            if let Some(gate) = gate {
-                let json = serde_json::to_string(&settings).into_alien_error().map_err(|err| {
-                    AlienError::new(ErrorData::JsonSerializationFailed {
-                        reason: format!("failed to serialize the network setting: {err}"),
-                    })
-                })?;
-                conditional_network_setting = Some((gate, json));
-                stack_settings.network = None;
-            }
+        if let (Some(settings), Some(Some(gate))) = (
+            stack_settings.network.clone(),
+            kubernetes_network_gate.clone(),
+        ) {
+            let json = serde_json::to_string(&settings).into_alien_error().map_err(|err| {
+                AlienError::new(ErrorData::JsonSerializationFailed {
+                    reason: format!("failed to serialize the network setting: {err}"),
+                })
+            })?;
+            conditional_network_setting = Some((gate, json));
+            stack_settings.network = None;
         }
     }
     let stack_inputs = stack_inputs_for_terraform(stack, target);
@@ -826,6 +830,7 @@ pub(crate) fn render_terraform_module(
             setup_only,
             profile,
             conditional_network_setting.as_ref(),
+            kubernetes_network_gate.as_ref().map(|gate| gate.as_deref()),
         )?)?,
     );
 
@@ -4467,6 +4472,7 @@ fn locals_body(
     setup_only: bool,
     profile: alien_core::SetupConfigurationProfile,
     conditional_network_setting: Option<&(String, String)>,
+    kubernetes_network_gate: Option<Option<&str>>,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
@@ -4612,6 +4618,7 @@ fn locals_body(
             stack_settings,
             profile,
             conditional_network_setting,
+            kubernetes_network_gate,
         )
     };
     // A protected install registers as protected: the signing settings the module pins ride in
@@ -4728,6 +4735,7 @@ fn stack_settings_expression(
     stack_settings: &StackSettings,
     profile: alien_core::SetupConfigurationProfile,
     conditional_network_setting: Option<&(String, String)>,
+    kubernetes_network_gate: Option<Option<&str>>,
 ) -> Expression {
     let operational = if profile == alien_core::SetupConfigurationProfile::Advanced {
         "var"
@@ -4762,7 +4770,7 @@ fn stack_settings_expression(
   endpointAccess = var.endpoint_access
 {network_in_object}}}{network_argument})"#,
                 network_in_object = network_in_object(target, &network),
-                network_argument = network_argument(target, &network),
+                network_argument = network_argument(target, &network, None),
             ));
         }
         alien_core::Platform::Gcp
@@ -4791,7 +4799,7 @@ fn stack_settings_expression(
   endpointAccess = var.endpoint_access
 {network_in_object}}}{network_argument})"#,
                 network_in_object = network_in_object(target, &network),
-                network_argument = network_argument(target, &network),
+                network_argument = network_argument(target, &network, kubernetes_network_gate),
             ));
         }
         _ if target.is_kubernetes() => {
@@ -4841,14 +4849,32 @@ fn network_in_object(target: TerraformTarget, network: &str) -> String {
 }
 
 /// The last `merge` argument: the network setting of a Kubernetes module that creates its cluster.
-fn network_argument(target: TerraformTarget, network: &str) -> String {
-    if target.is_kubernetes() {
-        format!(
-            ", jsondecode(var.kubernetes_cluster_mode == \"create\" ? jsonencode({{ network = {network} }}) : \"{{}}\")"
-        )
-    } else {
-        String::new()
+fn network_argument(
+    target: TerraformTarget,
+    network: &str,
+    existing_cluster_network_gate: Option<Option<&str>>,
+) -> String {
+    if !target.is_kubernetes() {
+        return String::new();
     }
+    // An existing GKE cluster keeps a network only for a stack that needs one, and it is the
+    // cluster's own: the registration describes it as one the deployer brought.
+    let existing = match (target, existing_cluster_network_gate) {
+        (TerraformTarget::Gke, Some(gate)) => format!(
+            "{gate_expr} && !local.deployment_requests_network ? jsonencode({{ network = {{ type = \"byo-vpc-gcp\", networkName = local.{name}, subnetName = local.{subnet}, region = local.{region} }} }}) : \"{{}}\"",
+            gate_expr = gate.map_or_else(
+                || "true".to_string(),
+                crate::emitters::enabled::gate_variable
+            ),
+            name = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_NAME,
+            subnet = crate::emitters::gcp::network::EXISTING_CLUSTER_SUBNET_NAME,
+            region = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_REGION,
+        ),
+        _ => "\"{}\"".to_string(),
+    };
+    format!(
+        ", jsondecode(var.kubernetes_cluster_mode == \"create\" ? jsonencode({{ network = {network} }}) : {existing})"
+    )
 }
 
 fn deployment_model(model: DeploymentModel) -> &'static str {
