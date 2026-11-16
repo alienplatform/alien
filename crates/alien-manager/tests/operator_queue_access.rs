@@ -1448,8 +1448,14 @@ async fn a_pending_operator_command_is_not_answered_without_a_lease_by_others() 
 #[tokio::test]
 async fn nobody_but_the_deployments_own_token_leases_the_operations_worker() {
     for index in 0..case_count().await {
-        let (fixture, name, bearer, allowed) = case(index).await;
+        // The in-memory registry knows the worker target, so a command can be
+        // queued for it and the allowed lease can be checked by command id.
+        let fixture = memory_fixture().await;
+        let (name, bearer, allowed) = fixture.callers().remove(index);
         let router = fixture.router();
+        let worker_command = fixture
+            .queue_command_for(&fixture.dep_a, OPERATIONS_WORKER_COMMAND_TARGET_ID)
+            .await;
         for resource_type in [CommandTargetType::Worker, CommandTargetType::Daemon] {
             let target = CommandTarget::new(OPERATIONS_WORKER_COMMAND_TARGET_ID, resource_type);
             let (status, body) = send(
@@ -1464,7 +1470,18 @@ async fn nobody_but_the_deployments_own_token_leases_the_operations_worker() {
                 && !name.starts_with("operatorOperations")
                 && resource_type == CommandTargetType::Worker
             {
-                assert_ne!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+                assert_eq!(status, StatusCode::OK, "{name}: {body}");
+                let response: alien_core::LeaseResponse = serde_json::from_value(body.clone())
+                    .unwrap_or_else(|error| {
+                        panic!("{name}: not a lease response ({error}): {body}")
+                    });
+                assert_eq!(response.leases.len(), 1, "{name}: {body}");
+                assert_eq!(response.leases[0].command_id, worker_command, "{name}");
+                assert_eq!(
+                    response.leases[0].envelope.target.resource_id,
+                    OPERATIONS_WORKER_COMMAND_TARGET_ID,
+                    "{name}"
+                );
             } else {
                 assert_eq!(
                     status,
@@ -1606,7 +1623,34 @@ async fn response_context_for_a_reserved_target_command_follows_the_rule() {
         )
         .await;
         if allowed {
-            assert_ne!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+            assert_eq!(status, StatusCode::OK, "{name}: {body}");
+            let handling: alien_core::ResponseHandling = serde_json::from_value(body.clone())
+                .unwrap_or_else(|error| {
+                    panic!("{name}: not response credentials ({error}): {body}")
+                });
+            // The credentials belong to this command and this lease.
+            assert!(
+                handling
+                    .submit_response_url
+                    .contains(&format!("/commands/{command_id}/response?")),
+                "{name}: {}",
+                handling.submit_response_url
+            );
+            assert!(
+                handling
+                    .submit_response_url
+                    .contains(&format!("lease_id={}", lease.lease_id)),
+                "{name}: {}",
+                handling.submit_response_url
+            );
+            assert!(
+                handling
+                    .storage_upload_request
+                    .path
+                    .contains(&format!("commands/{command_id}/response")),
+                "{name}: {}",
+                handling.storage_upload_request.path
+            );
         } else {
             assert_eq!(status, StatusCode::FORBIDDEN, "{name}: {body}");
         }
@@ -1624,6 +1668,7 @@ async fn the_allowed_callers_pass_the_no_lease_answer() {
         }
         let router = fixture.router();
         let command_id = fixture.queue_command(&fixture.dep_a).await;
+        let before = fixture.state_of(&command_id).await;
         let (status, body) = send(
             &router,
             &bearer,
@@ -1632,6 +1677,16 @@ async fn the_allowed_callers_pass_the_no_lease_answer() {
             respond_body(),
         )
         .await;
-        assert_ne!(status, StatusCode::FORBIDDEN, "{name}: {body}");
+        // Authorization passes (it is not the 403 of the refused callers), but
+        // the answer itself is not accepted today: a command that was never
+        // leased is Pending, and Pending -> Succeeded is not a transition.
+        // Exact status and code, so a 401 or a 500 cannot pass as "allowed".
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {body}");
+        assert_eq!(body["code"], "INVALID_STATE_TRANSITION", "{name}: {body}");
+        assert_eq!(
+            fixture.state_of(&command_id).await,
+            before,
+            "{name}: the refused answer must leave the command as it was"
+        );
     }
 }
