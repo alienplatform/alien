@@ -5,14 +5,14 @@
 //! the single internet-access switch cannot express a hostname list.
 
 use crate::{
-    block::{attr, resource_block},
+    block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::{
         agent_platform_engine::ENGINE_RESOURCE,
         helpers::{
-            binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
-            required_label, role_expression_for_binding, service_account_id_template,
-            service_account_member_for_label,
+            binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
+            permission_context, required_label, role_expression_for_binding,
+            service_account_id_template, service_account_member_for_label,
         },
     },
     expr,
@@ -232,9 +232,11 @@ fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Resul
     )
 }
 
-/// Lets the stack's management identity create and replace this sandbox's templates, on its
-/// engine only. Frozen only: a Live engine's manager already holds `sandbox/provision`.
-fn emit_template_management(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+/// Label of the management identity that creates and replaces this sandbox's templates, when the
+/// stack grants it `sandbox/templates` on a Frozen sandbox. Frozen only: a Live engine's manager
+/// already holds `sandbox/provision`. `None` when there is no remote manager identity: the
+/// deploying credentials run the template controller, so there is no member to bind.
+fn template_manager_label<'a>(ctx: &'a EmitContext<'_>) -> Result<Option<&'a str>> {
     const TEMPLATES: &str = "sandbox/templates";
     let granted = ctx
         .stack
@@ -243,21 +245,156 @@ fn emit_template_management(ctx: &EmitContext<'_>, fragment: &mut TfFragment) ->
         .and_then(|profile| profile.0.get(ctx.resource_id))
         .is_some_and(|refs| refs.iter().any(|reference| reference.id() == TEMPLATES));
     if !granted || ctx.resource.lifecycle != ResourceLifecycle::Frozen {
-        return Ok(());
+        return Ok(None);
     }
-    // No management resource means no remote manager identity: the deploying credentials run the
-    // template controller, so there is no member to bind.
     let Some(management_id) = ctx.stack.resources().find_map(|(id, entry)| {
         (entry.config.resource_type() == RemoteStackManagement::RESOURCE_TYPE).then_some(id)
     }) else {
-        return Ok(());
+        return Ok(None);
     };
-    let management_label = ctx.name_for(management_id).ok_or_else(|| {
+    ctx.name_for(management_id).map(Some).ok_or_else(|| {
         AlienError::new(ErrorData::GenericError {
             message: format!("management resource '{management_id}' has no Terraform name"),
         })
-    })?;
-    emit_engine_grant(ctx, fragment, TEMPLATES, management_label, "templates")
+    })
+}
+
+/// Lets the stack's management identity create and replace this sandbox's templates, on its
+/// engine only.
+fn emit_template_management(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+    let Some(management_label) = template_manager_label(ctx)? else {
+        return Ok(());
+    };
+    emit_engine_grant(
+        ctx,
+        fragment,
+        "sandbox/templates",
+        management_label,
+        "templates",
+    )?;
+    emit_image_repository(ctx, fragment, management_label)
+}
+
+/// Permissions of the custom role that lets the manager copy the sandbox image in: read what is
+/// there, upload blobs and manifests, and tag. No delete of any kind, so a compromised manager
+/// cannot remove a version a live template uses; cleanup is the repository's own policy.
+const IMAGE_WRITE_PERMISSIONS: [&str; 8] = [
+    "artifactregistry.repositories.get",
+    "artifactregistry.repositories.downloadArtifacts",
+    "artifactregistry.repositories.uploadArtifacts",
+    "artifactregistry.tags.create",
+    "artifactregistry.tags.update",
+    "artifactregistry.tags.get",
+    "artifactregistry.tags.list",
+    "artifactregistry.versions.get",
+];
+
+/// Terraform label of the stack-wide custom role carrying [`IMAGE_WRITE_PERMISSIONS`].
+const IMAGE_WRITE_ROLE_LABEL: &str = "gcp_role_sandbox_image_write";
+
+/// Creates this sandbox's dedicated image repository and lets the manager write to it, and to
+/// nothing else.
+///
+/// The manager's registry may be in another project or cloud, and Agent Platform refuses an image
+/// the creating identity cannot read, so the controller copies the image here by digest before it
+/// creates the template. The repository is never the stack's registry: that one has a push identity
+/// and workload bindings. Name, format and cleanup policy match what the controller would create,
+/// so a repository made here is the one it finds.
+fn emit_image_repository(
+    ctx: &EmitContext<'_>,
+    fragment: &mut TfFragment,
+    management_label: &str,
+) -> Result<()> {
+    let label = format!("{}_image", required_label(ctx)?);
+    let repository_name = format!(
+        "replace(lower(format(\"%s-{}-img\", local.resource_prefix)), \"_\", \"-\")",
+        ctx.resource_id
+    );
+    fragment.resource_blocks.push(resource_block(
+        "google_artifact_registry_repository",
+        &label,
+        [
+            attr("project", expr::raw("var.gcp_project")),
+            attr("location", expr::raw("var.gcp_region")),
+            attr("repository_id", expr::raw(repository_name)),
+            attr("format", Expression::String("DOCKER".to_string())),
+            attr(
+                "description",
+                expr::template(format!("Image of sandbox '{}'", ctx.resource_id)),
+            ),
+            attr("labels", labels(ctx, "sandbox")),
+            nested(block(
+                "cleanup_policies",
+                [
+                    attr("id", Expression::String("delete-untagged".to_string())),
+                    attr("action", Expression::String("DELETE".to_string())),
+                    nested(block(
+                        "condition",
+                        [
+                            attr("tag_state", Expression::String("UNTAGGED".to_string())),
+                            attr("older_than", Expression::String("604800s".to_string())),
+                        ],
+                    )),
+                ],
+            )),
+        ],
+    ));
+    fragment.push_shared_resource(resource_block(
+        "google_project_iam_custom_role",
+        IMAGE_WRITE_ROLE_LABEL,
+        [
+            attr("count", expr::raw("var.gcp_manage_custom_roles ? 1 : 0")),
+            attr("project", expr::raw("var.gcp_project")),
+            attr(
+                "role_id",
+                expr::raw("format(\"role_%s_sandbox_image_write\", local.gcp_custom_role_prefix)"),
+            ),
+            attr(
+                "title",
+                expr::template("Copy a sandbox image into its repository".to_string()),
+            ),
+            attr(
+                "description",
+                expr::template(
+                    "Read, upload and tag in a sandbox image repository. Cannot delete."
+                        .to_string(),
+                ),
+            ),
+            attr("stage", Expression::String("GA".to_string())),
+            attr(
+                "permissions",
+                Expression::Array(
+                    IMAGE_WRITE_PERMISSIONS
+                        .iter()
+                        .map(|permission| Expression::String((*permission).to_string()))
+                        .collect(),
+                ),
+            ),
+        ],
+    ));
+    fragment.resource_blocks.push(resource_block(
+        "google_artifact_registry_repository_iam_member",
+        &format!("{label}_write"),
+        [
+            attr("project", expr::raw("var.gcp_project")),
+            attr(
+                "location",
+                expr::traversal(["google_artifact_registry_repository", label.as_str(), "location"]),
+            ),
+            attr(
+                "repository",
+                expr::traversal(["google_artifact_registry_repository", label.as_str(), "name"]),
+            ),
+            attr(
+                "role",
+                expr::raw(format!(
+                    "var.gcp_manage_custom_roles ? google_project_iam_custom_role.{IMAGE_WRITE_ROLE_LABEL}[0].name : format(\"projects/%s/roles/role_%s_sandbox_image_write\", var.gcp_project, local.gcp_custom_role_prefix)"
+                )),
+            ),
+            attr("member", service_account_member_for_label(management_label)),
+        ],
+    ));
+    Ok(())
 }
 
 /// Binds `permission_set_id` to `member_label`'s service account on this sandbox's engine.
@@ -686,6 +823,32 @@ mod tests {
                 .collect();
             assert_eq!(members.len(), 1, "{fragment:?}");
             assert!(granted(false).resource_blocks.is_empty());
+
+            // The same grant gives the manager a dedicated image repository to copy into, with a
+            // writer role that can upload and tag but never delete.
+            let kinds = |kind: &str| {
+                fragment
+                    .resource_blocks
+                    .iter()
+                    .filter(|block| block.labels.first().map(|l| l.as_str()) == Some(kind))
+                    .count()
+            };
+            assert_eq!(
+                kinds("google_artifact_registry_repository"),
+                1,
+                "{fragment:?}"
+            );
+            assert_eq!(
+                kinds("google_artifact_registry_repository_iam_member"),
+                1,
+                "{fragment:?}"
+            );
+            assert!(fragment.resource_blocks.iter().any(|block| {
+                block.labels.get(1).map(|l| l.as_str()) == Some(IMAGE_WRITE_ROLE_LABEL)
+            }));
+            assert!(IMAGE_WRITE_PERMISSIONS
+                .iter()
+                .all(|permission| !permission.contains("delete")));
         }
 
         /// A sandbox that declares preview ports gets its own edge-signing identity: it holds the
@@ -869,7 +1032,13 @@ mod tests {
                 .permission("empty", PermissionProfile::new())
                 .build();
             let mut names = names();
-            for profile in ["named", "wildcard", "other-sandbox", "heartbeat-only", "empty"] {
+            for profile in [
+                "named",
+                "wildcard",
+                "other-sandbox",
+                "heartbeat-only",
+                "empty",
+            ] {
                 names.insert(
                     format!("{profile}-sa"),
                     format!("{}_sa", profile.replace('-', "_")),
@@ -892,7 +1061,8 @@ mod tests {
                 .resource_blocks
                 .iter()
                 .filter(|b| {
-                    b.labels.first().map(|l| l.as_str()) == Some("google_service_account_iam_member")
+                    b.labels.first().map(|l| l.as_str())
+                        == Some("google_service_account_iam_member")
                 })
                 .map(|b| attribute(b, "member"))
                 .collect();
