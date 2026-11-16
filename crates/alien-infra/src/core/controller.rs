@@ -1545,7 +1545,7 @@ impl ResourceControllerContext<'_> {
 
 /// The error for a controller that asked for a cloud client the context does not hold.
 /// A plain Kubernetes client means the Operator could not build the base cloud client.
-fn mismatch_or_missing_base_cloud(
+pub(crate) fn mismatch_or_missing_base_cloud(
     client_config: &ClientConfig,
     required_platform: alien_core::Platform,
 ) -> AlienError<ErrorData> {

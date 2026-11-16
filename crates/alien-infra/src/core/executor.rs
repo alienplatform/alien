@@ -242,11 +242,52 @@ fn controller_platform_for_entry(
         return Platform::Kubernetes;
     }
 
+    // A service account whose profile grants nothing on the base cloud has no cloud identity to
+    // create: it is the Kubernetes ServiceAccount Helm owns. Decided from the stack alone.
+    if stack_platform == Platform::Kubernetes
+        && lifecycle == ResourceLifecycle::Frozen
+        && matches!((resource, base_platform), (Some(resource), Some(base))
+            if resource
+                .downcast_ref::<alien_core::ServiceAccount>()
+                .is_some_and(|account| !service_account_grants_on(account, base)))
+    {
+        return Platform::Kubernetes;
+    }
+
     if stack_platform == Platform::Kubernetes && lifecycle == ResourceLifecycle::Frozen {
         base_platform.unwrap_or(stack_platform)
     } else {
         stack_platform
     }
+}
+
+/// True when a permission set carries at least one entry for `platform`.
+pub(crate) fn permission_set_grants_on(set: &alien_core::PermissionSet, platform: Platform) -> bool {
+    match platform {
+        Platform::Aws => set.platforms.aws.as_ref().is_some_and(|v| !v.is_empty()),
+        Platform::Gcp => set.platforms.gcp.as_ref().is_some_and(|v| !v.is_empty()),
+        Platform::Azure => set.platforms.azure.as_ref().is_some_and(|v| !v.is_empty()),
+        _ => false,
+    }
+}
+
+fn service_account_grants_on(account: &alien_core::ServiceAccount, platform: Platform) -> bool {
+    account
+        .stack_permission_sets
+        .iter()
+        .chain(account.resource_permission_sets.values().flatten())
+        .any(|set| permission_set_grants_on(set, platform))
+}
+
+/// True when a permission profile grants something on `platform`. A reference that does not
+/// resolve counts as a grant: the stack is not run as plain Kubernetes on a guess.
+fn profile_grants_on(profile: &alien_core::PermissionProfile, platform: Platform) -> bool {
+    profile.0.values().flatten().any(|reference| {
+        match reference.resolve(|id| alien_permissions::get_permission_set(id).cloned()) {
+            Some(set) => permission_set_grants_on(&set, platform),
+            None => true,
+        }
+    })
 }
 
 /// True when a resource of this stack runs on the base cloud's controllers (cloud resources,
@@ -258,16 +299,24 @@ pub fn stack_needs_base_cloud(
     stack_platform: Platform,
     base_platform: Option<Platform>,
 ) -> bool {
-    stack_platform == Platform::Kubernetes
-        && base_platform.is_some()
-        && stack.resources().any(|(_, entry)| {
-            controller_platform_for_entry(
-                stack_platform,
-                base_platform,
-                entry.lifecycle,
-                Some(&entry.config),
-            ) != Platform::Kubernetes
-        })
+    let Some(base) = base_platform.filter(|_| stack_platform == Platform::Kubernetes) else {
+        return false;
+    };
+    // A stack that is not prepared yet has profiles and no service accounts: its profiles
+    // become cloud identities exactly when they grant something on the base cloud.
+    // (The management profile is handled by remote stack management, not a service account.)
+    stack.resources().any(|(_, entry)| {
+        controller_platform_for_entry(
+            stack_platform,
+            base_platform,
+            entry.lifecycle,
+            Some(&entry.config),
+        ) != Platform::Kubernetes
+    }) || stack
+        .permissions
+        .profiles
+        .iter()
+        .any(|(name, profile)| name != "management" && profile_grants_on(profile, base))
 }
 
 fn controller_platform_for_state(stack_platform: Platform, state: &StackResourceState) -> Platform {
@@ -372,6 +421,105 @@ mod controller_platform_tests {
         // No base cloud, or not a Kubernetes stack: nothing to resolve.
         assert!(!stack_needs_base_cloud(&with_storage, Platform::Kubernetes, None));
         assert!(!stack_needs_base_cloud(&with_storage, Platform::Aws, Some(Platform::Aws)));
+    }
+
+    fn service_account(id: &str, permission_set: Option<&str>) -> Resource {
+        let mut profile = alien_core::PermissionProfile::new();
+        if let Some(permission_set) = permission_set {
+            profile
+                .0
+                .entry("*".to_string())
+                .or_default()
+                .push(alien_core::PermissionSetReference::from_name(permission_set));
+        }
+        Resource::new(
+            alien_core::ServiceAccount::from_permission_profile(
+                id.to_string(),
+                &profile,
+                |name| alien_permissions::get_permission_set(name).cloned(),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_frozen_service_account_without_cloud_grants_is_a_kubernetes_service_account() {
+        let no_grants = service_account("fixed-sa", None);
+        let grants = service_account("reader-sa", Some("storage/data-read"));
+        for base in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            assert_eq!(
+                controller_platform_for_entry(
+                    Platform::Kubernetes,
+                    Some(base),
+                    ResourceLifecycle::Frozen,
+                    Some(&no_grants),
+                ),
+                Platform::Kubernetes,
+            );
+            assert_eq!(
+                controller_platform_for_entry(
+                    Platform::Kubernetes,
+                    Some(base),
+                    ResourceLifecycle::Frozen,
+                    Some(&grants),
+                ),
+                base,
+            );
+        }
+        // A cloud deployment keeps its cloud identity whatever the profile grants.
+        assert_eq!(
+            controller_platform_for_entry(
+                Platform::Aws,
+                None,
+                ResourceLifecycle::Frozen,
+                Some(&no_grants),
+            ),
+            Platform::Aws,
+        );
+    }
+
+    #[test]
+    fn a_service_account_already_in_state_under_the_cloud_controller_keeps_it() {
+        // State as the current code wrote it: the account was created under the AWS controller.
+        let no_grants = service_account("fixed-sa", None);
+        let mut state = StackResourceState::new_pending(
+            "service-account".to_string(),
+            no_grants.clone(),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        state.controller_platform = Some(Platform::Aws);
+        assert_eq!(
+            controller_platform_for_state(Platform::Kubernetes, &state),
+            Platform::Aws,
+        );
+    }
+
+    #[test]
+    fn profiles_without_cloud_grants_do_not_need_the_base_cloud() {
+        let mut stack = stack_with(Vec::new());
+        stack
+            .permissions
+            .profiles
+            .insert("fixed".to_string(), alien_core::PermissionProfile::new());
+        assert!(!stack_needs_base_cloud(&stack, Platform::Kubernetes, Some(Platform::Aws)));
+
+        let mut grants = alien_core::PermissionProfile::new();
+        grants.0.entry("*".to_string()).or_default().push(
+            alien_core::PermissionSetReference::from_name("storage/data-read"),
+        );
+        stack.permissions.profiles.insert("reader".to_string(), grants.clone());
+        assert!(stack_needs_base_cloud(&stack, Platform::Kubernetes, Some(Platform::Aws)));
+
+        // The same decision on the prepared stack, where the profiles became service accounts.
+        let prepared = stack_with(vec![
+            (service_account("fixed-sa", None), ResourceLifecycle::Frozen),
+        ]);
+        assert!(!stack_needs_base_cloud(&prepared, Platform::Kubernetes, Some(Platform::Aws)));
+        let prepared = stack_with(vec![
+            (service_account("reader-sa", Some("storage/data-read")), ResourceLifecycle::Frozen),
+        ]);
+        assert!(stack_needs_base_cloud(&prepared, Platform::Kubernetes, Some(Platform::Aws)));
     }
 
     #[test]
@@ -3285,10 +3433,10 @@ impl StackExecutor {
                 .client_config
                 .config_for_platform(controller_platform)
                 .ok_or_else(|| {
-                    AlienError::new(ErrorData::ClientConfigMismatch {
-                        required_platform: controller_platform,
-                        found_platform: self.client_config.platform(),
-                    })
+                    crate::core::controller::mismatch_or_missing_base_cloud(
+                        &self.client_config,
+                        controller_platform,
+                    )
                 })?;
 
             let context = ResourceControllerContext {
