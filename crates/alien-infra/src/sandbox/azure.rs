@@ -347,7 +347,7 @@ impl AzureSandboxController {
             // A Frozen sandbox whose image changed without an update flow arrives serving the old
             // one, and builds as an update so a failed build leaves the served binding alone. One
             // serving nothing yet builds through the create flow.
-            Ok(()) if self.pending_image(&config).is_some() => {
+            Ok(()) if self.pending_image(&config).is_some() && !ctx.deployment_config.setup_run => {
                 return Ok(HandlerAction::Continue {
                     state: if self.disk_image.is_some() {
                         UpdatingDiskImage
@@ -777,6 +777,16 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<AzureSandboxHandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        // A setup run never builds the image. The disk-image calls are data-plane calls on the
+        // sandbox group, which the setup principal holds no role for; the management identity
+        // holds `sandbox/images` and builds it on its first provisioning tick, as it does when
+        // a Terraform package created the group.
+        if ctx.deployment_config.setup_run {
+            return Ok(AzureSandboxHandlerAction::Continue {
+                state: AzureSandboxState::Ready,
+                suggested_delay: None,
+            });
+        }
         // Nothing to build: `Ready` abandons any build left in flight.
         let Some(reference) = self.pending_image(config) else {
             return Ok(AzureSandboxHandlerAction::Continue {
@@ -1872,6 +1882,9 @@ mod tests {
                 .controller(controller)
                 .platform(Platform::Azure)
                 .resource_lifecycle(ResourceLifecycle::Frozen)
+                // The management identity builds images on a provisioning tick; a setup run
+                // makes no disk-image call (see a_direct_setup_run_issues_no_disk_image_call).
+                .setup_run(false)
                 .service_provider(provider_with(client))
                 .build()
                 .await
@@ -1901,6 +1914,9 @@ mod tests {
                 .controller(controller)
                 .platform(Platform::Azure)
                 .resource_lifecycle(ResourceLifecycle::Frozen)
+                // The management identity builds images on a provisioning tick; a setup run
+                // makes no disk-image call (see a_direct_setup_run_issues_no_disk_image_call).
+                .setup_run(false)
                 .service_provider(provider_with(client))
                 .build()
                 .await
@@ -1930,19 +1946,6 @@ mod tests {
             old.state = AzureSandboxState::UpdatingDiskImage;
             let mut run = bare_executor(sandbox(NODE), old, client).await;
             run.step().await.expect("the image is still building");
-        }
-
-        #[tokio::test]
-        async fn initial_setup_builds_without_listing_sandboxes() {
-            let mut client = MockSandboxDataPlaneApi::new();
-            client
-                .expect_list_disk_images()
-                .returning(|_| Ok(vec![image("new", NODE, "Ready")]));
-            client.expect_list_sandboxes().never();
-            let mut controller = adopted(None, None);
-            controller.state = AzureSandboxState::EnsureDiskImage;
-            let mut run = bare_executor(sandbox(NODE), controller, client).await;
-            run.step().await.expect("setup adopts the Ready image");
         }
 
         #[tokio::test]
@@ -3061,6 +3064,77 @@ mod direct_setup_tests {
         assert_eq!(controller.resource_group.as_deref(), Some("default-resource-group"));
         assert!(controller.created_group);
         assert!(polls.load(Ordering::SeqCst) >= 2, "waits for the group to finish");
+    }
+
+    /// The setup principal holds no data-plane role on the group, so a setup run makes no
+    /// disk-image call at all; the management identity builds the image on its first
+    /// provisioning tick, as it does when a Terraform package created the group.
+    #[tokio::test]
+    async fn a_direct_setup_run_issues_no_disk_image_call() {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_create_or_update_sandbox_group()
+            .returning(|_, _, _| Ok(group("Succeeded")));
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let groups: Arc<dyn alien_azure_clients::sandbox_groups::SandboxGroupsApi> =
+            Arc::new(groups);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_sandbox_groups_client()
+            .returning(move |_| Ok(groups.clone()));
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(|_| Ok(Arc::new(MockAuthorizationApi::new())));
+        // The group's Ready tick may list sandboxes; a disk-image call is the failure.
+        provider
+            .expect_get_azure_sandbox_data_plane_client()
+            .returning(|_, _, _| {
+                let mut client = MockSandboxDataPlaneApi::new();
+                client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
+                client.expect_list_disk_images().never();
+                client.expect_create_disk_image().never();
+                Ok(Arc::new(client))
+            });
+        let registry_image = Sandbox::new("box_one".to_string())
+            .code(SandboxCode::Image {
+                image: "example.invalid/app:1".to_string(),
+                bundled_from: None,
+            })
+            .egress(SandboxEgress::None)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        assert!(
+            matches!(
+                registry_image.azure_image(),
+                Ok(AzureSandboxImage::Registry(_))
+            ),
+            "the fixture must be a registry image, the kind that builds a disk image"
+        );
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(registry_image)
+            .resource_prefix("Test_Prefix")
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(AzureSandboxController::default())
+            .platform(Platform::Azure)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .setup_run(true)
+            .with_dependency(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                AzureResourceGroupController::mock_ready("default-resource-group"),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap();
+        drive(&mut executor).await;
+        let controller = executor.internal_state::<AzureSandboxController>().unwrap();
+        assert_eq!(controller.state, AzureSandboxState::Ready);
+        assert!(controller.disk_image_id.is_none(), "nothing was built in setup");
     }
 
     /// A group a Terraform package created arrives through its import and is adopted: this
