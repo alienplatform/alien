@@ -1,5 +1,6 @@
-//! Amazon ECS JSON API client. Calls are JSON in, JSON out: the operator and its
-//! plugins read a few fields of a few operations, so no full model is kept.
+//! JSON 1.1 API client for Amazon ECS and CloudWatch Logs. Calls are JSON in,
+//! JSON out: the operator and its plugins read a few fields of a few
+//! operations, so no full model is kept.
 
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
@@ -25,20 +26,65 @@ pub trait EcsApi: Send + Sync + std::fmt::Debug {
 pub struct EcsClient {
     client: Client,
     credentials: AwsCredentialProvider,
+    service: Service,
+}
+
+/// The service a [`EcsClient`] talks to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Service {
+    Ecs,
+    Logs,
+}
+
+impl Service {
+    /// Signing name, endpoint prefix and override key.
+    fn name(self) -> &'static str {
+        match self {
+            Service::Ecs => "ecs",
+            Service::Logs => "logs",
+        }
+    }
+
+    fn target(self, operation: &str) -> String {
+        match self {
+            Service::Ecs => format!("AmazonEC2ContainerServiceV20141113.{operation}"),
+            Service::Logs => format!("Logs_20140328.{operation}"),
+        }
+    }
+
+    fn resource_type(self) -> &'static str {
+        match self {
+            Service::Ecs => "Amazon ECS",
+            Service::Logs => "CloudWatch Logs",
+        }
+    }
 }
 
 impl EcsClient {
+    /// A client for the Amazon ECS API.
     pub fn new(client: Client, credentials: AwsCredentialProvider) -> Self {
         Self {
             client,
             credentials,
+            service: Service::Ecs,
+        }
+    }
+
+    /// A client for the CloudWatch Logs API (`FilterLogEvents`, ...), same
+    /// call shape as [`EcsClient::new`].
+    pub fn new_logs(client: Client, credentials: AwsCredentialProvider) -> Self {
+        Self {
+            client,
+            credentials,
+            service: Service::Logs,
         }
     }
 
     fn base_url(&self) -> String {
-        match self.credentials.get_service_endpoint_option("ecs") {
+        let name = self.service.name();
+        match self.credentials.get_service_endpoint_option(name) {
             Some(url) => url.to_string(),
-            None => format!("https://ecs.{}.amazonaws.com", self.credentials.region()),
+            None => format!("https://{name}.{}.amazonaws.com", self.credentials.region()),
         }
     }
 }
@@ -65,16 +111,17 @@ impl EcsApi for EcsClient {
         let builder = self
             .client
             .post(format!("{}/", base.trim_end_matches('/')))
-            .host(&format!("ecs.{}.amazonaws.com", self.credentials.region()))
-            .header(
-                "X-Amz-Target",
-                format!("AmazonEC2ContainerServiceV20141113.{operation}"),
-            )
+            .host(&format!(
+                "{}.{}.amazonaws.com",
+                self.service.name(),
+                self.credentials.region()
+            ))
+            .header("X-Amz-Target", self.service.target(operation))
             .content_type_amz_json()
             .content_sha256(&body)
             .body(body.clone());
         let sign = AwsSignConfig {
-            service_name: "ecs".into(),
+            service_name: self.service.name().into(),
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
@@ -92,7 +139,7 @@ impl EcsApi for EcsClient {
                 {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                    if let Some(mapped) = map_error(status, text, operation) {
+                    if let Some(mapped) = map_error(self.service, status, text, operation) {
                         return Err(error.context(mapped));
                     }
                 }
@@ -102,19 +149,24 @@ impl EcsApi for EcsClient {
     }
 }
 
-fn map_error(status: StatusCode, text: &str, operation: &str) -> Option<ErrorData> {
+fn map_error(
+    service: Service,
+    status: StatusCode,
+    text: &str,
+    operation: &str,
+) -> Option<ErrorData> {
     let parsed: EcsError = serde_json::from_str(text).ok()?;
     let kind = parsed.kind.unwrap_or_default();
     let kind = kind.rsplit('#').next().unwrap_or_default().to_string();
     let message = parsed.message.unwrap_or_else(|| "Unknown error".into());
     Some(match kind.as_str() {
         "AccessDeniedException" | "UnauthorizedOperation" => ErrorData::RemoteAccessDenied {
-            resource_type: "Amazon ECS".into(),
+            resource_type: service.resource_type().into(),
             resource_name: operation.into(),
         },
         "ClusterNotFoundException" | "ServiceNotFoundException" | "ResourceNotFoundException" => {
             ErrorData::RemoteResourceNotFound {
-                resource_type: "Amazon ECS".into(),
+                resource_type: service.resource_type().into(),
                 resource_name: operation.into(),
             }
         }
@@ -127,8 +179,8 @@ fn map_error(status: StatusCode, text: &str, operation: &str) -> Option<ErrorDat
             field_name: None,
         },
         _ => ErrorData::HttpResponseError {
-            message: format!("ECS {operation} failed: {message}"),
-            url: "ecs.amazonaws.com".into(),
+            message: format!("{} {operation} failed: {message}", service.resource_type()),
+            url: format!("{}.amazonaws.com", service.name()),
             http_status: status.as_u16(),
             http_response_text: Some(text.into()),
             http_request_text: None,

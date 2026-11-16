@@ -1107,6 +1107,7 @@ async fn run_operator_cli(
         pod_log_collection: crate::pod_logs::config_from_env()?,
         host_logs,
         host_inventory: crate::host_logs::inventory_config(host_logs, enrolled_by_token),
+        ecs: crate::ecs::config_from_env()?,
     };
     run_operator_with_cancel_and_loops_and_runtime(
         operator_config,

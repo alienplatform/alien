@@ -1857,6 +1857,7 @@ mod persistence_tests {
                 pod_log_collection: None,
                 host_logs: None,
                 host_inventory: None,
+                ecs: None,
             },
             Some(db),
         ));

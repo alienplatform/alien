@@ -24,6 +24,7 @@ pub mod cli;
 pub mod collector_logs;
 pub mod config;
 pub mod db;
+pub mod ecs;
 pub mod error;
 pub mod host;
 pub mod host_logs;
@@ -64,6 +65,7 @@ struct OperatorRuntimeOptions {
     pod_log_collection: Option<pod_logs::PodLogCollectionConfig>,
     host_logs: Option<host_logs::HostLogsConfig>,
     host_inventory: Option<host_logs::HostLogsConfig>,
+    ecs: Option<ecs::EcsConfig>,
 }
 
 impl OperatorRuntimeOptions {
@@ -75,6 +77,7 @@ impl OperatorRuntimeOptions {
             pod_log_collection: pod_logs::config_from_env()?,
             host_logs: host_logs::config_from_env(false)?,
             host_inventory: None,
+            ecs: ecs::config_from_env()?,
         })
     }
 }
@@ -548,6 +551,14 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         _ => None,
     };
 
+    let ecs_handle = match runtime_options.ecs.clone() {
+        Some(ecs_config) if matches!(config.platform, Platform::Aws) => Some(tokio::spawn({
+            let state = state.clone();
+            async move { ecs::run(state, ecs_config).await }
+        })),
+        _ => None,
+    };
+
     // Start sync and telemetry loops only if not airgapped
     let sync_handle = if !config.is_airgapped() {
         Some(tokio::spawn({
@@ -745,13 +756,21 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 std::future::pending::<()>().await;
             }
         } => Ok(loop_exit(&cancel, "pod-logs")),
+        // A log or inventory collector that stops, or cannot run, leaves the operator running.
         _ = async {
             if let Some(h) = host_log_handle {
                 h.await.ok();
-            } else {
-                std::future::pending::<()>().await;
+                warn!("Host log collection ended; the operator keeps running without it");
             }
+            std::future::pending::<()>().await;
         } => Ok(loop_exit(&cancel, "host-logs")),
+        _ = async {
+            if let Some(h) = ecs_handle {
+                h.await.ok();
+                warn!("ECS collection ended; the operator keeps running without it");
+            }
+            std::future::pending::<()>().await;
+        } => Ok(loop_exit(&cancel, "ecs")),
         _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();
@@ -1168,6 +1187,7 @@ mod tests {
                 pod_log_collection: None,
                 host_logs: None,
                 host_inventory: None,
+                ecs: None,
             },
             None,
         ));
@@ -1317,6 +1337,7 @@ mod tests {
                     pod_log_collection: None,
                     host_logs: None,
                     host_inventory: None,
+                    ecs: None,
                 },
                 None,
             ),
