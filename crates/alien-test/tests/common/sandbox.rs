@@ -384,10 +384,7 @@ pub async fn check_remote_interactive_command(
     )
     .await
     .context("discover assigned manager for remote bindings")?;
-    let sandbox = bindings
-        .sandbox("agents")
-        .await
-        .context("resolve the remote sandbox")?;
+    let sandbox = bindings.sandbox("agents").await.context("resolve the remote sandbox")?;
 
     let capabilities = sandbox.capabilities();
     eprintln!("capabilities: {capabilities:?}");
@@ -421,17 +418,10 @@ pub async fn check_remote_interactive_command(
         let mut replies = String::new();
         let mut exit = None;
         for (line, want) in [("first\n", "echo:first\n"), ("second\n", "echo:second\n")] {
-            command
-                .input
-                .write(line.as_bytes())
-                .await
-                .context("write stdin")?;
+            command.input.write(line.as_bytes()).await.context("write stdin")?;
             let started = std::time::Instant::now();
             while !replies.ends_with(want) {
-                ensure!(
-                    started.elapsed() < Duration::from_secs(60),
-                    "no reply to {line:?}: {replies:?}"
-                );
+                ensure!(started.elapsed() < Duration::from_secs(60), "no reply to {line:?}: {replies:?}");
                 match tokio::time::timeout(Duration::from_secs(60), command.output.next())
                     .await
                     .context("wait for output")?
@@ -467,10 +457,7 @@ pub async fn check_remote_interactive_command(
             }
         }
         eprintln!("replies {replies:?} exit {exit:?}");
-        ensure!(
-            replies == "echo:first\necho:second\n",
-            "unexpected replies {replies:?}"
-        );
+        ensure!(replies == "echo:first\necho:second\n", "unexpected replies {replies:?}");
         ensure!(
             matches!(exit, Some(CommandOutput::Exit { code: 0, .. })),
             "the command did not exit cleanly: {exit:?}"
