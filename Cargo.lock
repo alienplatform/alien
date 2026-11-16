@@ -376,6 +376,7 @@ dependencies = [
  "tempfile",
  "test-context",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "turso",
