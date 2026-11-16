@@ -574,6 +574,10 @@ async fn run_operator_cli(
         }
         _ => None,
     };
+    refuse_owned_secret_with_identity_store(
+        args.owned_secret.as_deref(),
+        args.identity_secret.as_deref(),
+    )?;
     let owned_values = load_owned_secret(
         args.owned_secret.as_deref(),
         &args.owned_secret_keys,
@@ -1883,6 +1887,22 @@ fn is_secret_file_mode_allowed(mode: u32) -> bool {
     has_owner_read && !has_owner_execute && !has_group_write_or_execute && !has_world_access
 }
 
+/// The Secret the Operator owns (database key and collector token) and the identity Secret are
+/// two ways to keep the Operator's state. With both set the owned Secret's key would win and
+/// the identity store would silently never be used, so the enrolled identity would not be
+/// kept outside the cache. Refuse the combination instead.
+fn refuse_owned_secret_with_identity_store(
+    owned_secret: Option<&str>,
+    identity_secret: Option<&str>,
+) -> Result<()> {
+    if owned_secret.is_some() && identity_secret.is_some() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "OPERATOR_OWNED_SECRET and OPERATOR_IDENTITY_SECRET are both set. Set only one: the chart for an install uses either the owned Secret or the identity Secret, not both.".to_string(),
+        }));
+    }
+    Ok(())
+}
+
 /// The values in the Secret the Operator owns, created first if they are missing. Empty when
 /// the chart names no such Secret (an Operator started with a key file or variable).
 async fn load_owned_secret(
@@ -2175,6 +2195,14 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[test]
+    fn an_owned_secret_with_an_identity_store_is_refused_not_silently_ignored() {
+        assert!(super::refuse_owned_secret_with_identity_store(Some("owned"), Some("id")).is_err());
+        assert!(super::refuse_owned_secret_with_identity_store(Some("owned"), None).is_ok());
+        assert!(super::refuse_owned_secret_with_identity_store(None, Some("id")).is_ok());
+        assert!(super::refuse_owned_secret_with_identity_store(None, None).is_ok());
+    }
+
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, load_operator_package_config,
         observe_only_initial_state, parse_operator_image_report, parse_operator_operations,
