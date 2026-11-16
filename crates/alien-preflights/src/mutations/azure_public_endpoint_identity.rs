@@ -198,6 +198,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_tcp_endpoint_listed_first_does_not_hide_the_https_one() {
+        let mut both = container("api", Some(ExposeProtocol::Tcp));
+        both.public_endpoints.push(PublicEndpoint {
+            name: "web".into(),
+            port: 8080,
+            protocol: ExposeProtocol::Http,
+            host_label: None,
+            wildcard_subdomains: false,
+        });
+        let state = StackState::new(Platform::Azure);
+        let stack = stack(vec![both]);
+        assert!(AzurePublicEndpointIdentityMutation.should_run(&stack, &state, &config()));
+        let stack = AzurePublicEndpointIdentityMutation
+            .mutate(stack, &state, &config())
+            .await
+            .unwrap();
+        assert!(stack.resources.contains_key("api-appgw-id"));
+    }
+
+    #[tokio::test]
     async fn only_azure_with_an_https_endpoint_runs() {
         let https = stack(vec![container("api", Some(ExposeProtocol::Http))]);
         let none = stack(vec![container("db", Some(ExposeProtocol::Tcp))]);

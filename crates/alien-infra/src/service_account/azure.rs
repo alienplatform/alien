@@ -139,7 +139,7 @@ pub struct AzureServiceAccountController {
     /// The client ID of the created user-assigned managed identity.
     pub identity_client_id: Option<String>,
     /// The principal ID of the created user-assigned managed identity.
-    pub(crate) identity_principal_id: Option<String>,
+    pub identity_principal_id: Option<String>,
     /// Resource IDs of created custom role definitions.
     pub(crate) custom_role_definition_ids: Vec<String>,
     /// Resource IDs of created role assignments.

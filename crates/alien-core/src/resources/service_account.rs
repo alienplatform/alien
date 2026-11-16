@@ -179,8 +179,11 @@ pub fn public_endpoint_identity_id(container_id: &str) -> String {
 /// needs a [`public_endpoint_identity_id`] identity.
 pub fn public_endpoint_identity_cluster(container: &crate::Container) -> Option<&str> {
     let cluster = container.cluster.as_deref()?;
-    let first = container.public_endpoints.first()?;
-    (first.protocol == crate::ExposeProtocol::Http).then_some(cluster)
+    container
+        .public_endpoints
+        .iter()
+        .any(|endpoint| endpoint.protocol == crate::ExposeProtocol::Http)
+        .then_some(cluster)
 }
 
 impl ServiceAccountBuilder {
