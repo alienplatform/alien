@@ -2399,6 +2399,8 @@ struct FakeEngine {
     /// How far Google's clock is behind this host's: sandboxes are stamped that much earlier than
     /// the host's `now`, as when the host clock runs ahead.
     google_behind: std::sync::Mutex<chrono::Duration>,
+    /// Sandboxes the list still shows as running after they stopped: a stop between a list and a read.
+    stale_listed: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 #[derive(Debug, Default)]
@@ -2440,6 +2442,9 @@ impl FakeEngine {
                 sandbox.state = new_state.to_string();
             }
         }
+    }
+    fn hide_state_from_list(&self, id: &str) {
+        self.stale_listed.lock().unwrap().insert(id.to_string());
     }
     fn lag_creates(&self, lags: &[u64]) {
         self.state
@@ -2522,7 +2527,13 @@ impl AgentPlatformApi for FakeEngine {
             .iter()
             .rev()
             .filter(|sandbox| sandbox.listed_from <= now)
-            .map(Self::record)
+            .map(|sandbox| {
+                let mut record = Self::record(sandbox);
+                if self.stale_listed.lock().unwrap().contains(&sandbox.id) {
+                    record.state = Some("STATE_RUNNING".to_string());
+                }
+                record
+            })
             .collect())
     }
     async fn list_sandboxes_by_display_name(
@@ -2789,6 +2800,11 @@ async fn a_race_of_two_converges_on_the_oldest_sandbox() {
     let engine = Arc::new(FakeEngine::default());
     engine.lag_creates(&[40, 40]);
     let results = race(&engine, "race", &[0, 5]).await;
+    assert_eq!(
+        engine.names().len(),
+        2,
+        "both callers created: this is a real duplicate race"
+    );
     assert_converged(&engine, &results);
     assert!(
         results[0].as_ref().unwrap().created,
@@ -2842,23 +2858,20 @@ async fn a_caller_waits_out_the_window_of_a_fresh_sandbox_before_returning_it() 
 #[tokio::test(start_paused = true)]
 async fn a_race_converges_while_the_older_agent_is_still_booting() {
     let engine = Arc::new(FakeEngine::default());
-    engine.lag_creates(&[0, 0]);
-    let older = provider_from(engine.clone())
-        .create(keyed("race-boot"))
-        .await
-        .unwrap();
+    // Both sandboxes are listed late, so neither caller sees the other on its first look and each
+    // creates: a real duplicate. The older one's agent is still booting when the newer caller
+    // re-checks and has to wait for it.
+    engine.lag_creates(&[40, 40]);
+    let older_id = (7_000_000_000_000_000_000u64 + 1).to_string();
     engine
         .silent_probes
         .lock()
         .unwrap()
-        .insert(older.sandbox_id.clone(), 3);
-    let newer = provider_from(engine.clone())
-        .get_or_create(keyed("race-boot"))
-        .await
-        .unwrap();
-    assert!(!newer.created);
-    assert_eq!(newer.sandbox.sandbox_id, older.sandbox_id);
-    assert_eq!(engine.live_ids(), vec![older.sandbox_id]);
+        .insert(older_id.clone(), 3);
+    let results = race(&engine, "race-boot", &[0, 5]).await;
+    assert_eq!(engine.names().len(), 2, "both callers created");
+    assert_converged(&engine, &results);
+    assert_eq!(engine.live_ids(), vec![older_id]);
 }
 
 /// The re-check after a create is retried; a failure that clears does not change the answer.
@@ -3033,4 +3046,66 @@ async fn duplicates_older_than_the_window_are_reported() {
         .await
         .unwrap();
     assert_eq!(duplicates_past_the_window(&both).len(), 2);
+}
+
+/// A sandbox that ends during the wait is not handed out as a running one.
+#[tokio::test(start_paused = true)]
+async fn a_created_sandbox_that_expired_during_the_wait_is_not_returned() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let mut request = keyed("short-lived");
+    request.timeout_ms = Some(10_000);
+    let call = tokio::spawn(async move { sut.get_or_create(request).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    engine.set_state(
+        &(7_000_000_000_000_000_000u64 + 1).to_string(),
+        "STATE_TERMINATED",
+    );
+    let result = call.await.unwrap();
+    assert!(
+        result.is_err(),
+        "an expired sandbox is not reported as created and running: {result:?}"
+    );
+}
+
+/// A lifetime shorter than the contention window is not waited out: the sandbox would end first.
+#[tokio::test(start_paused = true)]
+async fn the_wait_stays_inside_a_short_lifetime() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let mut request = keyed("short-wait");
+    request.timeout_ms = Some(10_000);
+    let started = tokio::time::Instant::now();
+    sut.get_or_create(request).await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "waited {:?}",
+        started.elapsed()
+    );
+}
+
+/// `get(key)` skips a sandbox that stops between the list and the read.
+#[tokio::test(start_paused = true)]
+async fn get_by_key_skips_a_sandbox_that_stopped_after_the_list() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let older = sut.get_or_create(keyed("stops")).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    let newer_id = {
+        // a second live sandbox for the same key (a missed duplicate)
+        let created = provider_from(engine.clone())
+            .create(keyed("stops"))
+            .await
+            .unwrap();
+        created.sandbox_id
+    };
+    engine.hide_state_from_list(&older.sandbox.sandbox_id);
+    engine.set_state(&older.sandbox.sandbox_id, "STATE_TERMINATED");
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    let found = sut
+        .get("stops")
+        .await
+        .unwrap()
+        .expect("the live one answers");
+    assert_eq!(found.sandbox_id, newer_id);
 }

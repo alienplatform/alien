@@ -1127,6 +1127,10 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 continue;
             };
             let state = sandbox_state(GET, sandbox.state.as_deref())?;
+            // Stopped between the list and this read: it does not answer the key.
+            if state == SandboxState::Terminated {
+                continue;
+            }
             // The key answers with the sandbox that holds it even when its agent does not, so a
             // caller that has only the key can still learn the id and terminate it. Such a
             // sandbox is reported with no generation, as any sandbox that is not usable is.
@@ -1177,8 +1181,15 @@ impl Sandbox for GcpAgentPlatformSandbox {
             return Ok(ResolvedSandbox::found(found));
         }
 
+        // A sandbox that lives shorter than the window cannot wait it out: it would end before the
+        // call returns. Its wait is capped at half its lifetime, and what that gives up (an older
+        // concurrent create the list shows late) is accepted for such short-lived sandboxes.
+        let wait = match self.lifetime_seconds(request.timeout_ms, GET_OR_CREATE)? {
+            Some(seconds) => CONTENTION_WINDOW.min(Duration::from_secs(u64::from(seconds)) / 2),
+            None => CONTENTION_WINDOW,
+        };
         let created = self.create(request).await?;
-        let decide_at = tokio::time::Instant::now() + CONTENTION_WINDOW;
+        let decide_at = tokio::time::Instant::now() + wait;
         let own = created.sandbox_id.clone();
 
         // Two callers can both have looked before either created. The oldest sandbox with the key
@@ -1218,7 +1229,23 @@ impl Sandbox for GcpAgentPlatformSandbox {
         };
         let outcome = self.reach_first(&candidates, Some(&own)).await;
         if matches!(outcome, Ok(None)) {
-            return Ok(ResolvedSandbox::created(created));
+            // The wait took time: the sandbox may have reached its lifetime meanwhile, and a
+            // terminal one is gone, not created.
+            return match self.read_sandbox(GET_OR_CREATE, &own).await? {
+                Some(sandbox)
+                    if sandbox_state(GET_OR_CREATE, sandbox.state.as_deref())?
+                        != SandboxState::Terminated =>
+                {
+                    Ok(ResolvedSandbox::created(created))
+                }
+                _ => Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxTerminated".to_string(),
+                    reason: format!(
+                        "sandbox '{own}' reached its lifetime while the call checked for a \
+                         concurrent create; retry, or ask for a longer timeout"
+                    ),
+                })),
+            };
         }
         // An older sandbox holds the key, whether or not it can be reached now: this one is the
         // duplicate either way and is deleted.
