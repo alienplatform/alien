@@ -75,7 +75,7 @@ fn syntax_and_shape_errors() {
         &format!("{DAEMON}hostaccess = true\n"),
         5,
         1,
-        "unknown key `hostaccess` (did you mean 'host-access'?); expected one of: build, command",
+        "unknown key `hostaccess` (did you mean 'host-access'?); expected one of: build, built-architectures, command",
     );
     assert_at(
         &format!("{DAEMON}cpu = [1]\n"),
@@ -99,13 +99,13 @@ fn syntax_and_shape_errors() {
         &format!("{DAEMON}health = {{ port = 8080 }}\n"),
         5,
         1,
-        "unknown key `health` (did you mean 'health-check'?); expected one of: build, command",
+        "unknown key `health` (did you mean 'health-check'?); expected one of: build, built-architectures, command",
     );
     assert_at(
         &format!("{DAEMON}host_access = true\n"),
         5,
         1,
-        "unknown key `host_access` (did you mean 'host-access'?); expected one of: build, command",
+        "unknown key `host_access` (did you mean 'host-access'?); expected one of: build, built-architectures, command",
     );
     assert_at(
         &DAEMON.replace("\"rust\"", "\"rusty\""),

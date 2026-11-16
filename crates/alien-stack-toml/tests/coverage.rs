@@ -153,6 +153,30 @@ const UNCOVERED: &[(&str, &str)] = &[
         "#Worker/runtime-identity-exchange",
         "Set by `alien build`; a value written in the stack definition is replaced",
     ),
+    (
+        "#Container/built-architectures",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
+    (
+        "#Container/built-architectures[]",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
+    (
+        "#Daemon/built-architectures",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
+    (
+        "#Daemon/built-architectures[]",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
+    (
+        "#Worker/built-architectures",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
+    (
+        "#Worker/built-architectures[]",
+        "Set by `alien build`; a value written in the stack definition is replaced",
+    ),
 ];
 
 #[test]
