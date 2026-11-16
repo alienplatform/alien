@@ -631,6 +631,13 @@ pub struct ResourceControllerContext<'a> {
 }
 
 impl ResourceControllerContext<'_> {
+    /// Whether this run is a setup run with direct setup authority: the one that creates a
+    /// Frozen resource itself, as opposed to adopting what a setup package created.
+    pub fn is_direct_setup_run(&self) -> bool {
+        self.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            && self.deployment_config.setup_run
+    }
+
     pub fn emit_heartbeat(&self, heartbeat: ResourceHeartbeat) {
         self.heartbeat_collector.emit(heartbeat);
     }

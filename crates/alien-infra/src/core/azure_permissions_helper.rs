@@ -203,6 +203,10 @@ impl AzurePermissionsHelper {
                         .iter()
                         .filter(|r| r.id().starts_with(&type_prefix))
                         .filter(|r| !is_worker_command_transport_permission(resource_type, r.id()))
+                        .filter(|r| {
+                            resource_type != "sandbox"
+                                || Self::wildcard_sandbox_set_reaches_group(ctx, resource_id, r)
+                        })
                         .cloned(),
                 );
             }
@@ -254,6 +258,25 @@ impl AzurePermissionsHelper {
         .await?;
 
         Ok(())
+    }
+
+    /// Whether a `"*"` entry's sandbox set is placed on this group. The setup's Terraform places
+    /// only the built-in sets that bind on a sandbox group and nowhere wider (`sandbox/execute`,
+    /// `sandbox/images`): a set with a stack binding is the service account's at the resource
+    /// group, one with no Azure section belongs to a profile shared across clouds, and a group
+    /// published for remote access belongs to its remote caller, so a `"*"` holder gets nothing
+    /// on it. Resolved by name, as the emitter does.
+    fn wildcard_sandbox_set_reaches_group(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        reference: &alien_core::permissions::PermissionSetReference,
+    ) -> bool {
+        let published = ctx
+            .desired_stack
+            .resources
+            .get(resource_id)
+            .is_some_and(|entry| entry.has_remote_bindings());
+        wildcard_sandbox_set_is_group_only(published, reference)
     }
 
     async fn apply_remote_bindings_permissions(
@@ -1951,5 +1974,51 @@ mod tests {
             ],
             "all deterministic assignment IDs must be available for cleanup after partial success"
         );
+    }
+}
+
+/// The rule behind `wildcard_sandbox_set_reaches_group`, free of the controller context.
+fn wildcard_sandbox_set_is_group_only(
+    published: bool,
+    reference: &alien_core::permissions::PermissionSetReference,
+) -> bool {
+    use alien_core::permissions::PermissionSetReference;
+    let PermissionSetReference::Name(name) = reference else {
+        return false;
+    };
+    !published
+        && alien_permissions::get_permission_set(name)
+            .and_then(|set| set.platforms.azure.as_ref())
+            .is_some_and(|bindings| {
+                bindings.iter().any(|b| b.binding.resource.is_some())
+                    && bindings.iter().all(|b| b.binding.stack.is_none())
+            })
+}
+
+#[cfg(test)]
+mod wildcard_sandbox_tests {
+    use super::wildcard_sandbox_set_is_group_only;
+    use alien_core::permissions::PermissionSetReference;
+
+    fn name(id: &str) -> PermissionSetReference {
+        PermissionSetReference::Name(id.to_string())
+    }
+
+    /// The customer's `"*": ["sandbox/execute", "sandbox/management", ...]` grant, held on every
+    /// sandbox group as the Terraform emitter places it: only the sets that bind on a group alone.
+    #[test]
+    fn a_wildcard_grant_reaches_only_the_group_only_sets_of_an_unpublished_group() {
+        for (id, reaches) in [
+            ("sandbox/execute", true),
+            ("sandbox/images", true),
+            ("sandbox/remote-execute", true),
+            ("sandbox/management", false),
+            ("sandbox/provision", false),
+            ("sandbox/heartbeat", false),
+            ("sandbox/bundle-write", false),
+        ] {
+            assert_eq!(wildcard_sandbox_set_is_group_only(false, &name(id)), reaches, "{id}");
+            assert!(!wildcard_sandbox_set_is_group_only(true, &name(id)), "{id} on a published group");
+        }
     }
 }

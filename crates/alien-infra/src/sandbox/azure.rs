@@ -98,6 +98,10 @@ pub struct AzureSandboxController {
     pub(crate) region: Option<String>,
     /// Resource group the sandbox group sits in.
     pub(crate) resource_group: Option<String>,
+    /// A direct setup created the group, so this controller deletes it. A group a Terraform
+    /// package imported is left to `terraform destroy`.
+    #[serde(default)]
+    pub(crate) created_group: bool,
     /// Catalog name or registry image every sandbox is created from, taken from the declaration's
     /// `code`. A registry image is set only once its disk image is Ready, so the binding never
     /// names one sessions cannot start from yet.
@@ -158,9 +162,16 @@ impl AzureSandboxController {
     async fn ensure_group(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        // Reached only when the import did not seed this controller at Ready, which means the
-        // setup package predates the group emitter. Creating one here would take ownership of a
-        // resource a regenerated package then creates under the same name.
+        // The import seeds this controller at Ready, so a controller that gets here holds no
+        // group. A direct setup (setup credentials, a setup run, no import record) creates it,
+        // as it creates every other Frozen resource. Anything else is a setup package that
+        // predates the group emitter: creating one would take ownership of a resource a
+        // regenerated package then creates under the same name.
+        let nothing_imported =
+            self.sandbox_group.is_none() && self.region.is_none() && self.resource_group.is_none();
+        if nothing_imported && ctx.is_direct_setup_run() {
+            return self.create_group(ctx, config).await;
+        }
         let (group, region, resource_group) =
             self.identity(&config.id)
                 .context(ErrorData::CloudPlatformError {
@@ -176,13 +187,76 @@ impl AzureSandboxController {
         info!(sandbox_id = %config.id, %group, "Azure sandbox group adopted");
 
         Ok(HandlerAction::Continue {
-            state: if matches!(config.egress, SandboxEgress::Internet) {
-                InitializingEgressKey
-            } else if self.pending_image(config).is_some() {
-                EnsureDiskImage
-            } else {
-                Ready
+            state: self.state_after_group(config),
+            suggested_delay: None,
+        })
+    }
+
+    /// A role assignment names the group, so the group has to be finished first.
+    #[handler(state = WaitingForGroup, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn waiting_for_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        let (group, _region, resource_group) = self.identity(&config.id)?;
+        let arm = ctx
+            .service_provider
+            .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
+        let observed = arm
+            .get_sandbox_group(&resource_group, &group)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read Azure sandbox group '{group}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
+        match observed
+            .properties
+            .and_then(|properties| properties.provisioning_state)
+            .as_deref()
+        {
+            Some("Succeeded") => Ok(HandlerAction::Continue {
+                state: ApplyingGroupPermissions,
+                suggested_delay: None,
+            }),
+            Some("Failed") | Some("Canceled") => Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("Azure sandbox group '{group}' failed to provision"),
+                resource_id: Some(config.id.clone()),
+            })),
+            _ => Ok(HandlerAction::Stay {
+                max_times: Some(60),
+                suggested_delay: Some(Duration::from_secs(5)),
+            }),
+        }
+    }
+
+    /// The grants setup's Terraform places on the group: the profiles' `sandbox/*` sets, the
+    /// management identity's, and the remote caller's, through the helper every other direct
+    /// setup resource uses.
+    #[handler(state = ApplyingGroupPermissions, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn applying_group_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        let (group, _region, resource_group) = self.identity(&config.id)?;
+        crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
+            ctx,
+            &config.id,
+            &group,
+            alien_azure_clients::authorization::Scope::Resource {
+                resource_group_name: resource_group,
+                resource_provider: "Microsoft.App".to_string(),
+                parent_resource_path: None,
+                resource_type: "sandboxGroups".to_string(),
+                resource_name: group.clone(),
             },
+            "Sandbox",
+            "sandbox",
+        )
+        .await?;
+        Ok(HandlerAction::Continue {
+            state: self.state_after_group(config),
             suggested_delay: None,
         })
     }
@@ -427,14 +501,82 @@ impl AzureSandboxController {
         on_failure = DeleteFailed,
         status = ResourceStatus::Deleting
     )]
-    async fn deleting(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
-        // The group is the setup stack's to destroy, and destroying it takes its sandboxes and
-        // disk images with it. A delete here would race `terraform destroy` and fail teardown on
-        // the 404 whichever call lost; the runtime's own grant does not carry the delete anyway.
+    async fn deleting(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        // A group a Terraform package created is that stack's to destroy, and destroying it takes
+        // its sandboxes and disk images with it. A delete here would race `terraform destroy` and
+        // fail teardown on the 404 whichever call lost. A group a direct setup created is this
+        // controller's: nothing else will remove it.
+        if self.created_group {
+            if let (Some(group), Some(resource_group)) =
+                (self.sandbox_group.as_ref(), self.resource_group.as_ref())
+            {
+                let arm = ctx
+                    .service_provider
+                    .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
+                match arm.delete_sandbox_group(resource_group, group).await {
+                    Ok(()) => {}
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) => {}
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!("Failed to delete Azure sandbox group '{group}'"),
+                            resource_id: Some(ctx.desired_config.id().to_string()),
+                        }))
+                    }
+                }
+                return Ok(HandlerAction::Continue {
+                    state: WaitingForGroupDeletion,
+                    suggested_delay: Some(Duration::from_secs(5)),
+                });
+            }
+        }
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
         })
+    }
+
+    /// Azure deletes the group asynchronously; the delete is confirmed by the read returning 404.
+    #[handler(state = WaitingForGroupDeletion, on_failure = DeleteFailed, status = ResourceStatus::Deleting)]
+    async fn waiting_for_group_deletion(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let (Some(group), Some(resource_group)) =
+            (self.sandbox_group.as_ref(), self.resource_group.as_ref())
+        else {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
+        let arm = ctx
+            .service_provider
+            .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
+        match arm.get_sandbox_group(resource_group, group).await {
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                })
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to confirm deletion of Azure sandbox group '{group}'"),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })),
+            Ok(_) => Ok(HandlerAction::Stay {
+                max_times: Some(120),
+                suggested_delay: Some(Duration::from_secs(5)),
+            }),
+        }
     }
 
     // ─────────────── TERMINAL STATES ──────────────────────────────────────
@@ -989,6 +1131,66 @@ impl AzureSandboxController {
         Ok((group, client))
     }
 
+    /// Creates the group with the setup credentials and waits for ARM to finish it.
+    async fn create_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Result<AzureSandboxHandlerAction> {
+        let azure_config = ctx.get_azure_config()?;
+        let region = azure_config.region.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "the Azure region is not set; set AZURE_REGION to create the sandbox group"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+        // The dedicated sandbox subnets an internet-egress group connects to are created by the
+        // setup package; a direct setup has no network that carries them.
+        if matches!(config.egress, SandboxEgress::Internet) {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: "an Azure sandbox with internet egress needs the dedicated sandbox \
+                          subnets the Terraform setup package creates; set it up with the \
+                          package, or declare egress none or allow"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        let resource_group = crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
+        let group = sandbox_group_name(ctx.resource_prefix, &config.id);
+        let arm = ctx
+            .service_provider
+            .get_azure_sandbox_groups_client(azure_config)?;
+        // An idempotent put: a retry after a failed setup finds the group and converges on it.
+        arm.create_or_update_sandbox_group(&resource_group, &group, &region)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create Azure sandbox group '{group}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
+        self.capture_session_inputs(config)?;
+        self.sandbox_group = Some(group.clone());
+        self.region = Some(region);
+        self.resource_group = Some(resource_group);
+        self.created_group = true;
+        info!(sandbox_id = %config.id, %group, "Azure sandbox group created");
+        Ok(AzureSandboxHandlerAction::Continue {
+            state: AzureSandboxState::WaitingForGroup,
+            suggested_delay: None,
+        })
+    }
+
+    /// Where the create flow goes once the group is held.
+    fn state_after_group(&self, config: &Sandbox) -> AzureSandboxState {
+        if matches!(config.egress, SandboxEgress::Internet) {
+            AzureSandboxState::InitializingEgressKey
+        } else if self.pending_image(config).is_some() {
+            AzureSandboxState::EnsureDiskImage
+        } else {
+            AzureSandboxState::Ready
+        }
+    }
+
     fn identity(&self, sandbox_id: &str) -> Result<(String, String, String)> {
         match (
             self.sandbox_group.clone(),
@@ -1022,6 +1224,14 @@ impl AzureSandboxController {
             }
         }
     }
+}
+
+/// The group's name, the one the Terraform setup package derives from the same prefix and id:
+/// lowercase, with `_` as `-`, because Azure rejects what a deployer's prefix may carry.
+fn sandbox_group_name(resource_prefix: &str, sandbox_id: &str) -> String {
+    format!("{resource_prefix}-{sandbox_id}")
+        .to_lowercase()
+        .replace('_', "-")
 }
 
 /// The proxy's `deployment` Basic credentials, only for a reference on the proxy's own host: a
@@ -1111,6 +1321,7 @@ mod tests {
             egress_public_key: None,
             egress_config_digest: None,
             egress_replica_secret_ready: false,
+            created_group: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1168,6 +1379,7 @@ mod tests {
             egress_public_key: None,
             egress_config_digest: None,
             egress_replica_secret_ready: false,
+            created_group: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1335,6 +1547,7 @@ mod tests {
             egress_public_key: None,
             egress_config_digest: None,
             egress_replica_secret_ready: false,
+            created_group: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1388,6 +1601,7 @@ mod tests {
             egress_public_key: None,
             egress_config_digest: None,
             egress_replica_secret_ready: false,
+            created_group: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1449,6 +1663,7 @@ mod tests {
             egress_public_key: None,
             egress_config_digest: None,
             egress_replica_secret_ready: false,
+            created_group: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1487,6 +1702,7 @@ mod tests {
             egress_public_key: None,
             egress_config_digest: None,
             egress_replica_secret_ready: false,
+            created_group: false,
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1599,6 +1815,7 @@ mod tests {
                 egress_public_key: None,
                 egress_config_digest: None,
                 egress_replica_secret_ready: false,
+                created_group: false,
                 default_policy: None,
                 _internal_stay_count: None,
             }
@@ -2707,3 +2924,255 @@ mod tests {
 #[cfg(all(test, feature = "local"))]
 #[path = "azure_gateway_tests.rs"]
 mod gateway_tests;
+
+#[cfg(test)]
+mod direct_setup_tests {
+    use super::*;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use crate::infra_requirements::AzureResourceGroupController;
+    use alien_azure_clients::authorization::MockAuthorizationApi;
+    use alien_azure_clients::sandbox_data_plane::MockSandboxDataPlaneApi;
+    use alien_azure_clients::sandbox_groups::{
+        MockSandboxGroupsApi, SandboxGroup, SandboxGroupProperties,
+    };
+    use alien_core::{
+        AzureResourceGroup, InitialSetupAuthority, Platform, ResourceLifecycle, SandboxCode,
+        SandboxLifecyclePolicy,
+    };
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    fn sandbox(egress: SandboxEgress) -> Sandbox {
+        Sandbox::new("box_one".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu".to_string(),
+                bundled_from: None,
+            })
+            .egress(egress)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    }
+
+    fn group(state: &str) -> SandboxGroup {
+        SandboxGroup {
+            id: None,
+            name: None,
+            location: "eastus".to_string(),
+            properties: Some(SandboxGroupProperties {
+                provisioning_state: Some(state.to_string()),
+            }),
+        }
+    }
+
+    fn not_found() -> alien_client_core::Error {
+        AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+            resource_type: "SandboxGroup".to_string(),
+            resource_name: "g".to_string(),
+        })
+    }
+
+    async fn executor(
+        controller: AzureSandboxController,
+        groups: MockSandboxGroupsApi,
+        setup_run: bool,
+        egress: SandboxEgress,
+    ) -> SingleControllerExecutor {
+        let groups: Arc<dyn alien_azure_clients::sandbox_groups::SandboxGroupsApi> =
+            Arc::new(groups);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_sandbox_groups_client()
+            .returning(move |_| Ok(groups.clone()));
+        provider
+            .expect_get_azure_authorization_client()
+            .returning(|_| Ok(Arc::new(MockAuthorizationApi::new())));
+        provider
+            .expect_get_azure_sandbox_data_plane_client()
+            .returning(|_, _, _| {
+                let mut client = MockSandboxDataPlaneApi::new();
+                client.expect_list_sandboxes().returning(|_| Ok(Vec::new()));
+                client
+                    .expect_list_disk_images()
+                    .returning(|_| Ok(Vec::new()));
+                Ok(Arc::new(client))
+            });
+        SingleControllerExecutor::builder()
+            .resource(sandbox(egress))
+            .resource_prefix("Test_Prefix")
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(controller)
+            .platform(Platform::Azure)
+            .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+            .setup_run(setup_run)
+            .with_dependency(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                AzureResourceGroupController::mock_ready("default-resource-group"),
+            )
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    async fn drive(executor: &mut SingleControllerExecutor) {
+        for _ in 0..12 {
+            if executor.step().await.is_err() {
+                break;
+            }
+        }
+    }
+
+    /// A direct setup records the group, region and resource group, as an import does, and the
+    /// name is the one the Terraform package derives from the same prefix and id.
+    #[tokio::test]
+    async fn a_direct_setup_creates_and_records_the_group() {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_create_or_update_sandbox_group()
+            .withf(|rg, name, location| {
+                rg == "default-resource-group" && name == "test-prefix-box-one" && location == "eastus"
+            })
+            .times(1)
+            .returning(|_, _, _| Ok(group("Creating")));
+        let polls = Arc::new(AtomicU32::new(0));
+        let seen = polls.clone();
+        groups.expect_get_sandbox_group().returning(move |_, _| {
+            // Still creating on the first read, as ARM is, then finished.
+            Ok(group(if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                "Creating"
+            } else {
+                "Succeeded"
+            }))
+        });
+        let mut executor = executor(
+            AzureSandboxController::default(),
+            groups,
+            true,
+            SandboxEgress::None,
+        )
+        .await;
+        drive(&mut executor).await;
+        let controller = executor.internal_state::<AzureSandboxController>().unwrap();
+        assert_eq!(controller.sandbox_group.as_deref(), Some("test-prefix-box-one"));
+        assert_eq!(controller.region.as_deref(), Some("eastus"));
+        assert_eq!(controller.resource_group.as_deref(), Some("default-resource-group"));
+        assert!(controller.created_group);
+        assert!(polls.load(Ordering::SeqCst) >= 2, "waits for the group to finish");
+    }
+
+    /// A group a Terraform package created arrives through its import and is adopted: this
+    /// controller never calls create.
+    #[tokio::test]
+    async fn an_imported_group_is_adopted_not_created() {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups.expect_create_or_update_sandbox_group().times(0);
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let imported = AzureSandboxController {
+            sandbox_group: Some("tf-group".to_string()),
+            region: Some("westus2".to_string()),
+            resource_group: Some("rg".to_string()),
+            ..Default::default()
+        };
+        let mut executor = executor(imported, groups, true, SandboxEgress::None).await;
+        drive(&mut executor).await;
+        let controller = executor.internal_state::<AzureSandboxController>().unwrap();
+        assert_eq!(controller.sandbox_group.as_deref(), Some("tf-group"));
+        assert!(!controller.created_group);
+    }
+
+    /// Outside a setup run nothing is created, and the failure says what to do, as before.
+    #[tokio::test]
+    async fn a_runtime_run_with_no_group_refuses_to_create_one() {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups.expect_create_or_update_sandbox_group().times(0);
+        let mut executor = executor(
+            AzureSandboxController::default(),
+            groups,
+            false,
+            SandboxEgress::None,
+        )
+        .await;
+        drive(&mut executor).await;
+        let controller = executor.internal_state::<AzureSandboxController>().unwrap();
+        assert!(controller.sandbox_group.is_none());
+        assert_ne!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// A retry after a failed setup finds the group where the failed run left it and converges.
+    #[tokio::test]
+    async fn a_retry_converges_on_the_group_the_failed_run_made() {
+        for _ in 0..2 {
+            let mut executor = executor(
+                AzureSandboxController::default(),
+                {
+                    let mut again = MockSandboxGroupsApi::new();
+                    again
+                        .expect_create_or_update_sandbox_group()
+                        .times(1)
+                        .returning(|_, _, _| Ok(group("Succeeded")));
+                    again
+                        .expect_get_sandbox_group()
+                        .returning(|_, _| Ok(group("Succeeded")));
+                    again
+                },
+                true,
+                SandboxEgress::None,
+            )
+            .await;
+            drive(&mut executor).await;
+            let controller = executor.internal_state::<AzureSandboxController>().unwrap();
+            assert_eq!(controller.sandbox_group.as_deref(), Some("test-prefix-box-one"));
+        }
+    }
+
+    /// An internet-egress group connects to subnets only the package creates, so a direct setup
+    /// says so rather than creating a group that cannot reach them.
+    #[tokio::test]
+    async fn an_internet_egress_group_needs_the_package() {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups.expect_create_or_update_sandbox_group().times(0);
+        let mut executor = executor(
+            AzureSandboxController::default(),
+            groups,
+            true,
+            SandboxEgress::Internet,
+        )
+        .await;
+        drive(&mut executor).await;
+        assert_ne!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// Delete removes a group this controller created, and leaves an imported one to its package.
+    #[tokio::test]
+    async fn delete_removes_only_a_group_it_created() {
+        for (created, deletes) in [(true, 1usize), (false, 0usize)] {
+            let mut groups = MockSandboxGroupsApi::new();
+            groups
+                .expect_delete_sandbox_group()
+                .times(deletes)
+                .returning(|_, _| Ok(()));
+            groups
+                .expect_get_sandbox_group()
+                .returning(|_, _| Err(not_found()));
+            let controller = AzureSandboxController {
+                state: AzureSandboxState::Ready,
+                sandbox_group: Some("g".to_string()),
+                region: Some("eastus".to_string()),
+                resource_group: Some("rg".to_string()),
+                created_group: created,
+                ..Default::default()
+            };
+            let mut executor = executor(controller, groups, true, SandboxEgress::None).await;
+            executor.delete().expect("delete is accepted");
+            executor
+                .run_until_status(ResourceStatus::Deleted)
+                .await
+                .expect("the delete finishes");
+        }
+    }
+}

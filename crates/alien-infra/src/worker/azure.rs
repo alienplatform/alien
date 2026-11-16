@@ -8197,6 +8197,7 @@ mod tests {
                 egress_public_key: None,
                 egress_config_digest: None,
                 egress_replica_secret_ready: false,
+                created_group: false,
                 default_policy: None,
                 _internal_stay_count: None,
             }

@@ -24,14 +24,12 @@ enum TestVault<'a> {
 async fn executor(
     directory: &std::path::Path,
     wrong_source: bool,
-    earlier_live: bool,
     settings: NetworkSettings,
 ) -> SingleControllerExecutor {
     executor_with(
         TestVault::Local(directory),
         None,
         wrong_source,
-        earlier_live,
         settings,
     )
     .await
@@ -41,7 +39,6 @@ async fn executor_with(
     vault: TestVault<'_>,
     controller: Option<AzureSandboxController>,
     wrong_source: bool,
-    earlier_live: bool,
     settings: NetworkSettings,
 ) -> SingleControllerExecutor {
     let (network, vnet, nsg, nat, public) = fixture();
@@ -144,22 +141,6 @@ async fn executor_with(
                 )
         }
     };
-    if earlier_live {
-        builder = builder.with_stack_resource(
-            Sandbox::new("aaa-live".into())
-                .code(SandboxCode::Image {
-                    image: "ubuntu".into(),
-                    bundled_from: None,
-                })
-                .egress(SandboxEgress::Internet)
-                .lifecycle(alien_core::SandboxLifecyclePolicy {
-                    max_lifetime_seconds: None,
-                    idle_pause_seconds: None,
-                })
-                .build(),
-            ResourceLifecycle::Live,
-        );
-    }
     builder.build().await.unwrap()
 }
 
@@ -174,7 +155,7 @@ fn created() -> NetworkSettings {
 async fn actual_controller_initializes_shared_key_and_publishes_only_after_network_checks() {
     let dir = tempfile::tempdir().unwrap();
     let vault = LocalVault::new("secrets".into(), dir.path().into());
-    let mut run = executor(dir.path(), false, false, created()).await;
+    let mut run = executor(dir.path(), false, created()).await;
     run.step().await.unwrap();
     let controller = run.internal_state::<AzureSandboxController>().unwrap();
     assert_eq!(controller.state, AzureSandboxState::PublishingEgressConfig);
@@ -336,7 +317,6 @@ async fn the_owner_never_reads_a_value_from_key_vault() {
         TestVault::KeyVault(server.base_url()),
         None,
         false,
-        false,
         created(),
     )
     .await;
@@ -404,7 +384,6 @@ async fn the_owner_never_reads_a_value_from_key_vault() {
             ..updated
         }),
         false,
-        false,
         created(),
     )
     .await;
@@ -435,7 +414,7 @@ async fn the_owner_never_reads_a_value_from_key_vault() {
 async fn actual_connection_mismatch_prevents_config_and_binding_publication() {
     let dir = tempfile::tempdir().unwrap();
     let vault = LocalVault::new("secrets".into(), dir.path().into());
-    let mut run = executor(dir.path(), true, false, created()).await;
+    let mut run = executor(dir.path(), true, created()).await;
     run.step().await.unwrap();
     let error = run
         .step()
@@ -455,30 +434,9 @@ async fn actual_connection_mismatch_prevents_config_and_binding_publication() {
 }
 
 #[tokio::test]
-async fn frozen_controller_initializes_key_before_earlier_live_sandbox() {
-    let dir = tempfile::tempdir().unwrap();
-    let vault = LocalVault::new("secrets".into(), dir.path().into());
-    let mut run = executor(dir.path(), false, true, created()).await;
-    run.step().await.unwrap();
-    assert_eq!(
-        run.internal_state::<AzureSandboxController>()
-            .unwrap()
-            .state,
-        AzureSandboxState::PublishingEgressConfig
-    );
-    assert!(!vault
-        .get_secret(crate::sandbox::egress::SIGNING_KEY)
-        .await
-        .unwrap()
-        .is_empty());
-}
-
-// Azure has no default VNet: UseDefault creates the same managed VNet, subnets and NAT
-// as Create, so publication must not apply AWS's default-VPC refusal.
-#[tokio::test]
 async fn default_network_settings_publish_like_a_created_network() {
     let dir = tempfile::tempdir().unwrap();
-    let mut run = executor(dir.path(), false, false, NetworkSettings::UseDefault).await;
+    let mut run = executor(dir.path(), false, NetworkSettings::UseDefault).await;
     run.step().await.unwrap();
     run.step().await.unwrap();
     let controller = run.internal_state::<AzureSandboxController>().unwrap();

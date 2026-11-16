@@ -87,6 +87,7 @@ impl ResourceImporter for AzureSandboxImporter {
             egress_public_key: None,
             egress_config_digest: None,
             egress_replica_secret_ready: false,
+            created_group: false,
             default_policy: sandbox.default_policy.clone(),
             _internal_stay_count: None,
         };
