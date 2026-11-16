@@ -1097,10 +1097,13 @@ impl CommandServer {
             let scanned = wait
                 .scan_in_turn(woken_at.take(), || async {
                     let result = self
-                        .acquire_lease_once(deployment_id, lease_request, authority_deadline, true)
+                        .acquire_lease_scan(deployment_id, lease_request, authority_deadline, true)
                         .await;
-                    let found_nothing = matches!(&result, Ok(r) if r.leases.is_empty());
-                    (result, found_nothing)
+                    // Only a scan that reached the end of the queue may stop
+                    // the other waiters' scans; one that stopped at its limit
+                    // may have missed a command a larger request would reach.
+                    let found_nothing = matches!(&result, Ok((r, true)) if r.leases.is_empty());
+                    (result.map(|(response, _)| response), found_nothing)
                 })
                 .await;
             match scanned {
@@ -1193,6 +1196,27 @@ impl CommandServer {
         authority_deadline: Option<DateTime<Utc>>,
         consistent_scan: bool,
     ) -> Result<LeaseResponse> {
+        self.acquire_lease_scan(
+            deployment_id,
+            lease_request,
+            authority_deadline,
+            consistent_scan,
+        )
+        .await
+        .map(|(response, _)| response)
+    }
+
+    /// One scan and lease attempt. The flag says whether the scan reached the
+    /// end of the target's queue (it saw fewer entries than its limit and no
+    /// more pages), so an empty answer means the queue holds nothing for
+    /// anyone, not only nothing within this request's limit.
+    async fn acquire_lease_scan(
+        &self,
+        deployment_id: &str,
+        lease_request: &LeaseRequest,
+        authority_deadline: Option<DateTime<Utc>>,
+        consistent_scan: bool,
+    ) -> Result<(LeaseResponse, bool)> {
         if let Some(deadline) = authority_deadline {
             self.remaining_authority(deadline)?;
         }
@@ -1219,6 +1243,8 @@ impl CommandServer {
             message: "Failed to scan for pending commands".to_string(),
         })?;
 
+        let reached_end = scan_result.next_cursor.is_none()
+            && scan_result.items.len() < lease_request.max_leases * 2;
         for entry in scan_result.items {
             let index_key = entry.key;
             if leases.len() >= lease_request.max_leases {
@@ -1426,7 +1452,7 @@ impl CommandServer {
             });
         }
 
-        Ok(LeaseResponse { leases })
+        Ok((LeaseResponse { leases }, reached_end))
     }
 
     /// Rewrite manager-origin URLs in a lease-served envelope to references

@@ -677,6 +677,52 @@ async fn eight_waiters_on_one_target_share_the_probe_and_serialize_their_scans()
     }
 }
 
+/// A scan that stopped at its limit did not see the whole queue, so its empty
+/// answer must not stop a larger request's scan. Two commands are already
+/// leased (and still indexed); a waiter with room for one lease sees only
+/// those two, a waiter with room for four reaches the third.
+#[tokio::test]
+async fn a_small_waiters_partial_empty_scan_does_not_hide_a_command_from_a_larger_waiter() {
+    let server = pull_server().await;
+    for _ in 0..2 {
+        server
+            .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+            .await
+            .unwrap();
+    }
+    let mut take_two = lease_request(&server, 0);
+    take_two.max_leases = 2;
+    let held = client(&server);
+    assert_eq!(held.acquire(&take_two).await.unwrap().len(), 2);
+
+    // The small waiter registers first, so it scans first after the wake-up.
+    let small = {
+        let (c, r) = (client(&server), lease_request(&server, 20));
+        tokio::spawn(async move { c.acquire(&r).await })
+    };
+    wait_for_open_waits(&server, 1).await;
+    let large = {
+        let (c, mut r) = (client(&server), lease_request(&server, 20));
+        r.max_leases = 4;
+        tokio::spawn(async move { c.acquire(&r).await })
+    };
+    wait_for_open_waits(&server, 2).await;
+
+    let started = Instant::now();
+    server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+        .await
+        .unwrap();
+    let leased = tokio::time::timeout(Duration::from_secs(3), large)
+        .await
+        .expect("the larger waiter was left to the end of its wait")
+        .unwrap()
+        .unwrap();
+    assert_eq!(leased.len(), 1);
+    println!("larger waiter leased after {:?}", started.elapsed());
+    small.abort();
+}
+
 #[tokio::test]
 async fn a_released_lease_wakes_a_parked_waiter() {
     let server = server_with_probe_and_faults().await;
