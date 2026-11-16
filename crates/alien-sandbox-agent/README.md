@@ -370,6 +370,14 @@ not evict a live session; idle pool pods carry neither and stay evictable. A cla
 holds its node until its session ends: with no `maxLifetimeSeconds` declared and no `timeoutMs` on
 the create, a session has no deadline and keeps its node until it is terminated.
 
+## Kubernetes Operator restarts and capacity
+
+The sandbox broker runs inside the Operator pod. While the Operator restarts (for example on every
+release), sandboxes keep running, but calls to the broker fail with a retryable
+`REMOTE_SERVICE_UNAVAILABLE` error for up to about a minute. The bindings do not retry for you;
+retry the call. Size nodes for the warm pool plus live sessions: one 4-vCPU Kata node held about
+three default sandbox pods (2Gi each plus about 600Mi runtime overhead).
+
 ## Bootstrap file protection
 
 Before any image code starts, the agent creates a private mount namespace and

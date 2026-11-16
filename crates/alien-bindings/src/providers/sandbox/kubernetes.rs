@@ -105,6 +105,18 @@ enum Lookup {
     Unsupported,
 }
 
+/// The broker runs inside the Operator pod, so while the Operator restarts (every release) its
+/// connections are refused for tens of seconds. Running sandboxes are unaffected; the call is
+/// worth repeating, so the error is retryable.
+fn broker_unreachable(operation: &str) -> ErrorData {
+    ErrorData::RemoteServiceUnavailable {
+        operation_context: operation.to_string(),
+        details:
+            "the sandbox broker is unreachable; the Operator is restarting, retry in a few seconds"
+                .to_string(),
+    }
+}
+
 /// Asks the broker for a session and a fresh capability.
 async fn lookup_claim(client: &reqwest::Client, url: &str, token: &str) -> Result<Lookup> {
     let response = client
@@ -113,10 +125,7 @@ async fn lookup_claim(client: &reqwest::Client, url: &str, token: &str) -> Resul
         .send()
         .await
         .into_alien_error()
-        .context(ErrorData::OperationNotSupported {
-            operation: "sandbox.get".to_string(),
-            reason: "the sandbox broker is unreachable".to_string(),
-        })?;
+        .context(broker_unreachable("sandbox.get"))?;
 
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(Lookup::NotFound);
@@ -460,10 +469,7 @@ impl KubernetesSandbox {
                 .send()
                 .await
                 .into_alien_error()
-                .context(ErrorData::OperationNotSupported {
-                    operation: "sandbox.create".to_string(),
-                    reason: "the sandbox broker is unreachable".to_string(),
-                })?;
+                .context(broker_unreachable("sandbox.create"))?;
             Ok::<_, AlienError<ErrorData>>(response.status())
         }
         .await;
@@ -514,10 +520,7 @@ impl KubernetesSandbox {
             .send()
             .await
             .into_alien_error()
-            .context(ErrorData::OperationNotSupported {
-                operation: "sandbox.create".to_string(),
-                reason: "the sandbox broker is unreachable".to_string(),
-            })?;
+            .context(broker_unreachable("sandbox.create"))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -780,10 +783,7 @@ impl Sandbox for KubernetesSandbox {
             .send()
             .await
             .into_alien_error()
-            .context(ErrorData::OperationNotSupported {
-                operation: "sandbox.list".to_string(),
-                reason: "the sandbox broker is unreachable".to_string(),
-            })?;
+            .context(broker_unreachable("sandbox.list"))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -880,10 +880,7 @@ impl Sandbox for KubernetesSandbox {
             .send()
             .await
             .into_alien_error()
-            .context(ErrorData::OperationNotSupported {
-                operation: "sandbox.preview".to_string(),
-                reason: "the sandbox broker is unreachable".to_string(),
-            })?;
+            .context(broker_unreachable("sandbox.preview"))?;
         if !response.status().is_success() {
             let status = response.status();
             let reason = if status == reqwest::StatusCode::FORBIDDEN {
@@ -955,10 +952,7 @@ impl Sandbox for KubernetesSandbox {
             .send()
             .await
             .into_alien_error()
-            .context(ErrorData::OperationNotSupported {
-                operation: "sandbox.terminate".to_string(),
-                reason: "the sandbox broker is unreachable".to_string(),
-            })?;
+            .context(broker_unreachable("sandbox.terminate"))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1007,6 +1001,31 @@ mod tests {
             .any(|name| name.eq_ignore_ascii_case("authorization")));
         assert_eq!(headers["x-alien-preview-capability"], "cap");
         assert_eq!(headers["x-alien-preview-port"], "8081");
+    }
+
+    /// The broker lives in the Operator pod, so a restart refuses connections for tens of seconds.
+    /// That is a wait, not an unsupported operation: the caller must be told it can retry.
+    #[tokio::test]
+    async fn an_unreachable_broker_is_a_retryable_error_that_says_the_operator_is_restarting() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let error = lookup_claim(
+            &reqwest::Client::new(),
+            &format!("http://127.0.0.1:{port}/sessions/s1"),
+            "token",
+        )
+        .await
+        .err()
+        .expect("nothing listens on that port");
+
+        assert!(error.retryable, "an unreachable broker must be retryable");
+        assert!(
+            error.message.contains("Operator is restarting"),
+            "the message says why and what to do: {}",
+            error.message
+        );
     }
 
     /// An Operator that predates `tenantKey` and `timeoutMs` rejects unknown fields, so a caller
