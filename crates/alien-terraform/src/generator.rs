@@ -25,7 +25,7 @@ use crate::{
 };
 use alien_core::{
     import::{setup_import_format_version_for_platform, EmitContext},
-    ComputeCluster, DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
+    DeploymentModel, ErrorData, HeartbeatsMode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesSettings, Kv, Network, NetworkSettings, RemoteBindings,
     RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
     StackInputDefinition, StackInputKind, StackInputProvider, StackInputValidation, StackSettings,
@@ -426,22 +426,8 @@ pub(crate) fn render_terraform_module(
         if !alien_core::emits_package_scaffolding(
             resource,
             stack_settings.setup_management,
-            platform,
+            alien_core::SetupTarget::from_cloud(platform, target.is_kubernetes()),
         ) {
-            continue;
-        }
-
-        // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not
-        // cloud infrastructure. Emitter lookup keys off the cloud the cluster runs in, so
-        // without this an EKS install would provision the MicroVM image, connector, security
-        // group and roles of the AWS backend it never uses — and refuse `egress: allow`, which
-        // Kubernetes supports, with advice about a platform the customer did not choose.
-        // ComputeCluster is also Kubernetes-native: the operator validates its
-        // logical pools without provisioning a second cloud machine fleet.
-        if target.is_kubernetes()
-            && (resource_type == Sandbox::RESOURCE_TYPE
-                || resource_type == ComputeCluster::RESOURCE_TYPE)
-        {
             continue;
         }
 

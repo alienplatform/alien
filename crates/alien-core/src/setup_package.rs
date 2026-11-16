@@ -1,6 +1,6 @@
 use crate::{
-    ownership_policy_for_resource_type, ErrorData, Key, ManagementPermissions, Platform,
-    ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack, Storage,
+    ownership_policy_for_resource_type, ComputeCluster, ErrorData, Key, ManagementPermissions,
+    Platform, ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack, Storage,
 };
 use alien_error::AlienError;
 
@@ -97,19 +97,78 @@ pub enum SetupConfigurationProfile {
     Advanced,
 }
 
-/// Automatic packages install access and secret storage, then let the runtime
-/// create application infrastructure. Cloud API activation and Azure's containing
-/// resource group must exist before their management identity can be installed.
-/// Azure also installs application identities so management can name their
-/// principals in the role-assignment conditions.
+/// Where a setup package installs: the platform the deployment runs on and the cloud its
+/// infrastructure lives in. They differ for managed Kubernetes (an EKS, GKE or AKS cluster runs
+/// on `Kubernetes`, in the `Aws`, `Gcp` or `Azure` cloud).
+///
+/// Every question about what a setup package emits and registers is answered from this, so the
+/// generators, the emitters and the manager's registration check cannot disagree about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetupTarget {
+    /// The platform the deployment runs on.
+    pub deployment_platform: Platform,
+    /// The cloud the setup's infrastructure lives in.
+    pub cloud_platform: Platform,
+}
+
+impl SetupTarget {
+    /// A target from a registration's `platform` and `basePlatform`.
+    pub fn new(deployment_platform: Platform, base_platform: Option<Platform>) -> Self {
+        Self {
+            deployment_platform,
+            cloud_platform: base_platform.unwrap_or(deployment_platform),
+        }
+    }
+
+    /// A target from the cloud and whether the setup installs onto a Kubernetes cluster in it.
+    pub fn from_cloud(cloud_platform: Platform, targets_kubernetes: bool) -> Self {
+        Self {
+            deployment_platform: if targets_kubernetes {
+                Platform::Kubernetes
+            } else {
+                cloud_platform
+            },
+            cloud_platform,
+        }
+    }
+
+    pub fn is_kubernetes(&self) -> bool {
+        self.deployment_platform == Platform::Kubernetes
+    }
+}
+
+/// Whether setup emits this resource and registers it with the manager.
+///
+/// This is the one rule. Both setup generators render exactly the resources it accepts, and the
+/// manager expects a registration to hold exactly those, so a change here moves all three
+/// together.
+///
+/// - On Kubernetes the cluster's own nodes and pods stand in for the cloud machines: a
+///   `ComputeCluster` is a set of logical pools the Operator validates, and a `Sandbox` is a pod.
+///   Setup creates no cloud infrastructure for either, whatever the cloud or whether the cluster
+///   is new or existing.
+/// - Automatic packages install access and secret storage, then let the runtime create
+///   application infrastructure. Cloud API activation and Azure's containing resource group must
+///   exist before their management identity can be installed. Azure also installs application
+///   identities so management can name their principals in the role-assignment conditions.
+/// - Manual packages emit what the resource's ownership policy says.
+///
+/// Whether a Kubernetes cluster is new or existing decides which resources the stack declares
+/// (the cluster and network mutations add or omit them), not which of them setup emits.
 pub fn emits_package_scaffolding(
     entry: &ResourceEntry,
     management: SetupManagement,
-    platform: Platform,
+    target: SetupTarget,
 ) -> bool {
     let resource_type = entry.config.resource_type();
+    if target.is_kubernetes()
+        && (resource_type == Sandbox::RESOURCE_TYPE
+            || resource_type == ComputeCluster::RESOURCE_TYPE)
+    {
+        return false;
+    }
     if management == SetupManagement::Automatic {
-        is_automatic_setup_package_resource_type(resource_type.as_ref(), platform)
+        is_automatic_setup_package_resource_type(resource_type.as_ref(), target.cloud_platform)
     } else {
         ownership_policy_for_resource_type(resource_type.as_ref())
             .emits_setup_scaffolding(entry.lifecycle)

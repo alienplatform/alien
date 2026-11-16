@@ -2177,7 +2177,7 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
             alien_core::emits_package_scaffolding(
                 entry,
                 req.stack_settings.setup_management,
-                req.base_platform.unwrap_or(req.platform),
+                alien_core::SetupTarget::new(req.platform, req.base_platform),
             )
         })
         .map(|(resource_id, _)| resource_id.as_str())
@@ -2511,7 +2511,7 @@ mod setup_update_authorization_tests {
                 alien_core::emits_package_scaffolding(
                     entry,
                     req.stack_settings.setup_management,
-                    Platform::Aws,
+                    alien_core::SetupTarget::new(req.platform, req.base_platform),
                 )
             })
             .map(|(id, entry)| ImportedResource {
