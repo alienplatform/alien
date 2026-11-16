@@ -610,6 +610,19 @@ impl AgentPlatformApi for WedgedAgent {
     async fn list_engines(&self) -> ClientResult<Vec<ReasoningEngine>> {
         unimplemented!()
     }
+    async fn get_engine_iam_policy(
+        &self,
+        _engine: &str,
+    ) -> ClientResult<alien_gcp_clients::iam::IamPolicy> {
+        unimplemented!()
+    }
+    async fn set_engine_iam_policy(
+        &self,
+        _engine: &str,
+        _policy: alien_gcp_clients::iam::IamPolicy,
+    ) -> ClientResult<alien_gcp_clients::iam::IamPolicy> {
+        unimplemented!()
+    }
     async fn create_template(
         &self,
         _engine: &str,
