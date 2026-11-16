@@ -343,6 +343,9 @@ pub struct SandboxEnvironment {
     /// Runtime state, e.g. `STATE_RUNNING`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    /// When the sandbox was created (RFC 3339); orders sandboxes that share a request key
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_time: Option<String>,
     /// Template the sandbox was cut from
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_environment_template: Option<String>,

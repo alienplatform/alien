@@ -35,6 +35,7 @@ fn sandbox_in_state(id: &str, state: &str) -> SandboxEnvironment {
         name: Some(sandbox_name(id)),
         display_name: None,
         state: Some(state.to_string()),
+        create_time: None,
         sandbox_environment_template: None,
         expire_time: None,
         connection_info: None,
@@ -285,7 +286,7 @@ async fn get_returns_none_when_the_sandbox_is_gone() {
         .returning(|_, _| Err(not_found()));
 
     let found = provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect("a gone sandbox is a valid answer");
     assert!(found.is_none(), "a not-found sandbox is None, not an error");
@@ -305,7 +306,7 @@ async fn get_does_not_report_a_running_sandbox_whose_agent_is_silent() {
         .returning(|_, _, _| Err(execute_refused()));
 
     let error = provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect_err("a running record with a silent agent is not a healthy sandbox");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
@@ -320,11 +321,11 @@ async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
     // The stale sandbox reads RUNNING but its agent is silent; the fresh one is healthy.
     client
         .expect_get_sandbox()
-        .withf(|_, sandbox| sandbox == "stale")
+        .withf(|_, sandbox| sandbox == "1002")
         .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
     client
         .expect_execute()
-        .withf(|_, sandbox, _| sandbox == "stale")
+        .withf(|_, sandbox, _| sandbox == "1002")
         .returning(|_, _, _| Err(execute_refused()));
 
     client.expect_create_sandbox().times(1).returning(|_, _| {
@@ -345,7 +346,7 @@ async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("stale".to_string()),
+            sandbox_id: Some("1002".to_string()),
             ..Default::default()
         })
         .await
@@ -381,13 +382,13 @@ async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("booting".to_string()),
+            sandbox_id: Some("1003".to_string()),
             ..Default::default()
         })
         .await
         .expect("a booting sandbox is waited for and handed back");
 
-    assert_eq!(sandbox.sandbox.sandbox_id, "booting");
+    assert_eq!(sandbox.sandbox.sandbox_id, "1003");
     assert_eq!(sandbox.sandbox.state, SandboxState::Running);
     assert!(
         !sandbox.created,
@@ -401,7 +402,7 @@ async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second
 async fn get_or_create_replaces_a_paused_sandbox_without_touching_it() {
     let mut client = MockAgentPlatformApi::new();
     client.expect_get_sandbox().returning(|_, id| {
-        if id == "paused" {
+        if id == "1004" {
             Ok(sandbox_in_state(id, "STATE_PAUSED"))
         } else {
             Ok(sandbox_in_state(id, "STATE_RUNNING"))
@@ -420,7 +421,7 @@ async fn get_or_create_replaces_a_paused_sandbox_without_touching_it() {
 
     let resolved = provider(client)
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("paused".to_string()),
+            sandbox_id: Some("1004".to_string()),
             ..Default::default()
         })
         .await
@@ -452,7 +453,7 @@ async fn get_or_create_waits_out_a_wake_someone_else_started() {
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("waking".to_string()),
+            sandbox_id: Some("1005".to_string()),
             ..Default::default()
         })
         .await
@@ -474,7 +475,7 @@ async fn generation_for_boot(boot_id: &'static str) -> u64 {
         .returning(move |_, _, _| Ok(health_reply_with_boot(boot_id)));
 
     provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect("a running sandbox")
         .expect("a present sandbox")
@@ -519,7 +520,7 @@ async fn get_refuses_an_agent_that_reports_an_empty_boot_id() {
         .returning(|_, _, _| Ok(health_reply_with_boot("")));
 
     let error = provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect_err("an empty boot id is no container identity");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
@@ -539,7 +540,7 @@ async fn get_refuses_an_agent_whose_health_omits_the_boot_id() {
     });
 
     let error = provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect_err("a health reply without a boot id is not usable");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
@@ -553,7 +554,7 @@ async fn get_refuses_an_agent_whose_health_omits_the_boot_id() {
 #[tokio::test(start_paused = true)]
 async fn get_does_not_hang_on_a_wedged_agent() {
     let error = provider_from(Arc::new(WedgedAgent::default()))
-        .get("s1")
+        .get("1001")
         .await
         .expect_err("a wedged agent is unreachable, not a hang");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
@@ -732,7 +733,7 @@ async fn a_state_word_outside_that_set_is_an_error_rather_than_a_guess() {
         });
 
         let error = provider(client)
-            .get("s1")
+            .get("1001")
             .await
             .expect_err("an unreadable state must not become a sandbox");
 
@@ -2369,4 +2370,306 @@ async fn terminate_drops_the_grants_of_a_sandbox_that_is_gone() {
     let grants = provider.grants.lock().unwrap();
     assert_eq!(grants.len(), 1, "{grants:?}");
     assert!(grants.contains_key(&("s2".to_string(), 8080)));
+}
+
+// ---- get_or_create and get by a caller's own key ----------------------------------------------
+
+/// An in-memory engine that behaves the way Google does for these calls: it mints numeric ids,
+/// keeps the display name it was given, orders sandboxes by creation time, answers 404 for an id
+/// that is gone, and answers 400 for an id that is not numeric.
+#[derive(Debug, Default)]
+struct FakeEngine {
+    state: std::sync::Mutex<FakeEngineState>,
+    /// The first this-many `list` calls answer as if nothing existed yet: two callers that both
+    /// looked before either created.
+    blind_lists: AtomicUsize,
+}
+
+#[derive(Debug, Default)]
+struct FakeEngineState {
+    next: u64,
+    sandboxes: Vec<(String, Option<String>, String)>, // id, display name, state
+    created_with: Vec<Option<String>>,
+}
+
+impl FakeEngine {
+    fn names(&self) -> Vec<Option<String>> {
+        self.state.lock().unwrap().created_with.clone()
+    }
+    fn live_ids(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .sandboxes
+            .iter()
+            .filter(|(_, _, state)| state == "STATE_RUNNING")
+            .map(|(id, _, _)| id.clone())
+            .collect()
+    }
+    fn set_state(&self, id: &str, new_state: &str) {
+        for (sid, _, state) in self.state.lock().unwrap().sandboxes.iter_mut() {
+            if sid == id {
+                *state = new_state.to_string();
+            }
+        }
+    }
+    fn record(id: &str, display: &Option<String>, state: &str, ordinal: u64) -> SandboxEnvironment {
+        let mut sandbox = sandbox_in_state(id, state);
+        sandbox.display_name = display.clone();
+        sandbox.create_time = Some(format!("2026-11-16T10:00:{:02}.123456Z", ordinal % 60));
+        sandbox
+    }
+}
+
+#[async_trait]
+impl AgentPlatformApi for FakeEngine {
+    async fn create_sandbox(
+        &self,
+        _engine: &str,
+        request: SandboxCreateRequest,
+    ) -> ClientResult<Operation> {
+        let mut state = self.state.lock().unwrap();
+        state.next += 1;
+        let id = (7_000_000_000_000_000_000u64 + state.next).to_string();
+        state.created_with.push(request.display_name.clone());
+        state.sandboxes.push((
+            id.clone(),
+            request.display_name,
+            "STATE_RUNNING".to_string(),
+        ));
+        Ok(done_op(serde_json::json!({ "name": sandbox_name(&id) })))
+    }
+    async fn get_sandbox(&self, _engine: &str, sandbox: &str) -> ClientResult<SandboxEnvironment> {
+        assert!(
+            sandbox.chars().all(|c| c.is_ascii_digit()),
+            "Google answers 400 for a non-numeric id, and a caller's key must never reach it: {sandbox}"
+        );
+        let state = self.state.lock().unwrap();
+        state
+            .sandboxes
+            .iter()
+            .enumerate()
+            .find(|(_, (id, _, _))| id == sandbox)
+            .map(|(ordinal, (id, display, st))| Self::record(id, display, st, ordinal as u64))
+            .ok_or_else(not_found)
+    }
+    async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
+        if self
+            .blind_lists
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Ok(Vec::new());
+        }
+        let state = self.state.lock().unwrap();
+        // Newest first, so a caller that trusts the listing order picks the wrong one.
+        Ok(state
+            .sandboxes
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(ordinal, (id, display, st))| Self::record(id, display, st, ordinal as u64))
+            .collect())
+    }
+    async fn delete_sandbox(&self, _engine: &str, sandbox: &str) -> ClientResult<()> {
+        self.state
+            .lock()
+            .unwrap()
+            .sandboxes
+            .retain(|(id, _, _)| id != sandbox);
+        Ok(())
+    }
+    async fn execute(&self, _engine: &str, _sandbox: &str, _input: &[u8]) -> ClientResult<Vec<u8>> {
+        Ok(health_reply())
+    }
+    async fn create_engine(&self, _display_name: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn delete_engine(&self, _engine: &str) -> ClientResult<()> {
+        unimplemented!()
+    }
+    async fn list_engines(&self) -> ClientResult<Vec<ReasoningEngine>> {
+        unimplemented!()
+    }
+    async fn create_template(
+        &self,
+        _engine: &str,
+        _template: SandboxEnvironmentTemplate,
+    ) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn get_template(
+        &self,
+        _engine: &str,
+        _template: &str,
+    ) -> ClientResult<SandboxEnvironmentTemplate> {
+        unimplemented!()
+    }
+    async fn delete_template(&self, _engine: &str, _template: &str) -> ClientResult<()> {
+        unimplemented!()
+    }
+    async fn list_templates(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironmentTemplate>> {
+        unimplemented!()
+    }
+    async fn snapshot(
+        &self,
+        _engine: &str,
+        _sandbox: &str,
+        _display_name: &str,
+    ) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn get_operation(&self, _name: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+}
+
+fn keyed(key: &str) -> CreateSandboxRequest {
+    CreateSandboxRequest {
+        sandbox_id: Some(key.to_string()),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn a_second_get_or_create_with_the_same_key_finds_the_first() {
+    let engine = Arc::new(FakeEngine::default());
+    let first = provider_from(engine.clone())
+        .get_or_create(keyed("engine-1111"))
+        .await
+        .unwrap();
+    let second = provider_from(engine.clone())
+        .get_or_create(keyed("engine-1111"))
+        .await
+        .unwrap();
+    assert!(first.created);
+    assert!(!second.created, "the key already names a sandbox");
+    assert_eq!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(engine.live_ids().len(), 1, "one sandbox, not two");
+}
+
+#[tokio::test]
+async fn different_keys_get_different_sandboxes() {
+    let engine = Arc::new(FakeEngine::default());
+    let a = provider_from(engine.clone())
+        .get_or_create(keyed("a"))
+        .await
+        .unwrap();
+    let b = provider_from(engine.clone())
+        .get_or_create(keyed("b"))
+        .await
+        .unwrap();
+    assert!(b.created);
+    assert_ne!(a.sandbox.sandbox_id, b.sandbox.sandbox_id);
+}
+
+/// The key goes to Google only as its hash, never raw: it is caller-supplied, and the display name
+/// is what a later list matches on.
+#[tokio::test]
+async fn the_raw_key_never_reaches_google() {
+    let engine = Arc::new(FakeEngine::default());
+    let key = "engine-5f3a";
+    provider_from(engine.clone())
+        .get_or_create(keyed(key))
+        .await
+        .unwrap();
+    for name in engine.names() {
+        let name = name.expect("a keyed create is stamped");
+        assert!(!name.contains("engine") && !name.contains('"'), "{name}");
+        assert!(name.ends_with(&request_key(key)), "{name}");
+    }
+}
+
+/// Two callers both looked before either created, so each made a sandbox. The newer one is
+/// terminated and both callers end with the oldest.
+#[tokio::test]
+async fn a_race_converges_on_the_oldest_sandbox() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.blind_lists.store(2, Ordering::SeqCst);
+    let first = provider_from(engine.clone())
+        .get_or_create(keyed("race"))
+        .await
+        .unwrap();
+    let second = provider_from(engine.clone())
+        .get_or_create(keyed("race"))
+        .await
+        .unwrap();
+    // The first caller's re-check saw only its own sandbox; the second one's saw the older.
+    assert!(first.created);
+    assert!(
+        !second.created,
+        "the later caller yields to the older sandbox"
+    );
+    assert_eq!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(
+        engine.live_ids(),
+        vec![first.sandbox.sandbox_id],
+        "the loser was terminated"
+    );
+}
+
+#[tokio::test]
+async fn get_by_key_finds_it() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let created = sut.get_or_create(keyed("lookup")).await.unwrap();
+    let found = sut.get("lookup").await.unwrap().expect("found by key");
+    assert_eq!(found.sandbox_id, created.sandbox.sandbox_id);
+    let by_id = sut
+        .get(&created.sandbox.sandbox_id)
+        .await
+        .unwrap()
+        .expect("found by id");
+    assert_eq!(by_id.sandbox_id, found.sandbox_id);
+}
+
+#[tokio::test]
+async fn an_unknown_key_or_numeric_id_is_none_not_an_error() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine);
+    assert!(sut.get("never-created").await.unwrap().is_none());
+    assert!(sut.get("123456789").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn terminated_sandboxes_are_ignored() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let first = sut.get_or_create(keyed("gone")).await.unwrap();
+    engine.set_state(&first.sandbox.sandbox_id, "STATE_DELETING");
+    assert!(
+        sut.get("gone").await.unwrap().is_none(),
+        "a terminating sandbox is not live"
+    );
+    let second = sut.get_or_create(keyed("gone")).await.unwrap();
+    assert!(
+        second.created,
+        "a terminated sandbox does not answer the key"
+    );
+    assert_ne!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
+}
+
+#[tokio::test]
+async fn after_terminate_the_key_and_the_id_are_none() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let created = sut.get_or_create(keyed("done")).await.unwrap();
+    sut.terminate(&created.sandbox.sandbox_id).await.unwrap();
+    assert!(sut.get("done").await.unwrap().is_none());
+    assert!(sut
+        .get(&created.sandbox.sandbox_id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// A numeric id naming an existing sandbox keeps working as it did.
+#[tokio::test]
+async fn a_numeric_id_that_names_a_sandbox_is_found_as_before() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let created = sut.create(CreateSandboxRequest::default()).await.unwrap();
+    let resolved = sut.get_or_create(keyed(&created.sandbox_id)).await.unwrap();
+    assert!(!resolved.created);
+    assert_eq!(resolved.sandbox.sandbox_id, created.sandbox_id);
 }
