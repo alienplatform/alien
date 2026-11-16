@@ -2383,6 +2383,8 @@ struct FakeEngine {
     /// The first this-many `list` calls answer as if nothing existed yet: two callers that both
     /// looked before either created.
     blind_lists: AtomicUsize,
+    /// The next this-many probes of one sandbox get no answer: its agent is still booting.
+    silent_probes: std::sync::Mutex<std::collections::HashMap<String, usize>>,
 }
 
 #[derive(Debug, Default)]
@@ -2479,7 +2481,13 @@ impl AgentPlatformApi for FakeEngine {
             .retain(|(id, _, _)| id != sandbox);
         Ok(())
     }
-    async fn execute(&self, _engine: &str, _sandbox: &str, _input: &[u8]) -> ClientResult<Vec<u8>> {
+    async fn execute(&self, _engine: &str, sandbox: &str, _input: &[u8]) -> ClientResult<Vec<u8>> {
+        if let Some(left) = self.silent_probes.lock().unwrap().get_mut(sandbox) {
+            if *left > 0 {
+                *left -= 1;
+                return Err(execute_refused());
+            }
+        }
         Ok(health_reply())
     }
     async fn create_engine(&self, _display_name: &str) -> ClientResult<Operation> {
@@ -2672,4 +2680,53 @@ async fn a_numeric_id_that_names_a_sandbox_is_found_as_before() {
     let resolved = sut.get_or_create(keyed(&created.sandbox_id)).await.unwrap();
     assert!(!resolved.created);
     assert_eq!(resolved.sandbox.sandbox_id, created.sandbox_id);
+}
+
+/// Found live: a second caller looks while the first one's sandbox is listed and running but its
+/// agent has not started answering. That sandbox is waited for, not passed over for a second one,
+/// which is the duplicate the pair would then have to converge away from.
+#[tokio::test]
+async fn a_sandbox_whose_agent_is_still_booting_is_waited_for_not_replaced() {
+    let engine = Arc::new(FakeEngine::default());
+    let first = provider_from(engine.clone())
+        .get_or_create(keyed("booting-key"))
+        .await
+        .unwrap();
+    engine
+        .silent_probes
+        .lock()
+        .unwrap()
+        .insert(first.sandbox.sandbox_id.clone(), 3);
+    let second = provider_from(engine.clone())
+        .get_or_create(keyed("booting-key"))
+        .await
+        .unwrap();
+    assert!(
+        !second.created,
+        "the first caller's sandbox answers the key"
+    );
+    assert_eq!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(engine.live_ids().len(), 1);
+}
+
+/// The racing newer caller must still converge when the older sandbox's agent is not up yet.
+#[tokio::test]
+async fn a_race_converges_while_the_older_agent_is_still_booting() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.blind_lists.store(1, Ordering::SeqCst);
+    let older = provider_from(engine.clone())
+        .get_or_create(keyed("race-boot"))
+        .await
+        .unwrap();
+    engine
+        .silent_probes
+        .lock()
+        .unwrap()
+        .insert(older.sandbox.sandbox_id.clone(), 3);
+    let newer = provider_from(engine.clone())
+        .get_or_create(keyed("race-boot"))
+        .await
+        .unwrap();
+    assert_eq!(newer.sandbox.sandbox_id, older.sandbox.sandbox_id);
+    assert_eq!(engine.live_ids(), vec![older.sandbox.sandbox_id]);
 }

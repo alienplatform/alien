@@ -509,11 +509,45 @@ impl GcpAgentPlatformSandbox {
             if Some(candidate.as_str()) == own {
                 return Ok(None);
             }
-            if let Some(found) = self.reach(&candidate).await? {
+            if let Some(found) = self.reach_candidate(&candidate).await? {
                 return Ok(Some(found));
             }
         }
         Ok(None)
+    }
+
+    /// A sandbox stamped with the caller's key, waited for rather than passed over.
+    ///
+    /// Unlike an id the caller handed in, a key's sandbox is usually one a concurrent caller made
+    /// a moment ago: listed and running while its agent has not started answering. Replacing it
+    /// would make the second sandbox this lookup exists to prevent, so it is settled like any
+    /// other sandbox that is coming up. One that is paused, terminated or gone is skipped.
+    async fn reach_candidate(&self, id: &str) -> Result<Option<SandboxInstance>> {
+        let Some(sandbox) = self.read_sandbox(GET_OR_CREATE, id).await? else {
+            return Ok(None);
+        };
+        match sandbox_state(GET_OR_CREATE, sandbox.state.as_deref())? {
+            SandboxState::Running | SandboxState::Starting => {}
+            SandboxState::Paused | SandboxState::Terminated => return Ok(None),
+        }
+        match self.settle(id).await {
+            Ok(generation) => Ok(Some(SandboxInstance {
+                sandbox_id: id.to_string(),
+                state: SandboxState::Running,
+                generation,
+            })),
+            // Taken down while it was waited for, most likely by the caller that lost a race.
+            Err(error)
+                if matches!(
+                    &error.error,
+                    Some(ErrorData::SandboxCommandFailed { failure, .. })
+                        if failure == "sandboxGone" || failure == "sandboxTerminated"
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// A sandbox id that stays a single path segment.
@@ -1972,11 +2006,19 @@ fn generation_from_boot_id(boot_id: &str) -> u64 {
 fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
     match state {
         Some("STATE_RUNNING") => Ok(SandboxState::Running),
-        Some("STATE_CREATING" | "STATE_PENDING" | "STATE_RESUMING") => Ok(SandboxState::Starting),
-        Some("STATE_PAUSED" | "STATE_PAUSING" | "STATE_SUSPENDED") => Ok(SandboxState::Paused),
-        Some("STATE_STOPPED" | "STATE_FAILED" | "STATE_DELETING" | "STATE_DELETED") => {
-            Ok(SandboxState::Terminated)
+        Some("STATE_CREATING" | "STATE_PENDING" | "STATE_PROVISIONING" | "STATE_RESUMING") => {
+            Ok(SandboxState::Starting)
         }
+        Some("STATE_PAUSED" | "STATE_PAUSING" | "STATE_SUSPENDED") => Ok(SandboxState::Paused),
+        Some(
+            "STATE_STOPPED"
+            | "STATE_STOPPING"
+            | "STATE_FAILED"
+            | "STATE_TERMINATED"
+            | "STATE_DEPROVISIONING"
+            | "STATE_DELETING"
+            | "STATE_DELETED",
+        ) => Ok(SandboxState::Terminated),
         other => Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
             provider: "gcp-agent-platform".to_string(),
             binding_name: operation.to_string(),
