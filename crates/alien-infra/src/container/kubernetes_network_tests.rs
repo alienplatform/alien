@@ -424,3 +424,22 @@ fn a_sandbox_source_is_matched_in_the_sandbox_namespace_only() {
         None
     );
 }
+
+#[test]
+fn dns_is_allowed_to_the_node_local_cache_pods_as_well_as_cluster_dns() {
+    let apps: std::collections::BTreeSet<String> = super::cluster_dns_peers()
+        .iter()
+        .filter_map(|peer| {
+            peer.pod_selector
+                .as_ref()?
+                .match_labels
+                .as_ref()?
+                .get("k8s-app")
+                .cloned()
+        })
+        .collect();
+    assert_eq!(
+        apps,
+        std::collections::BTreeSet::from(["kube-dns".to_string(), "node-local-dns".to_string()])
+    );
+}
