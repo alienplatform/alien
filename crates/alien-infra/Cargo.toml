@@ -86,7 +86,9 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 console_error_panic_hook = { workspace = true }
 
 [dev-dependencies]
-alien-infra = { path = ".", features = ["test-utils"] }
+# The tests cover every platform's controllers, so they need every platform feature even when
+# `cargo test -p alien-infra` builds this crate alone (no other workspace crate turning them on).
+alien-infra = { path = ".", features = ["all-platforms", "test-utils"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp"] }
 alien-preflights = { workspace = true }
 alien-aws-clients = { workspace = true }
