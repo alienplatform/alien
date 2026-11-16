@@ -509,6 +509,7 @@ impl PreflightRegistry {
         // Add the gateway before compute sizing, vault grants, and service accounts.
         registry.add_mutation(Box::new(mutations::SandboxGatewayMutation));
         registry.add_mutation(Box::new(mutations::ComputeClusterMutation));
+        registry.add_mutation(Box::new(mutations::AzurePublicEndpointIdentityMutation));
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::SigningVerifierMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));

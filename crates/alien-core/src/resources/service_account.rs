@@ -165,6 +165,24 @@ fn is_service_account(stack: &Stack, id: &str) -> bool {
     })
 }
 
+/// Id of the identity that a container's HTTPS public endpoint runs as, on a platform that
+/// attaches a user-assigned identity to the endpoint's load balancer (Azure).
+///
+/// The identity is a setup-owned [`ServiceAccount`] with no permission sets. Setup also lets
+/// the cluster's machines attach it, so the load balancer can be created and updated at
+/// runtime without any role-assignment rights.
+pub fn public_endpoint_identity_id(container_id: &str) -> String {
+    format!("{container_id}-appgw-id")
+}
+
+/// The cluster whose machines serve `container`'s HTTPS public endpoint, when the endpoint
+/// needs a [`public_endpoint_identity_id`] identity.
+pub fn public_endpoint_identity_cluster(container: &crate::Container) -> Option<&str> {
+    let cluster = container.cluster.as_deref()?;
+    let first = container.public_endpoints.first()?;
+    (first.protocol == crate::ExposeProtocol::Http).then_some(cluster)
+}
+
 impl ServiceAccountBuilder {
     /// Adds a stack-level permission set to the service account.
     /// Stack-level permissions apply to all resources in the stack.

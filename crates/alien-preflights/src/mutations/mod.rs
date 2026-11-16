@@ -4,6 +4,7 @@
 pub mod azure_container_apps_environment;
 pub mod azure_memory_adjustment;
 pub mod azure_resource_group;
+pub mod azure_public_endpoint_identity;
 pub mod azure_service_activation;
 pub mod azure_service_bus_namespace;
 pub mod azure_storage_account;
@@ -60,6 +61,7 @@ pub use remote_bindings::RemoteBindingsMutation;
 pub use remote_stack_management::RemoteStackManagementMutation;
 pub use resource_link_permissions::ResourceLinkPermissionsMutation;
 pub use sandbox_bundle_storage::SandboxBundleStorageMutation;
+pub use azure_public_endpoint_identity::AzurePublicEndpointIdentityMutation;
 pub use sandbox_gateway::SandboxGatewayMutation;
 pub use sandbox_gateway_links::SandboxGatewayLinksMutation;
 pub use secrets_vault::{DeployerSecretsVaultMutation, SecretsVaultMutation};
