@@ -2477,10 +2477,21 @@ jobs:
                 exit 1
               fi
 
+              # Copy the qualified manifest as-is. By default a single-platform
+              # image is wrapped in a new manifest list, so the tag would get a
+              # different digest than the qualified one and every rerun would
+              # refuse it.
               docker buildx imagetools create \
+                --prefer-index=false \
                 --tag "$versioned" \
                 --tag "${image}:latest" \
                 "${image}@${source_digest}"
+              promoted_digest=$(docker buildx imagetools inspect "$versioned" |
+                sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
+              if [ "$promoted_digest" != "$source_digest" ]; then
+                echo "::error::${versioned} is ${promoted_digest}, not the qualified ${source_digest}"
+                exit 1
+              fi
             done
 
       # The enforcer digests a signed release pins (crates/alien-cli/
