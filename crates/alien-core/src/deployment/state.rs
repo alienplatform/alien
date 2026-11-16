@@ -334,6 +334,23 @@ pub enum SetupScaffolding {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         image_arn: Option<String>,
     },
+    /// A Frozen GCP sandbox's image repository and the manager's write access to it. Setup makes
+    /// them because the runtime identity may write images into the repository but cannot create
+    /// it or change who may; an image-only release then rolls without setup.
+    #[serde(rename_all = "camelCase")]
+    GcpSandbox {
+        /// Artifact Registry repository the sandbox's image is copied into.
+        image_repository: String,
+        /// Custom role (no delete) the manager is granted on that repository.
+        write_role: String,
+        /// Whether the manager holds `write_role` on the repository.
+        #[serde(default)]
+        writer_granted: bool,
+        /// Whether the manager may create sandbox templates on the sandbox's engine, which an
+        /// image change needs. Written by the step that grants it.
+        #[serde(default)]
+        templates_granted: bool,
+    },
 }
 
 /// The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
@@ -387,6 +404,9 @@ impl SetupScaffolding {
                     (Some(_), None) => {}
                 }
             }
+            // A repository is found by its fixed name, so a record never lacks anything a found
+            // one would add.
+            (SetupScaffolding::GcpSandbox { .. }, _) | (_, SetupScaffolding::GcpSandbox { .. }) => {}
         }
     }
 }

@@ -275,19 +275,9 @@ fn emit_template_management(ctx: &EmitContext<'_>, fragment: &mut TfFragment) ->
     emit_image_repository(ctx, fragment, management_label)
 }
 
-/// Permissions of the custom role that lets the manager copy the sandbox image in: read what is
-/// there, upload blobs and manifests, and tag. No delete of any kind, so a compromised manager
-/// cannot remove a version a live template uses; cleanup is the repository's own policy.
-const IMAGE_WRITE_PERMISSIONS: [&str; 8] = [
-    "artifactregistry.repositories.get",
-    "artifactregistry.repositories.downloadArtifacts",
-    "artifactregistry.repositories.uploadArtifacts",
-    "artifactregistry.tags.create",
-    "artifactregistry.tags.update",
-    "artifactregistry.tags.get",
-    "artifactregistry.tags.list",
-    "artifactregistry.versions.get",
-];
+// Permissions of the custom role that lets the manager copy the sandbox image in; shared with
+// direct setup, so the two grant the same thing.
+use alien_core::gar_repository::SANDBOX_IMAGE_WRITE_PERMISSIONS as IMAGE_WRITE_PERMISSIONS;
 
 /// Terraform label of the stack-wide custom role carrying [`IMAGE_WRITE_PERMISSIONS`].
 const IMAGE_WRITE_ROLE_LABEL: &str = "gcp_role_sandbox_image_write";

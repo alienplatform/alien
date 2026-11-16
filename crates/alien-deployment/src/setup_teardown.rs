@@ -558,6 +558,9 @@ fn outstanding_scaffolding(state: &DeploymentState) -> String {
             SetupScaffolding::AwsSandbox { egress: None, build_role_name, image_arn: None } => {
                 format!("sandbox '{resource_id}': role '{build_role_name}'")
             }
+            SetupScaffolding::GcpSandbox { image_repository, write_role, .. } => format!(
+                "sandbox '{resource_id}': image repository '{image_repository}' and role '{write_role}'"
+            ),
         })
         .collect();
     if outstanding.is_empty() {

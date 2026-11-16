@@ -16,6 +16,8 @@ use crate::{ErrorData, ImporterRegistry, PlatformServiceProvider, Result};
 mod aws_sandbox;
 #[cfg(feature = "aws")]
 mod aws_sandbox_egress;
+#[cfg(feature = "gcp")]
+mod gcp_sandbox;
 
 /// The credentials a scaffolding step acts with: setup's, never the runtime identity's.
 pub struct SetupScaffoldingContext<'a> {
@@ -120,6 +122,12 @@ pub async fn reconcile(
             }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
+            #[cfg(feature = "gcp")]
+            Scaffolded::GcpSandbox(sandbox) => {
+                gcp_sandbox::reconcile(ctx, stack_state, &sandbox.id, records).await?
+            }
+            #[cfg(not(feature = "gcp"))]
+            Scaffolded::GcpSandbox(_) => return Err(gcp_not_built()),
         };
         if step == ScaffoldingProgress::InProgress {
             tracing::info!(resource_id = %resource_id, "Setup scaffolding in progress");
@@ -180,18 +188,25 @@ pub fn changes_requiring_setup(
             }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
+            // Its changes are the image's, below.
+            Scaffolded::GcpSandbox(_) => {}
         }
     }
     if platform == Platform::Gcp {
-        changes.extend(gcp_frozen_sandbox_image_changes(installed, target));
+        changes.extend(gcp_frozen_sandbox_image_changes(installed, records, target));
     }
     Ok(changes)
 }
 
-/// A new image for a Frozen GCP sandbox replaces its template, which takes `sandbox/templates` on
-/// its engine. A Terraform setup is taken to grant that to the manager and a direct setup never
-/// does, so after a direct setup the replace needs the deployer's credentials.
-fn gcp_frozen_sandbox_image_changes(installed: &Stack, target: &Stack) -> Vec<String> {
+/// A new image for a Frozen GCP sandbox is copied into the sandbox's repository and replaces its
+/// template. A setup that recorded both the manager's write access to that repository and its
+/// template grant on the engine lets the manager do that; any other install needs the deployer's
+/// credentials once to get them, and the message says so.
+fn gcp_frozen_sandbox_image_changes(
+    installed: &Stack,
+    records: &BTreeMap<String, SetupScaffolding>,
+    target: &Stack,
+) -> Vec<String> {
     target
         .resources()
         .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
@@ -206,8 +221,21 @@ fn gcp_frozen_sandbox_image_changes(installed: &Stack, target: &Stack) -> Vec<St
                     "sandbox '{resource_id}' is new, and setup creates its template"
                 ));
             };
-            (installed.code != target.code)
-                .then(|| format!("sandbox '{resource_id}' changes its image"))
+            if installed.code == target.code {
+                return None;
+            }
+            match records.get(resource_id) {
+                Some(SetupScaffolding::GcpSandbox {
+                    writer_granted: true,
+                    templates_granted: true,
+                    ..
+                }) => None,
+                _ => Some(format!(
+                    "sandbox '{resource_id}' changes its image, and this setup did not give the \
+                     manager the access to roll an image on its own. Running the deployment's \
+                     setup once enables image-only releases"
+                )),
+            }
         })
         .collect()
 }
@@ -223,6 +251,10 @@ fn scaffolded(
         }
         let scaffolded = match platform {
             Platform::Aws => Scaffolded::AwsSandbox(entry.config.downcast_ref()?),
+            // A Live one is the runtime controller's, which cannot create what a repository needs.
+            Platform::Gcp if entry.lifecycle == ResourceLifecycle::Frozen => {
+                Scaffolded::GcpSandbox(entry.config.downcast_ref()?)
+            }
             _ => return None,
         };
         Some((resource_id, entry, scaffolded))
@@ -231,6 +263,15 @@ fn scaffolded(
 
 enum Scaffolded<'a> {
     AwsSandbox(&'a alien_core::Sandbox),
+    GcpSandbox(&'a alien_core::Sandbox),
+}
+
+#[cfg(not(feature = "gcp"))]
+fn gcp_not_built() -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ControllerNotAvailable {
+        resource_type: alien_core::Sandbox::RESOURCE_TYPE,
+        platform: Platform::Gcp,
+    })
 }
 
 #[cfg(not(feature = "aws"))]
@@ -259,11 +300,13 @@ pub fn seeds(
     records: &BTreeMap<String, SetupScaffolding>,
 ) -> Result<Vec<ScaffoldingSeed>> {
     scaffolded(stack, stack_state.platform)
-        .map(|(_, _, scaffolded)| match scaffolded {
+        .filter_map(|(_, _, scaffolded)| match scaffolded {
             #[cfg(feature = "aws")]
-            Scaffolded::AwsSandbox(sandbox) => aws_sandbox::seed(ctx, stack, sandbox, records),
+            Scaffolded::AwsSandbox(sandbox) => Some(aws_sandbox::seed(ctx, stack, sandbox, records)),
             #[cfg(not(feature = "aws"))]
-            Scaffolded::AwsSandbox(_) => Err(aws_not_built()),
+            Scaffolded::AwsSandbox(_) => Some(Err(aws_not_built())),
+            // Its controller is built by the setup run's own executor; there is nothing to seed.
+            Scaffolded::GcpSandbox(_) => None,
         })
         .collect()
 }
@@ -368,6 +411,8 @@ pub async fn recover_unrecorded(
             }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
+            // Recorded before the create call, so there is nothing a record can lack.
+            Scaffolded::GcpSandbox(_) => None,
         };
         let Some(recovered) = recovered else {
             continue;
@@ -402,6 +447,14 @@ pub async fn teardown(
             }
             #[cfg(not(feature = "aws"))]
             Some(SetupScaffolding::AwsSandbox { .. }) => return Err(aws_not_built()),
+            #[cfg(feature = "gcp")]
+            Some(SetupScaffolding::GcpSandbox {
+                image_repository,
+                write_role,
+                ..
+            }) => gcp_sandbox::teardown(ctx, &resource_id, image_repository, write_role).await?,
+            #[cfg(not(feature = "gcp"))]
+            Some(SetupScaffolding::GcpSandbox { .. }) => return Err(gcp_not_built()),
             None => continue,
         };
         match step {

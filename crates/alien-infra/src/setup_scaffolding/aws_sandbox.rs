@@ -163,9 +163,9 @@ pub(super) async fn reconcile(
     }
 
     if let Some(network_id) = egress_network {
-        let SetupScaffolding::AwsSandbox { egress, .. } = records
-            .get_mut(&sandbox.id)
-            .unwrap_or_else(|| unreachable!("recorded above"));
+        let Some(SetupScaffolding::AwsSandbox { egress, .. }) = records.get_mut(&sandbox.id) else {
+            unreachable!("recorded above")
+        };
         if aws_sandbox_egress::reconcile(ctx, aws, sandbox, network_id, stack_state, egress).await?
             == ScaffoldingProgress::InProgress
         {
@@ -648,7 +648,8 @@ fn record(
             *build_role_name = role_name;
             *image_arn = image;
         }
-        None => {
+        // Another cloud's record under an AWS sandbox's id cannot happen: a stack has one platform.
+        Some(SetupScaffolding::GcpSandbox { .. }) | None => {
             records.insert(
                 sandbox_id.to_string(),
                 SetupScaffolding::AwsSandbox {

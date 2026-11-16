@@ -42,6 +42,29 @@ pub fn sandbox_image_repository(prefix: &str, sandbox_id: &str) -> Option<String
     .then_some(repository)
 }
 
+/// What the manager's identity may do in a sandbox's image repository: read it, upload and tag. No
+/// delete of any kind, so a compromised manager cannot remove a version a live template uses;
+/// untagged versions are cleaned by the repository's own policy. One list for the Terraform
+/// emitter and direct setup, so the two grant the same thing.
+pub const SANDBOX_IMAGE_WRITE_PERMISSIONS: [&str; 8] = [
+    "artifactregistry.repositories.get",
+    "artifactregistry.repositories.downloadArtifacts",
+    "artifactregistry.repositories.uploadArtifacts",
+    "artifactregistry.tags.create",
+    "artifactregistry.tags.update",
+    "artifactregistry.tags.get",
+    "artifactregistry.tags.list",
+    "artifactregistry.versions.get",
+];
+
+/// Id of the custom role carrying [`SANDBOX_IMAGE_WRITE_PERMISSIONS`] that a direct setup creates
+/// for one sandbox: letters, digits and underscores, at most 64 characters. `None` when it would
+/// not fit.
+pub fn sandbox_image_write_role_id(prefix: &str, sandbox_id: &str) -> Option<String> {
+    let id = format!("{prefix}_{sandbox_id}_image_write").replace('-', "_");
+    (id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')).then_some(id)
+}
+
 /// Return the original project ID only when its path agrees with its repository name.
 pub fn project_id_for_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     let (repository, remainder) = path.split_once('/')?;

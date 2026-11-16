@@ -391,7 +391,28 @@ async fn ensure_image_repository(
             if matches!(
                 e.error,
                 Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-            ) => {}
+            ) =>
+        {
+            // A direct setup creates the repository and the manager's write access to it with
+            // the deployer's credentials, which this controller never holds at runtime.
+            if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup {
+                return Err(AlienError::new(if ctx.deployment_config.setup_run {
+                    // Setup's scaffolding makes it in this same run.
+                    ErrorData::DependencyNotReady {
+                        resource_id: sandbox_id.to_string(),
+                        dependency_id: repository.to_string(),
+                    }
+                } else {
+                    ErrorData::SetupRerunRequired {
+                        resource_id: sandbox_id.to_string(),
+                        message: format!(
+                            "the sandbox image repository '{repository}' does not exist. Setup \
+                             creates it; run the deployment's setup again. Nothing was copied"
+                        ),
+                    }
+                }));
+            }
+        }
         Err(e) => {
             if matches!(
                 e.error,
@@ -2388,6 +2409,25 @@ mod tests {
             dest: &MockServer,
             provider: Arc<MockPlatformServiceProvider>,
         ) -> SingleControllerExecutor {
+            executor_as(
+                alien_core::InitialSetupAuthority::ImportedHandoff,
+                false,
+                image,
+                source,
+                dest,
+                provider,
+            )
+            .await
+        }
+
+        async fn executor_as(
+            authority: alien_core::InitialSetupAuthority,
+            setup_run: bool,
+            image: &str,
+            source: &MockServer,
+            dest: &MockServer,
+            provider: Arc<MockPlatformServiceProvider>,
+        ) -> SingleControllerExecutor {
             let config = GcpClientConfig::mock().with_service_overrides(ServiceOverrides {
                 endpoints: std::collections::HashMap::from([(
                     "artifactregistry-docker".to_string(),
@@ -2399,6 +2439,8 @@ mod tests {
                 .controller(GcpAgentPlatformTemplateController::default())
                 .platform(Platform::Gcp)
                 .client_config(ClientConfig::Gcp(Box::new(config)))
+                .initial_setup_authority(authority)
+                .setup_run(setup_run)
                 .manager_url(source.base_url())
                 .native_image_host("us-central1-docker.pkg.dev")
                 .service_provider(provider)
@@ -2615,6 +2657,74 @@ mod tests {
             assert!(!error.retryable);
             assert_eq!(source_requests.hits(), 0);
             assert_eq!(dest_requests.hits(), 0);
+        }
+
+        /// A direct setup's scaffolding creates the repository and the manager's write access with
+        /// the deployer's credentials; this controller never creates it on a direct install. During
+        /// the setup run it waits for the scaffolding; afterwards a missing repository says to run
+        /// setup again. Neither creates, copies or touches the template.
+        #[tokio::test]
+        async fn a_direct_install_never_creates_the_repository() {
+            for (setup_run, code) in [
+                (true, "DEPENDENCY_NOT_READY"),
+                (false, "SETUP_RERUN_REQUIRED"),
+            ] {
+                let (source, dest) = (MockServer::start(), MockServer::start());
+                let source_requests = source.mock(|w, t| {
+                    w.any_request();
+                    t.status(200);
+                });
+                let dest_requests = dest.mock(|w, t| {
+                    w.any_request();
+                    t.status(200);
+                });
+                let mut m = MockAgentPlatformApi::new();
+                m.expect_create_template().never();
+                // No repository, and no create call allowed.
+                let provider = provider_with(Arc::new(m), 0, false, 0, false);
+                let mut executor = executor_as(
+                    alien_core::InitialSetupAuthority::DirectSetup,
+                    setup_run,
+                    SOURCE_IMAGE,
+                    &source,
+                    &dest,
+                    provider,
+                )
+                .await;
+                let error = executor
+                    .step()
+                    .await
+                    .expect_err("a missing repository stops the step");
+                assert_eq!(error.code, code, "{error}");
+                assert_eq!(source_requests.hits(), 0);
+                assert_eq!(dest_requests.hits(), 0);
+            }
+        }
+
+        /// What setup made is adopted: the copy goes into it, the template uses the copy, and the
+        /// controller records no repository, so its teardown leaves setup's to setup.
+        #[tokio::test]
+        async fn a_direct_install_adopts_the_repository_setup_made() {
+            let (body, _) = manifest();
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            serve_source(&source, &body);
+            serve_destination(&dest);
+            let m = healthy_client();
+            let provider = provider_with(Arc::new(m), 0, true, 0, false);
+            let mut executor = executor_as(
+                alien_core::InitialSetupAuthority::DirectSetup,
+                false,
+                SOURCE_IMAGE,
+                &source,
+                &dest,
+                provider,
+            )
+            .await;
+            executor.run_until_terminal().await.expect("create runs");
+            let controller = executor
+                .internal_state::<GcpAgentPlatformTemplateController>()
+                .expect("the controller downcasts");
+            assert_eq!(controller.created_image_repository, None);
         }
     }
 }

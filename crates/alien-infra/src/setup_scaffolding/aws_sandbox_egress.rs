@@ -3057,7 +3057,9 @@ mod tests {
                 break;
             }
         }
-        let SetupScaffolding::AwsSandbox { egress, .. } = records.get_mut("agents").unwrap();
+        let Some(SetupScaffolding::AwsSandbox { egress, .. }) = records.get_mut("agents") else {
+            panic!("an AWS record")
+        };
         egress.as_mut().unwrap().connector_arn = None;
 
         let made = converge(&cloud, &stack, &state, &mut records).await;

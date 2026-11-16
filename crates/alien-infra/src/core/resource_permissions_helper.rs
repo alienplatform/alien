@@ -56,7 +56,7 @@ const GCP_CUSTOM_ROLE_UPDATE_MASK: &str = "includedPermissions,title,description
 /// resource prefix reuse its roles instead of consuming new slots. A `create`
 /// that conflicts re-reads the role, so a concurrent caller ensuring the same
 /// role converges instead of failing.
-async fn ensure_gcp_custom_role(
+pub(crate) async fn ensure_gcp_custom_role(
     iam: &dyn IamApi,
     permission_set_id: &str,
     custom_role: &GcpCustomRole,
