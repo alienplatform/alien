@@ -875,11 +875,11 @@ async fn live_leak_probes() {
     publish(&provider, &body).await;
 }
 
-/// A running sandbox across a gateway replacement. The operator applies a new gateway image (both
-/// VMs replaced) from outside; this test coordinates through two vault secrets: it writes
-/// `gw-replace-signal` = `ready` after the first check and waits for the operator to set it to
-/// `applied`, then checks the same sandbox and a new one at once, and again once the signal is
-/// `later`.
+/// A running sandbox across a setup re-run that installs a new gateway image. The operator runs the
+/// re-run from outside; this test coordinates through one vault secret: it writes
+/// `gw-replace-signal` = `ready` after the first check, then probes the SAME sandbox every few
+/// seconds (an allowed and an unlisted host) until the operator sets the secret to `done`, and
+/// finally creates a NEW sandbox. Every probe is logged with its time, so a gap shows.
 #[tokio::test]
 #[ignore = "live Azure: run inside the deployment's VNet via scripts/azure-internet-live.sh"]
 async fn live_gateway_replace() {
@@ -889,6 +889,12 @@ async fn live_gateway_replace() {
     let vault = provider.load_vault("secrets").await.expect("vault");
     let mut log: Vec<String> = Vec::new();
     let mut created = Vec::new();
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
 
     let outcome = async {
         let first = sandbox
@@ -900,54 +906,71 @@ async fn live_gateway_replace() {
             .map_err(|error| format!("create: {error}"))?;
         let id = first.sandbox_id.clone();
         created.push(id.clone());
-        let seen = proxy(sandbox, &id, "example.com", 443, "").await;
-        log.push(format!("before: running sandbox, example.com {seen}"));
-        let seen = proxy(sandbox, &id, "www.google.com", 443, "").await;
-        log.push(format!("before: running sandbox, www.google.com {seen}"));
+        for host in ["example.com", "www.google.com"] {
+            let seen = proxy(sandbox, &id, host, 443, "").await;
+            log.push(format!("{} before: {host} {seen}", now()));
+        }
         vault
             .set_secret("gw-replace-signal", "ready")
             .await
             .map_err(|error| format!("signal: {error}"))?;
-        for stage in ["applied", "later"] {
-            let mut waited = 0;
-            loop {
-                let signal = vault
-                    .get_secret("gw-replace-signal")
-                    .await
-                    .unwrap_or_default();
-                if signal == stage {
-                    break;
-                }
-                waited += 1;
-                if waited > 1500 {
-                    return Err(format!("no `{stage}` signal"));
-                }
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            let seen = proxy(sandbox, &id, "example.com", 443, "").await;
-            log.push(format!(
-                "{stage} (epoch {stamp}): the SAME sandbox, example.com {seen}"
-            ));
-            let seen = proxy(sandbox, &id, "www.google.com", 443, "").await;
-            log.push(format!("{stage}: the SAME sandbox, www.google.com {seen}"));
-            match sandbox
-                .create(CreateSandboxRequest {
-                    egress: Some(allow(&["example.com"])),
-                    ..Default::default()
-                })
+        let mut stage = "ready".to_string();
+        // The vault secret holds about 25 KB, so only a change of answer is logged, with a count.
+        let mut last: std::collections::HashMap<&str, String> = Default::default();
+        let mut counts: std::collections::HashMap<String, u32> = Default::default();
+        for _ in 0..600 {
+            let signal = vault
+                .get_secret("gw-replace-signal")
                 .await
-            {
-                Ok(new) => {
-                    created.push(new.sandbox_id.clone());
-                    let seen = proxy(sandbox, &new.sandbox_id, "example.com", 443, "").await;
-                    log.push(format!("{stage}: a NEW sandbox, example.com {seen}"));
-                }
-                Err(error) => log.push(format!("{stage}: a NEW sandbox, create failed: {error}")),
+                .unwrap_or_default();
+            if signal != stage {
+                log.push(format!("{} signal now `{signal}`", now()));
+                stage = signal;
             }
+            for host in ["example.com", "www.google.com"] {
+                let seen = proxy(sandbox, &id, host, 443, "").await;
+                let short: String = seen.chars().take(60).collect();
+                *counts.entry(format!("{host} {short}")).or_default() += 1;
+                if last.get(host) != Some(&short) {
+                    log.push(format!(
+                        "{} [{stage}] the SAME sandbox, {host} now: {short}",
+                        now()
+                    ));
+                    last.insert(host, short);
+                }
+            }
+            if stage == "done" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+        let mut totals: Vec<_> = counts.into_iter().collect();
+        totals.sort();
+        for (what, n) in totals {
+            log.push(format!("total probes: {what} x{n}"));
+        }
+        if stage != "done" {
+            return Err("no `done` signal".to_string());
+        }
+        match sandbox
+            .create(CreateSandboxRequest {
+                egress: Some(allow(&["example.com"])),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(new) => {
+                created.push(new.sandbox_id.clone());
+                let seen = proxy(sandbox, &new.sandbox_id, "example.com", 443, "").await;
+                log.push(format!(
+                    "{} after: a NEW sandbox, example.com {seen}",
+                    now()
+                ));
+            }
+            Err(error) => log.push(format!(
+                "{} after: a NEW sandbox, create failed: {error}",
+                now()
+            )),
         }
         Ok::<(), String>(())
     }

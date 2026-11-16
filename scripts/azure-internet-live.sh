@@ -79,6 +79,13 @@ teardown() {
   left=$(arm GET "/subscriptions/$SUB/resources?api-version=2021-04-01&\$filter=startswith(resourceGroup,'$P-')" | jq -r '.value[]?.id')
   echo "${left:-<none>}" | tee -a "$out"
   [ -z "$left" ] || exit 1
+  # The module's custom role definitions live at subscription scope and outlive the groups; a
+  # later run with the same prefix fails on them ("already exists"). Delete this prefix's.
+  arm GET "/subscriptions/$SUB/providers/Microsoft.Authorization/roleDefinitions?api-version=2022-04-01&\$filter=type%20eq%20'CustomRole'" \
+    | jq -r '.value[]? | select(.properties.roleName | startswith("'"$P"'-")) | .id' | while read -r id; do
+      echo "delete role definition $id" | tee -a "$out"
+      arm DELETE "$id?api-version=2022-04-01" >/dev/null || true
+    done
   # Role assignments scoped inside a deleted group go with it; list any left at subscription scope.
   arm GET "/subscriptions/$SUB/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&\$filter=principalId%20eq%20'$(sp_object_id)'" \
     | jq -r '.value[]? | select(.properties.scope | contains("'"$P"'")) | .id' | tee -a "$out"
