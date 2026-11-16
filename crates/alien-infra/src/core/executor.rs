@@ -233,10 +233,7 @@ fn controller_platform_for_entry(
     // Frozen resources use the underlying cloud provider.
     if stack_platform == Platform::Kubernetes
         && resource.is_some_and(|resource| {
-            resource
-                .downcast_ref::<alien_core::ComputeCluster>()
-                .is_some()
-                || resource.downcast_ref::<alien_core::Sandbox>().is_some()
+            alien_core::is_kubernetes_native_resource_type(&resource.resource_type())
         })
     {
         return Platform::Kubernetes;
