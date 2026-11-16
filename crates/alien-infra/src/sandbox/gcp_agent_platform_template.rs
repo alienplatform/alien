@@ -1498,6 +1498,63 @@ mod tests {
         );
     }
 
+    // ---- Egress change, current behavior (no setup-run gate on the controller). ----------------
+
+    /// Records today's controller behavior: a replacement that widens egress (`none` to `allow`)
+    /// is created on a run that is not a setup run, and one that narrows it is too. Nothing here
+    /// compares the change with what setup recorded; only the preflights stand in front of it.
+    #[tokio::test]
+    async fn an_egress_change_replaces_the_template_on_a_non_setup_run_today() {
+        for (from, to, internet) in [
+            (SandboxEgress::None, SandboxEgress::Allow, true),
+            (SandboxEgress::Allow, SandboxEgress::None, false),
+        ] {
+            let created: Arc<Mutex<Vec<Option<bool>>>> = Arc::new(Mutex::new(Vec::new()));
+            let mut m = MockAgentPlatformApi::new();
+            {
+                let created = created.clone();
+                m.expect_create_template().returning(move |_, body| {
+                    created.lock().unwrap().push(
+                        body.egress_control_config
+                            .and_then(|egress| egress.internet_access),
+                    );
+                    Ok(pending_op())
+                });
+            }
+            m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
+            m.expect_get_template()
+                .returning(|_, id| Ok(active_template(id)));
+            m.expect_list_templates()
+                .returning(|_| Ok(vec![active_template("tpl1"), active_template("tpl2")]));
+            m.expect_delete_template().returning(|_, _| Ok(()));
+            let mut executor = SingleControllerExecutor::builder()
+                .resource(sandbox_with(from.clone(), "ubuntu:24.04", None, None))
+                .controller(GcpAgentPlatformTemplateController::mock_ready(
+                    "eng", "tpl1",
+                ))
+                .platform(Platform::Gcp)
+                .service_provider(provider_with(Arc::new(m)))
+                .with_test_dependencies()
+                .build()
+                .await
+                .expect("executor builds");
+            executor
+                .update(sandbox_with(to.clone(), "ubuntu:24.04", None, None))
+                .expect("update accepted");
+            executor.run_until_terminal().await.expect("replace runs");
+            assert_eq!(
+                executor.status(),
+                ResourceStatus::Running,
+                "{from:?} -> {to:?}"
+            );
+            assert_eq!(
+                *created.lock().unwrap(),
+                vec![Some(internet)],
+                "{from:?} -> {to:?}: one replacement carrying the release's egress"
+            );
+        }
+    }
+
     // ---- 4. Best-effort deletion: teardown succeeds even when a delete errors. -----------------
 
     #[tokio::test]
