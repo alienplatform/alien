@@ -2237,18 +2237,33 @@ struct SandboxAgentLayering {
     /// Whether the image itself turns on supervised startup of the base command. On AWS the
     /// controller turns it on at build time instead, together with the capability grant it needs.
     image_command_env: bool,
+    /// Whether the image names the header the agent reads a preview caller's bearer from. Only
+    /// GCP does: its edge consumes `Authorization`, and every other cloud's callers still send
+    /// theirs there, so naming another header would make the agent drop it.
+    caller_authorization_header: bool,
 }
 
 impl SandboxAgentLayering {
+    fn for_build(self) -> gcp_sandbox_image::AgentLayering {
+        gcp_sandbox_image::AgentLayering {
+            arch: self.target.to_dockdash_arch(),
+            contract: self.contract,
+            image_command_env: self.image_command_env,
+            caller_authorization_header: self.caller_authorization_header,
+        }
+    }
+
     const AZURE: Self = Self {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::AZURE_SANDBOX,
         image_command_env: true,
+        caller_authorization_header: false,
     };
     const GCP: Self = Self {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::GCP_AGENT_PLATFORM,
         image_command_env: true,
+        caller_authorization_header: true,
     };
     /// The image ends as the base's own user. Supervised startup of the base command
     /// (`ALIEN_SANDBOX_IMAGE_COMMAND`) is deliberately not baked in: the pod sets it, together
@@ -2259,11 +2274,13 @@ impl SandboxAgentLayering {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::KUBERNETES_SANDBOX,
         image_command_env: false,
+        caller_authorization_header: false,
     };
     const AWS: Self = Self {
         target: BinaryTarget::LinuxArm64,
         contract: alien_core::sandbox_image::AWS_MICROVM,
         image_command_env: false,
+        caller_authorization_header: false,
     };
 }
 
@@ -2350,11 +2367,7 @@ async fn push_sandbox_agent_image(
         push_options.auth.clone(),
         // The default cache, which every other dockdash build here uses by not naming one.
         dockdash::BlobCache::new().map_dockdash_err()?,
-        gcp_sandbox_image::AgentLayering {
-            arch: layering.target.to_dockdash_arch(),
-            contract: layering.contract,
-            image_command_env: layering.image_command_env,
-        },
+        layering.for_build(),
     )
     .await?
     .image;

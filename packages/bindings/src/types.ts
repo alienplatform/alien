@@ -480,8 +480,10 @@ export interface SandboxPreview {
    */
   callerAuthorizationHeader: string
   /**
-   * WebSocket subprotocols to offer, in this order and after your own, when your client cannot
-   * set headers on the upgrade (a browser). Empty where the headers alone are enough.
+   * WebSocket subprotocols to offer, in this order and after your own, in addition to every
+   * header in `headers`. On GCP a WebSocket needs both the headers and these; a client that can
+   * only offer subprotocols (a browser) cannot open one there. Empty where the headers alone are
+   * enough.
    */
   subprotocols: string[]
 }

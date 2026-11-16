@@ -513,8 +513,10 @@ class SandboxPreview:
 
     ``caller_authorization_header`` names the header that carries your own bearer token so it
     reaches the workload unchanged: ``Authorization`` except where the cloud's edge consumes
-    that header. ``subprotocols`` is what a WebSocket client that cannot set headers must offer,
-    in order and after its own protocols; it is empty where the headers alone are enough."""
+    that header. ``subprotocols`` is what a WebSocket client must offer, in order and after its
+    own protocols, in addition to every header in ``headers``; on GCP a WebSocket needs both, so a
+    client that can only offer subprotocols cannot open one there. It is empty where the headers
+    alone are enough."""
 
     endpoint: str
     headers: Mapping[str, str]
