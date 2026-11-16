@@ -26,6 +26,7 @@ use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
 use alien_error::{AlienError, Context};
 use alien_infra::ClientConfigExt;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
@@ -280,7 +281,8 @@ async fn record_pass_error(state: &OperatorState, error: &AlienError<ErrorData>)
         return Ok(());
     }
     let recorded = error.clone().into_generic();
-    if current.error.as_ref().map(|e| (&e.code, &e.message)) == Some((&recorded.code, &recorded.message))
+    if current.error.as_ref().map(|e| (&e.code, &e.message))
+        == Some((&recorded.code, &recorded.message))
     {
         return Ok(());
     }
@@ -1115,7 +1117,7 @@ pub(super) async fn enrich_config(
 /// region from IMDS waits for a timeout, and every deployment pass would pay it again.
 const BASE_CLOUD_RETRY_AFTER: Duration = Duration::from_secs(300);
 
-static BASE_CLOUD_FAILURE: std::sync::Mutex<Option<(Platform, std::time::Instant)>> =
+static BASE_CLOUD_FAILURE: std::sync::Mutex<Option<(Platform, std::time::Instant, String)>> =
     std::sync::Mutex::new(None);
 
 /// The last base cloud client this process built. Once the Operator has had a working
@@ -1133,18 +1135,71 @@ fn last_good_base_cloud(base_platform: Platform) -> Option<ClientConfig> {
         .map(|(_, cloud)| cloud)
 }
 
-/// The base cloud client, or `None` when its region or credentials cannot be resolved and
-/// none has ever been built. The reason is logged once per failure window.
-async fn base_cloud_client(base_platform: Platform) -> Option<ClientConfig> {
-    let recently_failed = BASE_CLOUD_FAILURE
+/// Whether the pod's configuration names a base cloud identity: a region and a way to sign
+/// in (an IRSA role and token file, a Pod Identity credentials endpoint, access keys or an
+/// explicit profile for AWS). This reads only what is set on the pod; it never calls the
+/// cloud, so a slow or failing call can never change the answer.
+///
+/// Without it the base cloud stays a label and the deployment runs as plain Kubernetes.
+/// With it, a failing call is an error to wait out and retry, never "not configured".
+fn base_cloud_configured(base_platform: Platform, env: &HashMap<String, String>) -> bool {
+    let set = |name: &str| env.get(name).is_some_and(|value| !value.trim().is_empty());
+    match base_platform {
+        Platform::Aws => {
+            let region = set("AWS_REGION") || set("AWS_DEFAULT_REGION");
+            let sign_in = (set("AWS_ROLE_ARN") && set("AWS_WEB_IDENTITY_TOKEN_FILE"))
+                || (set("AWS_ACCESS_KEY_ID") && set("AWS_SECRET_ACCESS_KEY"))
+                || set("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+                || set("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+                || set("AWS_PROFILE");
+            region && sign_in
+        }
+        Platform::Gcp => [
+            "GCP_ACCESS_TOKEN",
+            "GOOGLE_SERVICE_ACCOUNT_KEY",
+            "GCP_SERVICE_ACCOUNT_KEY",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "GCP_PROJECT_ID",
+            "GOOGLE_CLOUD_PROJECT",
+        ]
+        .iter()
+        .any(|name| set(name)),
+        Platform::Azure => {
+            set("AZURE_ACCESS_TOKEN")
+                || set("AZURE_CLIENT_ID")
+                || set("IDENTITY_ENDPOINT")
+                || set("AZURE_FEDERATED_TOKEN_FILE")
+        }
+        _ => false,
+    }
+}
+
+/// The base cloud client: `Ok(None)` when the pod names no base cloud identity (plain
+/// Kubernetes), `Ok(Some)` when it was built, and an error when an identity is configured
+/// but the cloud could not be reached. The error is retried on the next pass (a failed
+/// resolution is remembered for a while so each pass does not wait out a timeout again); a
+/// client that was ever built is kept meanwhile.
+async fn base_cloud_client(base_platform: Platform) -> Result<Option<ClientConfig>> {
+    let env: HashMap<String, String> = std::env::vars().collect();
+    if !base_cloud_configured(base_platform, &env) {
+        info!(
+            base_platform = %base_platform,
+            "No base cloud identity is set on the Operator pod; running as plain Kubernetes"
+        );
+        return Ok(None);
+    }
+    let recent_failure = BASE_CLOUD_FAILURE
         .lock()
         .ok()
-        .and_then(|failure| *failure)
-        .is_some_and(|(platform, at)| {
-            platform == base_platform && at.elapsed() < BASE_CLOUD_RETRY_AFTER
+        .and_then(|failure| failure.clone())
+        .filter(|(platform, at, _)| {
+            *platform == base_platform && at.elapsed() < BASE_CLOUD_RETRY_AFTER
         });
-    if recently_failed {
-        return last_good_base_cloud(base_platform);
+    if let Some((_, _, message)) = recent_failure {
+        return match last_good_base_cloud(base_platform) {
+            Some(cloud) => Ok(Some(cloud)),
+            None => Err(AlienError::new(ErrorData::ConfigurationError { message })),
+        };
     }
     match ClientConfig::from_std_env(base_platform).await {
         Ok(cloud) => {
@@ -1154,7 +1209,7 @@ async fn base_cloud_client(base_platform: Platform) -> Option<ClientConfig> {
             if let Ok(mut good) = BASE_CLOUD_LAST_GOOD.lock() {
                 *good = Some((base_platform, cloud.clone()));
             }
-            Some(cloud)
+            Ok(Some(cloud))
         }
         Err(error) => {
             let last_good = last_good_base_cloud(base_platform);
@@ -1166,13 +1221,19 @@ async fn base_cloud_client(base_platform: Platform) -> Option<ClientConfig> {
                 if last_good.is_some() {
                     "keeping the last working one"
                 } else {
-                    "running as plain Kubernetes"
+                    "trying again later"
                 }
             );
+            let message = format!(
+                "The {base_platform} cloud identity is configured on the Operator pod but its credentials could not be resolved ({error}). The Operator tries again; if this persists check the pod's role and that the cloud's identity service is reachable"
+            );
             if let Ok(mut failure) = BASE_CLOUD_FAILURE.lock() {
-                *failure = Some((base_platform, std::time::Instant::now()));
+                *failure = Some((base_platform, std::time::Instant::now(), message.clone()));
             }
-            last_good
+            match last_good {
+                Some(cloud) => Ok(Some(cloud)),
+                None => Err(AlienError::new(ErrorData::ConfigurationError { message })),
+            }
         }
     }
 }
@@ -1192,11 +1253,13 @@ pub(super) async fn resolve_client_config(
                     additional_headers: None,
             };
             // The base cloud is a label for the cluster until a resource needs the
-            // cloud's API. Without its region or credentials the deployment still
-            // runs as plain Kubernetes; a resource that needs the cloud fails with
+            // cloud's API. When the pod names no cloud identity the deployment runs as
+            // plain Kubernetes, and a resource that needs the cloud fails with
             // `BaseCloudUnavailable`, which reaches the manager as the deployment's error.
+            // When an identity is configured but the cloud cannot be reached, the pass
+            // fails and is retried; it never falls back to plain Kubernetes.
             if let Some(base_platform) = base_platform {
-                match base_cloud_client(base_platform).await {
+                match base_cloud_client(base_platform).await? {
                     Some(cloud) => Ok(ClientConfig::KubernetesCloud {
                         kubernetes: Box::new(kubernetes),
                         cloud: Box::new(cloud),
@@ -1258,42 +1321,144 @@ mod base_cloud_client_tests {
             .expect("a missing base cloud must not stop the deployment")
     }
 
+    fn configured_aws(sts: &str, token_file: &str) -> Vec<(&'static str, Option<String>)> {
+        vec![
+            ("AWS_REGION", Some("us-east-1".into())),
+            // Pod Identity: the credentials come from an endpoint, and the account id is
+            // looked up with them.
+            (
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                Some("http://127.0.0.1:9/creds".into()),
+            ),
+            (
+                "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+                Some(token_file.into()),
+            ),
+            ("AWS_ROLE_ARN", None),
+            ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+            ("AWS_ACCOUNT_ID", None),
+            ("AWS_EC2_METADATA_DISABLED", Some("true".into())),
+            (
+                "AWS_SERVICE_OVERRIDES_ENDPOINTS",
+                Some(format!("{{\"sts\":\"{sts}\"}}")),
+            ),
+        ]
+    }
+
+    fn try_resolve(base: Platform) -> alien_error::Result<ClientConfig, crate::error::ErrorData> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(resolve_client_config(
+                Platform::Kubernetes,
+                Some(base),
+                "/tmp/unused",
+                Some("alien".to_string()),
+                None,
+            ))
+    }
+
+    /// A Pod Identity endpoint is set on the pod, but the call fails (right after a restart, a
+    /// timeout, a token file not mounted yet). That is not "not configured": the pass fails
+    /// and is retried, and nothing switches to plain Kubernetes. Once the call works again
+    /// the cloud client is built.
+    #[test]
+    fn a_failing_sign_in_on_a_configured_install_is_retried_not_dropped() {
+        let directory = tempfile::tempdir().unwrap();
+        let token = directory.path().join("token");
+        std::fs::write(&token, "token").unwrap();
+        let token = token.to_str().unwrap().to_string();
+        let down = configured_aws("http://127.0.0.1:9", &token);
+        temp_env::with_vars(down, || {
+            reset_cache();
+            let error = try_resolve(Platform::Aws).expect_err(
+                "a configured install whose sign-in fails must not become plain Kubernetes",
+            );
+            assert!(error.message.contains("configured"), "{}", error.message);
+            // Still failing inside the retry window: the same error, no new wait.
+            assert!(try_resolve(Platform::Aws).is_err());
+            // The retry window passes and the identity service answers (access keys stand in
+            // for a working sign-in, an account id avoids the lookup).
+            *BASE_CLOUD_FAILURE.lock().unwrap() = None;
+            temp_env::with_vars(
+                [
+                    ("AWS_CONTAINER_CREDENTIALS_FULL_URI", None::<&str>),
+                    ("AWS_ACCESS_KEY_ID", Some("AKIAEXAMPLE")),
+                    ("AWS_SECRET_ACCESS_KEY", Some("secret")),
+                    ("AWS_ACCOUNT_ID", Some("123456789012")),
+                ],
+                || {
+                    let config = try_resolve(Platform::Aws).expect("recovered");
+                    assert!(
+                        matches!(config, ClientConfig::KubernetesCloud { .. }),
+                        "{config:?}"
+                    );
+                },
+            );
+        });
+        reset_cache();
+    }
+
+    /// A region and no way to sign in (the case the portal's Helm values produce on EKS
+    /// without IRSA) is plain Kubernetes at once, with no call to the cloud.
+    #[test]
+    fn a_region_without_a_sign_in_is_plain_kubernetes() {
+        temp_env::with_vars(
+            [
+                ("AWS_REGION", Some("us-east-1")),
+                ("AWS_ROLE_ARN", None),
+                ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
+                ("AWS_ACCESS_KEY_ID", None),
+                ("AWS_SECRET_ACCESS_KEY", None),
+                ("AWS_PROFILE", None),
+                ("AWS_CONTAINER_CREDENTIALS_FULL_URI", None),
+                ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", None),
+            ],
+            || {
+                reset_cache();
+                let started = std::time::Instant::now();
+                let config = try_resolve(Platform::Aws).expect("plain Kubernetes");
+                assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+                assert!(
+                    started.elapsed() < std::time::Duration::from_secs(2),
+                    "no cloud call is made"
+                );
+            },
+        );
+    }
+
     /// Once the Operator has built the base cloud client it keeps using it: a later
     /// failure to resolve the cloud identity does not replace it with plain Kubernetes.
     #[test]
     fn a_working_base_cloud_client_is_never_dropped() {
+        let directory = tempfile::tempdir().unwrap();
+        let token = directory.path().join("token");
+        std::fs::write(&token, "token").unwrap();
+        let token = token.to_str().unwrap().to_string();
         let working = [
-            ("AWS_ACCESS_KEY_ID", Some("AKIAEXAMPLE")),
-            ("AWS_SECRET_ACCESS_KEY", Some("secret")),
-            ("AWS_REGION", Some("us-east-1")),
-            ("AWS_ACCOUNT_ID", Some("123456789012")),
+            ("AWS_ACCESS_KEY_ID", Some("AKIAEXAMPLE".to_string())),
+            ("AWS_SECRET_ACCESS_KEY", Some("secret".to_string())),
+            ("AWS_REGION", Some("us-east-1".to_string())),
+            ("AWS_ACCOUNT_ID", Some("123456789012".to_string())),
         ];
-        let broken = [
-            ("AWS_ACCESS_KEY_ID", None),
-            ("AWS_SECRET_ACCESS_KEY", None),
-            ("AWS_REGION", None),
-            ("AWS_DEFAULT_REGION", None),
-            ("AWS_ACCOUNT_ID", None),
-            ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
-            ("AWS_CONTAINER_CREDENTIALS_FULL_URI", None),
-            ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", None),
-            // Don't wait for a metadata service that is not there.
-            ("AWS_EC2_METADATA_DISABLED", Some("true")),
-        ];
-        // One outer `with_vars` keeps the process-wide environment lock across both phases,
-        // so the other test's cache reset cannot run in between.
+        let broken = configured_aws("http://127.0.0.1:9", &token);
         temp_env::with_vars(working, || {
             reset_cache();
-            let config = resolve(Platform::Aws);
-            assert!(matches!(config, ClientConfig::KubernetesCloud { .. }), "{config:?}");
+            let config = try_resolve(Platform::Aws).unwrap();
+            assert!(
+                matches!(config, ClientConfig::KubernetesCloud { .. }),
+                "{config:?}"
+            );
             temp_env::with_vars(broken, || {
-                // Expire the failure window so the resolution is attempted again.
                 *BASE_CLOUD_FAILURE.lock().unwrap() = None;
-                let config = resolve(Platform::Aws);
-                assert!(matches!(config, ClientConfig::KubernetesCloud { .. }), "{config:?}");
-                // And a cloud that was never built stays plain Kubernetes.
-                let config = resolve(Platform::Gcp);
-                assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+                let config = try_resolve(Platform::Aws).unwrap();
+                assert!(
+                    matches!(config, ClientConfig::KubernetesCloud { .. }),
+                    "{config:?}"
+                );
             });
         });
         reset_cache();
@@ -2382,8 +2547,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -2555,7 +2720,10 @@ mod tests {
         current.status = DeploymentStatus::Pending;
         current.error = None;
         current.target_release = current.current_release.clone();
-        assert!(current.target_release.is_some(), "the fixture has a release");
+        assert!(
+            current.target_release.is_some(),
+            "the fixture has a release"
+        );
         state.db.set_deployment_state(&current).await.unwrap();
 
         let error = AlienError::new(ErrorData::ConfigurationError {
@@ -2564,9 +2732,20 @@ mod tests {
         record_pass_error(&state, &error).await.unwrap();
 
         let recorded = state.db.get_deployment_state().await.unwrap().unwrap();
-        assert_eq!(recorded.status, DeploymentStatus::Pending, "it keeps retrying");
-        let message = recorded.error.clone().expect("the error is visible").message;
-        assert!(message.contains("No region for the base cloud"), "{message}");
+        assert_eq!(
+            recorded.status,
+            DeploymentStatus::Pending,
+            "it keeps retrying"
+        );
+        let message = recorded
+            .error
+            .clone()
+            .expect("the error is visible")
+            .message;
+        assert!(
+            message.contains("No region for the base cloud"),
+            "{message}"
+        );
 
         // A Running deployment keeps its health reporting; the error is not recorded there.
         let mut running = recorded;
