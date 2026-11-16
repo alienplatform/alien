@@ -256,6 +256,15 @@ impl SandboxEgress {
     }
 }
 
+/// What a caller is told when it asks a Google Cloud sandbox for a per-sandbox outbound policy.
+///
+/// On Google Cloud `internet` is Google's own open outbound path: any host and port, through
+/// Google's shared addresses. Nothing of ours sits on that path, so no host list can be enforced
+/// and there is no fixed egress IP. The binding and the plan-time check share this text.
+pub const GCP_NO_EGRESS_ALLOWLIST: &str = "Google Cloud sandboxes have no outbound allowlist: \
+`internet` is open outbound through Google's shared addresses (no fixed egress IP) and takes no \
+per-sandbox policy; declare `none` to block all outbound traffic";
+
 /// Per-session deadline metadata read by the external lifecycle reaper.
 pub const SANDBOX_EXPIRY_LABEL: &str = "alienExpiresAtMs";
 
@@ -817,6 +826,12 @@ impl Sandbox {
                 }));
             }
             policy.validate()?;
+            if platform == Platform::Gcp {
+                return Err(AlienError::new(ErrorData::SandboxEgressInvalid {
+                    target: "defaultPolicy".into(),
+                    reason: GCP_NO_EGRESS_ALLOWLIST.into(),
+                }));
+            }
         }
         if self.image_user == Some(0) && platform == Platform::Local {
             return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
@@ -1238,20 +1253,6 @@ impl Sandbox {
 
         if matches!(self.egress, SandboxEgress::None) {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
-        }
-
-        // `internet` needs a gateway-enforced policy, and on default placement there is no
-        // enforcement point outside the guest: the sandbox's traffic leaves through Google's own
-        // path, where nothing of ours can allow some hosts and deny the rest. It would plan
-        // cleanly and then run without a policy. A private network placement (PSC-I) or VPC
-        // Service Controls would give one; each has to be accepted by the deployment first, and
-        // the project's first sandbox pins the placement for good. Until one of them is chosen,
-        // or Google ships an egress allowlist for Agent Platform, this stays refused.
-        if platform == Platform::Gcp && matches!(self.egress, SandboxEgress::Internet) {
-            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
-                capability: "egress internet: there is no enforcement point outside the guest on GCP Agent Platform without PSC-I or VPC Service Controls, so a host:port policy could not be enforced; declare egress none".to_string(),
-                platform: platform.to_string(),
-            }));
         }
 
         // The agent serves on its own port, which the template declares first and the agent
@@ -1931,20 +1932,29 @@ mod tests {
     /// A URI with no token must come back whole, because every bundle configured today has none
     /// and emitting one differently would change every existing customer's template.
     #[test]
-    fn gcp_refuses_internet_egress_at_plan_time_and_still_takes_none() {
-        let refused = sandbox_with(SandboxEgress::Internet, vec![])
+    fn gcp_takes_internet_as_open_outbound_and_refuses_an_allowlist_policy() {
+        sandbox_with(SandboxEgress::Internet, vec![])
             .validate_for_platform(Platform::Gcp)
-            .unwrap_err();
-        assert!(refused.to_string().contains("egress internet"), "{refused}");
-        assert!(
-            refused
-                .to_string()
-                .contains("no enforcement point outside the guest"),
-            "{refused}"
-        );
+            .unwrap();
         sandbox_with(SandboxEgress::None, vec![])
             .validate_for_platform(Platform::Gcp)
             .unwrap();
+        for policy in [
+            EgressPolicy::Allow {
+                allow: vec!["api.example.com".into()],
+            },
+            EgressPolicy::Internet,
+        ] {
+            let mut declared = sandbox_with(SandboxEgress::Internet, vec![]);
+            declared.default_policy = Some(policy);
+            let refused = declared.validate_for_platform(Platform::Gcp).unwrap_err();
+            assert!(
+                refused
+                    .to_string()
+                    .contains("Google Cloud sandboxes have no outbound allowlist"),
+                "{refused}"
+            );
+        }
     }
 
     /// GCP has no idle policy and nothing in Alien watches for idleness yet, so a declared idle
