@@ -483,12 +483,18 @@ mod tests {
                 mid_rollout_partly_ready += 1;
             }
         }
-        assert!(mid_rollout_partly_ready > 0, "the capture caught a partly ready rollout");
+        assert!(
+            mid_rollout_partly_ready > 0,
+            "the capture caught a partly ready rollout"
+        );
         let settled = read("settled.json");
         assert!(deployment_has_ready_replicas(&settled));
         assert!(!deployment_rollout_in_progress(&settled));
         let failing = read("steady-failure.json");
         assert!(!deployment_has_ready_replicas(&failing));
-        assert!(!deployment_rollout_in_progress(&failing), "a steady failure is drift");
+        assert!(
+            !deployment_rollout_in_progress(&failing),
+            "a steady failure is drift"
+        );
     }
 }

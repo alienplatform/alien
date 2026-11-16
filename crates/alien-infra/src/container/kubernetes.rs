@@ -2180,10 +2180,19 @@ impl KubernetesContainerController {
 
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
 
-    terminal_state!(
+    // A failed health check is checked again: the resource returns to Running when the
+    // workload is healthy, and keeps reporting its error while it is not.
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
@@ -3622,6 +3631,53 @@ mod tests {
                 assert!(!error.retryable);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_refresh_failed_container_is_checked_again_and_recovers_when_healthy() {
+        let config = manifest_test_container(&[], false);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let mut controller = manifest_test_controller();
+        let labels = {
+            let ctx = harness.ctx();
+            controller.workload_labels(&ctx, "web", controller.build_labels("web"))
+        };
+        let server = httpmock::MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/apps/v1/namespaces/test-ns/deployments/web");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"apps/v1", "kind":"Deployment",
+                "metadata":{"name":"web", "generation":3, "labels":labels},
+                "spec":{"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                "status":{"replicas":2,"updatedReplicas":2,"readyReplicas":2,"availableReplicas":2,
+                    "observedGeneration":3,
+                    "conditions":[{"type":"Progressing","status":"True","reason":"NewReplicaSetAvailable"}]}
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/pods");
+            then.status(200).json_body(
+                serde_json::json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[]}),
+            );
+        });
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/v1/namespaces/test-ns/events");
+            then.status(200).json_body(
+                serde_json::json!({"apiVersion":"v1","kind":"EventList","metadata":{},"items":[]}),
+            );
+        });
+        let mut ctx = harness.ctx();
+        point_at(&mut ctx, &server);
+        
+        controller.state = KubernetesContainerState::RefreshFailed;
+        assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
+        // The next step of a refresh-failed container is its health check.
+        let result = controller.step(&ctx).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(controller.get_status(), ResourceStatus::Running);
     }
 
     #[test]

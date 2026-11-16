@@ -1,5 +1,4 @@
-//! A deployment whose health check failed reports why, and returns to Running by itself once
-//! the resource is healthy again.
+//! A deployment whose health check failed keeps reporting why on every later observation.
 mod support;
 
 use alien_core::{
@@ -40,7 +39,7 @@ async fn drive_until(
 }
 
 #[tokio::test]
-async fn refresh_failed_reports_its_error_and_recovers_when_healthy() {
+async fn refresh_failed_keeps_its_error_on_later_observations() {
     let directory = TempDir::new().unwrap();
     let bindings = alien_local::LocalBindingsProvider::new(directory.path()).unwrap();
     let services = Arc::new(DefaultPlatformServiceProvider::with_local_bindings(
@@ -97,18 +96,31 @@ async fn refresh_failed_reports_its_error_and_recovers_when_healthy() {
         s.status == DeploymentStatus::RefreshFailed
     })
     .await;
+    let headline = alien_deployment::deployment_headline_error_from_state(&failed);
+    println!("headline: {headline:?}");
     assert!(
-        failed.error.is_some(),
+        headline.is_some(),
         "a RefreshFailed deployment must carry its error"
     );
 
-    // It becomes healthy again with nobody asking for a retry.
-    std::fs::rename(&moved, &data).unwrap();
-    assert!(!failed.retry_requested);
-    let recovered = drive_until(failed, &config, &client, services, |s| {
-        s.status == DeploymentStatus::Running
-    })
-    .await;
-    assert!(recovered.error.is_none());
+    // Observation continues while it is unhealthy: the reason stays visible.
+    let mut failed = failed;
+    for _ in 0..3 {
+        let result = crate::support::step(
+            failed,
+            config.clone(),
+            client.clone(),
+            Some(services.clone()),
+        )
+        .await
+        .unwrap();
+        failed = result.state;
+        assert_eq!(failed.status, DeploymentStatus::RefreshFailed);
+        assert!(
+            alien_deployment::deployment_headline_error_from_state(&failed).is_some(),
+            "error went missing on a later observation"
+        );
+    }
+
     bindings.shutdown().await;
 }

@@ -2,7 +2,7 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::{StackExecutor, StackResourceStateExt};
+use alien_infra::StackExecutor;
 use tracing::info;
 
 /// Handle Running status (health checks)
@@ -128,31 +128,9 @@ pub async fn handle_running(
     if has_failed {
         info!("Health check failed for one or more resources");
 
-        // Say why: a failed deployment never shows an empty error.
-        next.error = step_result
-            .next_state
-            .resources
-            .values()
-            .filter(|resource| {
-                matches!(
-                    resource.status,
-                    alien_core::ResourceStatus::ProvisionFailed
-                        | alien_core::ResourceStatus::UpdateFailed
-                        | alien_core::ResourceStatus::DeleteFailed
-                        | alien_core::ResourceStatus::RefreshFailed
-                )
-            })
-            .find_map(|resource| resource.error.clone())
-            .or_else(|| {
-                Some(
-                    AlienError::new(ErrorData::StackExecutionFailed {
-                        message: "A resource health check failed".to_string(),
-                    })
-                    .into_generic(),
-                )
-            });
         next.status = DeploymentStatus::RefreshFailed;
         next.stack_state = Some(step_result.next_state);
+        next.error = None;
 
         Ok(DeploymentStepResult {
             state: next,
@@ -203,22 +181,6 @@ pub async fn handle_refresh_failed(
     if !current.retry_requested {
         // Observation must continue after a transient health failure. Do not
         // reset controller state or enter a create/update retry flow here.
-        //
-        // A resource whose health check failed is checked again on every observation: it goes
-        // back to Running when it is healthy, and keeps its new error when it is not. Only
-        // RefreshFailed resources are resumed; other failures need an update or an explicit retry.
-        let mut current = current;
-        if let Some(stack_state) = current.stack_state.as_mut() {
-            for (resource_id, resource) in &mut stack_state.resources {
-                if resource.status == alien_core::ResourceStatus::RefreshFailed {
-                    resource
-                        .retry_failed()
-                        .context(ErrorData::StackExecutionFailed {
-                            message: format!("Failed to check resource '{resource_id}' again"),
-                        })?;
-                }
-            }
-        }
         return handle_running(current, config, client_config, service_provider).await;
     }
 

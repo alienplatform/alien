@@ -3476,7 +3476,20 @@ impl StackExecutor {
                     None
                 };
                 state.retry_attempt = next_retry_attempt;
-                state.error = next_error;
+                // Stepping a failed resource that stays failed does nothing and succeeds; that
+                // is not a reason to forget why it failed.
+                let stays_failed = next_status == current_resource_state.status
+                    && matches!(
+                        next_status,
+                        ResourceStatus::ProvisionFailed
+                            | ResourceStatus::UpdateFailed
+                            | ResourceStatus::DeleteFailed
+                            | ResourceStatus::RefreshFailed
+                    );
+                state.error = match next_error {
+                    None if stays_failed => current_resource_state.error.clone(),
+                    other => other,
+                };
             });
 
             if let Some(checkpoint) = failed_create_checkpoint {

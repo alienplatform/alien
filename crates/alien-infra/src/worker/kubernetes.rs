@@ -1218,10 +1218,19 @@ impl KubernetesWorkerController {
 
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
 
-    terminal_state!(
+    // A failed health check is checked again: the resource returns to Running when the
+    // workload is healthy, and keeps reporting its error while it is not.
+    #[handler(
         state = RefreshFailed,
-        status = ResourceStatus::RefreshFailed
-    );
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready(ctx).await
+    }
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
