@@ -2239,6 +2239,14 @@ mod lost_enrollment_tests {
         axum::Json(body): axum::Json<Value>,
     ) -> axum::response::Response {
         use axum::response::IntoResponse;
+        // A configured status makes the rotation fail with it (an unavailable or refusing
+        // manager); otherwise it rotates.
+        let status = manager.exchange_status.load(Ordering::SeqCst);
+        if status != 0 {
+            return axum::http::StatusCode::from_u16(status)
+                .unwrap()
+                .into_response();
+        }
         let mut installed = manager.installed.lock().await;
         if installed.as_deref() != body["key"].as_str().map(key_hash).as_deref() {
             return axum::http::StatusCode::UNAUTHORIZED.into_response();
@@ -2268,16 +2276,6 @@ mod lost_enrollment_tests {
             "expiresAt": Utc::now() + chrono::Duration::minutes(5),
         }))
         .into_response()
-    }
-
-    /// Rotation answers with the configured status; it never rotates.
-    async fn rotate(
-        axum::extract::State(manager): axum::extract::State<EnrollManager>,
-    ) -> axum::http::StatusCode {
-        match manager.exchange_status.load(Ordering::SeqCst) {
-            0 => axum::http::StatusCode::NOT_FOUND,
-            status => axum::http::StatusCode::from_u16(status).unwrap(),
-        }
     }
 
     async fn fixture(answer: u8) -> (Arc<OperatorDb>, String, EnrollManager, tempfile::TempDir) {
