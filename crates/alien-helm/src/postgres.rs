@@ -62,7 +62,7 @@ pub(crate) const HELPERS: &str = r#"
 {{- range $id, $database := .Values.postgres -}}
   {{- if and $database.enabled (not (hasKey (default dict $.Values.infrastructure) $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) -}}
     {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
-    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" (default $name $database.existingPasswordSecret) "key" "password")) "sslMode" "disable") -}}
+    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" (default (include "deployment.operatorSecretName" $) $database.existingPasswordSecret) "key" (ternary "password" (printf "postgres-%s-password" $id) (not (empty $database.existingPasswordSecret))))) "sslMode" "disable") -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -99,34 +99,10 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
     {{- fail (printf "Postgres image differs from postgres.%s.recordedImage; retain the recorded image or migrate the database before changing the pin" $id) }}
   {{- end }}
 {{- end }}
-{{- $credentials := default $name $database.existingPasswordSecret }}
-{{- if not $database.existingPasswordSecret }}
-{{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
-{{- $password := "" }}
-{{- if $existing }}
-  {{- $password = required "Existing Postgres Secret has no password; restore its original password" (index $existing.data "password") }}
-{{- else }}
-  {{- if lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
-    {{- fail "Postgres data exists but its credentials Secret is missing; restore the original Secret before installing" }}
-  {{- end }}
-  {{- if not (lookup "v1" "Secret" $.Release.Namespace "") }}
-    {{- fail "Cannot read Secrets in the database namespace; create the namespace before installing, or set postgres.<resource>.existingPasswordSecret to a Secret containing the password key for offline rendering" }}
-  {{- end }}
-  {{- $password = randAlphaNum 48 | b64enc }}
-{{- end }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ $name }}
-  annotations:
-    helm.sh/resource-policy: keep
-  labels:
-    {{- $labels | toYaml | nindent 4 }}
-type: Opaque
-data:
-  password: {{ $password | quote }}
-{{- end }}
+{{- /* The password lives in the Secret the Operator owns, or in the Secret named by
+existingPasswordSecret. The chart generates none: the Pod waits until the Secret exists. */ -}}
+{{- $credentials := default (include "deployment.operatorSecretName" $) $database.existingPasswordSecret }}
+{{- $credentialsKey := ternary "password" (printf "postgres-%s-password" $id) (not (empty $database.existingPasswordSecret)) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -211,7 +187,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $credentials }}
-                  key: password
+                  key: {{ $credentialsKey }}
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           readinessProbe:

@@ -1,11 +1,12 @@
-//! `gitops.enabled` makes a render fail instead of generating credentials.
+//! One install path for Helm, Flux and Argo CD.
 //!
-//! Without cluster access (Argo CD, `helm template`) `lookup` is empty, so a
-//! generated encryption key or collector token differs on every render. The
-//! GitOps profile refuses those renders; each test renders the real chart.
+//! Argo CD renders offline (`helm template`), so a chart that generates a value at
+//! render time would change it on every sync. The chart generates nothing: the
+//! Operator creates the values it needs in a Secret it owns. Each test renders the
+//! real chart.
 
 use super::{helpers::render, test_utils};
-use alien_core::{ResourceLifecycle, Stack, StackSettings, Storage};
+use alien_core::{Postgres, ResourceLifecycle, Stack, StackSettings, Storage};
 use serde::Deserialize;
 
 fn chart_files() -> test_utils::LinterFiles {
@@ -14,73 +15,171 @@ fn chart_files() -> test_utils::LinterFiles {
             Storage::new("data".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
+        .add(
+            Postgres::new("metadata".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .build();
     render(&stack, StackSettings::default()).files
 }
 
-const EXISTING: &str = "gitops:\n  enabled: true\nmanagement:\n  existingSecret:\n    name: alien-management\nruntime:\n  encryption:\n    existingSecret:\n      name: alien-encryption\n";
+const CODE_VALUES: &str = "management:\n  url: https://manager.example.com\n  enrollmentCode: ax_enroll_example\n  audience: https://manager.example.com\n  deploymentId: dep_example\nlogCollector:\n  enabled: true\n  mode: nodeAgent\npostgres:\n  metadata:\n    enabled: true\nruntime:\n  image:\n    pullWithManagementToken: true\n";
+
+fn documents(manifest: &str) -> Vec<serde_yaml::Value> {
+    serde_yaml::Deserializer::from_str(manifest)
+        .filter_map(|document| serde_yaml::Value::deserialize(document).ok())
+        .filter(|document| !document.is_null())
+        .collect()
+}
 
 #[test]
-fn profile_render_with_existing_secrets_generates_nothing() {
+fn two_offline_renders_with_the_same_values_are_identical() {
     let files = chart_files();
-    let rendered = test_utils::helm_template(&files, Some(EXISTING));
-    rendered.assert_ok("gitops with existing secrets");
-    assert!(
-        !rendered.stdout.contains("encryption-key:"),
-        "the chart must not render an encryption key Secret entry:\n{}",
-        rendered.stdout
-    );
-    // Rendering twice gives the same manifests: nothing random in the output.
-    let again = test_utils::helm_template(&files, Some(EXISTING));
-    assert_eq!(rendered.stdout, again.stdout);
-}
-
-#[test]
-fn profile_refuses_a_generated_encryption_key() {
-    let values =
-        "gitops:\n  enabled: true\nmanagement:\n  existingSecret:\n    name: alien-management\n";
-    let rendered = test_utils::helm_template(&chart_files(), Some(values));
-    assert!(!rendered.is_ok(), "{}", rendered.stdout);
-    assert!(
-        rendered
-            .stderr
-            .contains("runtime.encryption.existingSecret.name"),
-        "{}",
-        rendered.stderr
+    for release in ["app", "another-release"] {
+        let first = test_utils::helm_template_for_release(&files, Some(CODE_VALUES), release);
+        first.assert_ok("offline render with a code");
+        let second = test_utils::helm_template_for_release(&files, Some(CODE_VALUES), release);
+        assert_eq!(first.stdout, second.stdout, "{release}: renders differ");
+    }
+    // An upgrade render without cluster access is just as stable.
+    let upgrade_values =
+        format!("{CODE_VALUES}logCollector:\n  scope:\n    deploymentLabelValue: gitops-app\n")
+            .replace("logCollector:\n  enabled: true\n  mode: nodeAgent\n", "");
+    let first = test_utils::helm_template_as_upgrade(&files, Some(&upgrade_values));
+    first.assert_ok("offline upgrade render");
+    assert_eq!(
+        first.stdout,
+        test_utils::helm_template_as_upgrade(&files, Some(&upgrade_values)).stdout
     );
 }
 
 #[test]
-fn profile_refuses_a_management_token_in_values() {
-    let values = "gitops:\n  enabled: true\nmanagement:\n  token: test-credential\nruntime:\n  encryption:\n    existingSecret:\n      name: alien-encryption\n";
-    let rendered = test_utils::helm_template(&chart_files(), Some(values));
-    assert!(!rendered.is_ok(), "{}", rendered.stdout);
-    assert!(
-        rendered.stderr.contains("management.existingSecret.name"),
-        "{}",
-        rendered.stderr
-    );
+fn no_template_outside_a_hook_draws_a_random_value() {
+    let files = chart_files();
+    for (path, contents) in &files {
+        if !path.starts_with("templates/") {
+            continue;
+        }
+        for function in [
+            "randAlphaNum",
+            "randAlpha",
+            "randNumeric",
+            "randAscii",
+            "randBytes",
+            "uuidv4",
+        ] {
+            if !contents.contains(function) {
+                continue;
+            }
+            // Only the Helm hook that proves the release history may draw one.
+            assert!(
+                contents.contains("helm.sh/hook"),
+                "{path} draws a random value with {function} and is not a hook"
+            );
+        }
+    }
 }
 
 #[test]
-fn profile_refuses_a_generated_collector_token() {
-    let values = format!("{EXISTING}logCollector:\n  enabled: true\n  mode: nodeAgent\n");
-    let rendered = test_utils::helm_template(&chart_files(), Some(&values));
-    assert!(!rendered.is_ok(), "{}", rendered.stdout);
-    assert!(
-        rendered.stderr.contains("logCollector.token"),
-        "{}",
-        rendered.stderr
+fn the_chart_renders_neither_operator_owned_secret() {
+    let files = chart_files();
+    let rendered = test_utils::helm_template_for_release(&files, Some(CODE_VALUES), "app");
+    rendered.assert_ok("code install");
+    let documents = documents(&rendered.stdout);
+    let secret_names: Vec<&str> = documents
+        .iter()
+        .filter(|document| document["kind"] == "Secret")
+        .map(|document| document["metadata"]["name"].as_str().unwrap())
+        .collect();
+    // The bootstrap pull Secret is rendered from the code; the Operator's refreshed pull
+    // credential and its own Secret are written by the Operator, so a GitOps tool that
+    // applies the chart again has nothing of theirs to overwrite.
+    assert!(secret_names.contains(&"app-registry"), "{secret_names:?}");
+    assert!(!secret_names.contains(&"app-pull"), "{secret_names:?}");
+    assert!(!secret_names.contains(&"app-operator"), "{secret_names:?}");
+    for document in &documents {
+        for key in ["encryption-key", "collector-token"] {
+            assert!(document["stringData"][key].is_null(), "{key} is rendered");
+            assert!(document["data"][key].is_null(), "{key} is rendered");
+        }
+    }
+    let deployment = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "app")
+        .expect("Operator Deployment");
+    let pod = &deployment["spec"]["template"]["spec"];
+    let pull: Vec<&str> = pod["imagePullSecrets"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|reference| reference["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(pull, ["app-registry", "app-pull"]);
+    let env = |name: &str| -> Option<String> {
+        pod["containers"][0]["env"]
+            .as_sequence()?
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .and_then(|variable| variable["value"].as_str().map(str::to_string))
+    };
+    assert_eq!(
+        env("OPERATOR_OWNED_SECRET").as_deref(),
+        Some("app-operator")
     );
-    let pod_api = format!("{EXISTING}logCollector:\n  enabled: true\n  mode: podApi\n");
-    test_utils::helm_template(&chart_files(), Some(&pod_api)).assert_ok("podApi collector");
+    assert_eq!(env("OPERATOR_REGISTRY_SECRET").as_deref(), Some("app-pull"));
+    assert_eq!(
+        env("OPERATOR_OWNED_SECRET_KEYS").as_deref(),
+        Some("encryption-key=hex32,collector-token=token48,postgres-metadata-password=token48")
+    );
+    // The Operator reads its key from its Secret, not from a mounted file.
+    assert_eq!(env("OPERATOR_ENCRYPTION_KEY_FILE"), None);
+    // Self-update is off unless asked for.
+    assert_eq!(env("OPERATOR_SELF_UPDATE_DEPLOYMENT"), None);
+    // Every consumer waits on the Operator's Secret.
+    for document in &documents {
+        if !matches!(document["kind"].as_str(), Some("StatefulSet" | "DaemonSet")) {
+            continue;
+        }
+        let reference = serde_yaml::to_string(document).unwrap();
+        assert!(reference.contains("name: app-operator"), "{reference}");
+    }
 }
 
 #[test]
-fn without_the_profile_a_render_still_generates_credentials() {
-    // The default (a Helm CLI install) is unchanged.
-    let values = "management:\n  token: test-credential\n";
-    test_utils::helm_template(&chart_files(), Some(values)).assert_ok("helm cli install");
+fn the_code_can_come_from_a_secret_the_user_keeps_out_of_git() {
+    let files = chart_files();
+    let values = "management:\n  url: https://manager.example.com\n  enrollmentCodeSecret:\n    name: my-code\n    key: code\n  audience: https://manager.example.com\n  deploymentId: dep_example\n";
+    let rendered = test_utils::helm_template_for_release(&files, Some(values), "app");
+    rendered.assert_ok("code from a Secret");
+    assert!(!rendered.stdout.contains("ax_enroll"));
+    let documents = documents(&rendered.stdout);
+    let deployment = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment" && document["metadata"]["name"] == "app")
+        .unwrap();
+    let pod = serde_yaml::to_string(&deployment["spec"]["template"]["spec"]).unwrap();
+    assert!(pod.contains("secretName: my-code"), "{pod}");
+    assert!(pod.contains("key: code"), "{pod}");
+    assert!(pod.contains("OPERATOR_ENROLLMENT_CODE_FILE"), "{pod}");
+    // A Secret reference is a credential like the code itself: it needs the deployment and audience.
+    let incomplete = "management:\n  url: https://manager.example.com\n  enrollmentCodeSecret:\n    name: my-code\n";
+    assert!(!test_utils::helm_template_for_release(&files, Some(incomplete), "app").is_ok());
+}
+
+#[test]
+fn the_removed_install_inputs_are_not_in_the_shipped_values() {
+    let files = chart_files();
+    let values = &files["values.yaml"];
+    for removed in [
+        "gitops:",
+        "existingSecret:\n    name: \"\"\n    tokenKey",
+        "encryption:",
+    ] {
+        assert!(!values.contains(removed), "values.yaml still has {removed}");
+    }
+    assert!(!files
+        .keys()
+        .any(|path| path.contains("gitops") && path.starts_with("templates/")));
 }
 
 fn yaml_documents(text: &str) -> Vec<serde_yaml::Value> {
@@ -104,7 +203,7 @@ fn the_flux_example_installs_with_its_own_values() {
     assert_eq!(kinds, ["OCIRepository", "HelmRelease"]);
     assert_eq!(documents[0]["spec"]["ref"]["semver"], "1.x");
     let values = &documents[1]["spec"]["values"];
-    assert_eq!(values["runtime"]["image"]["selfUpdate"], false);
+    assert_example_values_are_the_install_values(values);
     test_utils::helm_template(&chart, Some(&to_yaml(values))).assert_ok("flux example values");
 }
 
@@ -121,14 +220,36 @@ fn the_argo_example_installs_with_its_own_values() {
         application["spec"]["source"]["chart"]
     );
     let values = &application["spec"]["source"]["helm"]["valuesObject"];
-    assert_eq!(values["runtime"]["image"]["selfUpdate"], false);
-    for key in ["existingSecret"] {
-        assert!(values["management"][key]["name"].is_string());
-        assert!(values["runtime"]["encryption"][key]["name"].is_string());
-    }
-    assert!(values["infrastructureExistingSecret"].is_string());
-    assert!(values["runtime"]["imagePullSecrets"][0]["name"].is_string());
-    test_utils::helm_template(&chart, Some(&to_yaml(values))).assert_ok("argo example values");
+    assert_example_values_are_the_install_values(values);
+    let rendered = test_utils::helm_template(&chart, Some(&to_yaml(values)));
+    rendered.assert_ok("argo example values");
+    // Argo CD renders on every sync: the same values must give the same manifests.
+    assert_eq!(
+        rendered.stdout,
+        test_utils::helm_template(&chart, Some(&to_yaml(values))).stdout
+    );
+}
+
+/// The GitOps examples set what any install sets (the manager URL, the enrollment code
+/// and its deployment, the infrastructure) and nothing else: no mode, no pre-made Secrets.
+fn assert_example_values_are_the_install_values(values: &serde_yaml::Value) {
+    let keys: Vec<&str> = values
+        .as_mapping()
+        .unwrap()
+        .keys()
+        .map(|key| key.as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["management", "infrastructure"]);
+    let management: Vec<&str> = values["management"]
+        .as_mapping()
+        .unwrap()
+        .keys()
+        .map(|key| key.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        management,
+        ["url", "enrollmentCode", "deploymentId", "audience"]
+    );
 }
 
 #[test]

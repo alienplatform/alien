@@ -62,9 +62,6 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
     pub deployment_name: &'a str,
     pub manager_url: &'a str,
     pub credential: ManagementCredential<'a>,
-    /// 64 hex characters, or empty to keep the key the installed Secret holds
-    /// (the chart reads it on upgrade and refuses to invent a new one).
-    pub runtime_encryption_key: &'a str,
     pub stack: &'a Stack,
     pub stack_state: &'a alien_core::StackState,
     pub stack_settings: &'a StackSettings,
@@ -326,6 +323,10 @@ fn generate_helm_chart_internal(
     files.insert(
         "templates/registry-secret.yaml".to_string(),
         registry_secret_tpl(),
+    );
+    files.insert(
+        "templates/migration-secret.yaml".to_string(),
+        include_str!("templates/migration-secret.yaml").to_string(),
     );
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert(
@@ -2297,10 +2298,6 @@ fn generate_operator_manifest_inner(
 
 /// Render one complete values file from registered deployment state.
 pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
-    if !options.runtime_encryption_key.is_empty() {
-        validate_runtime_encryption_key(options.runtime_encryption_key)?;
-    }
-
     let registry = HelmRegistry::built_in();
     let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
     let mut yaml = String::new();
@@ -2336,13 +2333,6 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     yaml.push_str(&format!(
         "  healthChecks: {}\n\n",
         yaml_string(heartbeats_mode_value(options.stack_settings.heartbeats))
-    ));
-
-    yaml.push_str("runtime:\n");
-    yaml.push_str("  encryption:\n");
-    yaml.push_str(&format!(
-        "    key: {}\n\n",
-        yaml_string(options.runtime_encryption_key)
     ));
 
     append_stack_settings(&mut yaml, options.stack_settings)?;
@@ -4086,13 +4076,18 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
     yaml.push_str(
         r#"management:
   token: ""
-  existingSecret:
-    name: ""
-    tokenKey: sync-token
   # One-hour, one-use code that enrolls the Operator for a registered
   # deployment, instead of token. The Operator then keeps its own key, which
   # it replaces every day. Requires deploymentId, audience and persistence.
+  # Once the Operator is enrolled it ignores the code, so a GitOps tool that
+  # applies the same values again changes nothing.
   enrollmentCode: ""
+  # Keep the code out of Git: name a Secret you created, and the key that holds
+  # the code. Used instead of enrollmentCode. The chart cannot read that Secret to
+  # build the bootstrap image pull credential, so give runtime.imagePullSecrets too.
+  enrollmentCodeSecret:
+    name: ""
+    key: enrollment-code
   # The manager audience returned with the enrollment code.
   audience: ""
   name: ""
@@ -4129,23 +4124,16 @@ runtime:
     pullWithManagementToken: false
     # Follow the Operator image the manager targets, so upgrades need no helm
     # upgrade. The Deployment is Recreate: the running pod stops before the
-    # new one starts. Set false when you deliver upgrades yourself (Argo CD,
-    # Flux, Renovate): the Operator then changes only with the chart version.
+    # new one starts. Off by default: the Operator then changes only with the
+    # chart version. Set true to let the Operator update itself.
     # Ignored when `digest` is set: a pinned Operator stays on that digest.
-    selfUpdate: true
+    selfUpdate: false
   # Pull secrets for the Operator and for the application's workloads (added
   # to their ServiceAccounts), for images in a registry that needs credentials.
   imagePullSecrets: []
   podLabels: {}
   podAnnotations: {}
   automountServiceAccountToken: true
-  encryption:
-    # Empty generates a key on first install and retains it across upgrades.
-    # Alternatively provide a stable 64-character hex key or an existing Secret.
-    key: ""
-    existingSecret:
-      name: ""
-      key: encryption-key
   replicas: 1
   resources:
     requests:
@@ -4345,7 +4333,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n# Set true when Flux, Argo CD or another tool renders this chart without access to\n# the cluster (`helm template`). The render then fails unless existing Secrets supply\n# every credential the chart would otherwise generate: a generated value would change\n# on every render. Requires management.existingSecret.name,\n# runtime.encryption.existingSecret.name, and either logCollector.mode=podApi or\n# logCollector.token.\ngitops:\n  enabled: false\n\n# The Operator Role can manage Ingresses, Gateways, HTTPRoutes and load balancer health\n# checks for the stack's public endpoints. Set false when stackSettings.kubernetes.exposure\n# is disabled, so the Role doesn't carry them.\nrbac:\n  routing:\n    enabled: true\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
+    yaml.push_str("\ninfrastructure: null\ninfrastructureExistingSecret: \"\"\n\n# The Operator Role can manage Ingresses, Gateways, HTTPRoutes and load balancer health\n# checks for the stack's public endpoints. Set false when stackSettings.kubernetes.exposure\n# is disabled, so the Role doesn't carry them.\nrbac:\n  routing:\n    enabled: true\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -4961,12 +4949,21 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "existingSecret": {
           "type": "object",
           "additionalProperties": false,
+          "description": "Read only while upgrading from a chart that took the management token from a Secret you made. Remove it from your values after the upgrade.",
           "properties": {
             "name": { "type": "string" },
             "tokenKey": { "type": "string", "minLength": 1 }
           }
         },
         "enrollmentCode": { "type": "string" },
+        "enrollmentCodeSecret": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "key": { "type": "string", "minLength": 1 }
+          }
+        },
         "audience": { "type": "string" },
         "name": { "type": "string" },
         "url": { "type": "string" },
@@ -4987,9 +4984,24 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
           "audience": { "minLength": 1 },
           "deploymentId": { "type": "string", "minLength": 1 },
           "token": { "enum": [""] },
-          "existingSecret": { "properties": { "name": { "enum": [""] } } }
+          "existingSecret": { "properties": { "name": { "enum": [""] } } },
+          "enrollmentCodeSecret": { "properties": { "name": { "enum": [""] } } }
         }
-      }
+      },
+      "allOf": [{
+        "if": {
+          "required": ["enrollmentCodeSecret"],
+          "properties": { "enrollmentCodeSecret": { "required": ["name"], "properties": { "name": { "minLength": 1 } } } }
+        },
+        "then": {
+          "required": ["audience", "deploymentId"],
+          "properties": {
+            "audience": { "minLength": 1 },
+            "deploymentId": { "type": "string", "minLength": 1 },
+            "token": { "enum": [""] }
+          }
+        }
+      }]
     },
     "global": {
       "type": "object",
@@ -5036,6 +5048,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "encryption": {
           "type": "object",
           "additionalProperties": false,
+          "description": "Read only while upgrading from a chart that took the encryption key from values or a Secret you made. The Operator now keeps the key in its own Secret. Remove it from your values after the upgrade.",
           "properties": {
             "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" },
             "existingSecret": {
@@ -5391,13 +5404,6 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
             "enabled": { "type": "boolean", "description": "Grant the Operator Role the rules for Ingresses, Gateways, HTTPRoutes and load balancer health checks." }
           }
         }
-      }
-    },
-    "gitops": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "enabled": { "type": "boolean", "description": "Fail the render unless existing Secrets supply the management token and the encryption key, so a render never generates credentials." }
       }
     },
     "basePlatform": { "type": ["string", "null"], "enum": ["aws", "gcp", "azure", null] },
@@ -5771,11 +5777,10 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
                     "required": ["management"],
                     "properties": {
                         "management": {
-                            "required": ["token", "existingSecret"],
+                            "required": ["token"],
                             "properties": {
                                 "token": { "enum": [""] },
                                 "existingSecret": {
-                                    "required": ["name"],
                                     "properties": { "name": { "enum": [""] } }
                                 }
                             }
@@ -5867,7 +5872,7 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
         };
         template.push_str(&format!("{{{{- if not (and (hasKey $conditions {reference:?}) (eq (toJson (get $conditions {reference:?})) {expected:?})) -}}}}{{{{- $_ := unset $values {id:?} -}}}}", reference=when.input, expected=when.equals.to_string(), id=input.id));
         if input.required && input.default.is_none() && !is_deployer_secret_input(input) {
-            template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token .Values.management.existingSecret.name) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
+            template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token (include "deployment.enrollmentCodeSecretName" .) (include "deployment.legacyManagementSecretName" .)) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
         }
         template.push_str("{{- end -}}\n");
     }
@@ -6057,30 +6062,6 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $normalized := regexReplaceAll "[^a-z0-9-]" $raw "-" -}}
 {{- $collapsed := regexReplaceAll "-+" $normalized "-" | trimAll "-" -}}
 {{- default "alien" $collapsed | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
-{{- define "deployment.managementSecretName" -}}
-{{- default (include "deployment.fullname" .) .Values.management.existingSecret.name -}}
-{{- end -}}
-
-{{- define "deployment.managementSecretTokenKey" -}}
-{{- if .Values.management.enrollmentCode -}}
-enrollment-code
-{{- else -}}
-{{- default "sync-token" .Values.management.existingSecret.tokenKey -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "deployment.managementCredentialFile" -}}
-{{- ternary "enrollment-code" "sync-token" (not (empty .Values.management.enrollmentCode)) -}}
-{{- end -}}
-
-{{- define "deployment.encryptionSecretName" -}}
-{{- default (include "deployment.fullname" .) .Values.runtime.encryption.existingSecret.name -}}
-{{- end -}}
-
-{{- define "deployment.encryptionSecretKey" -}}
-{{- default "encryption-key" .Values.runtime.encryption.existingSecret.key -}}
 {{- end -}}
 
 {{- /* Cluster-scoped: the namespace hash keeps installs of the same chart in
@@ -6290,50 +6271,48 @@ roleRef:
     .to_string()
 }
 
-/// Pull credentials for an Operator image served by the manager. The
-/// registry is the image's host. A token install pulls with its token. An
-/// enrollment install first pulls with its one-hour code; once enrolled the
-/// operator keeps this Secret filled with its own pull credential, which
-/// outlives the code. An upgrade keeps that credential unless the code
-/// changed, so a new code can recover an operator whose credential expired.
+/// Bootstrap pull credentials for an Operator image served by the manager. The
+/// registry is the image's host. A token install pulls with its token and an
+/// enrollment install with its one-hour code, so the first Pod can start. The
+/// Secret is a pure function of the values: two renders are identical. The
+/// Operator never writes it. Once enrolled it writes its own, longer-lived pull
+/// credential to a separate Secret that the chart never renders, so a GitOps tool
+/// re-applying this one cannot overwrite it.
+///
+/// An enrollment code kept in a Secret (`management.enrollmentCodeSecret`) cannot be
+/// read at render time, so no bootstrap Secret exists for it: supply
+/// `runtime.imagePullSecrets` for the first pull.
 fn registry_secret_tpl() -> String {
     r#"{{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
-{{- /* An enrolled Operator upgraded with no code and no token keeps the pull
-Secret it already has; the Operator keeps refreshing it. */ -}}
-{{- if and $pull (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
 {{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
 {{- $user := default "deployment" .Values.management.name }}
-{{- $codeHash := "" }}
 {{- $config := "" }}
 {{- if .Values.management.token }}
 {{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
-{{- else if not .Values.management.enrollmentCode }}
-{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
-{{- $codeHash = dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" (default dict $existing) }}
-{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
-{{- $config = index $existing.data ".dockerconfigjson" }}
-{{- else }}
-{{- $config = dict "auths" dict | toJson | b64enc }}
-{{- end }}
-{{- else }}
-{{- $codeHash = .Values.management.enrollmentCode | sha256sum }}
-{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
-{{- if and $existing (eq (dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" $existing) $codeHash) (hasKey (default dict $existing.data) ".dockerconfigjson") }}
-{{- $config = index $existing.data ".dockerconfigjson" }}
-{{- else }}
+{{- else if .Values.management.enrollmentCode }}
 {{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.enrollmentCode | b64enc))) | toJson | b64enc }}
 {{- end }}
+{{- /* Migration only (remove one release after migration is reported): an earlier chart's
+Operator refreshed this Secret in place. On upgrade, keep what it holds unless a token is
+given, so the Pod that starts next can still pull its image. The Operator now writes its
+refreshed credential to its own Secret. */ -}}
+{{- if and $pull .Release.IsUpgrade (not .Values.management.token) }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") (or (not .Values.management.enrollmentCode) (eq (dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" $existing) (.Values.management.enrollmentCode | sha256sum))) }}
+{{- $config = index $existing.data ".dockerconfigjson" }}
 {{- end }}
+{{- end }}
+{{- if and $pull $config }}
 apiVersion: v1
 kind: Secret
 metadata:
   name: {{ $name }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-  {{- if $codeHash }}
+  {{- if .Values.management.enrollmentCode }}
   annotations:
-    alien.dev/enrollment-code-sha256: {{ $codeHash | quote }}
+    alien.dev/enrollment-code-sha256: {{ .Values.management.enrollmentCode | sha256sum | quote }}
   {{- end }}
 type: kubernetes.io/dockerconfigjson
 data:
@@ -6363,21 +6342,8 @@ fn secret_tpl() -> String {
 {{- if and .Values.infrastructure .Values.infrastructureExistingSecret -}}
   {{- fail "Set either infrastructure or infrastructureExistingSecret, not both" -}}
 {{- end -}}
-{{- include "deployment.validateGitops" . -}}
-{{- $createManagementSecret := not .Values.management.existingSecret.name -}}
-{{- $createEncryptionSecret := not .Values.runtime.encryption.existingSecret.name -}}
-{{- $nodeCollector := and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) -}}
-{{- if or $createManagementSecret $createEncryptionSecret (ne (include "deployment.infrastructure" .) "{}") $nodeCollector .Values.inputValues }}
-{{- $collectorToken := .Values.logCollector.token -}}
-{{- if and $nodeCollector (empty $collectorToken) -}}
-  {{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
-  {{- if and $existing (hasKey (default dict $existing.data) "collector-token") -}}
-    {{- $collectorToken = index $existing.data "collector-token" | b64dec -}}
-    {{- if empty $collectorToken -}}{{ fail "Existing release Secret has an empty collector-token" }}{{- end -}}
-  {{- else -}}
-    {{- $collectorToken = randAlphaNum 48 -}}
-  {{- end -}}
-{{- end -}}
+{{- $createManagementSecret := not (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- if or $createManagementSecret (ne (include "deployment.infrastructure" .) "{}") .Values.inputValues }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -6396,14 +6362,8 @@ stringData:
   sync-token: {{ .Values.management.token | quote }}
   {{- end }}
   {{- end }}
-  {{- if $createEncryptionSecret }}
-  encryption-key: {{ include "deployment.runtimeEncryptionKey" . | quote }}
-  {{- end }}
   {{- if ne (include "deployment.infrastructure" .) "{}" }}
   external-bindings.json: {{ include "deployment.infrastructure" . | quote }}
-  {{- end }}
-  {{- if $nodeCollector }}
-  collector-token: {{ $collectorToken | quote }}
   {{- end }}
   {{- if .Values.inputValues }}
   input-values.json: {{ toJson .Values.inputValues | quote }}
@@ -7241,11 +7201,8 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "existingSecret" .Values.management.existingSecret "enrollmentCode" .Values.management.enrollmentCode) | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "legacySecret" (include "deployment.legacyManagementSecretName" .) "enrollmentCode" .Values.management.enrollmentCode "enrollmentCodeSecret" (default dict .Values.management.enrollmentCodeSecret)) | sha256sum | quote }}
         checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
-        {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
-        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
-        {{- end }}
         {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -7255,13 +7212,16 @@ spec:
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
       {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
-      {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
+      {{- if or .Values.runtime.imagePullSecrets (dig "pullWithManagementToken" false .Values.runtime.image) }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
         {{- if $pullWithToken }}
         - name: {{ include "deployment.fullname" . }}-registry
+        {{- end }}
+        {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
+        - name: {{ include "deployment.operatorPullSecretName" . }}
         {{- end }}
       {{- end }}
       {{- with .Values.runtime.scheduling.nodeSelector }}
@@ -7387,25 +7347,26 @@ spec:
             - name: OPERATOR_DATA_PERSISTENT
               value: {{ .Values.runtime.data.persistence.enabled | quote }}
             {{- if not (dig "enabled" false (default dict .Values.airgapped)) }}
-            {{- if .Values.management.enrollmentCode }}
+            {{- if or .Values.management.enrollmentCode (include "deployment.enrollmentCodeSecretName" .) }}
             - name: OPERATOR_ENROLLMENT_CODE_FILE
               value: /etc/deployment/secrets/enrollment-code
             - name: ALIEN_MANAGER_AUDIENCE
               value: {{ .Values.management.audience | quote }}
-            {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
-            - name: OPERATOR_REGISTRY_SECRET
-              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
-            {{- end }}
-            {{- else if or .Values.management.token .Values.management.existingSecret.name }}
+            {{- else if or .Values.management.token (include "deployment.legacyManagementSecretName" .) }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
-            {{- else if and .Release.IsUpgrade (dig "pullWithManagementToken" false .Values.runtime.image) }}
+            {{- end }}
+            {{- end }}
+            {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
             - name: OPERATOR_REGISTRY_SECRET
-              value: {{ printf "%s-registry" (include "deployment.fullname" .) | quote }}
+              value: {{ include "deployment.operatorPullSecretName" . | quote }}
             {{- end }}
-            {{- end }}
-            - name: OPERATOR_ENCRYPTION_KEY_FILE
-              value: /etc/deployment/secrets/encryption-key
+            - name: OPERATOR_OWNED_SECRET
+              value: {{ include "deployment.operatorSecretName" . | quote }}
+            - name: OPERATOR_OWNED_SECRET_KEYS
+              value: {{ include "deployment.operatorSecretKeys" . | quote }}
+            - name: OPERATOR_MIGRATION_SECRET
+              value: {{ include "deployment.migrationSecretName" . | quote }}
             - name: STACK_SETTINGS_FILE
               value: /etc/deployment/config/stack-settings.json
             {{- if .Values.inputValues }}
@@ -7436,7 +7397,7 @@ spec:
             {{- end }}
             - name: SYNC_INTERVAL
               value: "30"
-            {{- if and (dig "selfUpdate" true .Values.runtime.image) (not (dig "digest" "" .Values.runtime.image)) }}
+            {{- if and (dig "selfUpdate" false .Values.runtime.image) (not (dig "digest" "" .Values.runtime.image)) }}
             - name: OPERATOR_SELF_UPDATE_DEPLOYMENT
               value: {{ include "deployment.fullname" . | quote }}
             {{- end }}
@@ -7460,10 +7421,6 @@ spec:
               value: {{ include "deployment.logCollectorDaemonSetName" . | quote }}
             - name: OPERATOR_POD_LOG_MAX_STREAMS
               value: {{ default 32 .Values.logCollector.maxStreams | quote }}
-            {{- end }}
-            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
-            - name: COLLECTOR_TOKEN_FILE
-              value: /etc/deployment/secrets/collector-token
             {{- end }}
           ports:
             - name: otlp
@@ -7501,20 +7458,10 @@ spec:
               mountPath: /etc/deployment/secrets/{{ include "deployment.managementCredentialFile" . }}
               subPath: {{ include "deployment.managementCredentialFile" . }}
               readOnly: true
-            - name: encryption-key
-              mountPath: /etc/deployment/secrets/encryption-key
-              subPath: {{ include "deployment.encryptionSecretKey" . }}
-              readOnly: true
             {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
             - name: external-bindings
               mountPath: /etc/deployment/secrets/external-bindings.json
               subPath: external-bindings.json
-              readOnly: true
-            {{- end }}
-            {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
-            - name: collector-token
-              mountPath: /etc/deployment/secrets/collector-token
-              subPath: collector-token
               readOnly: true
             {{- end }}
             {{- if .Values.runtime.tmp.enabled }}
@@ -7545,10 +7492,6 @@ spec:
               - key: {{ include "deployment.managementSecretTokenKey" . }}
                 path: {{ include "deployment.managementCredentialFile" . }}
             defaultMode: 384
-        - name: encryption-key
-          secret:
-            secretName: {{ include "deployment.encryptionSecretName" . }}
-            defaultMode: 384
         {{- if or (ne (include "deployment.infrastructure" .) "{}") .Values.infrastructureExistingSecret }}
         - name: external-bindings
           secret:
@@ -7556,15 +7499,6 @@ spec:
             items:
               - key: external-bindings.json
                 path: external-bindings.json
-            defaultMode: 384
-        {{- end }}
-        {{- if and .Values.logCollector.enabled (eq (default "nodeAgent" .Values.logCollector.mode) "nodeAgent") (not (dig "enabled" false (default dict .Values.remoteOperator))) }}
-        - name: collector-token
-          secret:
-            secretName: {{ include "deployment.fullname" . }}
-            items:
-              - key: collector-token
-                path: collector-token
             defaultMode: 384
         {{- end }}
         {{- if .Values.runtime.tmp.enabled }}
@@ -7806,7 +7740,7 @@ spec:
             - name: COLLECTOR_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "deployment.fullname" . }}
+                  name: {{ include "deployment.operatorSecretName" . }}
                   key: collector-token
           volumeMounts:
             - name: config
@@ -8382,30 +8316,21 @@ fn aks_values_example(analysis: &ChartAnalysis) -> String {
 
 /// Values a GitOps install sets, written as the `values` of a Flux
 /// HelmRelease or the `valuesObject` of an Argo CD Application. `indent` is
-/// the number of spaces the block starts at.
+/// the number of spaces the block starts at. The values are the ones the Helm CLI
+/// install uses; GitOps has no mode of its own.
 fn gitops_values(indent: usize) -> String {
-    let block = r#"gitops:
-  enabled: true
-management:
+    let block = r#"management:
   url: https://manager.example.com
-  existingSecret:
-    name: deployment-management
-    tokenKey: sync-token
-runtime:
-  image:
-    # The GitOps tool owns the Operator image: a new chart version carries a new
-    # Operator, and the Operator doesn't change its own image.
-    selfUpdate: false
-  encryption:
-    existingSecret:
-      name: deployment-encryption
-      key: encryption-key
-  imagePullSecrets:
-    - name: deployment-registry
-infrastructureExistingSecret: deployment-infrastructure
-logCollector:
-  enabled: true
-  mode: podApi
+  # The one-use code, with the deployment ID and audience that come with it. Once the
+  # Operator is enrolled it ignores the code, so applying these values again changes
+  # nothing. To keep the code out of Git, create a Secret and use
+  # `enrollmentCodeSecret: {name: my-enrollment-code, key: enrollment-code}` instead
+  # (and set `runtime.imagePullSecrets` for the first image pull).
+  enrollmentCode: replace-with-the-enrollment-code
+  deploymentId: dep_replace_me
+  audience: https://manager.example.com
+# The Terraform module's chart_infrastructure_json output.
+infrastructure: {}
 "#;
     block
         .lines()
@@ -8419,13 +8344,8 @@ fn flux_example(chart_name: &str) -> String {
     format!(
         r#"# Install this chart with Flux. Use one namespace per install.
 #
-# Create these Secrets in the namespace first (not in git, or sealed):
-#   deployment-management     key sync-token: the deployment group token
-#   deployment-encryption     key encryption-key: 64 hex characters, kept for the life of the install
-#   deployment-infrastructure key external-bindings.json: the `infrastructure` values as JSON
-#                             (the Terraform module's chart_infrastructure_json output)
-#   deployment-registry       kubernetes.io/dockerconfigjson: pulls the Operator image and charts
-#                             through the manager
+# Create the `deployment-registry` Secret (kubernetes.io/dockerconfigjson) in the
+# namespace first: Flux uses it to pull the chart from the manager.
 #
 # `semver: "1.x"` takes every new chart version. A new Operator image is a new chart
 # version, so the Operator upgrades through Flux without a git change. Pin an exact
@@ -8470,16 +8390,15 @@ fn argocd_example(chart_name: &str) -> String {
     format!(
         r#"# Install this chart with Argo CD. Use one namespace per install.
 #
-# Create the Secrets named below in the destination namespace first (not in git, or
-# sealed): deployment-management (sync-token), deployment-encryption (encryption-key),
-# deployment-infrastructure (external-bindings.json) and deployment-registry
-# (kubernetes.io/dockerconfigjson). Register the registry as an Argo CD OCI
-# repository with the manager's install credentials.
+# Register the manager's registry as an Argo CD OCI repository with the install
+# credentials, so Argo CD can pull the chart.
 #
 # `targetRevision: "1.*"` follows new chart versions, and a new Operator image is a new
 # chart version. Recent Argo CD versions resolve ranges for OCI Helm sources; check
 # yours. Where it doesn't, pin an exact version and let Renovate or Argo CD Image
 # Updater open the bump.
+#
+# The Remote Operator depends on Helm release history; use Helm or Flux for it.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -8625,8 +8544,8 @@ cp examples/bootstrap.yaml install-values.yaml
 Edit `install-values.yaml` to set a bootstrap token and any application
 `inputValues` required by this chart. Set the management endpoint only when the
 installation service supplies an override or the chart has no endpoint default.
-The chart generates an encryption key on first installation and reuses it on
-upgrades. Keep credentials and any values file containing them private.
+The chart generates nothing at render time. The Operator creates its encryption key
+in its own Secret on first start. Keep credentials and any values file containing them private.
 
 ```bash
 helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
@@ -8647,12 +8566,35 @@ bindings and service-account identities.
 
 ## Credentials and storage
 
-The bootstrap token is exchanged for a deployment credential on first connection.
-The chart generates an encryption key on first install and reuses the installed
-Secret on upgrades. Explicit keys and existing Secrets remain supported through
-`runtime.encryption.key`, `management.existingSecret`, and
-`runtime.encryption.existingSecret`. Keep the original key: changing it makes
-stored encrypted data unreadable. A missing key must be restored, not regenerated.
+The one-use enrollment code (`management.enrollmentCode`, or `management.enrollmentCodeSecret`
+to keep it out of Git) or the bootstrap token is exchanged for a deployment credential
+on first connection. After that the Operator ignores the code, so applying the same values
+again changes nothing.
+
+The chart renders no random value: two renders with the same values are identical, with or
+without cluster access. The Operator creates one Secret, `<release>-operator`, on its first
+start, with its encryption key, the log collector token and the in-cluster Postgres
+passwords. It creates a value only when it is missing and never replaces one, so restarts
+never rotate it. Pods that use it wait until it exists. Keep that Secret: the encryption key
+makes the stored state readable, and a missing key must be restored, not regenerated; the
+Operator refuses to start on existing state without it. Uninstalling the release leaves the
+Secret in place, with the retained runtime volume.
+
+The Operator writes its own image pull credential to `<release>-pull`. The chart renders a
+separate bootstrap pull Secret from the code or token, so a GitOps tool that applies the
+chart again cannot overwrite the refreshed credential. With `enrollmentCodeSecret` the chart
+cannot build that bootstrap Secret: set `runtime.imagePullSecrets` for the first image pull.
+
+The Operator image changes with the chart version. `runtime.image.selfUpdate` is off by default.
+
+**Upgrading from an earlier chart.** Earlier charts generated the encryption key, the
+collector token and the Postgres passwords into the release Secret, or read them from
+`management.existingSecret` and `runtime.encryption.existingSecret`. This release reads those
+values once, on `helm upgrade`, and passes them unchanged to the Operator through
+`<release>-migration`; the Operator copies them into `<release>-operator`, which it then
+uses. Nothing is generated. The old fields are accepted only for this migration; remove
+them from your values afterwards. The migration reads the cluster, so upgrade with Helm or
+Flux, or keep the old Secrets in place while Argo CD renders offline.
 
 Runtime persistence is on by default and required for bootstrap installations.
 The identity, deployment credential, and log cursor survive Pod replacement.
@@ -8751,17 +8693,17 @@ from nodeAgent to podApi, the Operator checks both collector names and waits for
 their Pods to stop, including when the chart is rendered without cluster access.
 Use an Operator image built with this chart version for that transition.
 
-## GitOps
+## Flux and Argo CD
 
-Flux and Argo CD render this chart without access to the cluster. Set
-`gitops.enabled: true` and the render fails unless existing Secrets supply the
-management token (`management.existingSecret`) and the encryption key
-(`runtime.encryption.existingSecret`), and unless the log collector is
-`podApi` or `logCollector.token` is set. Without it a render generates a
-different key every time. `examples/gitops/flux.yaml` and
-`examples/gitops/argocd.yaml` show the full setup. A GitOps tool owns the
-Operator image, so they set `runtime.image.selfUpdate: false` and take Operator
-upgrades through chart versions. Keep one release per namespace.
+There is one install path. Flux and Argo CD install this chart with the values the Helm
+CLI uses: the manager URL, the enrollment code and, if the stack needs them, its
+infrastructure bindings. `examples/gitops/flux.yaml` and `examples/gitops/argocd.yaml` show
+the full setup. Use one namespace per install. The chart renders the same manifests with
+and without cluster access, so Argo CD can render it offline. Re-applying the same values
+after the code is spent changes nothing. The Operator image changes with the chart version.
+
+The Remote Operator depends on Helm release history and runs under Helm or Flux only, not
+Argo CD.
 
 ## Permissions
 
@@ -10242,7 +10184,7 @@ mod tests {
     }
 
     #[test]
-    fn postgres_offline_render_requires_stable_credentials() {
+    fn postgres_offline_render_generates_no_password() {
         let stack = Stack::new("database-stack".into())
             .add(
                 alien_core::Postgres::new("database".into()).build(),
@@ -10259,16 +10201,23 @@ mod tests {
             },
         )
         .unwrap();
-        let missing = crate::test_utils::helm_template_for_release(
-            &chart.files,
-            Some("postgres:\n  database:\n    enabled: true\n"),
-            "app",
-        );
-        assert!(
-            !missing.is_ok(),
-            "offline renders must not rotate database credentials"
-        );
-        assert!(missing.stderr.contains("existingPasswordSecret"));
+        // The password lives in the Secret the Operator creates, so an offline render needs
+        // nothing and is the same every time.
+        let owned_values = "postgres:\n  database:\n    enabled: true\n";
+        let owned =
+            crate::test_utils::helm_template_for_release(&chart.files, Some(owned_values), "app");
+        owned.assert_ok("operator-owned database password");
+        let again =
+            crate::test_utils::helm_template_for_release(&chart.files, Some(owned_values), "app");
+        assert_eq!(owned.stdout, again.stdout);
+        let owned_docs = parse_manifest_docs(&owned.stdout);
+        assert!(docs_by_kind(&owned_docs, "Secret")
+            .iter()
+            .all(|secret| secret["data"]["password"].is_null()));
+        let reference = &docs_by_kind(&owned_docs, "StatefulSet")[0]["spec"]["template"]["spec"]
+            ["containers"][0]["env"][2]["valueFrom"]["secretKeyRef"];
+        assert_eq!(reference["name"], "app-operator");
+        assert_eq!(reference["key"], "postgres-database-password");
         let values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\n";
         let first = crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
         first.assert_ok("explicit database credentials");
@@ -10636,7 +10585,6 @@ mod tests {
                 deployment_name: "prod",
                 manager_url: "https://manager.example.test",
                 credential,
-                runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
                 stack: &sample_stack(),
                 stack_state: &stack_state,
                 stack_settings: &StackSettings::default(),
@@ -10670,6 +10618,17 @@ mod tests {
                 .collect();
             assert!(!names.is_empty(), "{password}: no pull Secret");
             for name in names {
+                if name == "test-release-pull" {
+                    // The Operator writes this Secret. The chart never renders it, so a
+                    // GitOps tool that applies the chart again cannot overwrite it.
+                    assert!(
+                        !secrets
+                            .iter()
+                            .any(|secret| secret["metadata"]["name"].as_str() == Some(name)),
+                        "{password}: the chart renders the Operator's pull Secret"
+                    );
+                    continue;
+                }
                 let secret = secrets
                     .iter()
                     .find(|secret| secret["metadata"]["name"].as_str() == Some(name))
@@ -10723,7 +10682,6 @@ mod tests {
                 code: "ax_enroll_example",
                 audience: "https://manager.example.test",
             },
-            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
@@ -10761,9 +10719,9 @@ mod tests {
     }
 
     /// An enrolled Operator upgraded with no code and no token keeps pulling
-    /// its image through the pull Secret it already has. The chart must keep
-    /// rendering that Secret and the Pod's reference to it, or the new Pod
-    /// cannot pull on a node that has not cached the image.
+    /// its image through the pull Secrets it already has. The Pod must keep
+    /// referencing them, or the new Pod cannot pull on a node that has not
+    /// cached the image.
     #[test]
     fn an_upgrade_without_a_code_keeps_the_registry_pull_secret() {
         let registry = HelmRegistry::built_in();
@@ -10786,7 +10744,6 @@ mod tests {
                 code: "ax_enroll_example",
                 audience: "https://manager.example.test",
             },
-            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
@@ -10804,11 +10761,7 @@ mod tests {
                     1,
                 )
             } else {
-                values.replacen(
-                    "\nruntime:\n",
-                    "\nruntime:\n  image:\n    pullWithManagementToken: true\n",
-                    1,
-                )
+                format!("{values}\nruntime:\n  image:\n    pullWithManagementToken: true\n")
             }
         };
         let install = with_pull(&enrolled);
@@ -10861,10 +10814,14 @@ mod tests {
         let upgraded =
             crate::test_utils::helm_template_as_upgrade(&chart.files, Some(upgrade.as_str()));
         upgraded.assert_ok("upgrade without a code");
+        // Without cluster access there is no earlier Secret to keep, so none is rendered
+        // (a live upgrade keeps the one the earlier chart's Operator refreshed; the Kind
+        // upgrade test covers that). The Pod's references stay, so it can pull with the
+        // credential the Operator writes to its own Secret.
         assert_eq!(
             registry_secret(&upgraded),
-            (true, true, true),
-            "the pull Secret, the Pod reference and the Operator's Secret setting stay"
+            (false, true, true),
+            "the Pod references both pull Secrets and the Operator keeps its own"
         );
     }
 
@@ -10942,7 +10899,6 @@ mod tests {
                 code: "ax_enroll_example",
                 audience: "https://manager.example.test",
             },
-            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
@@ -11000,7 +10956,6 @@ mod tests {
                 code: "ax_enroll_example",
                 audience: "https://manager.example.test",
             },
-            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
@@ -11016,8 +10971,9 @@ mod tests {
         let docs = parse_manifest_docs(&rendered.stdout);
         let secret = docs_by_kind(&docs, "Secret")
             .into_iter()
-            .find(|secret| secret["stringData"]["encryption-key"].is_string())
+            .find(|secret| secret["stringData"]["sync-token"].is_string())
             .expect("release Secret");
+        assert!(secret["stringData"]["encryption-key"].is_null());
         assert_eq!(
             secret["stringData"]["enrollment-code"].as_str(),
             Some("ax_enroll_example")
@@ -11079,10 +11035,7 @@ mod tests {
             enrolled.replace("  audience: 'https://manager.example.test'\n", ""),
             enrolled.replace("deploymentId: 'dep_example'", "deploymentId: null"),
             enrolled.replace("  token: ''", "  token: 'ax_deploy_example'"),
-            enrolled.replace(
-                "runtime:\n",
-                "runtime:\n  data:\n    persistence:\n      enabled: false\n",
-            ),
+            format!("{enrolled}\nruntime:\n  data:\n    persistence:\n      enabled: false\n"),
         ] {
             assert!(
                 !crate::test_utils::helm_template(&chart.files, Some(&refused)).is_ok(),
@@ -13331,12 +13284,7 @@ remoteOperator:
     fn product_chart_remote_operator_removal_requires_the_exact_release_name() {
         let chart = sample_product_chart();
         let render = |values: &str| {
-            // This compares complete resources; use the same explicit key so
-            // independently rendered first-install Secrets remain comparable.
-            let values = format!(
-                "runtime:\n  encryption:\n    key: {TEST_RUNTIME_ENCRYPTION_KEY}\n{values}"
-            );
-            crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "shop")
+            crate::test_utils::helm_template_for_release(&chart.files, Some(values), "shop")
         };
         let has_rollback_guard = |manifest: &str| {
             docs_by_kind(&parse_manifest_docs(manifest), "Job")
@@ -13916,25 +13864,30 @@ logCollector:
         }));
         let remote = docs_by_kind(&docs, "Deployment")
             .into_iter()
-            .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())
+            .find(|deployment| {
+                operator_env_value(deployment, "OPERATOR_OWNED_SECRET_KEYS")
+                    .is_some_and(|keys| keys.contains("collector-token=token48"))
+            })
             .expect("node collector receiver");
+        assert_eq!(operator_env_value(&remote, "COLLECTOR_TOKEN_FILE"), None);
         assert_eq!(
             operator_env_value(&remote, "OPERATOR_POD_LOG_LABEL_KEY"),
             None
         );
-        let rotated_values = values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: rotated");
-        let rotated = crate::test_utils::helm_template(&chart.files, Some(&rotated_values));
-        rotated.assert_ok("rotated node collector token");
-        let rotated_docs = parse_manifest_docs(&rotated.stdout);
-        let rotated_runtime = docs_by_kind(&rotated_docs, "Deployment")
-            .into_iter()
-            .find(|deployment| operator_env_value(deployment, "COLLECTOR_TOKEN_FILE").is_some())
-            .expect("rotated runtime receiver");
-        assert_ne!(
-            remote["spec"]["template"]["metadata"]["annotations"]["checksum/collector-credential"],
-            rotated_runtime["spec"]["template"]["metadata"]["annotations"]
-                ["checksum/collector-credential"]
-        );
+        // The collector token is a value the Operator creates, never one the chart renders.
+        let token_reference = &daemonsets[0]["spec"]["template"]["spec"]["containers"][0]["env"][0]
+            ["valueFrom"]["secretKeyRef"];
+        assert_eq!(token_reference["name"], "test-release-operator");
+        assert_eq!(token_reference["key"], "collector-token");
+        assert!(docs_by_kind(&docs, "Secret")
+            .iter()
+            .all(|secret| secret["stringData"]["collector-token"].is_null()
+                && secret["data"]["collector-token"].is_null()));
+        // A value for it in the install values changes nothing: the chart renders no token.
+        let with_token = values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: ignored");
+        let ignored = crate::test_utils::helm_template(&chart.files, Some(&with_token));
+        ignored.assert_ok("collector token value");
+        assert!(!ignored.stdout.contains("ignored"));
 
         let mut remote_files = chart.files.clone();
         remote_files.shift_remove("templates/remote-operator-checks.yaml");
@@ -13987,7 +13940,7 @@ logCollector:
     }
 
     #[test]
-    fn registered_setup_values_include_runtime_encryption_key() {
+    fn registered_setup_values_carry_no_encryption_key() {
         let stack_state =
             alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
 
@@ -13996,7 +13949,6 @@ logCollector:
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
             credential: ManagementCredential::Token("token"),
-            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
@@ -14007,8 +13959,8 @@ logCollector:
         })
         .expect("registered setup values should render");
 
-        assert!(values.contains("runtime:\n  encryption:\n"));
-        assert!(values.contains(&format!("    key: '{}'", TEST_RUNTIME_ENCRYPTION_KEY)));
+        // The Operator creates its key in its own Secret; a values file carries none.
+        assert!(!values.contains("encryption"), "{values}");
 
         let values_yaml: YamlValue =
             serde_yaml::from_str(&values).expect("registered setup values should parse");
@@ -14020,59 +13972,6 @@ logCollector:
             .and_then(YamlValue::as_str),
             Some("e2e123")
         );
-    }
-
-    #[test]
-    fn registered_setup_values_with_no_key_leave_the_installed_one_alone() {
-        let stack_state =
-            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
-
-        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
-            deployment_id: "dep_123",
-            deployment_name: "deployment",
-            manager_url: "https://management.example.com",
-            credential: ManagementCredential::Token("token"),
-            runtime_encryption_key: "",
-            stack: &sample_stack(),
-            stack_state: &stack_state,
-            stack_settings: &StackSettings::default(),
-            base_platform: Some(Platform::Aws),
-            region: Some("us-east-1"),
-            gcp_project_id: None,
-            azure_location: None,
-        })
-        .expect("an empty key keeps the installed one");
-        let values_yaml: YamlValue = serde_yaml::from_str(&values).unwrap();
-        assert_eq!(
-            yaml_path(&values_yaml, &["runtime", "encryption", "key"]).and_then(YamlValue::as_str),
-            Some("")
-        );
-    }
-
-    #[test]
-    fn registered_setup_values_reject_invalid_runtime_encryption_key() {
-        let stack_state =
-            alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
-
-        let error = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
-            deployment_id: "dep_123",
-            deployment_name: "deployment",
-            manager_url: "https://management.example.com",
-            credential: ManagementCredential::Token("token"),
-            runtime_encryption_key: "replace-me-with-a-stable-64-character-encryption-secret",
-            stack: &sample_stack(),
-            stack_state: &stack_state,
-            stack_settings: &StackSettings::default(),
-            base_platform: Some(Platform::Aws),
-            region: Some("us-east-1"),
-            gcp_project_id: None,
-            azure_location: None,
-        })
-        .expect_err("invalid runtime encryption key should fail");
-
-        assert!(error
-            .to_string()
-            .contains("runtime encryption key must be exactly 64 hex characters"));
     }
 
     #[test]
@@ -14103,7 +14002,6 @@ logCollector:
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
             credential: ManagementCredential::Token("token"),
-            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &stack,
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
@@ -14154,7 +14052,6 @@ logCollector:
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
             credential: ManagementCredential::Token("token"),
-            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
@@ -14223,7 +14120,6 @@ logCollector:
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
             credential: ManagementCredential::Token("token"),
-            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             stack: &sample_stack(),
             stack_state: &stack_state,
             stack_settings: &StackSettings::default(),
