@@ -243,32 +243,48 @@ async fn a_sandbox_lifetime_and_a_command_timeout_never_reach_each_other() {
 /// is the earlier of the caller's `timeoutMs` and the declaration's ceiling.
 #[tokio::test]
 async fn azure_stamps_the_requested_lifetime_as_the_label_the_reaper_keys_on() {
-    use alien_azure_clients::azure::sandbox_data_plane::{MockSandboxDataPlaneApi, Sandbox as Record};
-    for (declared, requested_ms, expected_seconds) in
-        [(None, 600_000u64, 600i64), (Some(60u32), 600_000, 60), (Some(3600), 600_000, 600)]
-    {
+    use alien_azure_clients::azure::sandbox_data_plane::{
+        MockSandboxDataPlaneApi, Sandbox as Record,
+    };
+    for (declared, requested_ms, expected_seconds) in [
+        (None, 600_000u64, 600i64),
+        (Some(60u32), 600_000, 60),
+        (Some(3600), 600_000, 600),
+    ] {
         let mut client = MockSandboxDataPlaneApi::new();
         let seen = Arc::new(std::sync::Mutex::new(None::<String>));
         let sink = Arc::clone(&seen);
-        client.expect_create_sandbox().times(1).returning(move |_, request| {
-            *sink.lock().unwrap() = request.labels.get(alien_core::SANDBOX_EXPIRY_LABEL).cloned();
-            Ok(Record {
-                id: "s1".into(),
-                labels: request.labels,
-                vnet_connection_name: None,
-                egress_policy: Some(
-                    serde_json::from_value(json!({ "defaultAction": "Allow", "trafficInspection": "Full" })).unwrap(),
-                ),
-                state: Some("Running".into()),
-            })
-        });
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(move |_, request| {
+                *sink.lock().unwrap() = request
+                    .labels
+                    .get(alien_core::SANDBOX_EXPIRY_LABEL)
+                    .cloned();
+                Ok(Record {
+                    id: "s1".into(),
+                    labels: request.labels,
+                    vnet_connection_name: None,
+                    egress_policy: Some(
+                        serde_json::from_value(
+                            json!({ "defaultAction": "Allow", "trafficInspection": "Full" }),
+                        )
+                        .unwrap(),
+                    ),
+                    state: Some("Running".into()),
+                })
+            });
         client.expect_get_sandbox().returning(|_, id| {
             Ok(Record {
                 id: id.into(),
                 labels: Default::default(),
                 vnet_connection_name: None,
                 egress_policy: Some(
-                    serde_json::from_value(json!({ "defaultAction": "Allow", "trafficInspection": "Full" })).unwrap(),
+                    serde_json::from_value(
+                        json!({ "defaultAction": "Allow", "trafficInspection": "Full" }),
+                    )
+                    .unwrap(),
                 ),
                 state: Some("Running".into()),
             })
@@ -293,7 +309,13 @@ async fn azure_stamps_the_requested_lifetime_as_the_label_the_reaper_keys_on() {
             })
             .await
             .expect("a lifetime is honoured");
-        let label: i64 = seen.lock().unwrap().clone().expect("a label").parse().unwrap();
+        let label: i64 = seen
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("a label")
+            .parse()
+            .unwrap();
         let seconds = (label - before) / 1000;
         assert!(
             (expected_seconds - 2..=expected_seconds + 2).contains(&seconds),

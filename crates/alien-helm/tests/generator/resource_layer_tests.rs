@@ -560,9 +560,13 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
                 })
         })
     };
-    assert!(self_update_env("serviceAccountPrefix: custom-prefix\n"));
+    // Self-update is off by default: the Operator changes with the chart version.
+    assert!(!self_update_env("serviceAccountPrefix: custom-prefix\n"));
+    assert!(self_update_env(
+        "serviceAccountPrefix: custom-prefix\nruntime:\n  image:\n    selfUpdate: true\n"
+    ));
     assert!(!self_update_env(&format!(
-        "serviceAccountPrefix: custom-prefix\nruntime:\n  image:\n    digest: sha256:{}\n",
+        "serviceAccountPrefix: custom-prefix\nruntime:\n  image:\n    selfUpdate: true\n    digest: sha256:{}\n",
         "a".repeat(64)
     )));
     let mut images = Vec::new();

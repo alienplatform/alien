@@ -937,9 +937,23 @@ expression: schemas
         "description": "Login server URL (`<name>.azurecr.io`).",
         "type": "string"
       },
+      "pullIdentityResourceId": {
+        "description": "Setup-owned pull identity ARM ID; absent in older setup payloads.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "pullPrincipalId": {
         "description": "UAMI principal id with `AcrPull` access.",
         "type": "string"
+      },
+      "pullRoleAssignmentId": {
+        "description": "Setup-owned registry-scoped AcrPull assignment ARM ID.",
+        "type": [
+          "string",
+          "null"
+        ]
       },
       "pushPrincipalId": {
         "description": "UAMI principal id with `AcrPush` access.",
@@ -1171,6 +1185,13 @@ expression: schemas
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "Azure Key Vault key created by the customer-installed setup stack.",
     "properties": {
+      "diskEncryptionSetId": {
+        "description": "Disk Encryption Set created for volumes that use the key; absent when none do.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "keyId": {
         "description": "Full versioned Key Vault key ID used for new wrapping operations.",
         "type": "string"
@@ -1229,7 +1250,7 @@ expression: schemas
         "description": "Setup-owned subnet coordinates consumed by an internal sandbox gateway load balancer.",
         "properties": {
           "gatewayCidrs": {
-            "description": "Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before\nthe admin port was removed from that rule also allow TCP 3129; both are accepted.",
+            "description": "Gateway ranges allowed by the sandbox subnet NSGs on TCP 3128. Deployments set up before the admin port was removed from that rule also allow TCP 3129; both are accepted.",
             "items": {
               "type": "string"
             },
@@ -2557,8 +2578,15 @@ expression: schemas
   },
   "gcp_sandbox": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup creates no template, so this carries only the region the stack applied in. The engine registers its own id, and the template controller reads it from that dependency.",
+    "description": "GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup creates no template, so this carries the region the stack applied in and, when preview is declared, the signing identity setup created. The engine registers its own id, and the template controller reads it from that dependency.",
     "properties": {
+      "previewServiceAccount": {
+        "description": "Service account setup created to sign the edge credential for preview. Present only when the sandbox declares preview ports; the controller carries it into the binding.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "region": {
         "description": "Region the setup stack applied in; selects the regional Agent Platform endpoint.",
         "type": "string"

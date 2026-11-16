@@ -121,7 +121,8 @@ fn bootstrap_uses_selected_endpoint_and_keeps_registered_deployments_explicit() 
         &Stack::new("sample-agent".to_string()).build(),
         StackSettings::default(),
     );
-    let values = "management:\n  token: ax_bootstrap\n  url: https://selected-manager.example.test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+    let values =
+        "management:\n  token: ax_bootstrap\n  url: https://selected-manager.example.test\n";
     let bootstrap = test_utils::helm_template(&chart.files, Some(values));
     bootstrap.assert_ok("bootstrap with selected endpoint and credentials");
     let env = operator_env(&bootstrap.stdout);
@@ -162,7 +163,7 @@ fn bootstrap_tells_the_operator_its_helm_release() {
         &Stack::new("sample-agent".to_string()).build(),
         StackSettings::default(),
     );
-    let values = "management:\n  token: ax_bootstrap\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+    let values = "management:\n  token: ax_bootstrap\n";
     let rendered =
         test_utils::helm_template_for_release(&chart.files, Some(values), "shop-operator");
     rendered.assert_ok("bootstrap with a custom release name");

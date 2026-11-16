@@ -1,17 +1,38 @@
 name: CodeQL
 
 on:
+  # Weekly, and only when main changed since the last green run. The Rust analysis needs more
+  # memory than a standard runner has; on one it was killed in 80% of the nightly runs.
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 0 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Skips the scheduled run when main has not changed since this workflow last passed on it.
+  gate:
+    name: Main changed since the last green run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      changed: ${{ steps.gate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: gate
+        uses: ./.github/actions/changed-since-last-success
+
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.changed == 'true'
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       security-events: write
@@ -21,10 +42,13 @@ jobs:
         include:
           - language: actions
             build-mode: none
+            runner: ubuntu-latest
           - language: javascript-typescript
             build-mode: none
+            runner: ubuntu-latest
           - language: rust
             build-mode: none
+            runner: depot-ubuntu-24.04-8
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
