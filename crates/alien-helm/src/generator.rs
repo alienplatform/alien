@@ -1539,14 +1539,21 @@ fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
          Helm or the deployment's control plane.\n",
     );
     for input in inputs {
+        let label = input.label.trim();
+        let requirement = if input.required {
+            Some("required; workloads that read it wait until it exists")
+        } else if label.to_ascii_lowercase().ends_with("(optional)") {
+            // The label already says so.
+            None
+        } else {
+            Some("optional")
+        };
+        let heading = match requirement {
+            Some(requirement) => format!("{label} ({requirement})"),
+            None => label.to_string(),
+        };
         notes.push_str(&format!(
-            "  - {} ({}): deployer-secrets vault key {}\n",
-            input.label,
-            if input.required {
-                "required; workloads that read it wait until it exists"
-            } else {
-                "optional"
-            },
+            "  - {heading}: deployer-secrets vault key {}\n",
             alien_core::deployer_secret_vault_key(&input.id),
         ));
     }
@@ -11795,6 +11802,38 @@ infrastructureExistingSecret: customer-bindings
     }
 
     #[test]
+    fn deployer_secret_notes_do_not_repeat_an_optional_label() {
+        let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
+            id: id.to_string(),
+            kind: alien_core::StackInputKind::Secret,
+            when: None,
+            provided_by: vec![alien_core::StackInputProvider::Deployer],
+            required,
+            label: label.to_string(),
+            description: String::new(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            generate: None,
+            env: Vec::new(),
+        };
+        let stack = Stack::new("input-stack".to_string())
+            .inputs(vec![
+                secret("licenseKey", "License key", false),
+                secret("githubApp", "Existing GitHub App credentials (optional)", false),
+            ])
+            .build();
+        let notes = deployer_secret_notes_tpl(&stack).expect("notes");
+        assert!(notes.contains("  - License key (optional): deployer-secrets"), "{notes}");
+        assert!(
+            notes.contains("  - Existing GitHub App credentials (optional): deployer-secrets"),
+            "{notes}"
+        );
+        assert!(!notes.contains("(optional) (optional)"), "{notes}");
+    }
+
+    #[test]
     fn deployer_secrets_are_kubernetes_secrets_not_helm_values() {
         let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
             id: id.to_string(),
@@ -11815,6 +11854,7 @@ infrastructureExistingSecret: customer-bindings
             .inputs(vec![
                 secret("databasePassword", "Database password", true),
                 secret("licenseKey", "License key", false),
+                secret("githubApp", "Existing GitHub App credentials (optional)", false),
             ])
             .build();
         let registry = HelmRegistry::built_in();
@@ -11846,6 +11886,11 @@ infrastructureExistingSecret: customer-bindings
             notes.contains("License key (optional): deployer-secrets vault key license-key"),
             "{notes}"
         );
+        assert!(
+            notes.contains("Existing GitHub App credentials (optional): deployer-secrets vault key"),
+            "{notes}"
+        );
+        assert!(!notes.contains("(optional) (optional)"), "{notes}");
         assert!(
             notes.contains("kubectl create secret generic <name> --namespace apps --from-literal=value='<VALUE>'"),
             "{notes}"
