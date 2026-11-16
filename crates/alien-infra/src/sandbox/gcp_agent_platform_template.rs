@@ -318,7 +318,11 @@ async fn copy_image_into_own_project(
         repository: &path,
         token,
     };
-    let destination_base = format!("https://{}-docker.pkg.dev", gcp_config.region);
+    // The service override lets tests point the registry host at a local server.
+    let destination_base = gcp_config.get_service_endpoint(
+        "artifactregistry-docker",
+        &format!("https://{}-docker.pkg.dev", gcp_config.region),
+    );
     let destination_repository = format!("{}/{repository}/{sandbox_id}", gcp_config.project_id);
     let destination = CopyDestination {
         base_url: &destination_base,
@@ -348,7 +352,9 @@ async fn copy_image_into_own_project(
     .await?;
     spec.image_uri = format!(
         "{destination_base_host}/{destination_repository}@{digest}",
-        destination_base_host = destination_base.trim_start_matches("https://")
+        destination_base_host = destination_base
+            .split_once("://")
+            .map_or(destination_base.as_str(), |(_, host)| host)
     );
     info!(id = %sandbox_id, "Copied the sandbox image into the deployment's own project");
     Ok(())
@@ -2128,5 +2134,240 @@ mod tests {
             error.to_string().contains("prj_abc:sbx-agent"),
             "names the image: {error}"
         );
+    }
+
+    mod copy_into_own_project {
+        use super::*;
+        use alien_core::ClientConfig;
+        use alien_core::{GcpClientConfig, GcpServiceOverrides as ServiceOverrides};
+        use alien_gcp_clients::artifactregistry::{MockArtifactRegistryApi, Repository};
+        use httpmock::prelude::*;
+        use sha2::{Digest, Sha256};
+
+        const LAYER: &[u8] = b"layer";
+        const CONFIG: &[u8] = b"{}";
+        const SOURCE_IMAGE: &str =
+            "us-central1-docker.pkg.dev/vendor/artifacts-prj-abc/prj_abc/agent:v1";
+
+        fn digest_of(bytes: &[u8]) -> String {
+            format!("sha256:{:x}", Sha256::digest(bytes))
+        }
+
+        fn manifest() -> (String, String) {
+            let body = serde_json::json!({
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "config": {"digest": digest_of(CONFIG)},
+                "layers": [{"digest": digest_of(LAYER)}],
+            })
+            .to_string();
+            let digest = digest_of(body.as_bytes());
+            (body, digest)
+        }
+
+        /// The manager serves the image by name; Artifact Registry accepts every write.
+        fn serve_source(source: &MockServer, body: &str) {
+            source.mock(|w, t| {
+                w.method(GET)
+                    .path("/v2/vendor/artifacts-prj-abc/prj_abc/agent/manifests/v1")
+                    .header("authorization", "Bearer test-deployment-token");
+                t.status(200)
+                    .header("content-type", "application/vnd.oci.image.manifest.v1+json")
+                    .body(body);
+            });
+            // The copy then reads the manifest again by the digest it resolved.
+            let by_digest = digest_of(body.as_bytes());
+            source.mock(|w, t| {
+                w.method(GET).path(format!(
+                    "/v2/vendor/artifacts-prj-abc/prj_abc/agent/manifests/{by_digest}"
+                ));
+                t.status(200)
+                    .header("content-type", "application/vnd.oci.image.manifest.v1+json")
+                    .body(body);
+            });
+            for blob in [CONFIG, LAYER] {
+                let d = digest_of(blob);
+                source.mock(|w, t| {
+                    w.method(GET).path(format!(
+                        "/v2/vendor/artifacts-prj-abc/prj_abc/agent/blobs/{d}"
+                    ));
+                    t.status(200).body(blob);
+                });
+            }
+        }
+
+        fn serve_destination(dest: &MockServer) {
+            dest.mock(|w, t| {
+                w.method(httpmock::Method::HEAD);
+                t.status(404);
+            });
+            dest.mock(|w, t| {
+                w.method(POST);
+                t.status(202).header("location", "/upload");
+            });
+            dest.mock(|w, t| {
+                w.method(PUT).path("/upload");
+                t.status(201);
+            });
+            dest.mock(|w, t| {
+                w.method(PUT).path_contains("/manifests/");
+                t.status(201);
+            });
+        }
+
+        fn provider(
+            client: Arc<MockAgentPlatformApi>,
+            repository_creates: usize,
+        ) -> Arc<MockPlatformServiceProvider> {
+            let mut registry = MockArtifactRegistryApi::new();
+            // The repository is missing at first and there after its create.
+            let created = Arc::new(Mutex::new(false));
+            let seen = created.clone();
+            registry.expect_get_repository().returning(move |_, _, _| {
+                if *seen.lock().unwrap() {
+                    Ok(Repository::default())
+                } else {
+                    Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteResourceNotFound {
+                            resource_type: "repository".to_string(),
+                            resource_name: "r".to_string(),
+                        },
+                    ))
+                }
+            });
+            registry
+                .expect_create_repository()
+                .times(repository_creates)
+                .returning(move |_, _, _, _| {
+                    *created.lock().unwrap() = true;
+                    Ok(Default::default())
+                });
+            let registry = Arc::new(registry);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_gcp_agent_platform_client()
+                .returning(move |_| Ok(client.clone()));
+            provider
+                .expect_get_gcp_artifact_registry_client()
+                .returning(move |_| Ok(registry.clone()));
+            Arc::new(provider)
+        }
+
+        async fn executor(
+            image: &str,
+            source: &MockServer,
+            dest: &MockServer,
+            provider: Arc<MockPlatformServiceProvider>,
+        ) -> SingleControllerExecutor {
+            let config = GcpClientConfig::mock().with_service_overrides(ServiceOverrides {
+                endpoints: std::collections::HashMap::from([(
+                    "artifactregistry-docker".to_string(),
+                    dest.base_url(),
+                )]),
+            });
+            SingleControllerExecutor::builder()
+                .resource(sandbox_with(SandboxEgress::None, image, None, None))
+                .controller(GcpAgentPlatformTemplateController::default())
+                .platform(Platform::Gcp)
+                .client_config(ClientConfig::Gcp(Box::new(config)))
+                .manager_url(source.base_url())
+                .native_image_host("us-central1-docker.pkg.dev")
+                .service_provider(provider)
+                .with_test_dependencies()
+                .with_dependency(
+                    GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox(
+                        "agent-sbx",
+                    ))
+                    .build(),
+                    GcpAgentPlatformEngineController::mock_ready("eng"),
+                )
+                .build()
+                .await
+                .expect("executor builds")
+        }
+
+        #[tokio::test]
+        async fn an_image_in_the_managers_project_is_copied_and_the_template_uses_the_copy() {
+            let (body, digest) = manifest();
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            serve_source(&source, &body);
+            serve_destination(&dest);
+            let expected_prefix = format!(
+                "{}/test-project-123/test-agent-sbx-img/agent-sbx@{digest}",
+                dest.base_url().trim_start_matches("http://")
+            );
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template()
+                .withf(move |_, template| {
+                    template
+                        .custom_container_environment
+                        .as_ref()
+                        .and_then(|e| e.custom_container_spec.as_ref())
+                        .map(|s| s.image_uri == expected_prefix)
+                        .unwrap_or(false)
+                })
+                .times(1)
+                .returning(|_, _| Ok(pending_op()));
+            m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
+            m.expect_get_template()
+                .returning(|_, id| Ok(active_template(id)));
+            m.expect_list_templates()
+                .returning(|_| Ok(vec![active_template("tpl1")]));
+            let mut executor =
+                executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m), 1)).await;
+            executor.run_until_terminal().await.expect("create runs");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        #[tokio::test]
+        async fn an_image_already_in_the_deployments_project_is_not_copied() {
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            let own =
+                "us-central1-docker.pkg.dev/test-project-123/artifacts-prj-abc/prj_abc/agent:v1";
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template()
+                .withf(move |_, template| {
+                    template
+                        .custom_container_environment
+                        .as_ref()
+                        .and_then(|e| e.custom_container_spec.as_ref())
+                        .map(|s| s.image_uri == own)
+                        .unwrap_or(false)
+                })
+                .times(1)
+                .returning(|_, _| Ok(pending_op()));
+            m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
+            m.expect_get_template()
+                .returning(|_, id| Ok(active_template(id)));
+            m.expect_list_templates()
+                .returning(|_| Ok(vec![active_template("tpl1")]));
+            let mut executor = executor(own, &source, &dest, provider(Arc::new(m), 0)).await;
+            executor.run_until_terminal().await.expect("create runs");
+            assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        /// A failed copy is an error of the step; the template is never created from the
+        /// uncopied reference, which Agent Platform would refuse anyway.
+        #[tokio::test]
+        async fn a_failed_copy_creates_no_template_and_the_step_can_run_again() {
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            source.mock(|w, t| {
+                w.method(GET).path_contains("/manifests/");
+                t.status(403);
+            });
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template().never();
+            let mut executor =
+                executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m), 1)).await;
+            let first = executor.step().await;
+            let error = first.expect_err("a refused source stops the create");
+            assert!(error.to_string().contains("403"), "{error}");
+            assert!(
+                !error.to_string().contains("test-deployment-token"),
+                "{error}"
+            );
+            // The same step runs again: the repository exists now, and the source is refused again.
+            assert!(executor.step().await.is_err());
+        }
     }
 }
