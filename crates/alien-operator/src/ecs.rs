@@ -48,6 +48,44 @@ pub struct EcsConfig {
     pub log_group_prefix: Option<String>,
     /// The operator's own log group, never read back as input.
     pub own_log_group: Option<String>,
+    /// The operator found an enrolled identity when it started (a restart or a
+    /// replaced task), as opposed to enrolling for the first time.
+    pub enrolled_at_start: bool,
+    /// How far back a group with no saved position is read when the operator
+    /// started already enrolled. Saved positions live on the task's own disk and
+    /// are lost when the task is replaced.
+    pub log_lookback_ms: i64,
+}
+
+const DEFAULT_LOG_LOOKBACK_MINUTES: i64 = 15;
+const MAX_LOG_LOOKBACK_MINUTES: i64 = 24 * 60;
+
+/// Where a group with no saved position starts: the operator's own start on the
+/// first-ever start, or a bounded lookback before now when it started already enrolled.
+pub(crate) fn initial_log_start_ms(now_ms: i64, enrolled_at_start: bool, lookback_ms: i64) -> i64 {
+    if enrolled_at_start {
+        now_ms - lookback_ms
+    } else {
+        now_ms
+    }
+}
+
+fn log_lookback_ms_from_env() -> Result<i64> {
+    let minutes = match env_value("OPERATOR_ECS_LOG_LOOKBACK_MINUTES") {
+        None => DEFAULT_LOG_LOOKBACK_MINUTES,
+        Some(value) => value
+            .parse::<i64>()
+            .ok()
+            .filter(|m| (0..=MAX_LOG_LOOKBACK_MINUTES).contains(m))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!(
+                        "OPERATOR_ECS_LOG_LOOKBACK_MINUTES must be a number of minutes from 0 to {MAX_LOG_LOOKBACK_MINUTES}"
+                    ),
+                })
+            })?,
+    };
+    Ok(minutes * 60_000)
 }
 
 fn env_value(name: &str) -> Option<String> {
@@ -63,6 +101,8 @@ pub fn config_from_env() -> Result<Option<EcsConfig>> {
         cluster: env_value("OPERATOR_ECS_CLUSTER"),
         log_group_prefix: env_value("OPERATOR_ECS_LOG_GROUP_PREFIX"),
         own_log_group: env_value("OPERATOR_ECS_OWN_LOG_GROUP"),
+        enrolled_at_start: false,
+        log_lookback_ms: log_lookback_ms_from_env()?,
     };
     if let Some(prefix) = &config.log_group_prefix {
         if !prefix.starts_with('/') {
@@ -95,8 +135,10 @@ pub async fn run(state: Arc<OperatorState>, config: EcsConfig) {
                 clients.logs.clone(),
                 config.own_log_group.clone(),
             );
+            let (enrolled_at_start, lookback_ms) =
+                (config.enrolled_at_start, config.log_lookback_ms);
             handles.push(tokio::spawn(async move {
-                run_logs(state, logs, prefix, own).await
+                run_logs(state, logs, prefix, own, enrolled_at_start, lookback_ms).await
             }));
         } else {
             warn!("ECS log collection is enabled but deployment telemetry is off");
@@ -463,9 +505,17 @@ async fn run_logs(
     logs: Arc<dyn EcsApi>,
     prefix: String,
     own: Option<String>,
+    enrolled_at_start: bool,
+    log_lookback_ms: i64,
 ) {
-    // A restart does not replay old logs: new groups begin at operator start.
-    let started_ms = Utc::now().timestamp_millis();
+    // The first-ever start begins at its own start. A start that finds an
+    // enrolled identity (a replaced task lost its saved positions) reads back a
+    // bounded lookback, de-duplicated by event id.
+    let started_ms = initial_log_start_ms(
+        Utc::now().timestamp_millis(),
+        enrolled_at_start,
+        log_lookback_ms,
+    );
     loop {
         let result = async {
             let deployment_id = state.db.get_deployment_id().await?.ok_or_else(|| {
@@ -1029,6 +1079,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(groups, ["/ecs/web"]);
+    }
+
+    #[test]
+    fn a_replaced_task_reads_back_a_bounded_lookback_and_a_first_start_begins_now() {
+        let now = 10_000_000;
+        assert_eq!(initial_log_start_ms(now, false, 900_000), now);
+        assert_eq!(initial_log_start_ms(now, true, 900_000), now - 900_000);
+        assert_eq!(initial_log_start_ms(now, true, 0), now);
+    }
+
+    #[test]
+    fn the_lookback_setting_is_bounded() {
+        // Parsed through the same rule as the environment value.
+        for bad in ["-1", "abc", "100000"] {
+            std::env::set_var("OPERATOR_ECS_LOG_LOOKBACK_MINUTES", bad);
+            assert!(log_lookback_ms_from_env().is_err(), "{bad}");
+        }
+        std::env::set_var("OPERATOR_ECS_LOG_LOOKBACK_MINUTES", "30");
+        assert_eq!(log_lookback_ms_from_env().unwrap(), 30 * 60_000);
+        std::env::remove_var("OPERATOR_ECS_LOG_LOOKBACK_MINUTES");
+        assert_eq!(log_lookback_ms_from_env().unwrap(), 15 * 60_000);
     }
 
     #[test]

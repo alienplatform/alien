@@ -702,6 +702,9 @@ async fn run_operator_cli(
         .await?;
     }
     let stored_identity = db.read_daily_identity().await?;
+    let enrolled_at_start = stored_identity
+        .as_ref()
+        .is_some_and(|identity| !identity.deployment_id.is_empty());
     if (args.enrollment_token_file.is_some() || args.enrollment_token.is_some())
         && join_token.is_none()
         && !stored_identity
@@ -1107,7 +1110,10 @@ async fn run_operator_cli(
         pod_log_collection: crate::pod_logs::config_from_env()?,
         host_logs,
         host_inventory: crate::host_logs::inventory_config(host_logs, enrolled_by_token),
-        ecs: crate::ecs::config_from_env()?,
+        ecs: crate::ecs::config_from_env()?.map(|mut ecs| {
+            ecs.enrolled_at_start = enrolled_at_start;
+            ecs
+        }),
     };
     run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
@@ -2016,10 +2022,11 @@ async fn open_operator_db(
             secret_id,
         ),
         (None, None) => {
-            let key = match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
-                Some(path) => load_or_create_local_key(&path).await?,
-                None => load_encryption_key(encryption_key_file).await?,
-            };
+            let key =
+                match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
+                    Some(path) => load_or_create_local_key(&path).await?,
+                    None => load_encryption_key(encryption_key_file).await?,
+                };
             return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
         }
     };
