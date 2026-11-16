@@ -12,9 +12,10 @@ use crate::kubernetes_public_endpoint::{
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
-    label_selector, KubernetesWorkload, KubernetesWorkloadDataKind,
-    KubernetesWorkloadHeartbeatInput, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    deployment_has_ready_replicas, deployment_rollout_complete, deployment_rollout_in_progress,
+    emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -482,6 +483,13 @@ impl KubernetesWorkerController {
             }
 
             let healthy = deployment_has_ready_replicas(&deployment);
+            if !healthy && deployment_rollout_in_progress(&deployment) {
+                self.zero_ready_observed = false;
+                return Err(AlienError::new(ErrorData::ResourceRolloutInProgress {
+                    resource_id: config.id.clone(),
+                    message: "Deployment does not have the requested ready replicas yet".into(),
+                }));
+            }
             let zero_ready = deployment
                 .status
                 .as_ref()

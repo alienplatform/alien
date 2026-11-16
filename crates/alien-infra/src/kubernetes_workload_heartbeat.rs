@@ -42,6 +42,43 @@ pub(crate) fn deployment_has_ready_replicas(deployment: &Deployment) -> bool {
             || status.replicas.unwrap_or(0) != desired)
 }
 
+/// Whether Kubernetes is still rolling out a new revision of the Deployment, judged from its
+/// own status and not from elapsed time. A stuck rollout ends when Kubernetes sets
+/// `Progressing=False` (ProgressDeadlineExceeded), after which this is false.
+pub(crate) fn deployment_rollout_in_progress(deployment: &Deployment) -> bool {
+    let Some(status) = &deployment.status else {
+        return false;
+    };
+    let desired = deployment
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.replicas)
+        .unwrap_or(1);
+    let progressing_on_new_replica_set = status.conditions.iter().flatten().any(|condition| {
+        condition.type_ == "Progressing"
+            && condition.status == "True"
+            && condition.reason.as_deref() != Some("NewReplicaSetAvailable")
+    });
+    status.observed_generation.unwrap_or(0) < deployment.metadata.generation.unwrap_or(1)
+        || progressing_on_new_replica_set
+        || status.updated_replicas.unwrap_or(0) < desired
+        || status.replicas.unwrap_or(0) > status.updated_replicas.unwrap_or(0)
+}
+
+/// Whether Kubernetes is still rolling out a new revision of the StatefulSet.
+pub(crate) fn statefulset_rollout_in_progress(statefulset: &StatefulSet) -> bool {
+    let Some(status) = &statefulset.status else {
+        return false;
+    };
+    let revision_differs = match (&status.current_revision, &status.update_revision) {
+        (Some(current), Some(update)) => current != update,
+        _ => false,
+    };
+    status.observed_generation.unwrap_or(0) < statefulset.metadata.generation.unwrap_or(1)
+        || revision_differs
+        || status.updated_replicas.unwrap_or(0) < status.replicas
+}
+
 pub(crate) fn deployment_rollout_complete(
     deployment: &Deployment,
     desired_replicas: i32,

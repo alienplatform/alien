@@ -18,8 +18,9 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    deployment_has_ready_replicas, deployment_rollout_complete, emit_kubernetes_workload_heartbeat,
-    label_selector, statefulset_has_ready_replicas, KubernetesWorkload, KubernetesWorkloadDataKind,
+    deployment_has_ready_replicas, deployment_rollout_complete, deployment_rollout_in_progress,
+    emit_kubernetes_workload_heartbeat, label_selector, statefulset_has_ready_replicas,
+    statefulset_rollout_in_progress, KubernetesWorkload, KubernetesWorkloadDataKind,
     KubernetesWorkloadHeartbeatInput, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -1026,6 +1027,31 @@ impl KubernetesContainerController {
                 }
                 KubernetesWorkload::DaemonSet(_) => false,
             };
+            if !healthy {
+                let rolling_out = match &workload {
+                    KubernetesWorkload::Deployment(deployment) => {
+                        deployment_rollout_in_progress(deployment)
+                    }
+                    KubernetesWorkload::StatefulSet(statefulset) => {
+                        statefulset_rollout_in_progress(statefulset)
+                    }
+                    KubernetesWorkload::DaemonSet(_) => false,
+                };
+                if rolling_out {
+                    // Kubernetes is still replacing replicas. Check again with backoff; the
+                    // rollout ends in Ready, or Kubernetes marks it stuck and the next check
+                    // reports drift.
+                    self.zero_ready_observed = false;
+                    return Err(AlienError::new(ErrorData::ResourceRolloutInProgress {
+                        resource_id: config.id.clone(),
+                        message: format!(
+                            "{} ready replicas out of {} observed",
+                            ready_replicas.unwrap_or(0),
+                            replicas.unwrap_or(0)
+                        ),
+                    }));
+                }
+            }
             let zero_ready = ready_replicas.unwrap_or(0) == 0;
             let previous_zero = self.zero_ready_observed;
             self.zero_ready_observed = !healthy && zero_ready;
@@ -3520,6 +3546,84 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn partly_ready_workload_retries_while_rolling_out_and_drifts_once_settled() {
+        // (stateful, status, retried while rolling out)
+        let deployment_status = |reason: &str, condition: &str| {
+            serde_json::json!({
+                "replicas":2,"updatedReplicas":2,"readyReplicas":1,"observedGeneration":3,
+                "conditions":[{"type":"Progressing","status":condition,"reason":reason}]
+            })
+        };
+        let cases = [
+            // The new pods exist, one is not ready yet: still rolling out.
+            (false, deployment_status("ReplicaSetUpdated", "True"), true),
+            // Rollout finished and a replica later stopped being ready: drift.
+            (
+                false,
+                deployment_status("NewReplicaSetAvailable", "True"),
+                false,
+            ),
+            // Kubernetes gave up on the rollout: drift.
+            (
+                false,
+                deployment_status("ProgressDeadlineExceeded", "False"),
+                false,
+            ),
+            (
+                true,
+                serde_json::json!({"replicas":2,"updatedReplicas":2,"readyReplicas":1,
+                    "observedGeneration":3,"currentRevision":"web-1","updateRevision":"web-2"}),
+                true,
+            ),
+            (
+                true,
+                serde_json::json!({"replicas":2,"updatedReplicas":2,"readyReplicas":1,
+                    "observedGeneration":3,"currentRevision":"web-2","updateRevision":"web-2"}),
+                false,
+            ),
+        ];
+        for (stateful, status, rolling_out) in cases {
+            let server = httpmock::MockServer::start_async().await;
+            let kind = if stateful {
+                "StatefulSet"
+            } else {
+                "Deployment"
+            };
+            let collection = if stateful {
+                "statefulsets"
+            } else {
+                "deployments"
+            };
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}/web"));
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"apps/v1", "kind":kind,
+                    "metadata":{"name":"web", "generation":3},
+                    "spec":{"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                    "status":status
+                }));
+            });
+            let config = manifest_test_container(&[], stateful);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            point_at(&mut ctx, &server);
+            let mut controller = manifest_test_controller();
+            controller.is_stateful = stateful;
+            let error = controller
+                .ready(&ctx)
+                .await
+                .expect_err("one of two replicas is not ready");
+            if rolling_out {
+                assert_eq!(error.code, "RESOURCE_ROLLOUT_IN_PROGRESS", "{status}");
+                assert!(error.retryable);
+            } else {
+                assert_eq!(error.code, "RESOURCE_DRIFT", "{status}");
+                assert!(!error.retryable);
+            }
+        }
+    }
+
     #[test]
     fn zero_replica_workload_waits_for_the_controller_to_observe_its_generation() {
         assert!(!workload_ready(0, None, None, None, Some(2)));
@@ -4564,8 +4668,7 @@ mod tests {
         let render = |security: Option<ContainerSecurity>| async move {
             let mut config = manifest_test_container(&[], false);
             config.security = security;
-            let harness =
-                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
             manifest_test_controller()
                 .build_deployment(
                     &config,
@@ -4599,7 +4702,11 @@ mod tests {
         }))
         .await;
         assert_eq!(
-            restricted.security_context.as_ref().unwrap().run_as_non_root,
+            restricted
+                .security_context
+                .as_ref()
+                .unwrap()
+                .run_as_non_root,
             Some(true)
         );
         assert!(restricted.containers[0].security_context.is_some());
