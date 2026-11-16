@@ -48,6 +48,12 @@ on:
         description: Validate without publishing
         type: boolean
         default: false
+      abandon_unreleased_version:
+        description: >-
+          Prepare only. The unreleased version on main whose stable publish
+          cannot finish (no tag); the next version is bumped from it instead
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -109,30 +115,16 @@ jobs:
         run: |
           node --test scripts/sdk-release-metadata.test.mjs scripts/release-routing.test.mjs
           python3 scripts/crate-publish-order.test.py
+          scripts/next-release-version.test.sh
 
       - name: Compute next version
         id: bump
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        env:
+          ABANDON_VERSION: ${{ inputs.abandon_unreleased_version }}
         run: |
-          LATEST_TAG=$(git tag --list "v[0-9]*" --sort=-v:refname | head -n1)
-          if [ -z "$LATEST_TAG" ]; then
-            LATEST_TAG="v0.0.0"
-          fi
-          CURRENT_VERSION=${LATEST_TAG#v}
-          echo "Latest tag: $LATEST_TAG"
-
-          WORKSPACE_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
-          if [ "$WORKSPACE_VERSION" != "$CURRENT_VERSION" ]; then
-            echo "::error::main already contains unreleased version v${WORKSPACE_VERSION}; run the stable publish action instead"
-            exit 1
-          fi
-
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
-          VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-
-          echo "Bump type: patch"
-          echo "New version: v${VERSION}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          scripts/next-release-version.sh | tee "$RUNNER_TEMP/next-version.log"
+          grep '^version=' "$RUNNER_TEMP/next-version.log" >> "$GITHUB_OUTPUT"
 
       - name: Read qualification version
         id: qualification_version
