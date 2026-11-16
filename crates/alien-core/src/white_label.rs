@@ -23,6 +23,9 @@ impl Known {
     fn covers(&self, token: &str, line: &str) -> bool {
         let token_matches = if self.token_contains == LABEL_KEY {
             is_label_key(token)
+        } else if let Some(exact) = self.token_contains.strip_prefix('=') {
+            // A leading `=` means the whole token must equal the text, not contain it.
+            token == exact
         } else {
             token.contains(self.token_contains)
         };
@@ -66,7 +69,8 @@ pub const ALLOWLIST: &[Known] = &[
 /// Mentions that are fixed only by renaming something that exists on installed deployments (a
 /// label, annotation or physical name that code looks up). Renaming would replace resources or
 /// strand upgrades, so these stay until a follow-up changes them for new installs. Each entry is
-/// a known gap, not an approval: the scan report lists them as "rename-follow-up".
+/// a known gap, not an approval: [`find_pending_renames`] lists them for the scan report as
+/// "rename-follow-up".
 pub const PENDING_RENAMES: &[Known] = &[
     Known {
         token_contains: LABEL_KEY,
@@ -83,8 +87,8 @@ pub const PENDING_RENAMES: &[Known] = &[
                  conditions of existing roles; changing it breaks workload identity",
     },
     Known {
-        token_contains: "alien",
-        line_contains: Some("namespace"),
+        token_contains: "=alien",
+        line_contains: Some("namespace:"),
         reason: "the managed cluster's default Kubernetes namespace (see the trust conditions)",
     },
     Known {
@@ -134,22 +138,18 @@ impl std::fmt::Display for Mention {
 }
 
 fn is_delimiter(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '"' | '\'' | '`' | ',' | '(' | ')' | '[' | ']' | '{' | '}')
+    c.is_whitespace()
+        || matches!(
+            c,
+            '"' | '\'' | '`' | ',' | '(' | ')' | '[' | ']' | '{' | '}'
+        )
 }
 
-/// Every mention in `content` that the allowlist does not cover.
-pub fn find_mentions(artifact: &str, content: &str) -> Vec<Mention> {
+fn scan(artifact: &str, content: &str, keep: impl Fn(&str, &str) -> bool) -> Vec<Mention> {
     let mut mentions = Vec::new();
     for (index, line) in content.lines().enumerate() {
         for token in line.split(is_delimiter) {
-            if !token.to_ascii_lowercase().contains(NEEDLE) {
-                continue;
-            }
-            if ALLOWLIST
-                .iter()
-                .chain(PENDING_RENAMES)
-                .any(|known| known.covers(token, line))
-            {
+            if !token.to_ascii_lowercase().contains(NEEDLE) || !keep(token, line) {
                 continue;
             }
             mentions.push(Mention {
@@ -161,6 +161,27 @@ pub fn find_mentions(artifact: &str, content: &str) -> Vec<Mention> {
         }
     }
     mentions
+}
+
+/// Every mention in `content` that neither the allowlist nor the pending renames cover.
+pub fn find_mentions(artifact: &str, content: &str) -> Vec<Mention> {
+    scan(artifact, content, |token, line| {
+        !ALLOWLIST
+            .iter()
+            .chain(PENDING_RENAMES)
+            .any(|known| known.covers(token, line))
+    })
+}
+
+/// The mentions in `content` that only [`PENDING_RENAMES`] covers: the "rename-follow-up" rows of
+/// the scan report. The generator tests do not fail on them.
+pub fn find_pending_renames(artifact: &str, content: &str) -> Vec<Mention> {
+    scan(artifact, content, |token, line| {
+        !ALLOWLIST.iter().any(|known| known.covers(token, line))
+            && PENDING_RENAMES
+                .iter()
+                .any(|known| known.covers(token, line))
+    })
 }
 
 /// Panic, listing every mention, when `content` names the product outside the allowlist.
@@ -218,5 +239,23 @@ mod tests {
     #[test]
     fn clean_text_passes() {
         assert!(find_mentions("a", "Description: Acme setup").is_empty());
+    }
+
+    #[test]
+    fn namespace_exception_is_the_exact_token() {
+        assert!(find_mentions("a", "namespace: alien").is_empty());
+        assert_eq!(
+            find_mentions("a", "description: alien operator namespace").len(),
+            1
+        );
+        assert_eq!(find_mentions("a", "namespace: alien-extra").len(), 1);
+    }
+
+    #[test]
+    fn pending_renames_are_reported_separately() {
+        let line = "app.kubernetes.io/part-of: x\n  alien.dev/sandbox: \"1\"";
+        assert!(find_mentions("a", line).is_empty());
+        assert_eq!(find_pending_renames("a", line).len(), 1);
+        assert!(find_pending_renames("a", "Description: Alien setup").is_empty());
     }
 }

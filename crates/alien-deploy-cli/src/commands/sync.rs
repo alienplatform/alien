@@ -2736,13 +2736,13 @@ async fn download_tools(
             Ok(response) if response.status().is_success() => response,
             Ok(response) => {
                 println!(
-                    "Couldn't include alien-deploy for {platform}: {url} returned {}",
+                    "Couldn't include the deploy tool for {platform}: {url} returned {}",
                     response.status()
                 );
                 return Ok(Tools::Unavailable);
             }
             Err(e) => {
-                println!("Couldn't include alien-deploy for {platform}: {e}");
+                println!("Couldn't include the deploy tool for {platform}: {e}");
                 return Ok(Tools::Unavailable);
             }
         };
@@ -2751,7 +2751,7 @@ async fn download_tools(
             .await
             .into_alien_error()
             .context(config_error(format!(
-                "downloading alien-deploy for {platform}"
+                "downloading the deploy tool for {platform}"
             )))?;
         if let Some(expected) = expected {
             if hex::encode(Sha256::digest(&bytes)) != expected {
@@ -2820,7 +2820,7 @@ fn copy_tools(bundle_dir: &Path, folder: &Path) -> Result<()> {
             if name != TOOLS_SOURCES_FILE {
                 std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))
                     .into_alien_error()
-                    .context(config_error("making alien-deploy executable"))?;
+                    .context(config_error("making the deploy tool executable"))?;
             }
             continue;
         }
@@ -2832,7 +2832,7 @@ fn copy_tools(bundle_dir: &Path, folder: &Path) -> Result<()> {
         if name != TOOLS_SOURCES_FILE {
             std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o755))
                 .into_alien_error()
-                .context(config_error("making alien-deploy executable"))?;
+                .context(config_error("making the deploy tool executable"))?;
         }
         // The old inode can still be executing the site-side sync command.
         temporary

@@ -99,11 +99,26 @@ fn printed_sentences_never_name_the_product() {
     let mut offending = Vec::new();
     for file in files {
         let source = fs::read_to_string(&file).expect("read source");
-        let production = source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields one part");
-        for (index, line) in production.lines().enumerate() {
+        // Test-only items are skipped one by one: a file can have a `#[cfg(test)]` item early
+        // and production code after it.
+        let mut skipping = false;
+        let mut depth: i32 = 0;
+        for (index, line) in source.lines().enumerate() {
+            if !skipping && line.trim() == "#[cfg(test)]" {
+                skipping = true;
+                depth = 0;
+                continue;
+            }
+            if skipping {
+                depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+                // The item ends at its closing brace, or at a `;` for `mod tests;`/`use ...;`.
+                if (depth <= 0 && line.contains('}'))
+                    || (depth == 0 && line.trim_end().ends_with(';'))
+                {
+                    skipping = false;
+                }
+                continue;
+            }
             if line.trim_start().starts_with("//") {
                 continue;
             }
