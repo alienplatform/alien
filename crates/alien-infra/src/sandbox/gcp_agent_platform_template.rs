@@ -387,21 +387,22 @@ async fn ensure_image_repository(
                 Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
             ) => {}
         Err(e) => {
-            let denied = matches!(
+            if matches!(
                 e.error,
                 Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
-            );
+            ) {
+                return Err(AlienError::new(ErrorData::SetupRerunRequired {
+                    resource_id: sandbox_id.to_string(),
+                    message: format!(
+                        "no access to the sandbox image repository '{repository}'. An install \
+                         set up before sandbox images were copied into the project lacks the \
+                         repository and the manager's write access to it; re-apply the current \
+                         Terraform module. Nothing was created or copied"
+                    ),
+                }));
+            }
             return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: if denied {
-                    format!(
-                        "No access to the sandbox image repository '{repository}'. An install set \
-                         up before sandbox images were copied into the project lacks it: update \
-                         the setup (re-apply the current Terraform module) and retry. Nothing was \
-                         copied or created"
-                    )
-                } else {
-                    format!("Failed to read the sandbox image repository '{repository}': {e}")
-                },
+                message: format!("Failed to read the sandbox image repository '{repository}': {e}"),
                 resource_id: Some(sandbox_id.to_string()),
             }));
         }
@@ -2381,6 +2382,51 @@ mod tests {
             );
             // The same step runs again: the repository exists now, and the source is refused again.
             assert!(executor.step().await.is_err());
+        }
+
+        /// An install set up before images were copied has no repository and no grant on it. The
+        /// step says to rerun setup, and writes nothing: no repository, no copy, no template.
+        #[tokio::test]
+        async fn a_refused_repository_read_asks_for_the_setup_rerun_and_writes_nothing() {
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            let source_requests = source.mock(|w, t| {
+                w.any_request();
+                t.status(200);
+            });
+            let dest_requests = dest.mock(|w, t| {
+                w.any_request();
+                t.status(200);
+            });
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template().never();
+            let mut registry = MockArtifactRegistryApi::new();
+            registry.expect_get_repository().returning(|_, _, _| {
+                Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RemoteAccessDenied {
+                        resource_type: "repository".to_string(),
+                        resource_name: "r".to_string(),
+                    },
+                ))
+            });
+            registry.expect_create_repository().never();
+            let registry = Arc::new(registry);
+            let client = Arc::new(m);
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_gcp_agent_platform_client()
+                .returning(move |_| Ok(client.clone()));
+            provider
+                .expect_get_gcp_artifact_registry_client()
+                .returning(move |_| Ok(registry.clone()));
+            let mut executor = executor(SOURCE_IMAGE, &source, &dest, Arc::new(provider)).await;
+            let error = executor
+                .step()
+                .await
+                .expect_err("a refused read stops the step");
+            assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{error}");
+            assert!(!error.retryable);
+            assert_eq!(source_requests.hits(), 0);
+            assert_eq!(dest_requests.hits(), 0);
         }
     }
 }
