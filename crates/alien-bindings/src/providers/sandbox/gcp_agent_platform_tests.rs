@@ -1753,6 +1753,45 @@ async fn a_resume_without_a_pause_marker_is_not_reported_as_kept() {
     assert!(!lost.retryable);
 }
 
+/// A caller holding lifecycle access only is refused by `:execute`; the error names the permission
+/// sets it is missing, and nothing is paused without the memory check.
+#[tokio::test]
+async fn pause_and_resume_without_execute_access_name_the_missing_permission() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_execute().returning(|_, _, _| {
+        Err(http_error(
+            403,
+            "Permission denied on aiplatform.sandboxEnvironments.execute",
+        ))
+    });
+    client.expect_pause_sandbox().never();
+    let provider = provider(client);
+
+    let paused = provider.pause("s1").await.expect_err("no execute access");
+    assert_eq!(paused.code, "SANDBOX_COMMAND_FAILED", "{paused}");
+    assert!(!paused.retryable, "{paused}");
+    assert!(
+        paused.message.contains("sandbox/execute"),
+        "{}",
+        paused.message
+    );
+    assert!(
+        paused.message.contains("sandbox/management"),
+        "{}",
+        paused.message
+    );
+
+    let resumed = provider.resume("s1").await.expect_err("no execute access");
+    assert!(
+        resumed.message.contains("sandbox/execute"),
+        "{}",
+        resumed.message
+    );
+}
+
 /// Two callers resuming one paused sandbox both get it back: the first does not take the marker
 /// away from the second.
 #[tokio::test]

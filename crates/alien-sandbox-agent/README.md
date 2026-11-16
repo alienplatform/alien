@@ -530,7 +530,7 @@ exactly when the memory does. `resume()` reads it back and fails with `SANDBOX_M
 retryable) when it is missing after a pause or differs from the container that answers; a read that
 fails for another reason is reported as that failure, never as lost memory. A fresh container has no
 such file, so a pause in one process and a resume in another are checked the same way. The marker
-needs `/bin/sh` in the image. `resume()` on a sandbox that was running and never paused is a no-op.
+needs `/bin/sh` in the image. On Google Cloud, pause and resume talk to the sandbox's agent to check that memory survived, so the caller needs `sandbox/execute` (or `sandbox/remote-execute`) as well as `sandbox/management`; a caller with lifecycle access only gets an error naming the missing set. `resume()` on a sandbox that was running and never paused is a no-op.
 Any request to a paused sandbox, a command or a preview call included, wakes it: Google offers no
 way to turn that off, so a paused sandbox stays paused only while nothing talks to it. A wake by a
 command or a preview call skips the check above; callers who need it compare the sandbox's

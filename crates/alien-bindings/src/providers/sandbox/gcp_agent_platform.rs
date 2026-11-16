@@ -859,6 +859,20 @@ impl GcpAgentPlatformSandbox {
             ))
         })?
         .map_err(|error| {
+            // A caller with lifecycle access only (`sandbox/management`) is refused here with a
+            // 403, which no retry changes. Name what is missing rather than say the agent is
+            // unreachable, which reads as a transient fault.
+            if http_status(&error) == Some(403) && (operation == PAUSE || operation == RESUME) {
+                return error.context(ErrorData::SandboxCommandFailed {
+                    failure: "executePermissionMissing".to_string(),
+                    reason: format!(
+                        "{operation}: on Google Cloud, pause and resume talk to the sandbox's agent \
+                         to check that memory survived, so the caller needs sandbox/execute (or \
+                         sandbox/remote-execute) as well as sandbox/management; the agent call was \
+                         refused with 403"
+                    ),
+                });
+            }
             error.context(ErrorData::SandboxUnreachable {
                 operation: operation.to_string(),
                 reason: "the sandbox's agent did not answer a health probe".to_string(),
@@ -976,6 +990,9 @@ impl GcpAgentPlatformSandbox {
             // Bounded by the deadline too, since one probe's own budget is as long as the wait.
             match tokio::time::timeout_at(deadline, self.probe_agent(operation, sandbox_id)).await {
                 Ok(Ok(generation)) => return Ok(generation),
+                // The probe reports anything a wait can cure as unreachable; a refusal it names
+                // otherwise (the caller may not call the agent) is not cured by waiting.
+                Ok(Err(error)) if error.code == "SANDBOX_COMMAND_FAILED" => return Err(error),
                 Ok(Err(error)) => {
                     last_error = Some(error);
                     if tokio::time::Instant::now() + AGENT_READY_POLL >= deadline {
