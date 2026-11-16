@@ -625,6 +625,21 @@ impl AzureSandboxController {
         status = ResourceStatus::RefreshFailed
     );
 
+    /// A sandbox serving no image yet asks for the update that builds it. A setup run builds
+    /// nothing, and an imported sandbox arrives without one, so the sandbox sits Running with no
+    /// binding. Without the request a linked Worker starts in that window and never gets the
+    /// binding: it names an image, and nothing updates the Worker once the image exists. The
+    /// request keeps dependents waiting until the build has run and the binding is published.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        if ctx.deployment_config.setup_run || !matches!(self.state, AzureSandboxState::Ready) {
+            return Ok(false);
+        }
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        Ok(self.disk_image.is_none()
+            && self.disk_image_id.is_none()
+            && self.pending_image(config).is_some())
+    }
+
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{BindingValue, SandboxBinding};
 
@@ -2263,6 +2278,77 @@ mod tests {
             assert_eq!(controller.disk_image_id.as_deref(), Some("img-1"));
             let params = controller.get_binding_params().unwrap().expect("a binding");
             assert_eq!(params["diskImage"], PYTHON);
+        }
+
+        /// A sandbox at `Ready` with nothing built asks for the update that builds its registry
+        /// image, so a linked Worker waits for the binding instead of starting without it. The
+        /// update builds the image, and the binding exists before the sandbox is Running again.
+        #[tokio::test]
+        async fn a_sandbox_with_no_image_built_asks_for_the_update_that_builds_it() {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client
+                .expect_list_disk_images()
+                .returning(|_| Ok(Vec::new()));
+            client
+                .expect_create_disk_image()
+                .returning(|_, _| Ok(image("img-1", PYTHON, "Ready")));
+            let mut executor = executor(sandbox(PYTHON), adopted(None, None), client).await;
+            assert!(
+                executor.needs_update().unwrap(),
+                "nothing serves the image yet"
+            );
+            assert!(state_of(&executor).get_binding_params().unwrap().is_none());
+
+            executor.update(sandbox(PYTHON)).expect("the update starts");
+            executor
+                .step()
+                .await
+                .expect("the update routes to the build");
+            assert_eq!(
+                executor.status(),
+                ResourceStatus::Updating,
+                "dependents wait while the image builds"
+            );
+            executor.step().await.expect("the build succeeds");
+
+            assert_eq!(executor.status(), ResourceStatus::Running);
+            assert!(state_of(&executor).get_binding_params().unwrap().is_some());
+            assert!(!executor.needs_update().unwrap(), "the image is served");
+        }
+
+        /// Catalog images, a served registry image and a setup run ask for nothing.
+        #[tokio::test]
+        async fn only_a_provisioning_run_with_an_unbuilt_registry_image_asks_for_an_update() {
+            let catalog = executor(
+                sandbox("ubuntu"),
+                adopted(Some("ubuntu"), None),
+                MockSandboxDataPlaneApi::new(),
+            )
+            .await;
+            assert!(!catalog.needs_update().unwrap());
+
+            let served = executor(
+                sandbox(PYTHON),
+                adopted(Some(PYTHON), Some("img-1")),
+                MockSandboxDataPlaneApi::new(),
+            )
+            .await;
+            assert!(!served.needs_update().unwrap());
+
+            let setup = SingleControllerExecutor::builder()
+                .resource(sandbox(PYTHON))
+                .controller(adopted(None, None))
+                .platform(Platform::Azure)
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .setup_run(true)
+                .service_provider(provider_with(MockSandboxDataPlaneApi::new()))
+                .build()
+                .await
+                .expect("executor should build");
+            assert!(
+                !setup.needs_update().unwrap(),
+                "a setup run builds nothing, so it cannot ask for the build"
+            );
         }
 
         /// A create whose response was lost left an image under the label. The retry finds and

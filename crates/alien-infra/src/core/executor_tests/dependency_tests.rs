@@ -1008,6 +1008,38 @@ mod rollout_order {
         Ok(())
     }
 
+    /// A dependency that asks for an update holds the creation of a dependent too, not only its
+    /// update: a dependent created while the sandbox's binding is still unpublished would be
+    /// built without it and never see it.
+    #[tokio::test]
+    async fn a_dependency_with_a_requested_update_holds_back_a_dependent_still_to_be_created(
+    ) -> Result<()> {
+        let (dep, app) = ("dep-create-held", "app-create-held");
+        let only_dep = Stack::new("create-held".to_owned())
+            .add(worker(dep, "r1", false), ResourceLifecycle::Live)
+            .build();
+        let mut state = run_to_synced(&new_executor(&only_dep)?, new_test_state()).await?;
+        assert_all_running(&state, &[dep]);
+
+        crate::worker::request_test_worker_update(dep, true);
+        let executor = new_executor(&requested_stack(dep, app, "r1", false))?;
+        state = executor.step(state).await?.next_state;
+        assert!(
+            matches!(
+                get_status(&state, app),
+                None | Some(ResourceStatus::Pending)
+            ),
+            "the dependent started while its dependency still owed an update: {:?}",
+            get_status(&state, app)
+        );
+        crate::worker::request_test_worker_update(dep, false);
+        for _ in 0..40 {
+            state = executor.step(state).await?.next_state;
+        }
+        assert_all_running(&state, &[dep, app]);
+        Ok(())
+    }
+
     /// `dep` <- `app`: `dep` is Running on release one, `app` is asked to move to release two.
     fn requested_stack(dep: &str, app: &str, release: &str, fail_dep_update: bool) -> Stack {
         Stack::new("rollout-fail-open".to_owned())

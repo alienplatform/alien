@@ -3727,10 +3727,19 @@ impl StackExecutor {
             None => return false, // Defensive.
         };
 
-        resource_cfg
-            .dependencies
-            .iter()
-            .all(|dep_ref| self.dependency_settled(dep_ref.id(), state))
+        // A dependency that is Running but asks for an update to publish what its dependents
+        // read (a sandbox that has not built its image yet has no binding) holds their creation
+        // too: a dependent created now would be built without it, and nothing updates it later.
+        resource_cfg.dependencies.iter().all(|dep_ref| {
+            let id = dep_ref.id();
+            self.dependency_settled(id, state)
+                && match (self.resources.get(id), state.resources.get(id)) {
+                    (Some(desired), Some(current)) => {
+                        !self.needs_update_requested(id, desired, current, state)
+                    }
+                    _ => true,
+                }
+        })
     }
 
     /// Checks if a resource is ready for deletion by verifying all its dependents are deleted.
