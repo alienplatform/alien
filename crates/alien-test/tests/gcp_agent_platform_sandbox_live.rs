@@ -865,6 +865,131 @@ async fn reach_matrix_for_both_egress_switches() {
     }
 }
 
+/// The real path: the deployment is one a local manager deployed (`alien deploy`), and the binding
+/// is built from the controller state the manager recorded for the sandbox, exactly as the
+/// controller publishes it. It is then loaded with `load_sandbox` the way a workload does, so the
+/// provider-level checks run, and a sandbox is created and probed through it. Set
+/// `ALIEN_TEST_MANAGER_URL`, `ALIEN_TEST_MANAGER_TOKEN`, `ALIEN_TEST_DEPLOYMENT_ID` and
+/// `ALIEN_TEST_SANDBOX_RESOURCE` plus the `GOOGLE_TARGET_*` variables.
+#[tokio::test]
+#[ignore = "requires a deployment made by a local manager in a real GCP project"]
+async fn reach_through_a_manager_deployed_binding() {
+    use alien_bindings::traits::BindingsProviderApi;
+    use alien_core::bindings::{BindingValue, SandboxBinding};
+
+    let config = LiveConfig::from_env();
+    let resource = require_env("ALIEN_TEST_SANDBOX_RESOURCE");
+    let url = format!(
+        "{}/v1/deployments/{}",
+        require_env("ALIEN_TEST_MANAGER_URL").trim_end_matches('/'),
+        require_env("ALIEN_TEST_DEPLOYMENT_ID")
+    );
+    let deployment: serde_json::Value = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(require_env("ALIEN_TEST_MANAGER_TOKEN"))
+        .send()
+        .await
+        .expect("the manager answers")
+        .error_for_status()
+        .expect("the manager knows the deployment")
+        .json()
+        .await
+        .expect("the deployment is JSON");
+    let state = &deployment["stackState"]["resources"][resource.as_str()];
+    assert_eq!(state["status"], "running", "the sandbox is running: {state}");
+    let internal = &state["_internal"];
+    let text = |key: &str| {
+        internal[key]
+            .as_str()
+            .unwrap_or_else(|| panic!("controller state has {key}: {internal}"))
+            .to_string()
+    };
+    let (project, region) = (text("projectId"), text("region"));
+    let engine = format!(
+        "projects/{project}/locations/{region}/reasoningEngines/{}",
+        text("engine")
+    );
+    let template = format!("{engine}/sandboxEnvironmentTemplates/{}", text("templateId"));
+    assert_eq!(internal["egress"], "internet", "declared internet: {internal}");
+    let mut binding = SandboxBinding::gcp_agent_platform(
+        BindingValue::value(engine),
+        BindingValue::value(template),
+        BindingValue::value(region),
+        internal["maxLifetimeSeconds"].as_u64().map(|v| v as u32),
+        internal["allowEgress"].as_bool().unwrap_or(false),
+    );
+    if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
+        value.egress = Some(alien_core::SandboxEgress::Internet.into());
+    }
+
+    let env = HashMap::from([
+        ("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string()),
+        ("GCP_PROJECT_ID".to_string(), config.project_id.clone()),
+        ("GCP_REGION".to_string(), config.region.clone()),
+        (
+            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
+            config.credentials_json.clone(),
+        ),
+        (
+            "ALIEN_BOX_BINDING".to_string(),
+            serde_json::to_string(&binding).unwrap(),
+        ),
+    ]);
+    let bindings = alien_bindings::BindingsProvider::from_env(env)
+        .await
+        .expect("the provider builds from the environment");
+    let sandbox = bindings
+        .load_sandbox("box")
+        .await
+        .expect("load_sandbox accepts a Google Cloud internet binding");
+    assert_eq!(
+        sandbox.egress_declaration(),
+        Some(&alien_core::SandboxEgress::Internet)
+    );
+    let created = sandbox
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds on the loaded binding");
+    let sid = created.sandbox_id.clone();
+    let (command, args) = ("python3", vec!["-c".to_string(), REACH_PROBE.to_string()]);
+    let mut stream = sandbox
+        .run_command(
+            &sid,
+            RunCommandRequest {
+                command: command.to_string(),
+                args,
+                cwd: None,
+                env: BTreeMap::new(),
+                timeout: Duration::from_secs(120),
+            },
+        )
+        .await
+        .expect("the probe starts");
+    let mut stdout = Vec::new();
+    let mut exit = None;
+    while let Some(frame) = stream.next().await {
+        match frame.expect("a frame decodes") {
+            CommandOutput::Stdout { data, .. } => stdout.extend_from_slice(&data),
+            CommandOutput::Exit { code, .. } => exit = Some(code),
+            _ => {}
+        }
+    }
+    let text = String::from_utf8_lossy(&stdout).to_string();
+    println!("{text}");
+    sandbox.terminate(&sid).await.expect("terminate confirms gone");
+    assert_eq!(exit, Some(0), "the probe ran to the end: {text}");
+    let rows: BTreeMap<_, _> = text
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect();
+    for row in ["dns_example_com", "https_example_com", "tcp_1_1_1_1_443"] {
+        assert!(rows[row].starts_with("ok"), "{row} reachable: {rows:?}");
+    }
+    for row in ["dns_metadata_google_internal", "tcp_metadata_ip_80"] {
+        assert!(rows[row].starts_with("fail"), "{row} blocked: {rows:?}");
+    }
+}
+
 // ---- Orphan sweep -----------------------------------------------------------------------------
 
 fn sweep_log() -> PathBuf {
