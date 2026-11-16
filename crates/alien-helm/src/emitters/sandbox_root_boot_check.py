@@ -38,11 +38,11 @@ def container(name, capabilities, run_as_root=True):
 
 
 # The shape of a root-boot sandbox pod: root, the bounded boot capability set, the staging init
-# container that holds none, and the read-only subPath mounts over the agent and /opt/alien.
+# container that holds none, and the read-only subPath mounts over the agent and its install directory.
 pod = {
     "apiVersion": "v1",
     "kind": "Pod",
-    "metadata": {"name": "alien-root-boot-check", "namespace": NAMESPACE},
+    "metadata": {"name": "root-boot-check", "namespace": NAMESPACE},
     "spec": {
         "runtimeClassName": RUNTIME_CLASS or None,
         "automountServiceAccountToken": False,
@@ -78,7 +78,7 @@ host = "[%s]" % host if ":" in host else host
 token = open(SERVICE_ACCOUNT + "/token").read().strip()
 context = ssl.create_default_context(cafile=SERVICE_ACCOUNT + "/ca.crt")
 request = urllib.request.Request(
-    "https://%s:%s/api/v1/namespaces/%s/pods?dryRun=All&fieldManager=alien-root-boot-check"
+    "https://%s:%s/api/v1/namespaces/%s/pods?dryRun=All&fieldManager=root-boot-check"
     % (host, port, NAMESPACE),
     data=json.dumps(pod).encode(),
     headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},

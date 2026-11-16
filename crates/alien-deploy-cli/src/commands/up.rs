@@ -4581,7 +4581,7 @@ async fn up_command_with(
         output::label_value("Compute", &effective_compute_summary(&stack_settings));
         if stack_settings.setup_management == alien_core::SetupManagement::Automatic {
             output::info(
-                "Infrastructure management: Alien can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.",
+                "Infrastructure management: your vendor's management service can create, change, and remove infrastructure for this installation, including resources added by future releases. New cloud permissions can require an explicit setup update.",
             );
         }
         if let Some(public_endpoints) = public_endpoints.as_ref() {
@@ -7385,7 +7385,7 @@ async fn run_local_pull_model(
         .await;
     }
 
-    output::info("Installing alien-operator as a system service...");
+    output::info("Installing the Operator as a system service...");
 
     // Delegate to the operator install logic
     let install_args = super::operator::InstallArgs {
@@ -7404,7 +7404,7 @@ async fn run_local_pull_model(
 
     super::operator::install_service(install_args)?;
 
-    output::success("alien-operator installed and running as a system service.");
+    output::success("Operator installed and running as a system service.");
     output::info("The operator will sync with the manager and deploy updates automatically.");
     let command_name = embedded_config
         .and_then(|config| config.name.as_deref())
@@ -7565,7 +7565,7 @@ async fn run_kubernetes_pull_model(
     stack_settings: &StackSettings,
     public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
-    output::info("Kubernetes platform detected — installing alien-operator with Helm.");
+    output::info("Kubernetes platform detected — installing the Operator with Helm.");
     let (stack, resource_prefix) = fetch_kubernetes_release_stack(client, deployment_id).await?;
     let HelmRelease {
         name: release,
@@ -7634,7 +7634,7 @@ async fn run_kubernetes_pull_model(
     .await?;
 
     output::success(&format!(
-        "alien-operator Helm release '{}' is installed in namespace '{}'.",
+        "Operator Helm release '{}' is installed in namespace '{}'.",
         release, namespace
     ));
     output::info(&format!("Deployment ID: {}", deployment_id));
@@ -8028,7 +8028,7 @@ async fn find_or_download_operator_binary(
         .context(ErrorData::FileOperationFailed {
             operation: "create".to_string(),
             file_path: bin_dir.display().to_string(),
-            reason: "Failed to create ~/.alien/bin directory".to_string(),
+            reason: "Failed to create the Operator bin directory".to_string(),
         })?;
 
     let binary_path = bin_dir.join("alien-operator");
@@ -8043,20 +8043,20 @@ async fn find_or_download_operator_binary(
         resolve_stable_binary_url(&releases_url, "alien-operator", os, arch).await?
     };
 
-    output::info(&format!("Downloading alien-operator from {}...", url));
+    output::info(&format!("Downloading the Operator from {}...", url));
 
     let response =
         reqwest::get(&url)
             .await
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
-                message: format!("Failed to download alien-operator from {}", url),
+                message: format!("Failed to download the Operator from {}", url),
             })?;
 
     if !response.status().is_success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: format!(
-                "Failed to download alien-operator: HTTP {}",
+                "Failed to download the Operator: HTTP {}",
                 response.status()
             ),
         }));
@@ -8068,7 +8068,7 @@ async fn find_or_download_operator_binary(
             .await
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
-                message: "Failed to read alien-operator download response".to_string(),
+                message: "Failed to read the Operator download response".to_string(),
             })?;
 
     std::fs::write(&binary_path, &bytes)
@@ -8076,7 +8076,7 @@ async fn find_or_download_operator_binary(
         .context(ErrorData::FileOperationFailed {
             operation: "write".to_string(),
             file_path: binary_path.display().to_string(),
-            reason: "Failed to write alien-operator binary".to_string(),
+            reason: "Failed to write the Operator binary".to_string(),
         })?;
 
     // Make executable on Unix
@@ -8088,11 +8088,11 @@ async fn find_or_download_operator_binary(
             .context(ErrorData::FileOperationFailed {
                 operation: "chmod".to_string(),
                 file_path: binary_path.display().to_string(),
-                reason: "Failed to make alien-operator executable".to_string(),
+                reason: "Failed to make the Operator executable".to_string(),
             })?;
     }
 
-    output::success("alien-operator downloaded successfully.");
+    output::success("Operator downloaded successfully.");
 
     Ok(binary_path)
 }

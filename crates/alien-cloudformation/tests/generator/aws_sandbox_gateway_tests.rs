@@ -7,7 +7,7 @@
 //! declare.
 
 use alien_cloudformation::{
-    generate_cloudformation_template, test_utils::cfn_lint, to_yaml, CfEmitter, CfExpression,
+    generate_cloudformation_template, to_yaml, CfEmitter, CfExpression,
     CfRegistry, CfResource, CfTemplate, CloudFormationOptions, CloudFormationTarget,
     RegistrationMode,
 };
@@ -178,6 +178,7 @@ fn render(
             management_trust: Default::default(),
         },
     )
+    .map(super::helpers::scan_template)
 }
 
 /// The setup template for an internet sandbox carries the gateway's network, whether or not
@@ -227,7 +228,7 @@ async fn an_internet_sandbox_setup_template_carries_the_gateway_network() {
         let document: serde_json::Value = serde_yaml::from_str(&yaml).expect("template parses");
         collect_ports(&document, &mut proxy_rules);
         assert!(proxy_rules > 0, "{description}: no gateway proxy rule found");
-        cfn_lint(&yaml).assert_ok(&description);
+        super::helpers::lint(&yaml).assert_ok(&description);
         for (kind, name) in [
             ("resource", "SandboxGatewaySubnet1"),
             ("parameter", "SandboxGatewaySubnetIds"),
@@ -357,7 +358,7 @@ async fn a_profile_granted_an_internet_sandbox_renders_without_a_dependency_cycl
                 "{description}: {logical_id} depends on itself"
             );
         }
-        cfn_lint(&to_yaml(&template).expect("template serializes")).assert_ok(description);
+        super::helpers::lint(&to_yaml(&template).expect("template serializes")).assert_ok(description);
     }
 }
 
@@ -631,7 +632,7 @@ async fn the_management_role_cannot_decrypt_or_read_the_deployments_secrets() {
         "deployment key and internet sandbox",
     )
     .expect("template renders");
-    cfn_lint(&to_yaml(&template).expect("template serializes"))
+    super::helpers::lint(&to_yaml(&template).expect("template serializes"))
         .assert_ok("deployment key and internet sandbox");
 
     let gateway_config = "${AWS::StackName}-secrets-sandbox-egress-gateway-config";

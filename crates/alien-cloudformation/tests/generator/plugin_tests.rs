@@ -46,7 +46,7 @@ fn plugin_can_extend_registry_alongside_built_ins() {
     .expect("template should render");
 
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("plugin extension");
+    super::helpers::lint(&yaml).assert_ok("plugin extension");
 
     assert!(
         template.resources.contains_key("Data"),

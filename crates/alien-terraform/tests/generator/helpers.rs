@@ -248,6 +248,7 @@ pub fn linter_files(module: &ModuleFiles) -> IndexMap<String, String> {
 /// Snapshot the entire module as a single string with `=== <path> ===`
 /// separators between files. One `.snap` per scenario, fully reviewable.
 pub fn snapshot_module(name: &str, module: &ModuleFiles) {
+    alien_core::white_label::assert_files_white_labeled(name, module.iter());
     let mut buf = String::new();
     for (path, contents) in module.iter() {
         buf.push_str("=== ");

@@ -135,7 +135,7 @@ fn chart_values_include_kubernetes_exposure_contract() {
             exposure: Some(KubernetesExposureSettings::Generated {
                 route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
                     controller: Some("eks.amazonaws.com/alb".to_string()),
-                    ingress_class_name: "alien-alb".to_string(),
+                    ingress_class_name: "acme-alb".to_string(),
                     labels: Default::default(),
                     annotations: Default::default(),
                     provider: None,
@@ -160,7 +160,7 @@ fn chart_values_include_kubernetes_exposure_contract() {
             "route": {
                 "routeApi": "ingress",
                 "controller": "eks.amazonaws.com/alb",
-                "ingressClassName": "alien-alb",
+                "ingressClassName": "acme-alb",
             },
             "certificate": {
                 "mode": "managedTlsSecret",
@@ -298,10 +298,10 @@ fn workload_vault_permissions_render_runtime_secret_rbac() {
         .permission(
             "runtime",
             PermissionProfile::new()
-                .resource("alien-vault", ["vault/data-read", "vault/data-write"]),
+                .resource("acme-vault", ["vault/data-read", "vault/data-write"]),
         )
         .add(
-            Vault::new("alien-vault".to_string()).build(),
+            Vault::new("acme-vault".to_string()).build(),
             ResourceLifecycle::Frozen,
         )
         .add(worker, ResourceLifecycle::Live)
@@ -402,7 +402,7 @@ fn gcp_base_platform_config_renders_operator_environment() {
     let values = files.get("values.yaml").expect("values.yaml");
     let gcp_values = values
         .replace("basePlatform: null", "basePlatform: gcp")
-        .replace("projectId: \"\"", "projectId: alien-test-target")
+        .replace("projectId: \"\"", "projectId: acme-test-target")
         .replace("region: \"\"", "region: us-east4");
 
     let rendered = test_utils::helm_template(&files, Some(&gcp_values));
@@ -411,7 +411,7 @@ fn gcp_base_platform_config_renders_operator_environment() {
             assert!(rendered.stdout.contains("name: OPERATOR_BASE_PLATFORM"));
             assert!(rendered.stdout.contains("value: \"gcp\""));
             assert!(rendered.stdout.contains("name: GCP_PROJECT_ID"));
-            assert!(rendered.stdout.contains("value: \"alien-test-target\""));
+            assert!(rendered.stdout.contains("value: \"acme-test-target\""));
             assert!(rendered.stdout.contains("name: GOOGLE_CLOUD_PROJECT"));
             assert!(rendered.stdout.contains("name: GCP_REGION"));
             assert!(rendered.stdout.contains("value: \"us-east4\""));

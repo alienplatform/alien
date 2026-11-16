@@ -61,6 +61,8 @@ impl LinterRun {
 
 /// Run cfn-lint against a CloudFormation YAML template.
 pub fn cfn_lint(template_yaml: &str) -> LinterRun {
+    // Every template that reaches the linter is also checked for the product name.
+    alien_core::white_label::assert_white_labeled("template", template_yaml);
     run_when_enabled("cfn-lint", || {
         let dir = tempfile::tempdir().map_err(|error| error.to_string())?;
         let path = dir.path().join("template.yaml");

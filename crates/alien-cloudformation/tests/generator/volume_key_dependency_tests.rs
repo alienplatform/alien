@@ -166,6 +166,6 @@ fn encrypted_container_volume_generates_an_acyclic_dependency_graph() {
     let yaml = to_yaml(&template).expect("template should serialize");
     // E3004 checks the complete graph, including implicit Ref/GetAtt edges and
     // explicit DependsOn. The regression forms key -> workload -> node -> key.
-    alien_cloudformation::test_utils::cfn_lint(&yaml)
+    super::helpers::lint(&yaml)
         .assert_ok("encrypted volume dependency graph must be acyclic");
 }

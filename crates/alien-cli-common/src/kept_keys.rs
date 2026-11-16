@@ -121,7 +121,7 @@ pub fn print_kept_keys(keys: &[KeptKey]) {
     if keys.is_empty() {
         return;
     }
-    println!("Encryption keys are kept (Alien never deletes key material). Delete any you no longer need:");
+    println!("Encryption keys are kept (key material is never deleted). Delete any you no longer need:");
     for line in kept_key_lines(keys) {
         println!("  {line}");
     }

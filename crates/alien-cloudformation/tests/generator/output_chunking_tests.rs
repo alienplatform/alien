@@ -63,7 +63,7 @@ fn outputs_fallback_chunks_large_resource_payload() {
     assert_eq!(resource_count, 80);
 
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("chunked outputs");
+    super::helpers::lint(&yaml).assert_ok("chunked outputs");
 }
 
 #[test]
@@ -87,6 +87,7 @@ fn small_payload_emits_single_resources_output() {
         },
     )
     .expect("template should render");
+    let template = super::helpers::scan_template(template);
 
     assert!(
         template.outputs.contains_key(OUTPUT_RESOURCES),

@@ -134,6 +134,7 @@ pub fn helm_template_and_validate_for_release(
         if !matches!(rendered.status, LinterStatus::Passed) {
             return Ok(rendered);
         }
+        assert_rendered_white_labeled(&rendered);
 
         let rendered_path = dir.path().join("rendered.yaml");
         write_file(&rendered_path, &rendered.stdout)?;
@@ -256,8 +257,22 @@ fn helm_template_with_options(
         }
 
         let rendered = run_command("helm", args.iter().map(|arg| arg.as_os_str()), None)?;
-        helm_template_with_debug_on_failure(rendered, &args)
+        let rendered = helm_template_with_debug_on_failure(rendered, &args)?;
+        assert_rendered_white_labeled(&rendered);
+        Ok(rendered)
     })
+}
+
+/// Every manifest an integration test renders is scanned for the product name, so no scenario
+/// skips the white-label check. The unit tests inside this crate render the unbranded default
+/// (no vendor brand, so the product's own names), which is not what a vendor ships: they skip it.
+/// The integration tests include this file as a module of their own crate, which is how the two
+/// are told apart.
+fn assert_rendered_white_labeled(rendered: &LinterRun) {
+    let in_unit_tests = env!("CARGO_CRATE_NAME") == "alien_helm";
+    if !in_unit_tests && matches!(rendered.status, LinterStatus::Passed) {
+        alien_core::white_label::assert_white_labeled("helm template output", &rendered.stdout);
+    }
 }
 
 /// Render a chart's NOTES.txt for a release in `namespace`. `helm template`

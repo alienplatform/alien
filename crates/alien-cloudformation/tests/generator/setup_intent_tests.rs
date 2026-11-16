@@ -35,7 +35,7 @@ fn intent_carries_the_import_fields_and_a_read_policy_on_the_own_stack() {
     let mut template = template();
     add_verified_setup_intent(&mut template).unwrap();
     let yaml = alien_cloudformation::to_yaml(&template).unwrap();
-    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("setup intent");
+    super::helpers::lint(&yaml).assert_ok("setup intent");
 
     let registration = &template.resources["DeploymentRegistration"];
     let intent = &registration.metadata["SetupIntent"];

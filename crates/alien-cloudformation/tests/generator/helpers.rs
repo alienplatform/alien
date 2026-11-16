@@ -16,6 +16,20 @@ use alien_core::{
 use serde::{Deserialize, Serialize};
 use std::{any::Any, collections::HashMap};
 
+/// Run `cfn-lint` on a rendered template. `cfn_lint` also scans the template for the product
+/// name, so every template that is linted is scanned.
+pub fn lint(yaml: &str) -> alien_cloudformation::test_utils::LinterRun {
+    alien_cloudformation::test_utils::cfn_lint(yaml)
+}
+
+/// Scan a template that a test renders but does not lint (for example one that is only
+/// inspected structurally). Returns the template so it can wrap a render call.
+pub fn scan_template(template: CfTemplate) -> CfTemplate {
+    let yaml = to_yaml(&template).expect("template should serialize");
+    alien_core::white_label::assert_white_labeled("template", &yaml);
+    template
+}
+
 /// Render a stack against the built-in registry and a chosen
 /// registration mode. Runs `cfn-lint` and returns the YAML.
 pub fn render_built_ins(
@@ -74,7 +88,7 @@ pub fn render_built_ins_template(
     )
     .expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok(description);
+    lint(&yaml).assert_ok(description);
     (template, yaml)
 }
 
@@ -89,7 +103,7 @@ pub fn try_render_built_ins(
     description: &str,
 ) -> Result<CfTemplate> {
     let registry = CfRegistry::built_in();
-    generate_cloudformation_template(
+    let template = generate_cloudformation_template(
         stack,
         CloudFormationOptions {
             pins: alien_core::SetupPins::compiled_in(),
@@ -104,7 +118,8 @@ pub fn try_render_built_ins(
             description: Some(description.to_string()),
             management_trust: Default::default(),
         },
-    )
+    )?;
+    Ok(scan_template(template))
 }
 
 /// The registration mode the `.enabled()` tests render under: the custom
@@ -346,7 +361,7 @@ pub fn render_sample_template(
     )
     .expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok(description);
+    lint(&yaml).assert_ok(description);
     (template, yaml)
 }
 

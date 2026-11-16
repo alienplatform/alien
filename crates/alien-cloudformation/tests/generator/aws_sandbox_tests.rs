@@ -756,7 +756,7 @@ fn a_restricted_sandbox_never_defaults_to_the_mode_it_withholds() {
         !rendered.contains("\"use-default\""),
         "the withheld mode must appear neither as a value nor as the default: {rendered}"
     );
-    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("restricted sandbox default clamp");
+    super::helpers::lint(&yaml).assert_ok("restricted sandbox default clamp");
 }
 
 /// A sandbox on a Kubernetes target is a pod bounded by the chart, not cloud infrastructure.

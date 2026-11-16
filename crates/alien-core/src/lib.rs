@@ -1,4 +1,6 @@
 pub mod storage_notifications;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod white_label;
 
 mod prepared_resources;
 pub use prepared_resources::*;
