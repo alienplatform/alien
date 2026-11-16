@@ -49,6 +49,10 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity, privileged: boo
         .args(super::network_enforced_externally()?.then_some("--external-network"))
         .stdout(std::process::Stdio::piped())
         .env_clear()
+        .envs(token_sources(
+            image_environment(),
+            std::env::vars().filter(|(name, _)| TOKEN_SOURCES.contains(&name.as_str())),
+        ))
         .kill_on_drop(true);
     // SAFETY: only the existing async-signal-safe identity drop runs between fork and exec.
     unsafe {
@@ -86,6 +90,39 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity, privileged: boo
         )));
     }
     Ok(())
+}
+
+/// The only variables the check child is given: where the workload's own credential token for the
+/// node's agent comes from. Nothing else of the agent's environment reaches the child.
+const TOKEN_SOURCES: [&str; 2] = [
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+];
+
+/// The image's own environment, as the workload gets it. Unreadable or absent: empty.
+fn image_environment() -> std::collections::BTreeMap<String, String> {
+    std::fs::read(alien_core::sandbox_image::IMAGE_COMMAND_PATH)
+        .ok()
+        .and_then(|bytes| {
+            serde_json::from_slice::<alien_core::sandbox_image::SandboxImageCommand>(&bytes).ok()
+        })
+        .map(|image| image.env)
+        .unwrap_or_default()
+}
+
+/// The token variables the workload will have: the image's, replaced by the supplied environment
+/// (which wins for the workload too). Only the names in [`TOKEN_SOURCES`] are kept.
+fn token_sources(
+    image: impl IntoIterator<Item = (String, String)>,
+    supplied: impl IntoIterator<Item = (String, String)>,
+) -> Vec<(String, String)> {
+    let mut found = std::collections::BTreeMap::new();
+    for (name, value) in image.into_iter().chain(supplied) {
+        if TOKEN_SOURCES.contains(&name.as_str()) {
+            found.insert(name, value);
+        }
+    }
+    found.into_iter().collect()
 }
 
 /// Why the command-identity check failed, as the child's exit code. The parent reads the code
@@ -218,6 +255,46 @@ mod path_check_tests {
             codes.iter().map(|code| path_check_reason(*code)).collect();
         assert_eq!(reasons.len(), codes.len());
         assert_eq!(path_check_reason(1), "the check ended abnormally");
+    }
+
+    fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+        items
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_check_gets_the_token_sources_of_the_image_and_the_supplied_environment() {
+        let found = token_sources(
+            pairs(&[
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN", "from-image"),
+                ("PATH", "/bin"),
+            ]),
+            pairs(&[
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "/custom/token"),
+                ("AWS_SECRET_ACCESS_KEY", "other"),
+            ]),
+        );
+        assert_eq!(
+            found,
+            pairs(&[
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN", "from-image"),
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "/custom/token"),
+            ])
+        );
+    }
+
+    #[test]
+    fn the_supplied_token_replaces_the_image_one() {
+        let found = token_sources(
+            pairs(&[("AWS_CONTAINER_AUTHORIZATION_TOKEN", "image")]),
+            pairs(&[("AWS_CONTAINER_AUTHORIZATION_TOKEN", "supplied")]),
+        );
+        assert_eq!(
+            found,
+            pairs(&[("AWS_CONTAINER_AUTHORIZATION_TOKEN", "supplied")])
+        );
     }
 
     /// Only external enforcement (the Kubernetes NetworkPolicy) relaxes the metadata check to

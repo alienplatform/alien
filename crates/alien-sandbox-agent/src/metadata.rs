@@ -1364,7 +1364,13 @@ mod tests {
         const VERB: &str = "<Error><Code>InvalidHttpVerb</Code><Message>The HTTP verb specified was not recognized by the server.</Message></Error>";
         let address = serve(vec![
             ("PUT", "/latest", false, 400, VERB),
-            ("GET", "/metadata/identity/oauth2/token", false, 200, "{\"access_token\":\"x\"}"),
+            (
+                "GET",
+                "/metadata/identity/oauth2/token",
+                false,
+                200,
+                "{\"access_token\":\"x\"}",
+            ),
         ]);
         let found = check(address).unwrap_err();
         assert_eq!(found.cloud, "Azure");
@@ -1376,7 +1382,13 @@ mod tests {
     #[test]
     fn an_http_verb_error_does_not_excuse_data() {
         let address = serve(vec![
-            ("PUT", "/latest/api/token", false, 400, "<Code>InvalidHttpVerb</Code>"),
+            (
+                "PUT",
+                "/latest/api/token",
+                false,
+                400,
+                "<Code>InvalidHttpVerb</Code>",
+            ),
             ("GET", "/latest/user-data", false, 200, "secret"),
         ]);
         assert_eq!(check(address).unwrap_err().path, "/latest/user-data");
