@@ -271,7 +271,7 @@ pub(crate) fn permission_set_grants_on(set: &alien_core::PermissionSet, platform
     }
 }
 
-fn service_account_grants_on(account: &alien_core::ServiceAccount, platform: Platform) -> bool {
+pub(crate) fn service_account_grants_on(account: &alien_core::ServiceAccount, platform: Platform) -> bool {
     account
         .stack_permission_sets
         .iter()

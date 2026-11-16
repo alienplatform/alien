@@ -12,6 +12,8 @@ pub use executor::{
     StackExecutor, StepResult, REPLACE_DELETE_DENIED_CODE,
 };
 
+pub(crate) use executor::service_account_grants_on;
+
 mod service_provider;
 pub use service_provider::*;
 
