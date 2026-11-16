@@ -449,6 +449,120 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
+    /// GUIDs of the role definitions the role assignments this resource's permissions place depend
+    /// on. Read them before the resource is deleted: Azure drops the assignments with it, and
+    /// with them the only record of which roles they used. Roles are named by GUID because Azure
+    /// reports a custom role's id at the subscription even when it sits in a resource group.
+    pub async fn azure_role_definitions_in_use(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_name: &str,
+        resource_scope: Scope,
+        permission_type: &str,
+    ) -> Result<Vec<String>> {
+        let permission_context = Self::build_azure_permission_context(ctx, resource_name)?;
+        let assignment_ids = AzurePermissionsHelper::plan_resource_scoped_role_assignment_ids(
+            ctx,
+            resource_id,
+            permission_type,
+            resource_scope,
+            &permission_context,
+        )
+        .await?;
+        let client = ctx
+            .service_provider
+            .get_azure_authorization_client(ctx.get_azure_config()?)?;
+        let mut guids: Vec<String> = Vec::new();
+        for assignment_id in assignment_ids {
+            match client
+                .get_role_assignment_by_id(assignment_id.clone())
+                .await
+            {
+                Ok(assignment) => {
+                    let Some(properties) = assignment.properties else {
+                        continue;
+                    };
+                    let guid = properties
+                        .role_definition_id
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    if !guid.is_empty() && !guids.contains(&guid) {
+                        guids.push(guid);
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to read Azure role assignment '{assignment_id}'"),
+                        resource_id: Some(resource_id.to_string()),
+                    }))
+                }
+            }
+        }
+        Ok(guids)
+    }
+
+    /// Deletes the custom roles this deployment made in its resource group among `guids`: only a
+    /// role found in the group whose name starts with the deployment's prefix, and only when no
+    /// assignment still uses it (Azure refuses that delete, which leaves the role to its other
+    /// users). Safe to repeat and to call with built-in role GUIDs, which are not in the group.
+    pub async fn delete_azure_custom_role_definitions(
+        ctx: &ResourceControllerContext<'_>,
+        resource_group_name: &str,
+        guids: &[String],
+    ) -> Result<()> {
+        let client = ctx
+            .service_provider
+            .get_azure_authorization_client(ctx.get_azure_config()?)?;
+        let scope = Scope::ResourceGroup {
+            resource_group_name: resource_group_name.to_string(),
+        };
+        let ours = format!("{}-", ctx.resource_prefix).to_ascii_lowercase();
+        for guid in guids {
+            let role = match client.get_role_definition(&scope, guid.clone()).await {
+                Ok(role) => role,
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    continue
+                }
+                Err(error) => {
+                    warn!(role = %guid, error = %error, "could not read a custom role definition, leaving it");
+                    continue;
+                }
+            };
+            let named_by_us = role
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.role_name.as_deref())
+                .is_some_and(|name| name.to_ascii_lowercase().starts_with(&ours));
+            if !named_by_us {
+                continue;
+            }
+            match client.delete_role_definition(&scope, guid.clone()).await {
+                Ok(_) => info!(role = %guid, "Deleted a custom role definition"),
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    warn!(role = %guid, error = %error, "a custom role definition is still in use or could not be deleted, leaving it")
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Setup-only: idempotently create or update GCP custom roles from a permission set.
     ///
     /// Live resource reconciliation must bind principals to roles created by

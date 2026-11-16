@@ -8198,6 +8198,7 @@ mod tests {
                 egress_config_digest: None,
                 egress_replica_secret_ready: false,
                 created_group: false,
+                group_role_definitions: Vec::new(),
                 default_policy: None,
                 _internal_stay_count: None,
             }

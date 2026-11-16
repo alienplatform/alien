@@ -102,6 +102,10 @@ pub struct AzureSandboxController {
     /// package imported is left to `terraform destroy`.
     #[serde(default)]
     pub(crate) created_group: bool,
+    /// Role definitions the group's role assignments used, read before the group is deleted so the
+    /// custom ones this deployment made are removed with it.
+    #[serde(default)]
+    pub(crate) group_role_definitions: Vec<String>,
     /// Catalog name or registry image every sandbox is created from, taken from the declaration's
     /// `code`. A registry image is set only once its disk image is Ready, so the binding never
     /// names one sessions cannot start from yet.
@@ -512,6 +516,22 @@ impl AzureSandboxController {
             if let (Some(group), Some(resource_group)) =
                 (self.sandbox_group.as_ref(), self.resource_group.as_ref())
             {
+                // The assignments go with the group, so what they used is read first.
+                self.group_role_definitions =
+                    crate::core::ResourcePermissionsHelper::azure_role_definitions_in_use(
+                        ctx,
+                        ctx.desired_config.id(),
+                        group,
+                        alien_azure_clients::authorization::Scope::Resource {
+                            resource_group_name: resource_group.clone(),
+                            resource_provider: "Microsoft.App".to_string(),
+                            parent_resource_path: None,
+                            resource_type: "sandboxGroups".to_string(),
+                            resource_name: group.clone(),
+                        },
+                        "sandbox",
+                    )
+                    .await?;
                 let arm = ctx
                     .service_provider
                     .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
@@ -565,6 +585,13 @@ impl AzureSandboxController {
                     Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                 ) =>
             {
+                crate::core::ResourcePermissionsHelper::delete_azure_custom_role_definitions(
+                    ctx,
+                    resource_group,
+                    &self.group_role_definitions,
+                )
+                .await?;
+                self.group_role_definitions.clear();
                 Ok(HandlerAction::Continue {
                     state: Deleted,
                     suggested_delay: None,
@@ -1336,6 +1363,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1394,6 +1422,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1562,6 +1591,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1616,6 +1646,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1678,6 +1709,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1717,6 +1749,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
         };
@@ -1830,6 +1863,7 @@ mod tests {
                 egress_config_digest: None,
                 egress_replica_secret_ready: false,
                 created_group: false,
+                group_role_definitions: Vec::new(),
                 default_policy: None,
                 _internal_stay_count: None,
             }
@@ -2987,6 +3021,27 @@ mod direct_setup_tests {
         setup_run: bool,
         egress: SandboxEgress,
     ) -> SingleControllerExecutor {
+        executor_with_authorization(
+            controller,
+            groups,
+            setup_run,
+            egress,
+            MockAuthorizationApi::new(),
+            false,
+        )
+        .await
+    }
+
+    async fn executor_with_authorization(
+        controller: AzureSandboxController,
+        groups: MockSandboxGroupsApi,
+        setup_run: bool,
+        egress: SandboxEgress,
+        authorization: MockAuthorizationApi,
+        with_profile: bool,
+    ) -> SingleControllerExecutor {
+        let authorization: Arc<dyn alien_azure_clients::authorization::AuthorizationApi> =
+            Arc::new(authorization);
         let groups: Arc<dyn alien_azure_clients::sandbox_groups::SandboxGroupsApi> =
             Arc::new(groups);
         let mut provider = MockPlatformServiceProvider::new();
@@ -2995,7 +3050,7 @@ mod direct_setup_tests {
             .returning(move |_| Ok(groups.clone()));
         provider
             .expect_get_azure_authorization_client()
-            .returning(|_| Ok(Arc::new(MockAuthorizationApi::new())));
+            .returning(move |_| Ok(authorization.clone()));
         provider
             .expect_get_azure_sandbox_data_plane_client()
             .returning(|_, _, _| {
@@ -3006,7 +3061,7 @@ mod direct_setup_tests {
                     .returning(|_| Ok(Vec::new()));
                 Ok(Arc::new(client))
             });
-        SingleControllerExecutor::builder()
+        let mut builder = SingleControllerExecutor::builder()
             .resource(sandbox(egress))
             .resource_prefix("Test_Prefix")
             .resource_lifecycle(ResourceLifecycle::Frozen)
@@ -3018,10 +3073,23 @@ mod direct_setup_tests {
                 AzureResourceGroup::new("default-resource-group".to_string()).build(),
                 AzureResourceGroupController::mock_ready("default-resource-group"),
             )
-            .service_provider(Arc::new(provider))
-            .build()
-            .await
-            .unwrap()
+            .service_provider(Arc::new(provider));
+        if with_profile {
+            builder = builder
+            .with_dependency(
+                alien_core::ServiceAccount::new("runtime-sa".to_string()).build(),
+                crate::service_account::AzureServiceAccountController {
+                    identity_resource_id: Some("/subscriptions/s/resourceGroups/rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/runtime".to_string()),
+                    identity_principal_id: Some("principal-1".to_string()),
+                    ..Default::default()
+                },
+            )
+            .permission_profile(
+                "runtime",
+                alien_core::permissions::PermissionProfile::new().resource("box_one", ["sandbox/execute"]),
+            );
+        }
+        builder.build().await.unwrap()
     }
 
     async fn drive(executor: &mut SingleControllerExecutor) {
@@ -3260,6 +3328,7 @@ mod direct_setup_tests {
                 region: Some("eastus".to_string()),
                 resource_group: Some("rg".to_string()),
                 created_group: created,
+                group_role_definitions: Vec::new(),
                 ..Default::default()
             };
             let mut executor = executor(controller, groups, true, SandboxEgress::None).await;
@@ -3269,5 +3338,98 @@ mod direct_setup_tests {
                 .await
                 .expect("the delete finishes");
         }
+    }
+
+    /// Deleting a group the controller created also removes the custom roles this deployment made
+    /// for it, which a plain group delete leaves behind (a rerun then finds the old definitions).
+    /// A role not named by this deployment, or already gone, is left alone.
+    #[tokio::test]
+    async fn delete_removes_the_custom_roles_the_group_used() {
+        use alien_azure_clients::models::authorization_role_assignments::{
+            RoleAssignment, RoleAssignmentProperties,
+        };
+        use alien_azure_clients::models::authorization_role_definitions::{
+            RoleDefinition, RoleDefinitionProperties,
+        };
+        use std::sync::Mutex;
+
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_delete_sandbox_group()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Err(not_found()));
+
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_get_role_assignment_by_id()
+            .returning(|_| {
+                Ok(RoleAssignment {
+                    properties: Some(RoleAssignmentProperties {
+                        condition: None,
+                        condition_version: None,
+                        created_by: None,
+                        created_on: None,
+                        delegated_managed_identity_resource_id: None,
+                        description: None,
+                        principal_type: alien_azure_clients::models::authorization_role_assignments::RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                        scope: None,
+                        updated_by: None,
+                        updated_on: None,
+                        principal_id: "principal-1".to_string(),
+                        role_definition_id: "/subscriptions/s/providers/Microsoft.Authorization/roleDefinitions/AAAA".to_string(),
+                    }),
+                    ..Default::default()
+                })
+            });
+        authorization
+            .expect_get_role_definition()
+            .returning(|_, guid| {
+                Ok(RoleDefinition {
+                    properties: Some(RoleDefinitionProperties {
+                        // Ours when the name carries the deployment prefix.
+                        role_name: Some(if guid == "aaaa" {
+                            "Test_Prefix-sandbox [runtime]".to_string()
+                        } else {
+                            "someone-else".to_string()
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+            });
+        let deleted = Arc::new(Mutex::new(Vec::new()));
+        let seen = deleted.clone();
+        authorization
+            .expect_delete_role_definition()
+            .returning(move |_, guid| {
+                seen.lock().unwrap().push(guid);
+                Ok(None)
+            });
+        let controller = AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("g".to_string()),
+            region: Some("eastus".to_string()),
+            resource_group: Some("rg".to_string()),
+            created_group: true,
+            ..Default::default()
+        };
+        let mut executor = executor_with_authorization(
+            controller,
+            groups,
+            true,
+            SandboxEgress::None,
+            authorization,
+            true,
+        )
+        .await;
+        executor.delete().expect("delete is accepted");
+        executor
+            .run_until_status(ResourceStatus::Deleted)
+            .await
+            .expect("the delete finishes");
+        assert_eq!(*deleted.lock().unwrap(), vec!["aaaa".to_string()]);
     }
 }
