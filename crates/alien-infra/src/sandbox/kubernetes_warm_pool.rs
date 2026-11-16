@@ -225,8 +225,6 @@ mod tests {
         assert_eq!(labels.get(LABEL_SESSION), Some(&"s1".to_string()));
     }
 
-    /// Second-line defence only. The real guarantee is the API server rejecting a stale
-    /// resourceVersion, but a claimed pod must not be re-claimable even in memory.
     /// Node consolidation and cluster upgrades evict pods that do not opt out. A claimed pod holds
     /// a live session, so it opts out; an idle pod stays evictable because the pool refills.
     #[test]
@@ -251,6 +249,8 @@ mod tests {
         );
     }
 
+    /// Second-line defence only. The real guarantee is the API server rejecting a stale
+    /// resourceVersion, but a claimed pod must not be re-claimable even in memory.
     #[test]
     fn an_already_claimed_pod_cannot_be_claimed_again() {
         let mut pod = pod_with(idle_pod_labels("agent"));

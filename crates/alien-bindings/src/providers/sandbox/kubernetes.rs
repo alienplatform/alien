@@ -105,16 +105,35 @@ enum Lookup {
     Unsupported,
 }
 
+/// A broker call that did not get an answer.
+///
 /// The broker runs inside the Operator pod, so while the Operator restarts (every release) its
-/// connections are refused for tens of seconds. Running sandboxes are unaffected; the call is
-/// worth repeating, so the error is retryable.
-fn broker_unreachable(operation: &str) -> ErrorData {
-    ErrorData::RemoteServiceUnavailable {
+/// connections are refused for tens of seconds. Running sandboxes are unaffected; a refused
+/// connection means the request never arrived, so repeating the call is safe and the error is
+/// retryable. The message names the address, so a wrong broker URL reads differently from a
+/// restart.
+///
+/// Creating a session is the exception once the request may have arrived: a connection that
+/// failed after it was sent may already have claimed a pod, and a repeated create makes a second
+/// session. That outcome is unknown, and not retried.
+fn broker_failure(operation: &str, url: &str, error: reqwest::Error) -> AlienError<ErrorData> {
+    let refused = error.is_connect();
+    let error = AlienError::new(ErrorData::RemoteServiceUnavailable {
         operation_context: operation.to_string(),
-        details:
-            "the sandbox broker is unreachable; the Operator is restarting, retry in a few seconds"
-                .to_string(),
+        details: format!(
+            "the sandbox broker at {url} did not accept the connection; if the Operator is \
+             restarting, retry in a few seconds, otherwise check the broker address"
+        ),
+    });
+    if !refused && operation == "sandbox.create" {
+        return AlienError::new(ErrorData::SandboxOutcomeUnknown {
+            operation: operation.to_string(),
+            reason: format!(
+                "the connection to the sandbox broker at {url} failed after the request was sent"
+            ),
+        });
     }
+    error
 }
 
 /// Asks the broker for a session and a fresh capability.
@@ -124,8 +143,7 @@ async fn lookup_claim(client: &reqwest::Client, url: &str, token: &str) -> Resul
         .bearer_auth(token)
         .send()
         .await
-        .into_alien_error()
-        .context(broker_unreachable("sandbox.get"))?;
+        .map_err(|error| broker_failure("sandbox.get", url, error))?;
 
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(Lookup::NotFound);
@@ -468,8 +486,7 @@ impl KubernetesSandbox {
                 .bearer_auth(self.identity_token().await?)
                 .send()
                 .await
-                .into_alien_error()
-                .context(broker_unreachable("sandbox.create"))?;
+                .map_err(|error| broker_failure("sandbox.create", &self.broker_url, error))?;
             Ok::<_, AlienError<ErrorData>>(response.status())
         }
         .await;
@@ -519,8 +536,7 @@ impl KubernetesSandbox {
             })
             .send()
             .await
-            .into_alien_error()
-            .context(broker_unreachable("sandbox.create"))?;
+            .map_err(|error| broker_failure("sandbox.create", &self.broker_url, error))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -782,8 +798,7 @@ impl Sandbox for KubernetesSandbox {
             .bearer_auth(self.identity_token().await?)
             .send()
             .await
-            .into_alien_error()
-            .context(broker_unreachable("sandbox.list"))?;
+            .map_err(|error| broker_failure("sandbox.list", &self.broker_url, error))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -879,8 +894,7 @@ impl Sandbox for KubernetesSandbox {
             .json(&serde_json::json!({ "port": port }))
             .send()
             .await
-            .into_alien_error()
-            .context(broker_unreachable("sandbox.preview"))?;
+            .map_err(|error| broker_failure("sandbox.preview", &self.broker_url, error))?;
         if !response.status().is_success() {
             let status = response.status();
             let reason = if status == reqwest::StatusCode::FORBIDDEN {
@@ -951,8 +965,7 @@ impl Sandbox for KubernetesSandbox {
             .bearer_auth(self.identity_token().await?)
             .send()
             .await
-            .into_alien_error()
-            .context(broker_unreachable("sandbox.terminate"))?;
+            .map_err(|error| broker_failure("sandbox.terminate", &self.broker_url, error))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1025,6 +1038,66 @@ mod tests {
             error.message.contains("Operator is restarting"),
             "the message says why and what to do: {}",
             error.message
+        );
+    }
+
+    /// A sandbox over a broker at `broker_url`, with a token file in place.
+    fn sandbox_at(broker_url: String) -> KubernetesSandbox {
+        let token_path = std::env::temp_dir().join("kube-sandbox-test-token");
+        std::fs::write(&token_path, "token").unwrap();
+        KubernetesSandbox {
+            egress_manager: None,
+            default_policy: None,
+            policy_write: tokio::sync::Mutex::new(()),
+            egress: None,
+            resource_id: "sbx".to_string(),
+            broker_url,
+            token_path: token_path.to_string_lossy().into_owned(),
+            binding_name: "sandbox".to_string(),
+            client: reqwest::Client::new(),
+            claims: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// A refused connection never reached the broker, so creating again cannot make a second
+    /// session: the caller may retry, and the message names the broker address.
+    #[tokio::test]
+    async fn create_is_retryable_when_the_connection_is_refused() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let url = format!("http://127.0.0.1:{port}");
+        let error = sandbox_at(url.clone())
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("nothing listens on that port");
+        assert!(error.retryable, "a refused connection is retryable");
+        assert!(error.message.contains(&url), "{}", error.message);
+    }
+
+    /// A connection that dies after the request was sent may already have claimed a pod. Creating
+    /// again would make a second session and orphan the first, so the outcome is unknown and the
+    /// error is not retryable.
+    #[tokio::test]
+    async fn create_outcome_is_unknown_when_the_connection_drops_after_the_request() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 1024];
+            let _ = socket.read(&mut buffer).await;
+            drop(socket);
+        });
+        let error = sandbox_at(url)
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("the broker hung up");
+        assert!(!error.retryable, "a possible claim must not be repeated");
+        assert!(
+            matches!(error.error, Some(ErrorData::SandboxOutcomeUnknown { .. })),
+            "{error:?}"
         );
     }
 
