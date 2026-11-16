@@ -7,6 +7,10 @@
 //! A mention is the product name in any case, so also the project's domain and organisation
 //! names. Text that only a running workload reads, and never the administrator, is listed in
 //! [`ALLOWLIST`] with the reason it is allowed. Anything else fails the scan.
+//!
+//! The Terraform crate's AWS white-label test keeps its own ledger of exact occurrences in the
+//! setup and runtime policies it renders, which may only shrink. This scan is a pattern list
+//! for every generator scenario; the two answer different questions and are not merged.
 
 /// The text that counts as a mention, compared in lower case.
 const NEEDLE: &str = "alien";
@@ -26,8 +30,16 @@ impl Known {
         } else if let Some(exact) = self.token_contains.strip_prefix('=') {
             // A leading `=` means the whole token must equal the text, not contain it.
             token == exact
-        } else {
+        } else if self.token_contains.contains(['=', ':', '/']) {
             token.contains(self.token_contains)
+        } else {
+            // `KEY=https://host.example` is several words: every word that names the product
+            // must itself hold the entry's text, so a hostname after `=` is not covered by
+            // the variable name in front of it.
+            token
+                .split(['=', ':', '/'])
+                .filter(|part| part.to_ascii_lowercase().contains(NEEDLE))
+                .all(|part| part.contains(self.token_contains))
         };
         token_matches && self.line_contains.is_none_or(|text| line.contains(text))
     }
@@ -90,6 +102,36 @@ pub const PENDING_RENAMES: &[Known] = &[
         token_contains: "=alien",
         line_contains: Some("namespace:"),
         reason: "the managed cluster's default Kubernetes namespace (see the trust conditions)",
+    },
+    Known {
+        token_contains: "=alien",
+        line_contains: Some("\"namespace\":\"alien\""),
+        reason: "the managed cluster's default Kubernetes namespace in the JSON form of the trust \
+                 conditions (see above)",
+    },
+    Known {
+        token_contains: "alien-sbx-",
+        line_contains: None,
+        reason: "physical name of the sandbox network policy on installed clusters; the chart \
+                 replaces it on upgrade and the Operator's cleanup selects it",
+    },
+    Known {
+        token_contains: "alien-dc-",
+        line_contains: None,
+        reason: "physical name of the remote Operator's resources on existing installs",
+    },
+    Known {
+        token_contains: "/opt/alien",
+        line_contains: None,
+        reason: "install directory inside the sandbox image that the runtime's protected mounts \
+                 name; sandbox images already built mount it by this path",
+    },
+    Known {
+        token_contains: "alienplatform/alien-egress-gateway",
+        line_contains: None,
+        reason: "the egress gateway image is pulled from the product's registry and pinned by \
+                 digest; showing a vendor registry needs the image published there, which is a \
+                 release-process change",
     },
     Known {
         token_contains: "alien-sandbox-",
@@ -249,6 +291,23 @@ mod tests {
             1
         );
         assert_eq!(find_mentions("a", "namespace: alien-extra").len(), 1);
+    }
+
+    #[test]
+    fn namespace_exception_covers_the_json_form_only_exactly() {
+        assert!(find_mentions("a", "\"namespace\":\"alien\"").is_empty());
+        assert_eq!(find_mentions("a", "\"namespace\":\"alien-x\"").len(), 1);
+        assert_eq!(find_mentions("a", "\"description\":\"alien\"").len(), 1);
+    }
+
+    #[test]
+    fn env_var_name_does_not_cover_a_hostname_after_it() {
+        assert!(find_mentions("a", "- name: ALIEN_MANAGER_URL").is_empty());
+        assert!(find_mentions("a", "ALIEN_MANAGER_URL=https://example.test").is_empty());
+        assert_eq!(
+            find_mentions("a", "ALIEN_MANAGER_URL=https://host.alien.example").len(),
+            1
+        );
     }
 
     #[test]

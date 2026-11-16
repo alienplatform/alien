@@ -11,7 +11,7 @@ default = []
 # Pull in the alien-core jsonschema feature so generated modules stay aligned with the
 # typed ImportData JsonSchema snapshots.
 jsonschema = ["alien-core/jsonschema"]
-test-utils = []
+test-utils = ["alien-core/test-utils"]
 
 [dependencies]
 alien-signing = { workspace = true }
@@ -28,6 +28,7 @@ uuid = { workspace = true, features = ["v5"] }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+alien-core = { workspace = true, features = ["test-utils"] }
 alien-cloudformation = { workspace = true }
 alien-preflights = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }

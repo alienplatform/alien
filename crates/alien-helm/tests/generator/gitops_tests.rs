@@ -18,7 +18,7 @@ fn chart_files() -> test_utils::LinterFiles {
     render(&stack, StackSettings::default()).files
 }
 
-const EXISTING: &str = "gitops:\n  enabled: true\nmanagement:\n  existingSecret:\n    name: alien-management\nruntime:\n  encryption:\n    existingSecret:\n      name: alien-encryption\n";
+const EXISTING: &str = "gitops:\n  enabled: true\nmanagement:\n  existingSecret:\n    name: acme-management\nruntime:\n  encryption:\n    existingSecret:\n      name: acme-encryption\n";
 
 #[test]
 fn profile_render_with_existing_secrets_generates_nothing() {
@@ -38,7 +38,7 @@ fn profile_render_with_existing_secrets_generates_nothing() {
 #[test]
 fn profile_refuses_a_generated_encryption_key() {
     let values =
-        "gitops:\n  enabled: true\nmanagement:\n  existingSecret:\n    name: alien-management\n";
+        "gitops:\n  enabled: true\nmanagement:\n  existingSecret:\n    name: acme-management\n";
     let rendered = test_utils::helm_template(&chart_files(), Some(values));
     assert!(!rendered.is_ok(), "{}", rendered.stdout);
     assert!(
@@ -52,7 +52,7 @@ fn profile_refuses_a_generated_encryption_key() {
 
 #[test]
 fn profile_refuses_a_management_token_in_values() {
-    let values = "gitops:\n  enabled: true\nmanagement:\n  token: test-credential\nruntime:\n  encryption:\n    existingSecret:\n      name: alien-encryption\n";
+    let values = "gitops:\n  enabled: true\nmanagement:\n  token: test-credential\nruntime:\n  encryption:\n    existingSecret:\n      name: acme-encryption\n";
     let rendered = test_utils::helm_template(&chart_files(), Some(values));
     assert!(!rendered.is_ok(), "{}", rendered.stdout);
     assert!(

@@ -20,7 +20,7 @@
 
 use super::helpers::custom_resource_registration;
 use alien_cloudformation::{
-    generate_cloudformation_template, test_utils::cfn_lint, to_yaml, CfExpression, CfParameter,
+    generate_cloudformation_template, to_yaml, CfExpression, CfParameter,
     CfRegistry, CfTemplate, CloudFormationOptions, CloudFormationTarget, ManagementTrustOptions,
     RegistrationMode,
 };
@@ -111,7 +111,7 @@ fn render(
     let template =
         try_render(stack, target, registration, management_trust).expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
-    cfn_lint(&yaml).assert_ok("management trust");
+    super::helpers::lint(&yaml).assert_ok("management trust");
     template
 }
 

@@ -25,6 +25,7 @@ tempfile = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+alien-core = { workspace = true, features = ["test-utils"] }
 alien-permissions = { workspace = true }
 alien-preflights = { workspace = true }
 insta = { workspace = true, features = ["yaml"] }

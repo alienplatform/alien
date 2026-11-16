@@ -86,6 +86,9 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 libc = "0.2"
 
 [dev-dependencies]
+syn = { workspace = true }
+proc-macro2 = { workspace = true }
+alien-core = { workspace = true, features = ["test-utils"] }
 httpmock = { workspace = true }
 alien-cloudformation = { workspace = true }
 alien-terraform = { workspace = true }

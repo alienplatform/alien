@@ -522,7 +522,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     // that only admits the probe's exact image follows it.
     let mirrored = super::test_utils::helm_template(
         &chart.files,
-        Some("serviceAccountPrefix: custom-prefix\nglobal:\n  imageRegistry: mirror.site.internal:5000/alien\nheartbeat:\n  collection:\n    nodes:\n      enabled: false\n"),
+        Some("serviceAccountPrefix: custom-prefix\nglobal:\n  imageRegistry: mirror.site.internal:5000/acme\nheartbeat:\n  collection:\n    nodes:\n      enabled: false\n"),
     );
     mirrored.assert_ok("mirrored sandbox chart");
     let mirrored_documents = rendered_documents(&mirrored);
@@ -530,13 +530,13 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     // export pins another digest than the default), and it follows the mirror too.
     let bundled = super::test_utils::helm_template(
         &chart.files,
-        Some("global:\n  imageRegistry: mirror.site.internal:5000/alien\nsandbox:\n  cniProbeImage: docker.io/library/python:3.13-slim@sha256:aaaa\n"),
+        Some("global:\n  imageRegistry: mirror.site.internal:5000/acme\nsandbox:\n  cniProbeImage: docker.io/library/python:3.13-slim@sha256:aaaa\n"),
     );
     bundled.assert_ok("bundled probe image");
     assert!(
         bundled
             .stdout
-            .contains("mirror.site.internal:5000/alien/library/python@sha256:aaaa"),
+            .contains("mirror.site.internal:5000/acme/library/python@sha256:aaaa"),
         "the probe runs the bundled digest from the mirror"
     );
     assert!(!bundled
@@ -581,7 +581,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
     assert!(!images.is_empty());
     for image in &images {
         assert!(
-            image.starts_with("mirror.site.internal:5000/alien/"),
+            image.starts_with("mirror.site.internal:5000/acme/"),
             "{image} does not come from the mirror"
         );
     }
@@ -599,7 +599,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         .unwrap();
     assert_eq!(
         mirrored_image,
-        image.replace("docker.io/", "mirror.site.internal:5000/alien/"),
+        image.replace("docker.io/", "mirror.site.internal:5000/acme/"),
     );
     let mirrored_rules = serde_yaml::to_string(
         &mirrored_documents
@@ -624,7 +624,7 @@ async fn kubernetes_internet_sandbox_installs_a_hosted_gateway() {
         .unwrap();
     assert!(
         operator_env.contains("IMAGE_REGISTRY")
-            && operator_env.contains("mirror.site.internal:5000/alien"),
+            && operator_env.contains("mirror.site.internal:5000/acme"),
         "{operator_env}"
     );
     // Created pods cannot ask for host powers the probe itself does not have.

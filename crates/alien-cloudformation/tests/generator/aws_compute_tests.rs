@@ -93,7 +93,7 @@ fn render_template_json(stack: &Stack) -> serde_json::Value {
     .expect("template should render");
     // CI has cfn-lint and must pass; a box without it skips the lint.
     let yaml = alien_cloudformation::to_yaml(&template).unwrap();
-    let lint = alien_cloudformation::test_utils::cfn_lint(&yaml);
+    let lint = super::helpers::lint(&yaml);
     if !matches!(
         lint.status,
         alien_cloudformation::test_utils::LinterStatus::Skipped(_)

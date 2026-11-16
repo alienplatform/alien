@@ -306,7 +306,7 @@ fn every_parameter_stays_live_for_updates_that_reuse_the_template() {
         }
 
         let yaml = to_yaml(&template).expect("template should serialize");
-        alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("parameter updates");
+        super::helpers::lint(&yaml).assert_ok("parameter updates");
     }
 }
 

@@ -99,7 +99,7 @@ fn cloudformation_emits_stack_inputs_as_parameters_and_registration_values() {
     );
 
     let yaml = to_yaml(&template).expect("template should serialize");
-    alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok("stack inputs");
+    super::helpers::lint(&yaml).assert_ok("stack inputs");
 }
 
 fn deployer_secret_input(provided_by: Vec<StackInputProvider>) -> StackInputDefinition {
@@ -285,7 +285,7 @@ fn conditional_inputs_produce_a_valid_cloudformation_template_for_provider(
         },
     )
     .unwrap();
-    alien_cloudformation::test_utils::cfn_lint(&to_yaml(&template).unwrap())
+    super::helpers::lint(&to_yaml(&template).unwrap())
         .assert_ok("conditional input template");
     let registered = serde_json::to_value(
         &template.resources["DeploymentRegistration"].properties["InputValues"],
