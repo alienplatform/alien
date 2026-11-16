@@ -35,7 +35,24 @@ pub fn network_mode_expr(targets_kubernetes: bool) -> &'static str {
 
 /// Locals of a Kubernetes module that give the network the existing cluster is attached to, and
 /// the mode that follows the cluster mode.
-fn existing_cluster_network_locals(mut fragment: TfFragment) -> TfFragment {
+fn existing_cluster_network_locals(mut fragment: TfFragment, has_cluster: bool) -> TfFragment {
+    // A stack with a database but no workload has no cluster to look up: the module's own
+    // network inputs apply in every mode.
+    if !has_cluster {
+        for (name, value) in [
+            ("effective_network_mode", "var.network_mode"),
+            (EXISTING_CLUSTER_NETWORK_NAME, "var.network_name"),
+            (EXISTING_CLUSTER_SUBNET_NAME, "var.subnet_name"),
+            (
+                EXISTING_CLUSTER_NETWORK_REGION,
+                "var.network_region == \"\" ? var.gcp_region : var.network_region",
+            ),
+            (EXISTING_CLUSTER_NETWORK_PROJECT, "var.gcp_project"),
+        ] {
+            fragment.locals.insert(name.to_string(), expr::raw(value));
+        }
+        return fragment;
+    }
     let cluster = "data.google_container_cluster.kubernetes_existing[0]";
     let location = "(var.gke_cluster_location == \"\" ? var.gcp_region : var.gke_cluster_location)";
     for (name, value) in [
@@ -68,7 +85,7 @@ fn existing_cluster_network_locals(mut fragment: TfFragment) -> TfFragment {
             EXISTING_CLUSTER_NETWORK_PROJECT,
             // A Shared VPC network belongs to a host project, which the path names.
             format!(
-                "var.kubernetes_cluster_mode == \"existing\" && length(split(\"/\", {cluster}.network)) >= 5 ? split(\"/\", {cluster}.network)[1] : var.gcp_project"
+                "var.kubernetes_cluster_mode == \"existing\" ? (length(split(\"/\", {cluster}.network)) >= 5 ? split(\"/\", {cluster}.network)[1] : var.gcp_project) : var.gcp_project"
             ),
         ),
     ] {
@@ -168,7 +185,15 @@ impl TfEmitter for GcpNetworkEmitter {
             NetworkSettings::Create { cidr, .. } => {
                 let fragment = dynamic_topology(label, cidr.clone(), ctx.targets_kubernetes);
                 Ok(if ctx.targets_kubernetes {
-                    existing_cluster_network_locals(fragment)
+                    existing_cluster_network_locals(
+                        fragment,
+                        ctx.stack.resources().any(|(_, entry)| {
+                            entry
+                                .config
+                                .downcast_ref::<alien_core::KubernetesCluster>()
+                                .is_some()
+                        }),
+                    )
                 } else {
                     fragment
                 })

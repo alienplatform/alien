@@ -1785,6 +1785,8 @@ fn declared_cluster(ownership: KubernetesClusterOwnership) -> KubernetesCluster 
 enum Source {
     Workload,
     Database,
+    /// A cloud database and nothing that runs on the cluster, so no cluster is declared.
+    DatabaseOnly,
     GatedDatabase,
 }
 
@@ -1805,10 +1807,12 @@ async fn render_prepared(source: Source, target: TerraformTarget) -> alien_terra
             "Whether to create the database.",
         )]);
     }
-    builder = builder.add(app_workload(), ResourceLifecycle::Live);
+    if !matches!(source, Source::DatabaseOnly) {
+        builder = builder.add(app_workload(), ResourceLifecycle::Live);
+    }
     builder = match source {
         Source::Workload => builder,
-        Source::Database => builder.add(
+        Source::Database | Source::DatabaseOnly => builder.add(
             Postgres::new("db".to_string()).build(),
             ResourceLifecycle::Frozen,
         ),
@@ -2424,4 +2428,18 @@ async fn an_existing_gke_cluster_the_database_cannot_reach_fails_at_plan_with_a_
         )
         .await;
     }
+}
+
+/// A GKE stack with a database and nothing running on the cluster declares no cluster, so the
+/// module has no cluster to look the network up from: it must still validate, and use the
+/// module's own network inputs.
+#[tokio::test]
+async fn a_gke_stack_with_only_a_database_has_no_cluster_lookup() {
+    let module = render_prepared(Source::DatabaseOnly, TerraformTarget::Gke).await;
+    let text = whole_module(&module);
+    assert!(
+        !text.contains("kubernetes_existing"),
+        "no cluster is declared, so nothing may read its lookup"
+    );
+    assert_terraform_valid(&module, "gke_database_only");
 }
