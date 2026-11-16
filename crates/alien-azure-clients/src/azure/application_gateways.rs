@@ -1,5 +1,6 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::long_running_operation::OperationResult;
+use crate::azure::tables::ETag;
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, IntoAlienError};
@@ -17,11 +18,16 @@ pub type ApplicationGatewayOperationResult = OperationResult<Value>;
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait ApplicationGatewayApi: Send + Sync + std::fmt::Debug {
     /// Create or update an Application Gateway.
+    ///
+    /// With `etag` set (the `etag` of a prior GET), the request carries
+    /// `If-Match` and Azure refuses it with a conflict error when the gateway
+    /// changed in between, so a concurrent change is never overwritten.
     async fn create_or_update_application_gateway(
         &self,
         resource_group_name: &str,
         application_gateway_name: &str,
         application_gateway: &Value,
+        etag: Option<ETag>,
     ) -> Result<ApplicationGatewayOperationResult>;
 
     /// Get an Application Gateway by name.
@@ -133,6 +139,7 @@ impl ApplicationGatewayApi for AzureApplicationGatewayClient {
         resource_group_name: &str,
         application_gateway_name: &str,
         application_gateway: &Value,
+        etag: Option<ETag>,
     ) -> Result<ApplicationGatewayOperationResult> {
         let bearer_token = self
             .token_cache
@@ -149,10 +156,13 @@ impl ApplicationGatewayApi for AzureApplicationGatewayClient {
                 ),
             })?;
 
-        let builder = AzureRequestBuilder::new(Method::PUT, url)
+        let mut builder = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
             .content_length(&body)
             .body(body);
+        if let Some(etag) = etag {
+            builder = builder.header("If-Match", &etag.0);
+        }
 
         let req = builder.build()?;
         let signed = self.base.sign_request(req, &bearer_token).await?;
@@ -240,5 +250,122 @@ impl ApplicationGatewayApi for AzureApplicationGatewayClient {
                 application_gateway_name,
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use httpmock::{Method::PUT, MockServer};
+    use serde_json::json;
+
+    use super::*;
+    use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+
+    const SUBSCRIPTION_ID: &str = "12345678-1234-1234-1234-123456789012";
+
+    fn test_client(server: &MockServer) -> AzureApplicationGatewayClient {
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+        });
+        AzureApplicationGatewayClient::new(Client::new(), AzureTokenCache::new(config))
+    }
+
+    fn gateway_path() -> String {
+        format!(
+            "/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/test-rg/providers/Microsoft.Network/applicationGateways/test-gw"
+        )
+    }
+
+    #[tokio::test]
+    async fn the_update_carries_the_etag_it_was_given() {
+        let server = MockServer::start_async().await;
+        let put = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path(gateway_path())
+                    .header("If-Match", "W/\"abc\"");
+                then.status(200).json_body(json!({"name": "test-gw"}));
+            })
+            .await;
+
+        test_client(&server)
+            .create_or_update_application_gateway(
+                "test-rg",
+                "test-gw",
+                &json!({"location": "eastus"}),
+                Some(ETag("W/\"abc\"".to_string())),
+            )
+            .await
+            .expect("the update should succeed");
+
+        put.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn the_update_without_an_etag_sends_no_precondition() {
+        let server = MockServer::start_async().await;
+        // A request with If-Match would hit this mock instead and fail the
+        // assertion below.
+        let with_precondition = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path(gateway_path())
+                    .header_exists("If-Match");
+                then.status(500);
+            })
+            .await;
+        let plain = server
+            .mock_async(|when, then| {
+                when.method(PUT).path(gateway_path());
+                then.status(200).json_body(json!({"name": "test-gw"}));
+            })
+            .await;
+
+        test_client(&server)
+            .create_or_update_application_gateway(
+                "test-rg",
+                "test-gw",
+                &json!({"location": "eastus"}),
+                None,
+            )
+            .await
+            .expect("the update should succeed");
+
+        assert_eq!(with_precondition.hits_async().await, 0);
+        plain.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_changed_gateway_is_a_conflict_error() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(PUT).path(gateway_path());
+                then.status(412).json_body(json!({"error": {
+                    "code": "PreconditionFailed",
+                    "message": "The resource has changed."
+                }}));
+            })
+            .await;
+
+        let error = test_client(&server)
+            .create_or_update_application_gateway(
+                "test-rg",
+                "test-gw",
+                &json!({"location": "eastus"}),
+                Some(ETag("stale".to_string())),
+            )
+            .await
+            .expect_err("a stale etag must be refused");
+
+        assert!(
+            matches!(
+                error.error,
+                Some(ErrorData::RemoteResourceConflict { .. })
+            ),
+            "got {error:?}"
+        );
     }
 }
