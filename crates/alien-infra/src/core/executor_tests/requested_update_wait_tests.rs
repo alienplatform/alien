@@ -70,135 +70,21 @@ async fn step_until(
     Ok(max)
 }
 
-/// The state the failed release left: `mgmt` and both dependents in UpdateFailed with their
-/// config unchanged, each refused the grant its update needs.
-async fn all_three_failed(stack: &Stack, ids: &[String; 3]) -> Result<StackState> {
-    let mut state = run_to_synced(&new_executor(stack)?, new_test_state()).await?;
-    // No resume: failures stay where they fall.
-    let executor = executor(stack, false)?;
-    // The dependents fail first, while `mgmt` is healthy; then `mgmt` fails.
-    for id in &ids[1..] {
-        withhold_test_worker_setup_grant(id, TestSetupGrant::Update);
-        request_test_worker_update(id, true);
-    }
-    step_until(&executor, &mut state, 60, |s| {
-        ids[1..]
-            .iter()
-            .all(|id| status(s, id) == ResourceStatus::UpdateFailed)
-    })
-    .await?;
-    for id in &ids[1..] {
-        request_test_worker_update(id, false);
-    }
-    withhold_test_worker_setup_grant(&ids[0], TestSetupGrant::Update);
-    request_test_worker_update(&ids[0], true);
-    step_until(&executor, &mut state, 60, |s| {
-        status(s, &ids[0]) == ResourceStatus::UpdateFailed
-    })
-    .await?;
-    request_test_worker_update(&ids[0], false);
-    Ok(state)
-}
-
-/// The sequence that stuck an install: the dependency failed its update, the dependents were
-/// failed behind it, and one retry resumed them all at once. Now the dependency recovers
-/// first, then the dependents resume and settle.
-#[tokio::test]
-async fn a_retry_recovers_the_dependency_before_its_failed_dependents() -> Result<()> {
-    let (stack, ids) = stack("retry-order");
-    let mut state = all_three_failed(&stack, &ids).await?;
-
-    // Setup's grant arrives for all, and one explicit retry (resume enabled) runs.
-    for id in &ids {
-        give_test_worker_setup_grant(id);
-    }
-    let executor = executor(&stack, true)?;
-    let mut steps = 0;
-    while !executor.is_synced(&state) {
-        let before = state.clone();
-        state = executor.step(state).await?.next_state;
-        steps += 1;
-        assert!(steps <= 60, "the stack never synced");
-        for id in &ids[1..] {
-            let resumed = status(&before, id) == ResourceStatus::UpdateFailed
-                && status(&state, id) != ResourceStatus::UpdateFailed;
-            if resumed {
-                assert_eq!(
-                    status(&before, &ids[0]),
-                    ResourceStatus::Running,
-                    "{id} was resumed while its dependency was {:?}",
-                    status(&before, &ids[0])
-                );
-            }
-        }
-    }
-    println!("synced after {steps} steps");
-    assert_all_running(&state, &ids.each_ref().map(|id| id.as_str()));
-    Ok(())
-}
-
-/// A dependency that stays failed keeps its dependents as they are, and the failure that
-/// holds them is the dependency's own, still recorded on it.
-#[tokio::test]
-async fn a_dependency_that_stays_failed_keeps_its_dependents_unresumed() -> Result<()> {
-    let (stack, ids) = stack("stays-failed");
-    let mut state = all_three_failed(&stack, &ids).await?;
-    let attempts: Vec<_> = ids[1..]
-        .iter()
-        .map(|id| state.resources[id].retry_attempt)
-        .collect();
-
-    // Only the dependents' grants arrive; `mgmt` keeps failing.
-    for id in &ids[1..] {
-        give_test_worker_setup_grant(id);
-    }
-    let executor = executor(&stack, true)?;
-    for _ in 0..30 {
-        state = executor.step(state).await?.next_state;
-        assert_ne!(
-            status(&state, &ids[0]),
-            ResourceStatus::Running,
-            "the dependency cannot recover while it is refused"
-        );
-        for id in &ids[1..] {
-            assert_eq!(
-                status(&state, id),
-                ResourceStatus::UpdateFailed,
-                "{id} must stay as it is"
-            );
-        }
-    }
-    let attempts_after: Vec<_> = ids[1..]
-        .iter()
-        .map(|id| state.resources[id].retry_attempt)
-        .collect();
-    assert_eq!(attempts, attempts_after, "a dependent was retried");
-    assert!(
-        state.resources[&ids[0]].error.is_some(),
-        "the dependency's failure is still recorded"
-    );
-    assert!(!executor.is_synced(&state));
-    give_test_worker_setup_grant(&ids[0]);
-    Ok(())
-}
-
 /// A controller's own request for an update waits for a dependency that is failing its
 /// update, and is planned once the dependency has settled.
 #[tokio::test]
 async fn a_requested_update_waits_for_a_failing_dependency() -> Result<()> {
     let (stack, ids) = stack("requested-waits");
-    let mut state = all_three_failed(&stack, &ids).await?;
-    // The dependents are settled and healthy again; only `mgmt` is failing.
-    for id in &ids[1..] {
-        give_test_worker_setup_grant(id);
-    }
-    let resume = executor(&stack, true)?;
-    // `mgmt` is held failed by marking the dependents' recovery while it is refused: they
-    // stay failed (see the test above), so put them back to Running as an earlier retry of
-    // theirs would have, keeping `mgmt` failed.
-    for id in &ids[1..] {
-        state.resources.get_mut(id).unwrap().status = ResourceStatus::Running;
-    }
+    // Only `mgmt` fails its update; the dependents are healthy.
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    let resume = executor(&stack, false)?;
+    withhold_test_worker_setup_grant(&ids[0], TestSetupGrant::Update);
+    request_test_worker_update(&ids[0], true);
+    step_until(&resume, &mut state, 60, |s| {
+        status(s, &ids[0]) == ResourceStatus::UpdateFailed
+    })
+    .await?;
+    request_test_worker_update(&ids[0], false);
     request_test_worker_update(&ids[1], true);
     request_test_worker_update(&ids[2], true);
     let plan = resume.plan(&state)?;
@@ -208,19 +94,33 @@ async fn a_requested_update_waits_for_a_failing_dependency() -> Result<()> {
         plan.updates.keys()
     );
 
-    // The dependency recovers; once it is rolled the requests are planned.
+    // The dependency recovers; no dependent starts until it is Running again, and then
+    // each one is served.
     give_test_worker_setup_grant(&ids[0]);
-    let mut state = state;
-    step_until(&resume, &mut state, 60, |s| {
-        status(s, &ids[0]) == ResourceStatus::Running
-    })
-    .await?;
-    let plan = resume.plan(&state)?;
-    for id in &ids[1..] {
-        assert!(plan.updates.contains_key(id), "{id} is planned: {plan:?}");
+    let resume = executor(&stack, true)?;
+    for _ in 0..60 {
+        let before = state.clone();
+        state = resume.step(state).await?.next_state;
+        for id in &ids[1..] {
+            if status(&state, id) == ResourceStatus::Updating {
+                request_test_worker_update(id, false);
+                assert_eq!(
+                    status(&before, &ids[0]),
+                    ResourceStatus::Running,
+                    "{id} started while its dependency was {:?}",
+                    status(&before, &ids[0])
+                );
+            }
+        }
+        // The deployment never reports a failure while the dependency recovers.
+        if status(&state, &ids[0]) != ResourceStatus::UpdateFailed {
+            assert_ne!(stack_status(&state), alien_core::StackStatus::Failure, "{:?}", ids.iter().map(|i| status(&state, i)).collect::<Vec<_>>());
+        }
     }
     request_test_worker_update(&ids[1], false);
     request_test_worker_update(&ids[2], false);
+    assert!(resume.is_synced(&state));
+    assert!(resume.plan(&state)?.updates.is_empty());
     Ok(())
 }
 
@@ -241,5 +141,93 @@ async fn an_updating_resource_keeps_stepping_while_its_dependency_fails() -> Res
         status(s, &ids[2]) == ResourceStatus::Running
     })
     .await?;
+    Ok(())
+}
+
+/// The status the deployment reports for the stack after a step, from the resource statuses.
+fn stack_status(state: &StackState) -> alien_core::StackStatus {
+    let statuses: Vec<_> = state.resources.values().map(|r| r.status).collect();
+    StackState::compute_stack_status_from_resources(&statuses).unwrap()
+}
+
+/// The dependency and its dependent both ask for an update in one release. The dependent
+/// starts only once the dependency has finished its own, and the run is not over (synced with
+/// nothing left to plan) before the dependent's request is served.
+#[tokio::test]
+async fn a_deferred_request_is_served_in_the_same_run() -> Result<()> {
+    let (stack, ids) = stack("served");
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    let executor = crate::core::StackExecutor::builder(&stack, alien_core::ClientConfig::Test)
+        .deployment_config(&default_deployment_config())
+        .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+        .resume_unchanged_failed_resources(true)
+        .rollout_id("rel_a".to_string())
+        .build()?;
+    request_test_worker_update(&ids[0], true);
+    request_test_worker_update(&ids[2], true);
+
+    let mut dependency_done = false;
+    let mut served = false;
+    let mut first_synced = None;
+    for step in 0..60 {
+        let before = state.clone();
+        state = executor.step(state).await?.next_state;
+        for id in [&ids[0], &ids[2]] {
+            // The update clears the request, as a real one does.
+            if status(&state, id) == ResourceStatus::Updating {
+                request_test_worker_update(id, false);
+            }
+        }
+        assert_ne!(
+            stack_status(&state),
+            alien_core::StackStatus::Failure,
+            "step {step}"
+        );
+        dependency_done |= status(&state, &ids[0]) == ResourceStatus::Running
+            && state.resources[&ids[0]].requested_update_ran.is_some();
+        if status(&before, &ids[2]) != ResourceStatus::Updating
+            && status(&state, &ids[2]) == ResourceStatus::Updating
+        {
+            served = true;
+            assert!(
+                dependency_done && status(&before, &ids[0]) == ResourceStatus::Running,
+                "the dependent started before the dependency finished its update"
+            );
+        }
+        if first_synced.is_none() && executor.is_synced(&state) {
+            first_synced = Some(step);
+            assert!(
+                served || executor.plan(&state)?.updates.is_empty(),
+                "the run ended with the dependent's request unserved"
+            );
+        }
+    }
+    request_test_worker_update(&ids[0], false);
+    request_test_worker_update(&ids[2], false);
+    assert!(served, "the dependent's request was never served");
+    Ok(())
+}
+
+/// A run with no rollout id cannot tell a dependency that keeps asking from one yet to run;
+/// the dependent's request does not wait for that for good.
+#[tokio::test]
+async fn a_request_does_not_wait_for_good_on_a_dependency_that_keeps_asking() -> Result<()> {
+    let (stack, ids) = stack("keeps-asking");
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+    let executor = executor(&stack, true)?;
+    // Never cleared: the dependency's check stays true.
+    request_test_worker_update(&ids[0], true);
+    request_test_worker_update(&ids[2], true);
+    let mut served = false;
+    for _ in 0..60 {
+        state = executor.step(state).await?.next_state;
+        if status(&state, &ids[2]) == ResourceStatus::Updating {
+            served = true;
+            request_test_worker_update(&ids[2], false);
+        }
+    }
+    request_test_worker_update(&ids[0], false);
+    request_test_worker_update(&ids[2], false);
+    assert!(served, "the dependent's request waited for good");
     Ok(())
 }

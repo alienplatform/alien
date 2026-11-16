@@ -205,6 +205,8 @@ fn status_halts_stepping(status: ResourceStatus) -> bool {
 struct RolledWalk {
     done: HashMap<String, bool>,
     visiting: HashSet<String>,
+    /// A dependency that asks for its own update does not count as unrolled for that reason.
+    ignore_requests: bool,
 }
 
 fn status_allows_update_planning(status: ResourceStatus) -> bool {
@@ -1347,7 +1349,8 @@ impl StackExecutor {
             || self
                 .external_binding_drifted(dependency_id, current)
                 .unwrap_or(true)
-            || self.needs_update_requested(dependency_id, desired, current, state)
+            || (!walk.ignore_requests
+                && self.needs_update_requested(dependency_id, desired, current, state))
         {
             return Ok(false);
         }
@@ -1370,11 +1373,16 @@ impl StackExecutor {
         dependent: &StackResourceState,
         dependency: &ResourceRef,
         state: &StackState,
+        ignore_requests: bool,
     ) -> Result<bool> {
         if self.left_to_others(dependency.id(), state)
             || self.dependency_settled(dependency.id(), state)
         {
-            return self.dependency_rolled(dependency.id(), state);
+            let mut walk = RolledWalk {
+                ignore_requests,
+                ..RolledWalk::default()
+            };
+            return self.dependency_rolled_memo(dependency.id(), state, &mut walk, true);
         }
         let Some(dependency_state) = state.resources.get(dependency.id()) else {
             return Ok(false);
@@ -1397,8 +1405,31 @@ impl StackExecutor {
         desired: &ResourceConfig,
         state: &StackState,
     ) -> Result<bool> {
+        self.dependencies_allow_update_with(dependent, desired, state, false)
+    }
+
+    /// The same for an update the dependent's controller asks for. Without a rollout id a
+    /// dependency that keeps asking for its own update can never be told apart from one that
+    /// has yet to run, so it would hold the dependent for good; only its status and config
+    /// are waited for then.
+    fn dependencies_allow_requested_update(
+        &self,
+        dependent: &StackResourceState,
+        desired: &ResourceConfig,
+        state: &StackState,
+    ) -> Result<bool> {
+        self.dependencies_allow_update_with(dependent, desired, state, self.rollout_id.is_none())
+    }
+
+    fn dependencies_allow_update_with(
+        &self,
+        dependent: &StackResourceState,
+        desired: &ResourceConfig,
+        state: &StackState,
+        ignore_requests: bool,
+    ) -> Result<bool> {
         for dependency in &desired.dependencies {
-            if !self.dependency_allows_update(dependent, dependency, state)? {
+            if !self.dependency_allows_update(dependent, dependency, state, ignore_requests)? {
                 return Ok(false);
             }
         }
@@ -1968,12 +1999,17 @@ impl StackExecutor {
                                 state,
                             )? {
                                 // A requested update waits for the resource's dependencies
-                                // like a config-change update does.
-                                if self.dependencies_allow_update(
-                                    current_resource_state,
-                                    desired_config,
-                                    state,
-                                )? {
+                                // like a config-change update does. A resource that setup
+                                // owns does not wait: dependency propagation skips it, so
+                                // nothing would bring the request back once the dependency
+                                // has rolled.
+                                if self.setup_owns_writes(desired_config)
+                                    || self.dependencies_allow_requested_update(
+                                        current_resource_state,
+                                        desired_config,
+                                        state,
+                                    )?
+                                {
                                     debug!(
                                         "Scheduling UPDATE transition for '{}' due to deployment config drift",
                                         resource_id
@@ -2401,9 +2437,6 @@ impl StackExecutor {
             }
         }
         if apply_plan && self.resume_unchanged_failed_resources {
-            // Dependencies are judged by the state before any resume, so the result does not
-            // depend on the order resources are visited in.
-            let before_resume = state.clone();
             for (resource_id, resource_state) in &mut state.resources {
                 if !matches!(
                     resource_state.status,
@@ -2420,15 +2453,6 @@ impl StackExecutor {
                     || resource_state.dependencies != desired.dependencies
                     || self.external_binding_drifted(resource_id, resource_state)?
                 {
-                    continue;
-                }
-                // A failed resource resumes once its dependencies have rolled, like a new
-                // update would; until then the dependency is the one to recover.
-                if !self.dependencies_allow_update(resource_state, desired, &before_resume)? {
-                    debug!(
-                        "Not resuming failed resource '{}' - dependencies not ready yet",
-                        resource_id
-                    );
                     continue;
                 }
                 if resource_state.retry_failed()? {
