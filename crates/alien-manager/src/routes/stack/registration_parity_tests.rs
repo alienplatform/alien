@@ -377,6 +377,16 @@ async fn every_kubernetes_setup_registers_what_the_manager_expects() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Known gap, not a skipped case: an existing AKS cluster with a cloud database still gets a new
+/// VNet the cluster cannot reach (the Private Endpoint needs its own subnet in the cluster's
+/// VNet). GKE and EKS are covered by the network tests in `alien-terraform`. A follow-up changes
+/// the AKS module; this test is the place to turn on when it lands, and it fails until then.
+#[tokio::test]
+#[ignore = "known gap: AKS existing cluster with a database creates a VNet the cluster cannot reach"]
+async fn an_existing_aks_cluster_with_a_database_uses_the_cluster_network() {
+    panic!("not implemented: the AKS module creates its own VNet for the database endpoint");
+}
+
 /// Customers already hold modules generated before this rule moved into one place (a GKE module
 /// from the 1.0.459 release is one). They never registered a `compute` for a Kubernetes target,
 /// and the manager must accept exactly what they send, without regenerating them. The ids below
