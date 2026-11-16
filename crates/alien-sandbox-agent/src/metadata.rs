@@ -207,7 +207,8 @@ fn judge(reply: &Reply) -> Verdict {
 /// The AWS-shaped requests reach other clouds' metadata services on their clusters, and those
 /// answer them with a plain error: the GKE metadata server marks every reply with
 /// `Metadata-Flavor: Google` (a 405 for the token PUT), and Azure's service answers a request
-/// without a `Metadata: true` header with a 400 "Required metadata header not specified". That
+/// without a `Metadata: true` header with a 400 "Required metadata header not specified", and a
+/// PUT with a 400 `InvalidHttpVerb` error. That
 /// recognition changes how only a 400 or 405 is read (a status that carries no data): the request
 /// is not an AWS request there, so it is not "neither data nor a refusal". It never forgives data:
 /// a 2xx with a body, a redirect or a server error is judged as it would be anywhere else, whatever
@@ -215,10 +216,11 @@ fn judge(reply: &Reply) -> Verdict {
 fn judge_aws(reply: &Reply) -> Verdict {
     if let Reply::Status(400 | 405, body, head) = reply {
         let head = head.to_ascii_lowercase();
+        let body = body.to_ascii_lowercase();
+        // Azure answers the token PUT with a 400 XML error naming the verb, not the missing header.
         if head.contains("\r\nmetadata-flavor: google")
-            || body
-                .to_ascii_lowercase()
-                .contains("required metadata header not specified")
+            || body.contains("required metadata header not specified")
+            || body.contains("<code>invalidhttpverb</code>")
         {
             return Verdict::Refused;
         }
@@ -1333,6 +1335,51 @@ mod tests {
             ("GET", "/latest", false, 400, MISSING),
         ]);
         assert_eq!(check(address), Ok(()));
+    }
+
+    /// Recorded from a real cluster (Azure Instance Metadata Service on a Kubernetes node): the
+    /// token PUT is answered 400 with an XML error saying PUT is not a supported verb, and the
+    /// service has no identity to hand out. That is not an AWS request, so it is not a failure.
+    #[test]
+    fn the_azure_reply_to_the_token_put_passes() {
+        const VERB: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<Error xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\">\n    <Code>InvalidHttpVerb</Code>\n    <Message>The HTTP verb specified was not recognized by the server.</Message>\n    <Details>'PUT' is not a supported verb.</Details>\n</Error>";
+        let address = serve(vec![
+            ("PUT", "/latest", false, 400, VERB),
+            (
+                "GET",
+                "/metadata/identity/oauth2/token",
+                false,
+                400,
+                "{\"error\":\"invalid_request\",\"error_description\":\"Identity not found\"}",
+            ),
+        ]);
+        assert_eq!(check(address), Ok(()));
+    }
+
+    /// Recorded on a real cluster with no network policy: the service answers the AWS-shaped
+    /// requests with errors but hands a token to the identity request. The check still fails, and
+    /// names the Azure request.
+    #[test]
+    fn an_azure_node_that_hands_out_a_token_still_fails_with_the_azure_reason() {
+        const VERB: &str = "<Error><Code>InvalidHttpVerb</Code><Message>The HTTP verb specified was not recognized by the server.</Message></Error>";
+        let address = serve(vec![
+            ("PUT", "/latest", false, 400, VERB),
+            ("GET", "/metadata/identity/oauth2/token", false, 200, "{\"access_token\":\"x\"}"),
+        ]);
+        let found = check(address).unwrap_err();
+        assert_eq!(found.cloud, "Azure");
+        assert_eq!(found.path, "/metadata/identity/oauth2/token");
+        assert_eq!(found.unexpected, None);
+    }
+
+    /// The verb error excuses only the token request: data served on a later path still fails.
+    #[test]
+    fn an_http_verb_error_does_not_excuse_data() {
+        let address = serve(vec![
+            ("PUT", "/latest/api/token", false, 400, "<Code>InvalidHttpVerb</Code>"),
+            ("GET", "/latest/user-data", false, 200, "secret"),
+        ]);
+        assert_eq!(check(address).unwrap_err().path, "/latest/user-data");
     }
 
     /// A 400 with no recognizable cloud behind it is still not a refusal.
