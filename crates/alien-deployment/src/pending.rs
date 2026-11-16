@@ -187,14 +187,13 @@ pub async fn handle_pending(
     // Step 2: Collect environment information. Kubernetes deployments may run
     // on base cloud infrastructure; collect the base cloud environment while
     // keeping the deployment stack platform as Kubernetes.
-    let environment_info =
-        collect_deployment_environment_info(
-            current.platform,
-            config.base_platform,
-            &client_config,
-            alien_infra::stack_needs_base_cloud(&target_stack, current.platform, config.base_platform),
-        )
-        .await?;
+    let environment_info = collect_deployment_environment_info(
+        current.platform,
+        config.base_platform,
+        &client_config,
+        alien_infra::stack_needs_base_cloud(&target_stack, current.platform, config.base_platform),
+    )
+    .await?;
 
     // Step 2.5: Record the frozen-gate answers, then drop gated setup
     // resources the deployer declined, BEFORE the mutations: a declined
@@ -742,9 +741,11 @@ async fn collect_deployment_environment_info(
             );
             return Ok(None);
         }
-        return Err(AlienError::new(alien_infra::ErrorData::BaseCloudUnavailable {
-            required_platform: base,
-        }))
+        return Err(AlienError::new(
+            alien_infra::ErrorData::BaseCloudUnavailable {
+                required_platform: base,
+            },
+        ))
         .context(ErrorData::EnvironmentInfoCollectionFailed {
             platform: format!("{:?}", base),
             reason: "The base cloud client is unavailable".to_string(),
@@ -2102,10 +2103,14 @@ mod tests {
 
     #[tokio::test]
     async fn machines_skips_environment_collection() {
-        let environment_info =
-            collect_deployment_environment_info(Platform::Machines, None, &ClientConfig::Test, false)
-                .await
-                .expect("machines should not require a cloud client config");
+        let environment_info = collect_deployment_environment_info(
+            Platform::Machines,
+            None,
+            &ClientConfig::Test,
+            false,
+        )
+        .await
+        .expect("machines should not require a cloud client config");
 
         assert!(environment_info.is_none());
     }

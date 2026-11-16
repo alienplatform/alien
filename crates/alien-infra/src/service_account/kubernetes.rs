@@ -310,6 +310,10 @@ mod identity_tests {
             None,
         )
         .unwrap_err();
-        assert!(error.message.contains("eks.amazonaws.com/role-arn"), "{}", error.message);
+        assert!(
+            error.message.contains("eks.amazonaws.com/role-arn"),
+            "{}",
+            error.message
+        );
     }
 }

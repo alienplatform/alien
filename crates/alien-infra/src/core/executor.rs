@@ -262,7 +262,10 @@ fn controller_platform_for_entry(
 }
 
 /// True when a permission set carries at least one entry for `platform`.
-pub(crate) fn permission_set_grants_on(set: &alien_core::PermissionSet, platform: Platform) -> bool {
+pub(crate) fn permission_set_grants_on(
+    set: &alien_core::PermissionSet,
+    platform: Platform,
+) -> bool {
     match platform {
         Platform::Aws => set.platforms.aws.as_ref().is_some_and(|v| !v.is_empty()),
         Platform::Gcp => set.platforms.gcp.as_ref().is_some_and(|v| !v.is_empty()),
@@ -271,7 +274,10 @@ pub(crate) fn permission_set_grants_on(set: &alien_core::PermissionSet, platform
     }
 }
 
-pub(crate) fn service_account_grants_on(account: &alien_core::ServiceAccount, platform: Platform) -> bool {
+pub(crate) fn service_account_grants_on(
+    account: &alien_core::ServiceAccount,
+    platform: Platform,
+) -> bool {
     account
         .stack_permission_sets
         .iter()
@@ -415,29 +421,41 @@ mod controller_platform_tests {
         let plain = stack_with(vec![compute.clone()]);
         let with_storage = stack_with(vec![compute, storage]);
         for base in [Platform::Aws, Platform::Gcp, Platform::Azure] {
-            assert!(!stack_needs_base_cloud(&plain, Platform::Kubernetes, Some(base)));
-            assert!(stack_needs_base_cloud(&with_storage, Platform::Kubernetes, Some(base)));
+            assert!(!stack_needs_base_cloud(
+                &plain,
+                Platform::Kubernetes,
+                Some(base)
+            ));
+            assert!(stack_needs_base_cloud(
+                &with_storage,
+                Platform::Kubernetes,
+                Some(base)
+            ));
         }
         // No base cloud, or not a Kubernetes stack: nothing to resolve.
-        assert!(!stack_needs_base_cloud(&with_storage, Platform::Kubernetes, None));
-        assert!(!stack_needs_base_cloud(&with_storage, Platform::Aws, Some(Platform::Aws)));
+        assert!(!stack_needs_base_cloud(
+            &with_storage,
+            Platform::Kubernetes,
+            None
+        ));
+        assert!(!stack_needs_base_cloud(
+            &with_storage,
+            Platform::Aws,
+            Some(Platform::Aws)
+        ));
     }
 
     fn service_account(id: &str, permission_set: Option<&str>) -> Resource {
         let mut profile = alien_core::PermissionProfile::new();
         if let Some(permission_set) = permission_set {
-            profile
-                .0
-                .entry("*".to_string())
-                .or_default()
-                .push(alien_core::PermissionSetReference::from_name(permission_set));
+            profile.0.entry("*".to_string()).or_default().push(
+                alien_core::PermissionSetReference::from_name(permission_set),
+            );
         }
         Resource::new(
-            alien_core::ServiceAccount::from_permission_profile(
-                id.to_string(),
-                &profile,
-                |name| alien_permissions::get_permission_set(name).cloned(),
-            )
+            alien_core::ServiceAccount::from_permission_profile(id.to_string(), &profile, |name| {
+                alien_permissions::get_permission_set(name).cloned()
+            })
             .unwrap(),
         )
     }
@@ -502,24 +520,45 @@ mod controller_platform_tests {
             .permissions
             .profiles
             .insert("fixed".to_string(), alien_core::PermissionProfile::new());
-        assert!(!stack_needs_base_cloud(&stack, Platform::Kubernetes, Some(Platform::Aws)));
+        assert!(!stack_needs_base_cloud(
+            &stack,
+            Platform::Kubernetes,
+            Some(Platform::Aws)
+        ));
 
         let mut grants = alien_core::PermissionProfile::new();
         grants.0.entry("*".to_string()).or_default().push(
             alien_core::PermissionSetReference::from_name("storage/data-read"),
         );
-        stack.permissions.profiles.insert("reader".to_string(), grants.clone());
-        assert!(stack_needs_base_cloud(&stack, Platform::Kubernetes, Some(Platform::Aws)));
+        stack
+            .permissions
+            .profiles
+            .insert("reader".to_string(), grants.clone());
+        assert!(stack_needs_base_cloud(
+            &stack,
+            Platform::Kubernetes,
+            Some(Platform::Aws)
+        ));
 
         // The same decision on the prepared stack, where the profiles became service accounts.
-        let prepared = stack_with(vec![
-            (service_account("fixed-sa", None), ResourceLifecycle::Frozen),
-        ]);
-        assert!(!stack_needs_base_cloud(&prepared, Platform::Kubernetes, Some(Platform::Aws)));
-        let prepared = stack_with(vec![
-            (service_account("reader-sa", Some("storage/data-read")), ResourceLifecycle::Frozen),
-        ]);
-        assert!(stack_needs_base_cloud(&prepared, Platform::Kubernetes, Some(Platform::Aws)));
+        let prepared = stack_with(vec![(
+            service_account("fixed-sa", None),
+            ResourceLifecycle::Frozen,
+        )]);
+        assert!(!stack_needs_base_cloud(
+            &prepared,
+            Platform::Kubernetes,
+            Some(Platform::Aws)
+        ));
+        let prepared = stack_with(vec![(
+            service_account("reader-sa", Some("storage/data-read")),
+            ResourceLifecycle::Frozen,
+        )]);
+        assert!(stack_needs_base_cloud(
+            &prepared,
+            Platform::Kubernetes,
+            Some(Platform::Aws)
+        ));
     }
 
     #[test]
