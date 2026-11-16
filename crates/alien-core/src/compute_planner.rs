@@ -890,6 +890,17 @@ pub fn validate_compute_pool_selection(
     errors
 }
 
+/// What the stack's own workloads need from the pool `group_id`, ignoring the hardware of any
+/// machine the pool's capacity group already names. `None` when no workload runs on the pool.
+pub fn workload_requirements_for_pool(
+    stack: &Stack,
+    group_id: &str,
+) -> Result<Option<WorkloadRequirements>, ErrorData> {
+    Ok(collect_workload_groups(stack)?
+        .remove(group_id)
+        .map(|group| group.requirements))
+}
+
 /// Convert a capacity group declaration into planner requirements.
 pub fn capacity_group_requirements(group: &CapacityGroup) -> WorkloadRequirements {
     profile_to_requirements(

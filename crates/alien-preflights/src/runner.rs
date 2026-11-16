@@ -377,10 +377,25 @@ impl PreflightRunner {
                 );
                 // The same validation and profile derivation as every other compute selection:
                 // the profile is the machine's hardware, and a pick it refuses is an error.
+                let workload = alien_core::compute_planner::workload_requirements_for_pool(
+                    stack,
+                    &group.group_id,
+                )
+                .map_err(|error| {
+                    AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                        mutation_name: "ComputeClusterMutation".to_string(),
+                        message: format!(
+                            "Cannot read what the workloads of pool '{}' need: {error}",
+                            group.group_id
+                        ),
+                        resource_id: None,
+                    })
+                })?;
                 crate::mutations::compute_cluster::materialize_selected_group(
                     group,
                     stack_state.platform,
                     selection,
+                    workload.as_ref(),
                 )?;
                 changed = true;
             }
@@ -1240,6 +1255,87 @@ mod setup_update_authorization_tests {
             Some(profile_of("Standard_D8s_v5")),
             "the profile still belongs to the machine the pool moved from"
         );
+    }
+
+    /// A workload that needs 250 GiB of ephemeral storage first gets a machine with a local disk.
+    /// With no quota for that family the planner picks a smaller machine whose disk is
+    /// configurable. That pick must be checked against the workload, not against the hardware of
+    /// the machine it replaces.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_accepts_a_storage_fallback_that_fits_the_workload() {
+        use alien_core::{
+            instance_catalog, CapacityGroup, Container, ContainerCode, ComputeCluster,
+            ComputePoolSelection, ComputeSettings, ResourceSpec,
+        };
+        let first = instance_catalog::find_instance_type(Platform::Azure, "Standard_L8s_v3")
+            .expect("machine is in the catalog")
+            .to_machine_profile_for_storage(250 * 1024 * 1024 * 1024);
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("Standard_L8s_v3".to_string()),
+                profile: Some(first.clone()),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        let workload = Container::new("workload".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "2Gi".to_string(),
+                desired: "2Gi".to_string(),
+            })
+            .ephemeral_storage("250Gi".to_string())
+            .pool("general".to_string())
+            .permissions("test".to_string())
+            .build();
+        let stack = Stack::new("azure-pool".into())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .add(workload, ResourceLifecycle::Live)
+            .build();
+        let mut chosen = deployment_config();
+        chosen.stack_settings.compute = Some(ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("Standard_D2s_v5".to_string()),
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into(),
+            containers: Default::default(),
+        });
+
+        let updated = PreflightRunner::with_chosen_machines(
+            &stack,
+            &StackState::new(Platform::Azure),
+            &chosen,
+        )
+        .expect("the fallback fits the workload")
+        .expect("the pool moves");
+        let group = updated
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<ComputeCluster>())
+            .flat_map(|cluster| cluster.capacity_groups.iter())
+            .next()
+            .unwrap();
+        assert_eq!(group.instance_type.as_deref(), Some("Standard_D2s_v5"));
+        let profile = group.profile.as_ref().expect("the pool carries a profile");
+        assert_eq!(profile.cpu, "2.0");
+        assert_eq!(profile.ephemeral_storage_bytes, 250 * 1024 * 1024 * 1024);
     }
 
     /// A pick the compute selection refuses is an error, not a silent machine-only move.

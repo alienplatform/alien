@@ -152,6 +152,7 @@ fn validated_machine_profile(platform: Platform, group: &CapacityGroup) -> bool 
         &mut materialized,
         platform,
         &selection,
+        None,
     )
     .is_ok()
         && (group.profile.is_none() || materialized.profile == group.profile)
