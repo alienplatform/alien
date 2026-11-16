@@ -383,7 +383,7 @@ async fn collect(config: HostLogsConfig) -> Option<ObservedInventoryBatch> {
 /// Scopes this operator writes itself, outside the deployment steps. A deployment
 /// step that replaces the pending batches keeps these.
 pub(crate) fn is_operator_scope(scope: &str) -> bool {
-    scope == INVENTORY_SCOPE
+    scope == INVENTORY_SCOPE || scope == crate::ecs::SCOPE
 }
 
 /// Replace this scope's pending batch and keep any other scope's.

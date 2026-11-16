@@ -40,7 +40,7 @@ const MAX_LOG_GROUPS: usize = 20;
 const MAX_PAGES_PER_POLL: usize = 3;
 const PAGE_LIMIT: u32 = MAX_BATCH_RECORDS as u32;
 const MAX_SERVICES: usize = 200;
-const SCOPE: &str = "ecs";
+pub(crate) const SCOPE: &str = "ecs";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EcsConfig {
@@ -143,9 +143,13 @@ async fn clients() -> Result<Clients> {
 /// stored. A group with several streams delivers events out of order.
 const LATE_EVENT_WINDOW_MS: i64 = 30_000;
 /// Ids kept for de-duplication inside the window. A group that writes more than
-/// this within the window re-reads its newest events only: a later event older
-/// than the oldest kept id is not collected.
+/// this within the window forgets its oldest ids and stops reading at or before
+/// the newest forgotten time (`cutoff_ms`): a later event that old is not
+/// collected, but nothing is read twice.
 const MAX_SEEN_EVENTS: usize = 1000;
+/// Ids sharing the newest millisecond are never forgotten before this many, so a
+/// burst in one millisecond is moved past whole.
+const MAX_SEEN_EVENTS_IN_BURST: usize = 10_000;
 
 /// The saved position: the newest event time in milliseconds, and the time and id
 /// of every stored event within the late-event window before it.
@@ -153,6 +157,8 @@ const MAX_SEEN_EVENTS: usize = 1000;
 pub(crate) struct LogPosition {
     pub timestamp_ms: i64,
     pub seen: Vec<(i64, String)>,
+    /// Events at or before this time count as stored: ids this old were forgotten.
+    pub cutoff_ms: i64,
 }
 
 impl LogPosition {
@@ -162,11 +168,23 @@ impl LogPosition {
             .iter()
             .map(|(ts, id)| format!("{ts}:{id}"))
             .collect();
-        format!("{}|{}", self.timestamp_ms, seen.join(","))
+        format!(
+            "{}|{}|{}",
+            self.timestamp_ms,
+            seen.join(","),
+            self.cutoff_ms
+        )
     }
 
     pub(crate) fn decode(text: &str) -> Option<Self> {
-        let (timestamp, seen) = text.split_once('|')?;
+        let mut fields = text.splitn(3, '|');
+        let timestamp = fields.next()?;
+        let seen = fields.next()?;
+        // A position saved before the cutoff existed has two fields.
+        let cutoff_ms = match fields.next() {
+            Some(cutoff) => cutoff.parse().ok()?,
+            None => 0,
+        };
         let mut parsed = Vec::new();
         for entry in seen.split(',').filter(|entry| !entry.is_empty()) {
             let (ts, id) = entry.split_once(':')?;
@@ -175,16 +193,18 @@ impl LogPosition {
         Some(Self {
             timestamp_ms: timestamp.parse().ok()?,
             seen: parsed,
+            cutoff_ms,
         })
     }
 
-    /// The `startTime` to ask for: the start of the window, or, when the id list
-    /// is full, the oldest id it still holds.
+    /// The `startTime` to ask for: the start of the window, or just after the
+    /// newest forgotten time.
     pub(crate) fn start_time(&self) -> i64 {
         let window = self.timestamp_ms - LATE_EVENT_WINDOW_MS;
-        match self.seen.first() {
-            Some((oldest, _)) if self.seen.len() >= MAX_SEEN_EVENTS => window.max(*oldest),
-            _ => window,
+        if self.cutoff_ms > 0 {
+            window.max(self.cutoff_ms + 1)
+        } else {
+            window
         }
     }
 
@@ -199,9 +219,18 @@ impl LogPosition {
         self.seen.push((timestamp_ms, event_id.to_string()));
         let floor = self.timestamp_ms - LATE_EVENT_WINDOW_MS;
         self.seen.retain(|(ts, _)| *ts >= floor);
-        if self.seen.len() > MAX_SEEN_EVENTS {
+        let newest = self
+            .seen
+            .iter()
+            .filter(|(ts, _)| *ts == self.timestamp_ms)
+            .count();
+        let keep = MAX_SEEN_EVENTS.max(newest.min(MAX_SEEN_EVENTS_IN_BURST));
+        if self.seen.len() > keep {
             self.seen.sort_by_key(|(ts, _)| *ts);
-            let excess = self.seen.len() - MAX_SEEN_EVENTS;
+            let excess = self.seen.len() - keep;
+            if let Some((forgotten, _)) = self.seen[..excess].last() {
+                self.cutoff_ms = self.cutoff_ms.max(*forgotten);
+            }
             self.seen.drain(..excess);
         }
     }
@@ -406,7 +435,7 @@ pub(crate) async fn poll_group(
         .and_then(|offset| LogPosition::decode(&offset.timestamp))
         .unwrap_or(LogPosition {
             timestamp_ms: started_ms + LATE_EVENT_WINDOW_MS,
-            seen: Vec::new(),
+            ..Default::default()
         });
     let mut total = 0;
     for batch in read_group(logs, group, position).await? {
@@ -631,15 +660,11 @@ async fn run_inventory(state: Arc<OperatorState>, ecs: Arc<dyn EcsApi>, cluster:
                     resources,
                 };
                 let result = async {
-                    let pending = state.db.get_pending_observed_inventory_batches().await?;
-                    let mut merged: Vec<_> = pending
-                        .into_iter()
-                        .filter(|existing| existing.inventory_scope != batch.inventory_scope)
-                        .collect();
-                    merged.push(batch);
                     state
                         .db
-                        .set_pending_observed_inventory_batches(&merged)
+                        .update_pending_observed_inventory_batches(|pending| {
+                            crate::host::merge_batches(pending, batch)
+                        })
                         .await?;
                     state.db.request_sync();
                     Result::Ok(())
@@ -679,15 +704,17 @@ mod tests {
         let position = LogPosition {
             timestamp_ms: 1700,
             seen: vec![(1690, "a".into()), (1700, "b".into())],
+            cutoff_ms: 1500,
         };
         assert_eq!(LogPosition::decode(&position.encode()), Some(position));
         assert_eq!(
             LogPosition::decode("5|"),
             Some(LogPosition {
                 timestamp_ms: 5,
-                seen: vec![]
+                ..Default::default()
             })
         );
+        assert_eq!(LogPosition::decode("5|7:a|9").unwrap().cutoff_ms, 9);
         assert_eq!(LogPosition::decode("garbage"), None);
     }
 
@@ -696,6 +723,7 @@ mod tests {
         let saved = LogPosition {
             timestamp_ms: 100,
             seen: vec![(100, "a".into())],
+            ..Default::default()
         };
         let parsed = parse_events_page(
             "/ecs/web",
@@ -761,8 +789,27 @@ mod tests {
             busy.advance(1_000_000 + i, &format!("e{i}"));
         }
         assert_eq!(busy.seen.len(), MAX_SEEN_EVENTS);
-        // Full list: the query starts at the oldest id kept, so nothing is read twice.
-        assert_eq!(busy.start_time(), busy.seen[0].0);
+        // Full list: the query starts after the newest forgotten time, so nothing is read twice.
+        assert_eq!(busy.start_time(), 1_000_000 + 50);
+        assert!(busy.seen.iter().all(|(ts, _)| *ts >= busy.start_time()));
+    }
+
+    #[test]
+    fn a_burst_in_one_millisecond_is_moved_past_without_reading_events_again() {
+        let events: Vec<(i64, String, String)> = (0..1500)
+            .map(|i| (5_000, format!("id{i}"), format!("m{i}")))
+            .collect();
+        let refs: Vec<(i64, &str, &str)> = events
+            .iter()
+            .map(|(t, i, m)| (*t, i.as_str(), m.as_str()))
+            .collect();
+        let first = parse_events_page("/ecs/web", &page(&refs, None), &LogPosition::default());
+        assert_eq!(first.records.len(), 1500);
+        // The same events come back from the query window: none is new.
+        let saved = LogPosition::decode(&first.position.encode()).unwrap();
+        assert!(saved.start_time() <= 5_000);
+        let again = parse_events_page("/ecs/web", &page(&refs, None), &saved);
+        assert!(again.records.is_empty(), "{} re-read", again.records.len());
     }
 
     #[test]
@@ -959,7 +1006,7 @@ mod tests {
         let group = BusyGroup { total: 700 };
         let mut position = LogPosition {
             timestamp_ms: 1000,
-            seen: Vec::new(),
+            ..Default::default()
         };
         let mut stored = 0;
         for _ in 0..10 {

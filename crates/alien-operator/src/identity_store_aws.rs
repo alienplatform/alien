@@ -39,6 +39,8 @@ use crate::{
 };
 
 const CURRENT: &str = "AWSCURRENT";
+/// The version a secret with no current version is read at. Real version ids are UUIDs.
+const NO_VERSION: &str = "none";
 const PENDING_PREFIX: &str = "operator-pending-";
 
 pub(crate) struct AwsSecret {
@@ -105,6 +107,43 @@ impl AwsSecret {
         }
     }
 
+    /// A secret created without a value has no current version, and reading it
+    /// answers "not found" like a deleted one. Tell them apart: a secret that
+    /// exists with no current version is empty and gets its first version.
+    async fn uninitialized_or_missing(&self) -> Result<Option<Secret>> {
+        match self
+            .client
+            .describe_secret(DescribeSecretRequest {
+                secret_id: self.secret_id.clone(),
+            })
+            .await
+        {
+            Ok(described) => {
+                let has_current = described
+                    .version_ids_to_stages
+                    .iter()
+                    .flatten()
+                    .any(|(_, stages)| stages.iter().any(|stage| stage == CURRENT));
+                if described.deletion_date.is_some() {
+                    Ok(None)
+                } else if has_current {
+                    // The label appeared between the two calls: read again.
+                    Err(AlienError::new(ErrorData::ConfigurationError {
+                        message: "The identity secret changed while it was read; try again".into(),
+                    }))
+                } else {
+                    Ok(Some(record(NO_VERSION, BTreeMap::new())))
+                }
+            }
+            Err(error) => match error.error.as_ref() {
+                Some(ClientErrorData::RemoteResourceNotFound { .. }) => Ok(None),
+                _ => Err(error).context(ErrorData::ConfigurationError {
+                    message: "Cannot read the identity secret".into(),
+                }),
+            },
+        }
+    }
+
     fn private_stage() -> String {
         format!("{PENDING_PREFIX}{}", Uuid::new_v4().simple())
     }
@@ -154,7 +193,9 @@ impl SecretBackend for AwsSecret {
             Ok(response) => response,
             Err(error) => {
                 return match error.error.as_ref() {
-                    Some(ClientErrorData::RemoteResourceNotFound { .. }) => Ok(None),
+                    Some(ClientErrorData::RemoteResourceNotFound { .. }) => {
+                        self.uninitialized_or_missing().await
+                    }
                     // Anything else (denied, throttled, unreachable) is not "empty".
                     _ => Err(error).context(ErrorData::ConfigurationError {
                         message: "Cannot read the identity secret".into(),
@@ -239,7 +280,11 @@ impl SecretBackend for AwsSecret {
             .update_secret_version_stage(UpdateSecretVersionStageRequest {
                 secret_id: self.secret_id.clone(),
                 version_stage: CURRENT.to_string(),
-                remove_from_version_id: Some(expected),
+                // The first version of an empty secret has none to move the
+                // label from: Secrets Manager refuses to attach a label that is
+                // already on another version without one, so a second first
+                // writer is refused.
+                remove_from_version_id: (expected != NO_VERSION).then_some(expected),
                 move_to_version_id: Some(new_version.clone()),
             })
             .await
@@ -326,6 +371,12 @@ mod tests {
             }
             fake
         }
+        /// A secret created without a value: it exists and has no current version.
+        fn without_value() -> Arc<Self> {
+            let fake = Arc::new(Self::default());
+            fake.state.lock().unwrap().exists = true;
+            fake
+        }
         /// What an operator or a stack update does: a new current version.
         fn replace_current(&self, value: &str) {
             let mut state = self.state.lock().unwrap();
@@ -374,6 +425,12 @@ mod tests {
             _: DescribeSecretRequest,
         ) -> ClientResult<DescribeSecretResponse> {
             let state = self.state.lock().unwrap();
+            if !state.exists {
+                return Err(client_error(ClientErrorData::RemoteResourceNotFound {
+                    resource_type: "secret".into(),
+                    resource_name: "identity".into(),
+                }));
+            }
             let mut stages: std::collections::BTreeMap<String, Vec<String>> = Default::default();
             for (label, version) in &state.labels {
                 stages
@@ -452,6 +509,17 @@ mod tests {
                 }));
             }
             let mut state = self.state.lock().unwrap();
+            if request.remove_from_version_id.is_none()
+                && state.labels.contains_key(&request.version_stage)
+                && request.move_to_version_id.is_some()
+            {
+                // Secrets Manager: a label already on another version must be
+                // removed from it explicitly.
+                return Err(client_error(ClientErrorData::InvalidInput {
+                    message: "the staging label is attached to another version".into(),
+                    field_name: None,
+                }));
+            }
             if let Some(from) = &request.remove_from_version_id {
                 if state.labels.get(&request.version_stage) != Some(from) {
                     return Err(client_error(ClientErrorData::InvalidInput {
@@ -508,6 +576,46 @@ mod tests {
         assert_eq!(restarted.encryption_key().await.unwrap(), key);
         assert_eq!(restarted.read().await.unwrap().unwrap().current, "key-a");
         assert!(fake.private_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_secret_created_without_a_value_takes_the_first_identity() {
+        let fake = FakeSecretsManager::without_value();
+        let first = store(&fake);
+        assert!(first.read().await.unwrap().is_none());
+        let key = first.encryption_key().await.unwrap();
+        first
+            .persist_enrolled(&state("dep_1", "key-a"))
+            .await
+            .unwrap();
+        // A replacement task finds both the key and the identity.
+        let replacement = store(&fake);
+        assert_eq!(replacement.encryption_key().await.unwrap(), key);
+        assert_eq!(replacement.read().await.unwrap().unwrap().current, "key-a");
+        assert!(fake.private_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn two_first_writers_on_a_secret_without_a_value_leave_one_winner() {
+        let fake = FakeSecretsManager::without_value();
+        let (a, b) = (store(&fake), store(&fake));
+        a.read().await.unwrap();
+        b.read().await.unwrap();
+        a.write(&state("dep_1", "key-a")).await.unwrap();
+        let error = b.write(&state("dep_1", "key-b")).await.unwrap_err();
+        assert!(matches!(error.error, Some(ErrorData::IdentityConflict)));
+        assert!(fake.current_text().contains("key-a"));
+        assert!(fake.private_labels().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_deleted_secret_is_still_missing_not_empty() {
+        let fake = Arc::new(FakeSecretsManager::default());
+        assert!(AwsSecret::new(fake, "identity")
+            .get()
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
