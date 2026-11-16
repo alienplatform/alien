@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ArchitectureSchema } from "./architecture-schema.js";
 import { ContainerSecuritySchema } from "./container-security-schema.js";
 import { DaemonCodeSchema } from "./daemon-code-schema.js";
 import { DaemonRuntimeSchema } from "./daemon-runtime-schema.js";
@@ -14,7 +15,10 @@ import { ResourceSpecSchema } from "./resource-spec-schema.js";
 import { WorkloadPrioritySchema } from "./workload-priority-schema.js";
 
 export const DaemonSchema = z.object({
-    "cluster": z.string().describe("ComputeCluster resource ID that this daemon runs on for managed cloud\ncompute backends. Kubernetes and Local runtimes ignore this field.").nullish(),
+    get "builtArchitectures"(){
+                return z.array(ArchitectureSchema.describe("CPU architecture.")).describe("Set by `alien build` for a Kubernetes stack: the CPU architectures of the\nimage built for this workload (more than one means a multi-architecture\nimage). Pods of a single-architecture image are placed on matching nodes.\nAbsent means the build did not record it (an older release), so no\narchitecture is selected. Build output replaces any value written in the\nstack definition.").optional()
+              },
+"cluster": z.string().describe("ComputeCluster resource ID that this daemon runs on for managed cloud\ncompute backends. Kubernetes and Local runtimes ignore this field.").nullish(),
 get "code"(){
                 return DaemonCodeSchema
               },
