@@ -3,6 +3,8 @@
 //! `AZURE_TARGET_*` identity holding the data-plane role on the group `AZURE_RESOURCE_GROUP` and
 //! `AZURE_SANDBOX_GROUP` name; `AZURE_SANDBOX_IMAGE` must already be built there if a reference.
 //!
+//! `AZURE_SANDBOX_AGENT=true` runs it against an image with the agent layered on, through the agent.
+//!
 //! ```text
 //! cargo test -p alien-bindings --features azure --test azure_sandbox_pause_live -- --ignored --nocapture
 //! ```
@@ -100,7 +102,12 @@ async fn pause_and_resume_keep_memory() {
         .ok()
         .and_then(|seconds| seconds.parse().ok())
         .unwrap_or(120);
+    // `AZURE_SANDBOX_AGENT=true` for an image the release layered the agent onto: commands and
+    // files then travel through the agent, whose files live under its session root.
+    let agent = std::env::var("AZURE_SANDBOX_AGENT").is_ok_and(|value| value == "true");
+    let probe_path = if agent { "probe.py" } else { "/tmp/probe.py" };
     let binding = serde_json::json!({
+        "agent": agent,
         "service": "sandbox-azure",
         "sandboxGroup": env("AZURE_SANDBOX_GROUP"),
         "dataPlaneEndpoint": format!("https://management.{region}.azuredevcompute.io"),
@@ -133,14 +140,16 @@ async fn pause_and_resume_keep_memory() {
         sandbox
             .write_files(
                 &id,
-                BTreeMap::from([("/tmp/probe.py".to_string(), PROBE.as_bytes().to_vec())]),
+                BTreeMap::from([(probe_path.to_string(), PROBE.as_bytes().to_vec())]),
             )
             .await
             .expect("the probe is written");
         let (code, out) = shell(
             sandbox.as_ref(),
             &id,
-            "setsid python3 /tmp/probe.py >/dev/null 2>&1 </dev/null & sleep 2; echo started",
+            &format!(
+                "setsid python3 {probe_path} >/dev/null 2>&1 </dev/null & sleep 2; echo started"
+            ),
         )
         .await;
         assert_eq!(code, 0, "the probe starts: {out}");
