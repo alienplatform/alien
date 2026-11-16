@@ -890,6 +890,34 @@ pub fn validate_compute_pool_selection(
     errors
 }
 
+/// What a pick for `group` must satisfy when the pool's machine is being replaced: the needs of
+/// the stack's workloads on the pool, plus what the pool declares itself (architecture, nested
+/// virtualization, GPU). The hardware of the machine being replaced is left out. A pool no
+/// workload runs on needs only what it declares.
+pub fn requirements_for_replacing_pool_machine(
+    stack: &Stack,
+    group: &CapacityGroup,
+) -> Result<WorkloadRequirements, ErrorData> {
+    let declared = profile_to_requirements(
+        group.profile.as_ref(),
+        group.nested_virtualization.unwrap_or(false),
+    );
+    let declared = WorkloadRequirements {
+        architecture: declared.architecture,
+        nested_virt: declared.nested_virt,
+        gpu: declared.gpu,
+        ..default_requirements()
+    };
+    let Some(planned) = collect_workload_groups(stack)?.remove(&group.group_id) else {
+        return Ok(declared);
+    };
+    let mut requirements = planned.requirements;
+    requirements.architecture = requirements.architecture.or(declared.architecture);
+    requirements.nested_virt |= declared.nested_virt;
+    requirements.gpu = requirements.gpu.or(declared.gpu);
+    Ok(requirements)
+}
+
 /// Convert a capacity group declaration into planner requirements.
 pub fn capacity_group_requirements(group: &CapacityGroup) -> WorkloadRequirements {
     profile_to_requirements(

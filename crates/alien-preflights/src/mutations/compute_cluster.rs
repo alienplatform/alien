@@ -1225,19 +1225,24 @@ fn materialize_group<'c>(
                 ),
             })
         })?;
-    materialize_selection_within(group, platform, selection, scale)?;
+    materialize_selection_within(group, platform, selection, scale, None)?;
     Ok(selection)
 }
 
 /// Use the same validation and profile derivation for declared machine changes
 /// as for deployment compute selections.
+///
+/// `workload` is what the pool's workloads need, when the caller knows it. A pool whose machine
+/// is being replaced must be checked against that, not against the hardware of the machine it
+/// replaces.
 pub(crate) fn materialize_selected_group(
     group: &mut CapacityGroup,
     platform: Platform,
     selection: &ComputePoolSelection,
+    workload: Option<&WorkloadRequirements>,
 ) -> Result<()> {
     let scale = declared_scale_policy(group);
-    materialize_selection_within(group, platform, selection, &scale)
+    materialize_selection_within(group, platform, selection, &scale, workload)
 }
 
 fn materialize_selection_within(
@@ -1245,6 +1250,7 @@ fn materialize_selection_within(
     platform: Platform,
     selection: &ComputePoolSelection,
     scale: &CapacityGroupScalePolicy,
+    workload: Option<&WorkloadRequirements>,
 ) -> Result<()> {
     selection.validate().map_err(|message| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
@@ -1256,7 +1262,9 @@ fn materialize_selection_within(
             resource_id: None,
         })
     })?;
-    let requirements = capacity_group_requirements(group);
+    let requirements = workload
+        .cloned()
+        .unwrap_or_else(|| capacity_group_requirements(group));
     let errors =
         validate_compute_pool_selection(platform, &group.group_id, selection, &requirements, scale);
     if !errors.is_empty() {
