@@ -4806,7 +4806,12 @@ fn stack_settings_expression(
   endpointAccess = var.endpoint_access
 {network_in_object}}}{network_argument})"#,
                 network_in_object = network_in_object(target, &network),
-                network_argument = network_argument(target, &network, kubernetes_network_gate, gke_cluster_network),
+                network_argument = network_argument(
+                    target,
+                    &network,
+                    kubernetes_network_gate,
+                    gke_cluster_network
+                ),
             ));
         }
         _ if target.is_kubernetes() => {
@@ -4875,7 +4880,8 @@ fn network_argument(
             );
             if cluster_network {
                 format!(
-                    "{gate_expr} && !local.deployment_requests_network ? jsonencode({{ network = {{ type = \"byo-vpc-gcp\", networkName = local.{name}, subnetName = local.{subnet}, region = local.{region} }} }}) : \"{{}}\"",
+                    "{gate_expr} && !local.deployment_requests_network ? jsonencode({{ network = local.{in_use} ? {{ type = \"byo-vpc-gcp\", networkName = local.{name}, subnetName = local.{subnet}, region = local.{region} }} : {network} }}) : \"{{}}\"",
+                    in_use = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_IN_USE,
                     name = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_NAME,
                     subnet = crate::emitters::gcp::network::EXISTING_CLUSTER_SUBNET_NAME,
                     region = crate::emitters::gcp::network::EXISTING_CLUSTER_NETWORK_REGION,

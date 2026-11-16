@@ -1789,6 +1789,8 @@ enum Source {
     DatabaseOnly,
     /// A Redis instance next to the workload.
     Redis,
+    /// Postgres plus a Redis instance the deployer can decline (`redisEnabled`).
+    DatabaseWithGatedRedis,
     GatedDatabase,
 }
 
@@ -1809,11 +1811,28 @@ async fn render_prepared(source: Source, target: TerraformTarget) -> alien_terra
             "Whether to create the database.",
         )]);
     }
+    if matches!(source, Source::DatabaseWithGatedRedis) {
+        builder = builder.inputs(vec![gate_input(
+            "redisEnabled",
+            "Enable Redis",
+            "Whether to create the cache.",
+        )]);
+    }
     if !matches!(source, Source::DatabaseOnly) {
         builder = builder.add(app_workload(), ResourceLifecycle::Live);
     }
     builder = match source {
         Source::Workload => builder,
+        Source::DatabaseWithGatedRedis => builder
+            .add(
+                Postgres::new("db".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_enabled_when(
+                alien_core::Redis::new("cache".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "redisEnabled",
+            ),
         Source::Redis => builder.add(
             alien_core::Redis::new("cache".to_string()).build(),
             ResourceLifecycle::Frozen,
@@ -2525,6 +2544,47 @@ async fn a_gke_database_without_a_cluster_registers_the_network_it_creates() {
   assert {
     condition = local.deployment_settings.network.type == "create"
     error_message = "the registered settings describe the network that was created"
+  }"#,
+    )
+    .await;
+}
+
+/// Postgres plus a Redis instance the deployer can decline, in an existing GKE cluster: with
+/// Redis declined the database uses the cluster's network; with it accepted the module keeps its
+/// own network inputs (the instance's network cannot change). The registered settings follow.
+#[tokio::test]
+async fn a_declined_redis_leaves_the_database_on_the_clusters_network() {
+    let cluster = (
+        "projects/p/global/networks/cluster-net",
+        "projects/p/regions/europe-west1/subnetworks/cluster-subnet",
+    );
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::DatabaseWithGatedRedis,
+        cluster,
+        "input_redis_enabled = false",
+        r#"  assert {
+    condition = local.effective_network_mode == "use-existing" && length(google_compute_network.default_network) == 0
+    error_message = "with Redis declined the cluster's network is used and none is created"
+  }
+  assert {
+    condition = local.deployment_settings.network.type == "byo-vpc-gcp" && local.deployment_settings.network.networkName == "cluster-net"
+    error_message = "the settings name the cluster's network"
+  }"#,
+    )
+    .await;
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::DatabaseWithGatedRedis,
+        cluster,
+        "input_redis_enabled = true",
+        r#"  assert {
+    condition = local.effective_network_mode == "create-new" && length(google_compute_network.default_network) == 1
+    error_message = "with Redis accepted the module's own network inputs apply"
+  }
+  assert {
+    condition = local.deployment_settings.network.type == "create"
+    error_message = "the settings describe the network the module creates"
   }"#,
     )
     .await;

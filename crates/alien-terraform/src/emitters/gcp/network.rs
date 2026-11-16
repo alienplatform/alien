@@ -35,10 +35,13 @@ pub fn network_mode_expr(targets_kubernetes: bool) -> &'static str {
 
 /// Locals of a Kubernetes module that give the network the existing cluster is attached to, and
 /// the mode that follows the cluster mode.
-fn existing_cluster_network_locals(mut fragment: TfFragment, has_cluster: bool) -> TfFragment {
+fn existing_cluster_network_locals(
+    mut fragment: TfFragment,
+    cluster_network_condition: Option<String>,
+) -> TfFragment {
     // A stack with a database but no workload has no cluster to look up: the module's own
     // network inputs apply in every mode.
-    if !has_cluster {
+    let Some(in_use) = cluster_network_condition else {
         for (name, value) in [
             ("effective_network_mode", "var.network_mode"),
             (EXISTING_CLUSTER_NETWORK_NAME, "var.network_name"),
@@ -48,29 +51,30 @@ fn existing_cluster_network_locals(mut fragment: TfFragment, has_cluster: bool) 
                 "var.network_region == \"\" ? var.gcp_region : var.network_region",
             ),
             (EXISTING_CLUSTER_NETWORK_PROJECT, "var.gcp_project"),
+            (EXISTING_CLUSTER_NETWORK_IN_USE, "false"),
         ] {
             fragment.locals.insert(name.to_string(), expr::raw(value));
         }
         return fragment;
-    }
+    };
     let cluster = "data.google_container_cluster.kubernetes_existing[0]";
     let location = "(var.gke_cluster_location == \"\" ? var.gcp_region : var.gke_cluster_location)";
     for (name, value) in [
         (
             "effective_network_mode",
-            "var.kubernetes_cluster_mode == \"existing\" ? \"use-existing\" : var.network_mode"
-                .to_string(),
+            format!("local.{EXISTING_CLUSTER_NETWORK_IN_USE} ? \"use-existing\" : var.network_mode"),
         ),
+        (EXISTING_CLUSTER_NETWORK_IN_USE, in_use),
         (
             EXISTING_CLUSTER_NETWORK_NAME,
             format!(
-                "var.kubernetes_cluster_mode == \"existing\" ? basename({cluster}.network) : var.network_name"
+                "local.{EXISTING_CLUSTER_NETWORK_IN_USE} ? basename({cluster}.network) : var.network_name"
             ),
         ),
         (
             EXISTING_CLUSTER_SUBNET_NAME,
             format!(
-                "var.kubernetes_cluster_mode == \"existing\" ? basename({cluster}.subnetwork) : var.subnet_name"
+                "local.{EXISTING_CLUSTER_NETWORK_IN_USE} ? basename({cluster}.subnetwork) : var.subnet_name"
             ),
         ),
         (
@@ -78,14 +82,14 @@ fn existing_cluster_network_locals(mut fragment: TfFragment, has_cluster: bool) 
             // The subnet's own region when the cluster reports the subnet as a path, else the
             // region of the cluster's location.
             format!(
-                "var.kubernetes_cluster_mode == \"existing\" ? (length(split(\"/\", {cluster}.subnetwork)) >= 6 ? split(\"/\", {cluster}.subnetwork)[3] : join(\"-\", slice(split(\"-\", {location}), 0, 2))) : (var.network_region == \"\" ? var.gcp_region : var.network_region)"
+                "local.{EXISTING_CLUSTER_NETWORK_IN_USE} ? (length(split(\"/\", {cluster}.subnetwork)) >= 6 ? split(\"/\", {cluster}.subnetwork)[3] : join(\"-\", slice(split(\"-\", {location}), 0, 2))) : (var.network_region == \"\" ? var.gcp_region : var.network_region)"
             ),
         ),
         (
             EXISTING_CLUSTER_NETWORK_PROJECT,
             // A Shared VPC network belongs to a host project, which the path names.
             format!(
-                "var.kubernetes_cluster_mode == \"existing\" ? (length(split(\"/\", {cluster}.network)) >= 5 ? split(\"/\", {cluster}.network)[1] : var.gcp_project) : var.gcp_project"
+                "local.{EXISTING_CLUSTER_NETWORK_IN_USE} ? (length(split(\"/\", {cluster}.network)) >= 5 ? split(\"/\", {cluster}.network)[1] : var.gcp_project) : var.gcp_project"
             ),
         ),
     ] {
@@ -101,24 +105,41 @@ pub const EXISTING_CLUSTER_SUBNET_NAME: &str = "existing_subnet_name";
 pub const EXISTING_CLUSTER_NETWORK_REGION: &str = "existing_network_region";
 pub const EXISTING_CLUSTER_NETWORK_PROJECT: &str = "existing_network_project";
 
-/// Whether an existing GKE cluster's network serves this stack: the stack declares the cluster,
-/// and keeps no Memorystore instance.
+/// Local that is true while an existing GKE cluster's own network serves the stack.
+pub const EXISTING_CLUSTER_NETWORK_IN_USE: &str = "existing_cluster_network_in_use";
+
+/// The condition under which an existing GKE cluster's network serves this stack, or `None` when
+/// it never does: the stack declares no cluster, or keeps a Memorystore instance no input can
+/// decline.
 ///
 /// A Memorystore instance takes its consumer network at creation and replaces itself when it
-/// changes, which its deletion protection refuses. A stack with one keeps the module's network
-/// inputs in every cluster mode, as installed modules do, so regenerating never moves it.
-pub fn uses_cluster_network(stack: &alien_core::Stack) -> bool {
+/// changes, which its deletion protection refuses. While one exists the module keeps its own
+/// network inputs, as installed modules do, so regenerating never moves it. An instance the
+/// deployer can decline (`enabled_when`) only counts while its input is on.
+pub fn cluster_network_condition(stack: &alien_core::Stack) -> Option<String> {
     let mut has_cluster = false;
+    let mut condition = "var.kubernetes_cluster_mode == \"existing\"".to_string();
     for (_, entry) in stack.resources() {
         if entry.config.resource_type() == alien_core::Redis::RESOURCE_TYPE {
-            return false;
+            match entry.enabled_when.as_deref() {
+                None => return None,
+                Some(input) => condition.push_str(&format!(
+                    " && !var.{}",
+                    crate::generator::stack_input_variable_name(input)
+                )),
+            }
         }
         has_cluster |= entry
             .config
             .downcast_ref::<alien_core::KubernetesCluster>()
             .is_some();
     }
-    has_cluster
+    has_cluster.then_some(condition)
+}
+
+/// Whether an existing cluster's network can serve the stack at all.
+pub fn uses_cluster_network(stack: &alien_core::Stack) -> bool {
+    cluster_network_condition(stack).is_some()
 }
 
 /// Preconditions that fail the plan, before the lookup, when the cluster's network is one this
@@ -133,7 +154,7 @@ fn existing_cluster_preconditions(checks: &[(String, &str)]) -> hcl::structure::
                     attr(
                         "condition",
                         expr::raw(format!(
-                            "var.kubernetes_cluster_mode != \"existing\" || ({condition})"
+                            "!local.{EXISTING_CLUSTER_NETWORK_IN_USE} || ({condition})"
                         )),
                     ),
                     attr("error_message", Expression::String(message.to_string())),
@@ -205,7 +226,7 @@ impl TfEmitter for GcpNetworkEmitter {
             NetworkSettings::Create { cidr, .. } => {
                 let fragment = dynamic_topology(label, cidr.clone(), ctx.targets_kubernetes);
                 Ok(if ctx.targets_kubernetes {
-                    existing_cluster_network_locals(fragment, uses_cluster_network(ctx.stack))
+                    existing_cluster_network_locals(fragment, cluster_network_condition(ctx.stack))
                 } else {
                     fragment
                 })
