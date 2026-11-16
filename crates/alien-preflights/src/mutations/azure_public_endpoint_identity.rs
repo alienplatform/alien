@@ -7,7 +7,12 @@ use alien_core::{
 };
 use async_trait::async_trait;
 
-use crate::{error::Result, StackMutation};
+use alien_error::AlienError;
+
+use crate::{error::{ErrorData, Result}, StackMutation};
+
+const IDENTITY_DESCRIPTION: &str = "The identity the container's HTTPS public endpoint runs as. \
+     The cluster's machines are allowed to attach it.";
 
 const RESOURCE_GROUP_ID: &str = "default-resource-group";
 
@@ -56,8 +61,24 @@ impl StackMutation for AzurePublicEndpointIdentityMutation {
         for (container_id, cluster_id) in endpoints {
             let identity_id = public_endpoint_identity_id(&container_id);
             let identity_ref = ResourceRef::new(ServiceAccount::RESOURCE_TYPE, identity_id.clone());
-            // Preparing a stack again keeps the entry (and its display text) as it is.
-            if !stack.resources.contains_key(&identity_id) {
+            // Preparing a stack again keeps the entry (and its display text) as it is. A
+            // different resource under this id is refused: the cluster's machines are allowed
+            // to attach whatever identity lives here.
+            if let Some(existing) = stack.resources.get(&identity_id) {
+                let ours = existing.lifecycle == ResourceLifecycle::Frozen
+                    && existing.config.downcast_ref::<ServiceAccount>().is_some()
+                    && existing.description.as_deref() == Some(IDENTITY_DESCRIPTION);
+                if !ours {
+                    return Err(AlienError::new(ErrorData::StackMutationFailed {
+                        mutation_name: self.description().to_string(),
+                        message: format!(
+                            "the id '{identity_id}' is reserved for the identity of container \
+                             '{container_id}''s HTTPS public endpoint; rename the resource"
+                        ),
+                        resource_id: Some(identity_id.clone()),
+                    }));
+                }
+            } else {
                 let mut dependencies = Vec::new();
                 if stack.resources.contains_key(RESOURCE_GROUP_ID) {
                     dependencies.push(ResourceRef::new(
@@ -73,11 +94,7 @@ impl StackMutation for AzurePublicEndpointIdentityMutation {
                         lifecycle: ResourceLifecycle::Frozen,
                         dependencies,
                         display_name: Some(format!("Public endpoint identity ({container_id})")),
-                        description: Some(
-                            "The identity the container's HTTPS public endpoint runs as. \
-                             The cluster's machines are allowed to attach it."
-                                .to_string(),
-                        ),
+                        description: Some(IDENTITY_DESCRIPTION.to_string()),
                         remote_access: false,
                     },
                 );
@@ -195,6 +212,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(again, stack);
+    }
+
+    #[tokio::test]
+    async fn a_foreign_resource_under_the_identity_id_is_refused() {
+        let state = StackState::new(Platform::Azure);
+        let mut stack = stack(vec![container("api", Some(ExposeProtocol::Http))]);
+        stack.resources.insert(
+            "api-appgw-id".to_string(),
+            ResourceEntry {
+                enabled_when: None,
+                config: Resource::new(ServiceAccount::new("api-appgw-id".to_string()).build()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+            },
+        );
+        let error = AzurePublicEndpointIdentityMutation
+            .mutate(stack, &state, &config())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("api-appgw-id"), "{error}");
     }
 
     #[tokio::test]
