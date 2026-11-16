@@ -62,6 +62,9 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
     pub deployment_name: &'a str,
     pub manager_url: &'a str,
     pub credential: ManagementCredential<'a>,
+    /// 64 hex characters, or empty to let the Operator create the key when it first
+    /// starts. A key given here is passed to the Operator and never replaces one it has.
+    pub runtime_encryption_key: &'a str,
     pub stack: &'a Stack,
     pub stack_state: &'a alien_core::StackState,
     pub stack_settings: &'a StackSettings,
@@ -2298,6 +2301,10 @@ fn generate_operator_manifest_inner(
 
 /// Render one complete values file from registered deployment state.
 pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -> Result<String> {
+    if !options.runtime_encryption_key.is_empty() {
+        validate_runtime_encryption_key(options.runtime_encryption_key)?;
+    }
+
     let registry = HelmRegistry::built_in();
     let analysis = ChartAnalysis::from_stack(options.stack, &registry)?;
     let mut yaml = String::new();
@@ -2333,6 +2340,13 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
     yaml.push_str(&format!(
         "  healthChecks: {}\n\n",
         yaml_string(heartbeats_mode_value(options.stack_settings.heartbeats))
+    ));
+
+    yaml.push_str("runtime:\n");
+    yaml.push_str("  encryption:\n");
+    yaml.push_str(&format!(
+        "    key: {}\n\n",
+        yaml_string(options.runtime_encryption_key)
     ));
 
     append_stack_settings(&mut yaml, options.stack_settings)?;
@@ -4134,6 +4148,11 @@ runtime:
   podLabels: {}
   podAnnotations: {}
   automountServiceAccountToken: true
+  encryption:
+    # Optional: a stable 64-character hex key for the Operator's saved state. Empty lets
+    # the Operator create one on first start. The Operator never replaces a key it has;
+    # a different key here than the one in use stops the install.
+    key: ""
   replicas: 1
   resources:
     requests:
@@ -5033,6 +5052,13 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         },
         "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
         "automountServiceAccountToken": { "type": "boolean" },
+        "encryption": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" }
+          }
+        },
         "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
         "resources": { "type": "object" },
         "api": {
@@ -10554,6 +10580,7 @@ mod tests {
                 deployment_id: "dep_example",
                 deployment_name: "prod",
                 manager_url: "https://manager.example.test",
+                runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
                 credential,
                 stack: &sample_stack(),
                 stack_state: &stack_state,
@@ -10648,6 +10675,7 @@ mod tests {
             deployment_id: "dep_example",
             deployment_name: "prod",
             manager_url: "https://manager.example.test",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             credential: ManagementCredential::EnrollmentCode {
                 code: "ax_enroll_example",
                 audience: "https://manager.example.test",
@@ -10710,6 +10738,7 @@ mod tests {
             deployment_id: "dep_example",
             deployment_name: "prod",
             manager_url: "https://manager.example.test",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             credential: ManagementCredential::EnrollmentCode {
                 code: "ax_enroll_example",
                 audience: "https://manager.example.test",
@@ -10894,6 +10923,7 @@ mod tests {
             deployment_id: "dep_example",
             deployment_name: "prod",
             manager_url: "https://manager.example.test",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             credential: ManagementCredential::EnrollmentCode {
                 code: "ax_enroll_example",
                 audience: "https://manager.example.test",
@@ -10951,6 +10981,7 @@ mod tests {
             deployment_id: "dep_example",
             deployment_name: "prod",
             manager_url: "https://manager.example.test",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             credential: ManagementCredential::EnrollmentCode {
                 code: "ax_enroll_example",
                 audience: "https://manager.example.test",
@@ -14058,6 +14089,74 @@ logCollector:
     }
 
     #[test]
+    fn a_runtime_encryption_key_given_reaches_the_operator_and_renders_the_same_every_time() {
+        let chart = product_chart_for_stack(&database_stack(), true, None);
+        let values = format!("{MIGRATION_VALUES}runtime:\n  encryption:\n    key: {OLD_KEY}\n");
+        let render = || {
+            let rendered =
+                crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "app");
+            rendered.assert_ok("install with a given key");
+            rendered
+        };
+        let first = render();
+        assert_eq!(first.stdout, render().stdout, "two renders differ");
+        // It reaches the Operator in the Secret the Operator reads, and only there.
+        assert_eq!(
+            migration_data(&first),
+            Some(serde_json::json!({ "encryption-key": b64(OLD_KEY) }))
+        );
+        assert!(
+            !first.stdout.contains(&format!("{OLD_KEY}\n")),
+            "key in plain text"
+        );
+        // No key given: a new install renders no migration Secret; the Operator creates the key.
+        let none = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(MIGRATION_VALUES),
+            "app",
+        );
+        none.assert_ok("install without a key");
+        assert!(migration_data(&none).is_none());
+    }
+
+    #[test]
+    fn a_runtime_encryption_key_that_differs_from_the_installed_one_is_refused() {
+        let chart = product_chart_for_stack(&database_stack(), false, None);
+        let other = "f".repeat(64);
+        let values = format!("{MIGRATION_VALUES}runtime:\n  encryption:\n    key: {other}\n");
+        for installed in [
+            serde_json::json!({ "app": { "encryption-key": b64(OLD_KEY) } }),
+            serde_json::json!({ "app-operator": { "encryption-key": b64(OLD_KEY) } }),
+        ] {
+            let rendered = render_upgrade_with_installed_secrets(&chart, &values, installed);
+            assert!(
+                matches!(rendered.status, crate::test_utils::LinterStatus::Failed(_)),
+                "{}",
+                rendered.stdout
+            );
+            assert!(
+                rendered
+                    .stderr
+                    .contains("Changing the runtime encryption key"),
+                "{}",
+                rendered.stderr
+            );
+        }
+        // The installed key given again is accepted and carried unchanged.
+        let same = format!("{MIGRATION_VALUES}runtime:\n  encryption:\n    key: {OLD_KEY}\n");
+        let rendered = render_upgrade_with_installed_secrets(
+            &chart,
+            &same,
+            serde_json::json!({ "app": { "encryption-key": b64(OLD_KEY) } }),
+        );
+        rendered.assert_ok("the same key");
+        assert_eq!(
+            migration_data(&rendered),
+            Some(serde_json::json!({ "encryption-key": b64(OLD_KEY) }))
+        );
+    }
+
+    #[test]
     fn migration_keeps_the_key_the_operator_already_has_and_refuses_a_different_one() {
         let chart = product_chart_for_stack(&database_stack(), false, None);
         let carried = serde_json::json!({
@@ -14129,15 +14228,14 @@ logCollector:
         );
     }
 
-    #[test]
-    fn registered_setup_values_carry_no_encryption_key() {
+    fn setup_values_with_key(key: &str) -> Result<String> {
         let stack_state =
             alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
-
-        let values = render_manager_fetch_values(ManagerFetchHelmValuesOptions {
+        render_manager_fetch_values(ManagerFetchHelmValuesOptions {
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
+            runtime_encryption_key: key,
             credential: ManagementCredential::Token("token"),
             stack: &sample_stack(),
             stack_state: &stack_state,
@@ -14147,10 +14245,50 @@ logCollector:
             gcp_project_id: None,
             azure_location: None,
         })
-        .expect("registered setup values should render");
+    }
 
-        // The Operator creates its key in its own Secret; a values file carries none.
-        assert!(!values.contains("encryption"), "{values}");
+    #[test]
+    fn registered_setup_values_carry_the_runtime_encryption_key_given() {
+        let values = setup_values_with_key(TEST_RUNTIME_ENCRYPTION_KEY).unwrap();
+        assert_eq!(
+            yaml_path(
+                &serde_yaml::from_str::<YamlValue>(&values).unwrap(),
+                &["runtime", "encryption", "key"]
+            )
+            .and_then(YamlValue::as_str),
+            Some(TEST_RUNTIME_ENCRYPTION_KEY)
+        );
+        // The same inputs give the same values file.
+        assert_eq!(
+            values,
+            setup_values_with_key(TEST_RUNTIME_ENCRYPTION_KEY).unwrap()
+        );
+    }
+
+    #[test]
+    fn registered_setup_values_leave_the_key_empty_for_the_operator_to_create() {
+        let values = setup_values_with_key("").unwrap();
+        assert_eq!(
+            yaml_path(
+                &serde_yaml::from_str::<YamlValue>(&values).unwrap(),
+                &["runtime", "encryption", "key"]
+            )
+            .and_then(YamlValue::as_str),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn registered_setup_values_reject_invalid_runtime_encryption_key() {
+        let error =
+            setup_values_with_key("replace-me-with-a-stable-64-character-encryption-secret")
+                .unwrap_err();
+        assert!(error.to_string().contains("64 hex characters"), "{error}");
+    }
+
+    #[test]
+    fn registered_setup_values_scope_the_collector_to_the_prefix() {
+        let values = setup_values_with_key("").unwrap();
 
         let values_yaml: YamlValue =
             serde_yaml::from_str(&values).expect("registered setup values should parse");
@@ -14191,6 +14329,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             credential: ManagementCredential::Token("token"),
             stack: &stack,
             stack_state: &stack_state,
@@ -14241,6 +14380,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             credential: ManagementCredential::Token("token"),
             stack: &sample_stack(),
             stack_state: &stack_state,
@@ -14309,6 +14449,7 @@ logCollector:
             deployment_id: "dep_123",
             deployment_name: "deployment",
             manager_url: "https://management.example.com",
+            runtime_encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             credential: ManagementCredential::Token("token"),
             stack: &sample_stack(),
             stack_state: &stack_state,

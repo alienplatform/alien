@@ -71,6 +71,11 @@ runtime:
   podLabels: {}
   podAnnotations: {}
   automountServiceAccountToken: true
+  encryption:
+    # Optional: a stable 64-character hex key for the Operator's saved state. Empty lets
+    # the Operator create one on first start. The Operator never replaces a key it has;
+    # a different key here than the one in use stops the install.
+    key: ""
   replicas: 1
   resources:
     requests:
@@ -428,6 +433,13 @@ postgres: {}
         },
         "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
         "automountServiceAccountToken": { "type": "boolean" },
+        "encryption": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" }
+          }
+        },
         "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
         "resources": { "type": "object" },
         "api": {
@@ -1591,14 +1603,26 @@ unchanged into a Secret the Operator reads at start. The Operator copies them in
 it owns and never overwrites a value it already has. Nothing here is generated: a value that is
 not found is left out, and the Operator refuses to start on existing state without its key.
 
+It also carries the runtime encryption key when `runtime.encryption.key` is set. That key is
+a value the user supplies, so it renders the same every time; on a new install it is how the
+Operator gets a key chosen outside the cluster.
+
 This runs for every install, including one with the Remote Operator: the earlier chart
 generated these values for the runtime Operator and the databases whatever else the release
 carried.
 */ -}}
-{{- if .Release.IsUpgrade -}}
+{{- $requested := dig "encryption" "key" "" .Values.runtime -}}
+{{- if and $requested (not (regexMatch "^[a-fA-F0-9]{64}$" $requested)) -}}
+  {{- fail "runtime.encryption.key must be exactly 64 hex characters, or empty to let the Operator create it on first start." -}}
+{{- end -}}
+{{- if or .Release.IsUpgrade $requested -}}
 {{- $found := dict -}}
-{{- $own := lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
-{{- $owned := lookup "v1" "Secret" .Release.Namespace (include "deployment.operatorSecretName" .) -}}
+{{- $own := dict -}}
+{{- $owned := dict -}}
+{{- if .Release.IsUpgrade -}}
+  {{- $own = lookup "v1" "Secret" .Release.Namespace (include "deployment.fullname" .) -}}
+  {{- $owned = lookup "v1" "Secret" .Release.Namespace (include "deployment.operatorSecretName" .) -}}
+{{- end -}}
 {{- /* What the Operator already keeps in its own Secret is not carried again. */ -}}
 {{- $ownedData := default dict (and $owned $owned.data) -}}
 {{- $ownData := default dict (and $own $own.data) -}}
@@ -1614,12 +1638,24 @@ carried.
     {{- $_ := set $found "encryption-key" (index $ownData "encryption-key") -}}
   {{- end -}}
 {{- end -}}
+{{- if $requested -}}
+  {{- /* A key the user supplies must be the one the install already runs on. */ -}}
+  {{- range $installedData := list $ownData $ownedData -}}
+    {{- if and (hasKey $installedData "encryption-key") (ne (index $installedData "encryption-key" | b64dec) $requested) -}}
+      {{- fail "Changing the runtime encryption key would make the installed state unreadable. Keep the installed key." -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $_ := set $found "encryption-key" ($requested | b64enc) -}}
+{{- end -}}
 {{- if and (include "deployment.nodeCollector" .) (hasKey $ownData "collector-token") (not (hasKey $ownedData "collector-token")) -}}
   {{- $_ := set $found "collector-token" (index $ownData "collector-token") -}}
 {{- end -}}
 {{- range $database := include "deployment.ownedPostgres" . | fromJsonArray -}}
   {{- $key := printf "postgres-%s-password" $database.id -}}
-  {{- $installedDatabase := lookup "v1" "Secret" $.Release.Namespace $database.name -}}
+  {{- $installedDatabase := dict -}}
+  {{- if $.Release.IsUpgrade -}}
+    {{- $installedDatabase = lookup "v1" "Secret" $.Release.Namespace $database.name -}}
+  {{- end -}}
   {{- if and $installedDatabase (hasKey (default dict $installedDatabase.data) "password") (not (hasKey $ownedData $key)) -}}
     {{- $_ := set $found $key (index $installedDatabase.data "password") -}}
   {{- end -}}

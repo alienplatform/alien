@@ -2514,6 +2514,7 @@ async fn write_manager_fetch_values(
             deployment_name: &deployment.name,
             manager_url: &prepared.manager.public_url,
             credential: alien_helm::ManagementCredential::Token(&deployment.token),
+            runtime_encryption_key: &crate::operator::generate_encryption_key(),
             stack: &stack,
             stack_state,
             stack_settings,

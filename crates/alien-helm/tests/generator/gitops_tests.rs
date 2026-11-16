@@ -179,7 +179,7 @@ fn the_removed_install_inputs_are_not_in_the_shipped_values() {
     for removed in [
         "gitops:",
         "existingSecret:\n    name: \"\"\n    tokenKey",
-        "encryption:",
+        "existingSecret:\n      name: \"\"\n      key: encryption-key",
     ] {
         assert!(!values.contains(removed), "values.yaml still has {removed}");
     }

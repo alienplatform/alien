@@ -134,6 +134,33 @@ async fn attempt(
         .as_ref()
         .and_then(|secret| secret.data.clone())
         .unwrap_or_default();
+    let carried = match &owned.migration {
+        Some(name) => read(secrets, namespace, name)
+            .await?
+            .and_then(|secret| secret.data)
+            .unwrap_or_default(),
+        None => BTreeMap::new(),
+    };
+    // An encryption key handed to the Operator must be the one it already uses: a different
+    // key would not open its saved state, and the stored key is never replaced.
+    for (key, kind) in &owned.keys {
+        if *kind != ValueKind::Hex32 {
+            continue;
+        }
+        if let (Some(stored), Some(given)) = (
+            data.get(key).filter(|value| !value.0.is_empty()),
+            carried.get(key).filter(|value| !value.0.is_empty()),
+        ) {
+            if stored.0 != given.0 {
+                return Err(failed(format!(
+                    "'{key}' in Secret '{}' differs from the one given in Secret '{}'. The Operator \
+                     keeps the key it has; give the original key, or remove the one that was added.",
+                    owned.name,
+                    owned.migration.as_deref().unwrap_or_default(),
+                )));
+            }
+        }
+    }
     let missing: Vec<&(String, ValueKind)> = owned
         .keys
         .iter()
@@ -147,13 +174,6 @@ async fn attempt(
         }));
     }
 
-    let carried = match &owned.migration {
-        Some(name) => read(secrets, namespace, name)
-            .await?
-            .and_then(|secret| secret.data)
-            .unwrap_or_default(),
-        None => BTreeMap::new(),
-    };
     let mut migrated = Vec::new();
     let mut generated = Vec::new();
     for (key, kind) in missing {
@@ -525,7 +545,7 @@ mod tests {
         cluster.put(
             "app-migration",
             &[
-                ("encryption-key", &"f".repeat(64)),
+                ("encryption-key", OLD_KEY),
                 ("collector-token", "other-token"),
                 ("postgres-main-password", "migrated-password"),
             ],
@@ -610,6 +630,45 @@ mod tests {
         assert_eq!(ensured.migrated, ["encryption-key", "collector-token"]);
         // Only what the earlier chart never had is generated.
         assert_eq!(ensured.generated, ["postgres-main-password"]);
+        assert_eq!(
+            cluster.read("app-operator", "encryption-key").as_deref(),
+            Some(OLD_KEY)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_key_given_for_a_fresh_install_is_adopted_not_generated() {
+        let cluster = Cluster::default();
+        cluster.put("app-migration", &[("encryption-key", OLD_KEY)]);
+        let ensured = ensure(&cluster, NS, &owned(true), false).await.unwrap();
+        assert_eq!(ensured.values["encryption-key"], OLD_KEY);
+        assert!(!ensured.generated.contains(&"encryption-key".to_string()));
+        assert_eq!(
+            cluster.read("app-operator", "encryption-key").as_deref(),
+            Some(OLD_KEY)
+        );
+        // Starting again changes nothing.
+        let again = ensure(&cluster, NS, &owned(true), true).await.unwrap();
+        assert_eq!(again.values["encryption-key"], OLD_KEY);
+    }
+
+    #[tokio::test]
+    async fn no_key_given_means_the_operator_creates_one() {
+        let cluster = Cluster::default();
+        let ensured = ensure(&cluster, NS, &owned(true), false).await.unwrap();
+        assert_eq!(ensured.generated[0], "encryption-key");
+        assert_eq!(ensured.values["encryption-key"].len(), 64);
+    }
+
+    #[tokio::test]
+    async fn a_given_key_that_differs_from_the_one_in_use_is_refused() {
+        let cluster = Cluster::default();
+        cluster.put("app-operator", &[("encryption-key", OLD_KEY)]);
+        cluster.put("app-migration", &[("encryption-key", &"f".repeat(64))]);
+        let error = ensure(&cluster, NS, &owned(true), true).await.unwrap_err();
+        assert!(error.to_string().contains("differs"), "{error}");
+        // Nothing was written, and the key in use is unchanged.
+        assert!(cluster.writes.lock().unwrap().is_empty());
         assert_eq!(
             cluster.read("app-operator", "encryption-key").as_deref(),
             Some(OLD_KEY)
