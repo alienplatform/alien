@@ -27,13 +27,16 @@ pub const ALLOWED_GROUPS: [&str; 2] = ["systemd-journal", "docker"];
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostPermissions {
-    /// Groups the service user must belong to: `systemd-journal`, `docker`.
+    /// Groups the service user must belong to: `systemd-journal`, `docker`. Membership of
+    /// the `docker` group is equivalent to root on that host, whatever the operation's risk
+    /// tier: validation does not refuse it for a read-only operation.
     #[serde(default)]
     pub groups: Vec<String>,
     /// Exact `sudo` command templates, e.g. `/usr/bin/systemctl restart {unit}.service`.
     #[serde(default)]
     pub sudo_commands: Vec<String>,
-    /// The operation uses the Docker socket.
+    /// The operation uses the Docker socket. Access to the socket is equivalent to root on
+    /// that host, whatever the operation's risk tier.
     #[serde(default)]
     pub docker_socket: bool,
 }
