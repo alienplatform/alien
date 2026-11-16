@@ -695,6 +695,38 @@ fn the_chart_works_as_a_dependency_under_an_alias_and_stays_unbranded_without_br
     assert_eq!(kind(&documents, "ConfigMap").len(), 1);
 }
 
+/// A parent chart switches the dependency with `condition: operator.enabled`; Helm passes that
+/// key down to the subchart's values, which the values schema must accept.
+#[test]
+fn a_parent_chart_can_switch_the_dependency_with_a_condition() {
+    let parent = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(parent.path().join("charts")).unwrap();
+    write_chart(&parent.path().join("charts/operator"));
+    std::fs::write(
+        parent.path().join("Chart.yaml"),
+        "apiVersion: v2\nname: suite\nversion: 1.0.0\ndependencies:\n  - name: operator\n    version: 1.2.3\n    condition: operator.enabled\n",
+    )
+    .unwrap();
+    std::fs::write(
+        parent.path().join("values.yaml"),
+        format!("operator:\n  enabled: true\n  token: {TOKEN}\n"),
+    )
+    .unwrap();
+    let output = Command::new("helm")
+        .args(["template", "suite"])
+        .arg(parent.path())
+        .args(["--namespace", "shop"])
+        .output()
+        .expect("helm must be installed to run the chart tests");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rendered = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(kind(&documents(&rendered), "Deployment").len(), 1);
+}
+
 /// A parent chart that names its own objects after the release, as many do.
 /// Installed as a subchart, the Operator's objects must not take those names.
 #[test]

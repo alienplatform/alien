@@ -344,6 +344,8 @@ tolerations: []
 imagePullSecrets: []
 # Extra environment variables for the Operator, for example proxy settings:
 # [{{name: HTTPS_PROXY, value: "http://proxy:3128"}}].
+# Plugin settings and these variables are rendered as plain environment values in the Deployment,
+# visible to anyone who can read it: never put a secret in them.
 extraEnv: []
 "#,
         repository = yaml_string(options.image_repository),
@@ -450,7 +452,8 @@ fn values_schema_json() -> serde_json::Result<String> {
                 }
             },
             // Helm passes `global` to every subchart, so the chart can be one.
-            "global": {"type": "object"}
+            "global": {"type": "object"},
+            "enabled": {"type": "boolean"}
         }
     });
     serde_json::to_string_pretty(&schema).map(|mut text| {
