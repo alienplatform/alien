@@ -79,11 +79,17 @@ const JOB_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// round trips to observe that.
 const JOB_POLL_GRACE: Duration = Duration::from_secs(15);
 
-/// How long a caller that created a sandbox for a key waits before it looks once more for an older
-/// one. Longer than a create takes to appear in the list (measured 2 to 9 seconds, from the request
-/// to the sandbox being listed), so a racing older create has been listed by then.
+/// How long a caller that created a sandbox for a key, and found itself the oldest, waits before it
+/// looks once more for an older one.
+///
+/// Sized from a measurement: 20 creates against a real engine took 2.9 to 6.7 seconds (median 3.5,
+/// p95 5.7) from the request to the sandbox first showing in the display-name list, and one cold
+/// create took 8.8. An older sandbox that is still missing from the list when this caller has
+/// finished its own create therefore shows within about nine seconds of its request; this is that
+/// plus three. It costs a first create of a keyed sandbox that long; a call that finds the sandbox,
+/// or yields to an older one, does not wait.
 #[cfg(not(test))]
-const CONVERGENCE_RECHECK_DELAY: Duration = Duration::from_secs(8);
+const CONVERGENCE_RECHECK_DELAY: Duration = Duration::from_secs(12);
 #[cfg(test)]
 const CONVERGENCE_RECHECK_DELAY: Duration = Duration::from_millis(5);
 
