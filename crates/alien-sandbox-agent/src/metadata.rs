@@ -12,14 +12,24 @@ use std::{
     fmt,
     io::{Read, Write},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream},
-    time::Duration,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
+    time::{Duration, Instant},
 };
 
 /// The metadata service address shared by AWS, GCP and Azure.
 const METADATA_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)), 80);
-/// Per request. Nothing answering costs one connect timeout, so the whole check stays near 1 s.
+/// Per request. Nothing answering costs one connect timeout.
 const TIMEOUT: Duration = Duration::from_millis(500);
+/// The time the whole check may take. The parent gives the command that runs it 5 s, and that
+/// command has two more probes of its own to run, so this leaves them the rest with margin. A
+/// check that runs out of time fails; it never passes.
+const BUDGET: Duration = Duration::from_millis(2500);
+/// Requests in flight at once. The probes do not depend on each other.
+const PARALLEL_PROBES: usize = 8;
 /// The top-level listing, and the only entries allowed in it. Auto Mode's metadata service serves
 /// just these two to a pod; every identifying entry is a 404.
 const AWS_LISTING: &str = "/latest/meta-data/";
@@ -134,27 +144,30 @@ const AZURE_FIX: &str = "remove node-assigned identities the sandbox must not us
 
 /// Ok when no request obtained credentials or identity data and every reply was a refusal.
 ///
-/// Timing: nothing answering costs one connect timeout (about 0.5 s). A service that accepts and
-/// never replies is a read timeout, which fails the check (it cannot show nothing comes back).
+/// Timing: the probes run in parallel and the whole check has a fixed time budget. Nothing
+/// answering costs one connect timeout (about 0.5 s). A service that accepts and never replies is
+/// a read timeout, and a check that runs out of its budget stops: both fail the check (it cannot
+/// show nothing comes back).
 pub fn credentials_obtainable() -> Result<(), Exposure> {
-    check(METADATA_ADDRESS)?;
+    let deadline = Instant::now() + BUDGET;
     let tokens = pod_identity_tokens();
     let results: Vec<Result<(), Exposure>> = std::thread::scope(|scope| {
         let tokens = &tokens;
-        let handles: Vec<_> = OTHER_ENDPOINTS
+        let main = scope.spawn(move || check_by(METADATA_ADDRESS, deadline));
+        let others: Vec<_> = OTHER_ENDPOINTS
             .iter()
             .map(|endpoint| {
                 scope.spawn(move || {
                     if endpoint.address == POD_IDENTITY_ADDRESS {
-                        check_pod_identity(endpoint, tokens)
+                        check_pod_identity(endpoint, tokens, deadline)
                     } else {
-                        check_endpoint(endpoint)
+                        check_endpoint_by(endpoint, deadline)
                     }
                 })
             })
             .collect();
-        handles
-            .into_iter()
+        std::iter::once(main)
+            .chain(others)
             .map(|handle| handle.join().expect("endpoint probe panicked"))
             .collect()
     });
@@ -278,7 +291,11 @@ fn read_tokens(
         .collect()
 }
 
-fn check_pod_identity(endpoint: &Endpoint, tokens: &[String]) -> Result<(), Exposure> {
+fn check_pod_identity(
+    endpoint: &Endpoint,
+    tokens: &[String],
+    deadline: Instant,
+) -> Result<(), Exposure> {
     if tokens.is_empty() {
         // No token to present: a 400 means the agent wants one, and none is available.
         let reply = exchange(
@@ -286,6 +303,7 @@ fn check_pod_identity(endpoint: &Endpoint, tokens: &[String]) -> Result<(), Expo
             endpoint.method,
             endpoint.path,
             endpoint.headers,
+            deadline,
         );
         return match reply {
             Reply::Status(400, ..) => Ok(()),
@@ -298,29 +316,120 @@ fn check_pod_identity(endpoint: &Endpoint, tokens: &[String]) -> Result<(), Expo
             endpoint.method,
             endpoint.path,
             &[("Authorization", token.as_str())],
+            deadline,
         );
         outcome(endpoint.cloud, endpoint.path, endpoint.fix, judge(&reply))?;
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn check_endpoint(endpoint: &Endpoint) -> Result<(), Exposure> {
+    check_endpoint_by(endpoint, Instant::now() + BUDGET)
+}
+
+fn check_endpoint_by(endpoint: &Endpoint, deadline: Instant) -> Result<(), Exposure> {
     let reply = exchange(
         endpoint.address,
         endpoint.method,
         endpoint.path,
         endpoint.headers,
+        deadline,
     );
     outcome(endpoint.cloud, endpoint.path, endpoint.fix, judge(&reply))
 }
 
+#[cfg(test)]
 fn check(address: SocketAddr) -> Result<(), Exposure> {
+    check_by(address, Instant::now() + BUDGET)
+}
+
+/// One independent request and its judgement.
+type Probe<'a> = Box<dyn Fn() -> Result<(), Exposure> + Send + Sync + 'a>;
+
+/// Runs the probes with a bounded number in flight. Every probe runs to its own end (a reply, or
+/// the deadline inside it), and the first failure in list order is the result.
+fn run_probes(probes: Vec<Probe<'_>>) -> Result<(), Exposure> {
+    let next = AtomicUsize::new(0);
+    let results: Vec<Mutex<Option<Result<(), Exposure>>>> =
+        probes.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..PARALLEL_PROBES.min(probes.len()) {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(probe) = probes.get(index) else {
+                    break;
+                };
+                let result = probe();
+                *results[index].lock().expect("probe result lock") = Some(result);
+            });
+        }
+    });
+    results.into_iter().try_for_each(|result| {
+        result
+            .into_inner()
+            .expect("probe result lock")
+            .expect("every probe ran")
+    })
+}
+
+fn aws_probe<'a>(
+    address: SocketAddr,
+    deadline: Instant,
+    path: &'static str,
+    token: Option<&'a str>,
+    cloud: &'static str,
+) -> Probe<'a> {
+    Box::new(move || {
+        let headers: Vec<(&str, &str)> = token
+            .map(|token| vec![("X-aws-ec2-metadata-token", token)])
+            .unwrap_or_default();
+        outcome(
+            cloud,
+            path,
+            AWS_FIX,
+            judge_aws(&exchange(address, "GET", path, &headers, deadline)),
+        )
+    })
+}
+
+/// The listing is read as a list: only the entries a node with no instance data serves
+/// (`placement/`, `services/`) are allowed, so an entry added later (`tags/`, `hostname`, ...)
+/// fails the check without a path being added here first.
+fn listing_probe<'a>(
+    address: SocketAddr,
+    deadline: Instant,
+    token: Option<&'a str>,
+    cloud: &'static str,
+) -> Probe<'a> {
+    Box::new(move || {
+        let headers: Vec<(&str, &str)> = token
+            .map(|token| vec![("X-aws-ec2-metadata-token", token)])
+            .unwrap_or_default();
+        match exchange(address, "GET", AWS_LISTING, &headers, deadline) {
+            Reply::Status(code, body, _)
+                if (200..300).contains(&code)
+                    && body
+                        .lines()
+                        .map(str::trim)
+                        .all(|entry| entry.is_empty() || AWS_LISTING_ALLOWED.contains(&entry))
+                    && !body.trim().is_empty() =>
+            {
+                Ok(())
+            }
+            other => outcome(cloud, AWS_LISTING, AWS_FIX, judge_aws(&other)),
+        }
+    })
+}
+
+fn check_by(address: SocketAddr, deadline: Instant) -> Result<(), Exposure> {
     // The token request first: nothing listening means nothing to ask the rest of this address.
     let token_reply = exchange(
         address,
         "PUT",
         "/latest/api/token",
         &[("X-aws-ec2-metadata-token-ttl-seconds", "60")],
+        deadline,
     );
     if token_reply == Reply::Unreachable {
         return Ok(());
@@ -335,97 +444,78 @@ fn check(address: SocketAddr) -> Result<(), Exposure> {
             None
         }
     };
-    let aws = |path: &'static str, token: Option<&str>, cloud: &'static str| {
-        let headers: Vec<(&str, &str)> = token
-            .map(|token| vec![("X-aws-ec2-metadata-token", token)])
-            .unwrap_or_default();
-        outcome(
-            cloud,
-            path,
-            AWS_FIX,
-            judge_aws(&exchange(address, "GET", path, &headers)),
-        )
-    };
-    // The listing is read as a list: only the entries a node with no instance data serves
-    // (`placement/`, `services/`) are allowed, so an entry added later (`tags/`, `hostname`, ...)
-    // fails the check without a path being added here first.
-    let listing = |token: Option<&str>, cloud: &'static str| {
-        let headers: Vec<(&str, &str)> = token
-            .map(|token| vec![("X-aws-ec2-metadata-token", token)])
-            .unwrap_or_default();
-        match exchange(address, "GET", AWS_LISTING, &headers) {
-            Reply::Status(code, body, _)
-                if (200..300).contains(&code)
-                    && body
-                        .lines()
-                        .map(str::trim)
-                        .all(|entry| entry.is_empty() || AWS_LISTING_ALLOWED.contains(&entry))
-                    && !body.trim().is_empty() =>
-            {
-                Ok(())
-            }
-            other => outcome(cloud, AWS_LISTING, AWS_FIX, judge_aws(&other)),
-        }
-    };
     let aws_paths = || {
         [AWS_CREDENTIALS, AWS_INSTANCE_ID]
             .into_iter()
             .chain(AWS_OTHER_PATHS)
     };
+    let mut probes: Vec<Probe<'_>> = Vec::new();
     if let Some(token) = token.as_deref() {
-        listing(Some(token), "AWS")?;
+        probes.push(listing_probe(address, deadline, Some(token), "AWS"));
         for path in aws_paths() {
-            aws(path, Some(token), "AWS")?;
+            probes.push(aws_probe(address, deadline, path, Some(token), "AWS"));
         }
     }
-    listing(None, "AWS (IMDSv1, no session token)")?;
+    let no_token = "AWS (IMDSv1, no session token)";
+    probes.push(listing_probe(address, deadline, None, no_token));
     for path in aws_paths() {
-        aws(path, None, "AWS (IMDSv1, no session token)")?;
+        probes.push(aws_probe(address, deadline, path, None, no_token));
     }
     // GKE Workload Identity serves the instance id to every pod (it is not a credential), so only
     // the service-account token is asked for.
-    outcome(
-        "GCP",
-        GCP_TOKEN,
-        GCP_FIX,
-        judge(&exchange(
-            address,
-            "GET",
+    probes.push(Box::new(move || {
+        outcome(
+            "GCP",
             GCP_TOKEN,
-            &[("Metadata-Flavor", "Google")],
-        )),
-    )?;
-    outcome(
-        "Azure",
-        "/metadata/instance",
-        AZURE_FIX,
-        judge(&exchange(
-            address,
-            "GET",
-            AZURE_INSTANCE,
-            &[("Metadata", "true")],
-        )),
-    )?;
-    let azure = "/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/";
-    let azure_reply = exchange(address, "GET", azure, &[("Metadata", "true")]);
-    let verdict = match &azure_reply {
-        // "Identity not found": the node has no identity to hand out.
-        Reply::Status(400, body, _) if body.to_ascii_lowercase().contains("identity not found") => {
-            Verdict::Refused
-        }
-        // Any other 400 that talks about identities means the node has several user-assigned
-        // identities and wants a `client_id`: a command that knows one can still get a token.
-        Reply::Status(400, body, _) if body.to_ascii_lowercase().contains("identit") => {
-            Verdict::Data
-        }
-        other => judge(other),
-    };
-    outcome(
-        "Azure",
-        "/metadata/identity/oauth2/token",
-        AZURE_FIX,
-        verdict,
-    )
+            GCP_FIX,
+            judge(&exchange(
+                address,
+                "GET",
+                GCP_TOKEN,
+                &[("Metadata-Flavor", "Google")],
+                deadline,
+            )),
+        )
+    }));
+    probes.push(Box::new(move || {
+        outcome(
+            "Azure",
+            "/metadata/instance",
+            AZURE_FIX,
+            judge(&exchange(
+                address,
+                "GET",
+                AZURE_INSTANCE,
+                &[("Metadata", "true")],
+                deadline,
+            )),
+        )
+    }));
+    probes.push(Box::new(move || {
+        let azure = "/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://management.azure.com/";
+        let azure_reply = exchange(address, "GET", azure, &[("Metadata", "true")], deadline);
+        let verdict = match &azure_reply {
+            // "Identity not found": the node has no identity to hand out.
+            Reply::Status(400, body, _)
+                if body.to_ascii_lowercase().contains("identity not found") =>
+            {
+                Verdict::Refused
+            }
+            // Any other 400 that talks about identities means the node has several user-assigned
+            // identities and wants a `client_id`: a command that knows one can still get a token.
+            Reply::Status(400, body, _) if body.to_ascii_lowercase().contains("identit") => {
+                Verdict::Data
+            }
+            other => judge(other),
+        };
+        outcome(
+            "Azure",
+            "/metadata/identity/oauth2/token",
+            AZURE_FIX,
+            verdict,
+        )
+    }));
+    run_probes(probes)
 }
 
 /// Nothing could be reached: the connection was refused, timed out, or had no route. Anything
@@ -440,8 +530,18 @@ fn is_unreachable(error: &std::io::Error) -> bool {
 }
 
 /// One HTTP/1.1 exchange (`Connection: close`; Azure's service requires 1.1).
-fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &str)]) -> Reply {
-    let mut stream = match TcpStream::connect_timeout(&address, TIMEOUT) {
+fn exchange(
+    address: SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    deadline: Instant,
+) -> Reply {
+    let out_of_time = || Reply::Broken("the check ran out of its time budget".to_string());
+    let Some(connect_timeout) = time_left(deadline) else {
+        return out_of_time();
+    };
+    let mut stream = match TcpStream::connect_timeout(&address, connect_timeout) {
         Ok(stream) => stream,
         Err(error) if is_unreachable(&error) => return Reply::Unreachable,
         // Out of file descriptors, an unsupported address family, a permission error: the check
@@ -451,9 +551,10 @@ fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &st
         }
     };
     let broken = |why: &str| Reply::Broken(why.to_string());
-    if stream.set_read_timeout(Some(TIMEOUT)).is_err()
-        || stream.set_write_timeout(Some(TIMEOUT)).is_err()
-    {
+    let Some(write_timeout) = time_left(deadline) else {
+        return out_of_time();
+    };
+    if stream.set_write_timeout(Some(write_timeout)).is_err() {
         return broken("a socket timeout could not be set");
     }
     let host = match address.ip() {
@@ -469,7 +570,7 @@ fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &st
         return broken("the request could not be sent");
     }
     let mut raw = Vec::new();
-    let read = (&stream).take(MAX_REPLY as u64).read_to_end(&mut raw);
+    let read = read_reply(&mut stream, &mut raw, deadline);
     let Some(split) = raw.windows(4).position(|window| window == b"\r\n\r\n") else {
         return match read {
             Err(error)
@@ -478,7 +579,11 @@ fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &st
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                broken("no reply before the read timeout")
+                if Instant::now() >= deadline {
+                    out_of_time()
+                } else {
+                    broken("no reply before the read timeout")
+                }
             }
             _ => broken("an incomplete or unparseable reply"),
         };
@@ -519,6 +624,33 @@ fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &st
         _ => body_bytes.to_vec(),
     };
     Reply::Status(code, String::from_utf8_lossy(&body).to_string(), head)
+}
+
+/// What is left of a request's time: at most `TIMEOUT`, and never past the check's deadline.
+fn time_left(deadline: Instant) -> Option<Duration> {
+    let left = deadline.checked_duration_since(Instant::now())?;
+    (!left.is_zero()).then_some(left.min(TIMEOUT))
+}
+
+/// Reads up to `MAX_REPLY` bytes to the end of the stream. Each read waits at most `TIMEOUT`,
+/// and the whole reply no longer than the check's deadline, so a service that trickles bytes
+/// cannot hold the check past its budget.
+fn read_reply(stream: &mut TcpStream, raw: &mut Vec<u8>, deadline: Instant) -> std::io::Result<()> {
+    let mut chunk = [0u8; 4096];
+    while raw.len() < MAX_REPLY {
+        let Some(timeout) = time_left(deadline) else {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        };
+        stream.set_read_timeout(Some(timeout))?;
+        let want = chunk.len().min(MAX_REPLY - raw.len());
+        match stream.read(&mut chunk[..want]) {
+            Ok(0) => return Ok(()),
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 /// The most of a reply that is read; a reply that reaches it fails the check.
@@ -623,6 +755,10 @@ mod tests {
             }
         });
         address
+    }
+
+    fn check_pod_identity_now(endpoint: &Endpoint, tokens: &[String]) -> Result<(), Exposure> {
+        check_pod_identity(endpoint, tokens, Instant::now() + BUDGET)
     }
 
     const TOKEN: (&str, &str, bool, u16, &str) = ("PUT", "/latest/api/token", false, 200, "tok");
@@ -1015,7 +1151,10 @@ mod tests {
             400,
             "missing token",
         )]);
-        assert_eq!(check_pod_identity(&pod_identity_at(address), &[]), Ok(()));
+        assert_eq!(
+            check_pod_identity_now(&pod_identity_at(address), &[]),
+            Ok(())
+        );
     }
 
     #[test]
@@ -1027,8 +1166,8 @@ mod tests {
             200,
             "{\"AccessKeyId\":\"x\"}",
         )]);
-        let found =
-            check_pod_identity(&pod_identity_at(address), &["a-token".to_string()]).unwrap_err();
+        let found = check_pod_identity_now(&pod_identity_at(address), &["a-token".to_string()])
+            .unwrap_err();
         assert_eq!(found.unexpected, None);
     }
 
@@ -1036,7 +1175,7 @@ mod tests {
     fn a_refusal_from_pod_identity_with_a_readable_token_passes() {
         let address = serve(vec![("GET", "/v1/credentials", false, 403, "no")]);
         assert_eq!(
-            check_pod_identity(&pod_identity_at(address), &["a-token".to_string()]),
+            check_pod_identity_now(&pod_identity_at(address), &["a-token".to_string()]),
             Ok(())
         );
     }
@@ -1044,8 +1183,8 @@ mod tests {
     #[test]
     fn a_400_from_pod_identity_with_a_readable_token_fails_closed() {
         let address = serve(vec![("GET", "/v1/credentials", false, 400, "?")]);
-        let found =
-            check_pod_identity(&pod_identity_at(address), &["a-token".to_string()]).unwrap_err();
+        let found = check_pod_identity_now(&pod_identity_at(address), &["a-token".to_string()])
+            .unwrap_err();
         assert_eq!(found.unexpected.as_deref(), Some("HTTP 400"));
     }
 
@@ -1061,7 +1200,7 @@ mod tests {
             String::from_utf8_lossy(&buffer[..n]).to_string()
         });
         assert_eq!(
-            check_pod_identity(&pod_identity_at(address), &["tok-123".to_string()]),
+            check_pod_identity_now(&pod_identity_at(address), &["tok-123".to_string()]),
             Ok(())
         );
         assert!(seen.join().unwrap().contains("Authorization: tok-123\r\n"));
@@ -1399,5 +1538,72 @@ mod tests {
             .unwrap_err()
             .unexpected
             .is_some());
+    }
+
+    /// A fake service that refuses every request with a 404, but only after `delay`, on its own
+    /// thread per connection like a real one.
+    fn serve_slowly(delay: Duration) -> SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                std::thread::spawn(move || {
+                    let mut buffer = [0; 4096];
+                    let _ = stream.read(&mut buffer);
+                    std::thread::sleep(delay);
+                    let _ = write!(stream, "HTTP/1.0 404 X\r\nContent-Length: 0\r\n\r\n");
+                });
+            }
+        });
+        address
+    }
+
+    /// Every probe stays inside its own timeout, but asked one after the other they add up to
+    /// more than the 5 s the parent allows the whole check. Run together they finish well inside
+    /// the budget, and the answer is still a pass.
+    #[test]
+    fn slow_refusals_pass_within_the_budget() {
+        let address = serve_slowly(Duration::from_millis(400));
+        let started = Instant::now();
+        assert_eq!(check(address), Ok(()));
+        let took = started.elapsed();
+        assert!(took < BUDGET, "the check took {took:?}, budget {BUDGET:?}");
+    }
+
+    /// A check that runs out of its budget fails; it never passes for lack of time.
+    #[test]
+    fn a_check_that_runs_out_of_its_budget_fails() {
+        let address = serve_slowly(Duration::from_millis(400));
+        let started = Instant::now();
+        let found = check_by(address, Instant::now() + Duration::from_millis(300)).unwrap_err();
+        assert!(found.unexpected.is_some(), "{found}");
+        assert!(started.elapsed() < Duration::from_millis(450));
+    }
+
+    /// A service that sends a byte at a time is held to the same deadline as one that is silent.
+    #[test]
+    fn a_trickling_reply_is_cut_off_at_the_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                std::thread::spawn(move || {
+                    let mut buffer = [0; 4096];
+                    let _ = stream.read(&mut buffer);
+                    for byte in b"HTTP/1.0 404 X\r\nX-Pad: aaaaaaaaaaaaaaaaaaaaaaaa" {
+                        if stream.write_all(&[*byte]).is_err() {
+                            return;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                });
+            }
+        });
+        let started = Instant::now();
+        let found = check_by(address, Instant::now() + Duration::from_millis(600)).unwrap_err();
+        assert!(found.unexpected.is_some(), "{found}");
+        assert!(started.elapsed() < Duration::from_millis(900));
     }
 }
