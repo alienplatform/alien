@@ -4202,6 +4202,7 @@ runtime:
       runAsUser: 10001
       runAsGroup: 10001
       fsGroup: 10001
+      fsGroupChangePolicy: OnRootMismatch
       seccompProfile:
         type: RuntimeDefault
     containerSecurityContext:
@@ -12208,6 +12209,30 @@ infrastructureExistingSecret: customer-bindings
             Some("management:\n  token: test-credential\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: strict\n"),
         );
         assert!(!bad.is_ok());
+    }
+
+    #[test]
+    fn every_pod_that_sets_an_fs_group_keeps_file_modes_across_restarts() {
+        let files = sample_chart_files();
+        let values = "management:\n  token: test-credential\n  url: https://manager.example.com\n";
+        let rendered = crate::test_utils::helm_template(&files, Some(values));
+        rendered.assert_ok("default values");
+        let mut seen = 0;
+        for doc in serde_yaml::Deserializer::from_str(&rendered.stdout) {
+            let doc = serde_yaml::Value::deserialize(doc).unwrap();
+            let pod = &doc["spec"]["template"]["spec"]["securityContext"];
+            if pod["fsGroup"].is_null() {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(
+                pod["fsGroupChangePolicy"], "OnRootMismatch",
+                "{} {}",
+                doc["kind"].as_str().unwrap_or_default(),
+                doc["metadata"]["name"].as_str().unwrap_or_default()
+            );
+        }
+        assert!(seen > 0, "expected a pod with an fsGroup in the chart");
     }
 
     #[test]

@@ -3679,6 +3679,27 @@ mod tests {
         );
     }
 
+    /// A custom domain whose DNS record was never created still reports ready: the probe reaches
+    /// the load balancer directly, so Running does not prove the customer's DNS points at it.
+    #[tokio::test]
+    async fn custom_domain_without_a_dns_record_is_ready_when_the_load_balancer_answers() {
+        let server = MockServer::start_async().await;
+        let _ready = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/healthz")
+                    .header("host", format!("app.customer-domain.invalid:{}", server.port()));
+                then.status(204);
+            })
+            .await;
+        let url = format!("http://app.customer-domain.invalid:{}", server.port());
+
+        assert!(
+            public_endpoint_health_check_succeeds(&url, "/healthz", &[*server.address()]).await,
+            "a custom domain with no DNS record is Running once the load balancer serves it"
+        );
+    }
+
     /// The load balancer lookup of a bare IP or host name carries port 80; the probe must still
     /// connect to the port of the public URL (443 for https).
     #[tokio::test]
