@@ -7385,7 +7385,7 @@ async fn run_local_pull_model(
         .await;
     }
 
-    output::info("Installing alien-operator as a system service...");
+    output::info("Installing the Operator as a system service...");
 
     // Delegate to the operator install logic
     let install_args = super::operator::InstallArgs {
@@ -7404,7 +7404,7 @@ async fn run_local_pull_model(
 
     super::operator::install_service(install_args)?;
 
-    output::success("alien-operator installed and running as a system service.");
+    output::success("Operator installed and running as a system service.");
     output::info("The operator will sync with the manager and deploy updates automatically.");
     let command_name = embedded_config
         .and_then(|config| config.name.as_deref())
@@ -7565,7 +7565,7 @@ async fn run_kubernetes_pull_model(
     stack_settings: &StackSettings,
     public_endpoints: Option<&PublicEndpointUrls>,
 ) -> Result<()> {
-    output::info("Kubernetes platform detected — installing alien-operator with Helm.");
+    output::info("Kubernetes platform detected — installing the Operator with Helm.");
     let (stack, resource_prefix) = fetch_kubernetes_release_stack(client, deployment_id).await?;
     let HelmRelease {
         name: release,
@@ -8043,14 +8043,14 @@ async fn find_or_download_operator_binary(
         resolve_stable_binary_url(&releases_url, "alien-operator", os, arch).await?
     };
 
-    output::info(&format!("Downloading alien-operator from {}...", url));
+    output::info(&format!("Downloading the Operator from {}...", url));
 
     let response =
         reqwest::get(&url)
             .await
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
-                message: format!("Failed to download alien-operator from {}", url),
+                message: format!("Failed to download the Operator from {}", url),
             })?;
 
     if !response.status().is_success() {
@@ -8092,7 +8092,7 @@ async fn find_or_download_operator_binary(
             })?;
     }
 
-    output::success("alien-operator downloaded successfully.");
+    output::success("Operator downloaded successfully.");
 
     Ok(binary_path)
 }

@@ -414,7 +414,7 @@ async fn down_command_with(
     if args.erase_data && site_bound.is_empty() {
         output::success("Deployment and its durable data erased successfully.");
     } else if args.erase_data {
-        output::success("Deployment and the durable data Alien created erased successfully.");
+        output::success("Deployment and the durable data created for it erased successfully.");
     } else {
         output::success("Deployment stopped. Durable data and recovery tracking retained; use --erase-data to erase later.");
     }

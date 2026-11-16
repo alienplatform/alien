@@ -74,6 +74,7 @@ pub fn render_built_ins_template(
     )
     .expect("template should render");
     let yaml = to_yaml(&template).expect("template should serialize");
+    alien_core::white_label::assert_white_labeled(description, &yaml);
     alien_cloudformation::test_utils::cfn_lint(&yaml).assert_ok(description);
     (template, yaml)
 }

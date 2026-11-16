@@ -1,4 +1,5 @@
 pub mod storage_notifications;
+pub mod white_label;
 
 mod prepared_resources;
 pub use prepared_resources::*;

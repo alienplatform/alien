@@ -27,6 +27,13 @@ pub fn try_render(stack: &Stack, settings: StackSettings) -> alien_core::Result<
 /// Snapshot the entire chart as a single string with `=== <path> ===`
 /// separators between files. One `.snap` per scenario.
 pub fn snapshot_chart(name: &str, chart: &HelmChart) {
+    alien_core::white_label::assert_files_white_labeled(
+        name,
+        chart
+            .files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.as_str())),
+    );
     let mut buf = String::new();
     for (path, contents) in &chart.files {
         buf.push_str("=== ");

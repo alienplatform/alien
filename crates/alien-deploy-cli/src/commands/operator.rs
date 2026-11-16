@@ -118,11 +118,11 @@ pub fn stop_service_if_running() -> Result<()> {
         })? {
         ServiceStatus::Running => stop(),
         ServiceStatus::Stopped(_) => {
-            output::info("alien-operator service is already stopped");
+            output::info("Operator service is already stopped");
             Ok(())
         }
         ServiceStatus::NotInstalled => {
-            output::info("alien-operator service is not installed");
+            output::info("Operator service is not installed");
             Ok(())
         }
     }
@@ -139,7 +139,7 @@ pub fn uninstall_service_if_installed() -> Result<()> {
         })? {
         ServiceStatus::Running | ServiceStatus::Stopped(_) => uninstall(),
         ServiceStatus::NotInstalled => {
-            output::info("alien-operator service is not installed");
+            output::info("Operator service is not installed");
             Ok(())
         }
     }
@@ -160,7 +160,7 @@ pub fn default_service_data_dir() -> String {
 }
 
 fn install(args: InstallArgs) -> Result<()> {
-    output::header("Installing alien-operator service");
+    output::header("Installing Operator service");
 
     let binary_path = match args.binary {
         Some(p) => p,
@@ -311,7 +311,7 @@ fn install(args: InstallArgs) -> Result<()> {
             message: "Failed to start service".to_string(),
         })?;
 
-    output::success("alien-operator service installed and started");
+    output::success("Operator service installed and started");
     output::info(&format!("  Binary:     {}", binary_path.display()));
     output::info(&format!("  Data dir:   {}", data_dir));
     output::info(&format!("  Platform:   {}", args.platform));
@@ -356,7 +356,7 @@ fn start() -> Result<()> {
         .context(ErrorData::OperatorServiceError {
             message: "Failed to start service".to_string(),
         })?;
-    output::success("alien-operator service started");
+    output::success("Operator service started");
     Ok(())
 }
 
@@ -368,12 +368,12 @@ fn stop() -> Result<()> {
         .context(ErrorData::OperatorServiceError {
             message: "Failed to stop service".to_string(),
         })?;
-    output::success("alien-operator service stopped");
+    output::success("Operator service stopped");
     Ok(())
 }
 
 fn status() -> Result<()> {
-    output::header("alien-operator service status");
+    output::header("Operator service status");
 
     // Try to query by starting — if already running this errors.
     // service-manager doesn't have a status() method, so we check the data dir.
@@ -422,7 +422,7 @@ fn uninstall() -> Result<()> {
             message: "Failed to uninstall service".to_string(),
         })?;
 
-    output::success("alien-operator service uninstalled");
+    output::success("Operator service uninstalled");
     Ok(())
 }
 
@@ -490,8 +490,8 @@ pub fn which_operator_binary() -> Result<PathBuf> {
 
     Err(AlienError::new(ErrorData::OperatorServiceError {
         message:
-            "alien-operator binary not found. Set ALIEN_OPERATOR_BINARY=/path/to/alien-operator, \
-                  build with 'cargo build -p alien-operator', or install it first."
+            "the Operator binary was not found. Set ALIEN_OPERATOR_BINARY to its path, or install it \
+                  first."
                 .to_string(),
     }))
 }
