@@ -69,7 +69,7 @@ const METRICS_SERVER_IMAGE_VALUES: &str =
 /// Image references the generator renders inside a quoted string, by template. A value with
 /// `"` or `#` could end that string and drop what follows, so a protected chart renders
 /// `repository@<digest>` through `quote`, with the digest written into the template.
-const OPERATOR_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" .Values.runtime.image.tag "digest" (dig "digest" "" .Values.runtime.image)) | quote }}"#;
+const OPERATOR_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" (include "deployment.operatorTag" $) "digest" (dig "digest" "" .Values.runtime.image)) | quote }}"#;
 const LOG_COLLECTOR_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" .Values.logCollector.image.repository "tag" .Values.logCollector.image.tag "digest" (dig "digest" "" .Values.logCollector.image)) | quote }}"#;
 const CLEANUP_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}"#;
 
@@ -713,6 +713,10 @@ mod tests {
         let same =
             apply_package_defaults(chart.clone(), &defaults(&format!("1.4.0@{DIGEST}"))).unwrap();
         assert_eq!(operator_tag(&same), format!("1.4.0@{DIGEST}"));
+        // The protected chart's Operator template reads the packaged literal, not Chart.yaml.
+        let identity = &packaged.files["templates/_runtime-identity.tpl"];
+        assert!(identity.contains("{{- define \"deployment.operatorVersion\" -}}1.4.0{{- end -}}"));
+        assert!(OPERATOR_IMAGE_TEMPLATE.contains("deployment.operatorTag"));
         let other = format!("1.4.0@sha256:{}", "b".repeat(64));
         let error = apply_package_defaults(chart, &defaults(&other)).unwrap_err();
         assert!(error.to_string().contains("pins Operator image"), "{error}");

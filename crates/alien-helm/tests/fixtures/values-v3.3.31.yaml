@@ -1,0 +1,249 @@
+management:
+  token: ""
+  existingSecret:
+    name: ""
+    tokenKey: sync-token
+  name: ""
+  # Resolved management endpoint captured when this package was built.
+  defaultUrl: ""
+  # Override the captured or installed endpoint when routing changes.
+  url: ""
+  # Leave unset to create a deployment from the bootstrap token.
+  deploymentId: null
+  setupItem: deployment
+  updates: auto
+  telemetry: auto
+  healthChecks: "on"
+
+inputValues: {}
+
+runtime:
+  image:
+    repository: registry.example.com/deployment/operator
+    tag: latest
+    pullPolicy: IfNotPresent
+    # Pull the Operator image with management.token (for an image served by
+    # the manager this chart connects to).
+    pullWithManagementToken: false
+    # Follow the Operator image the manager targets, so upgrades need no helm
+    # upgrade. Kubernetes keeps the running pod until the new one is ready.
+    selfUpdate: true
+  # Pull secrets for the Operator and for the application's workloads (added
+  # to their ServiceAccounts), for images in a registry that needs credentials.
+  imagePullSecrets: []
+  podLabels: {}
+  podAnnotations: {}
+  automountServiceAccountToken: true
+  encryption:
+    # Empty generates a key on first install and retains it across upgrades.
+    # Alternatively provide a stable 64-character hex key or an existing Secret.
+    key: ""
+    existingSecret:
+      name: ""
+      key: encryption-key
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  api:
+    enabled: false
+    bindHost: 0.0.0.0
+    port: 8080
+    service:
+      type: ClusterIP
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+  security:
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+  tmp:
+    enabled: true
+    sizeLimit: 256Mi
+  data:
+    mountPath: /var/lib/deployment-operator
+    persistence:
+      # Required for bootstrap identity and durable local runtime state.
+      enabled: true
+      existingClaim: ""
+      storageClassName: ""
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+  scheduling:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpreadConstraints: []
+    priorityClassName: ""
+    runtimeClassName: ""
+  pdb:
+    enabled: false
+    minAvailable: 1
+  networkPolicy:
+    enabled: false
+    ingress:
+      enabled: true
+    egress:
+      enabled: true
+  cleanup:
+    onUninstall:
+      enabled: true
+      deletePersistentVolumeClaims: false
+      helmHistoryBackend: secret
+      image:
+        repository: alpine/k8s
+        tag: "1.32.0"
+        pullPolicy: IfNotPresent
+
+logCollector:
+  enabled: false
+  # podApi: the Operator reads selected Pod logs through the namespaced API.
+  # nodeAgent: a Fluent Bit DaemonSet reads selected Pod logs on each node.
+  mode: nodeAgent
+  maxStreams: 32
+  # nodeAgent only. Generated on first install and retained on upgrade.
+  token: ""
+  image:
+    repository: fluent/fluent-bit
+    tag: "3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  scope:
+    deploymentLabelKey: "alien.dev/deployment"
+    legacyDeploymentLabelKey: ""
+    deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
+
+heartbeat:
+  collection:
+    nodes:
+      enabled: true
+
+airgapped:
+  # No connection to the manager: targets arrive in bundles installed with
+  # `alien-deploy sync`, which also carries state and telemetry back. Needs
+  # management.deploymentId from the bundle.
+  enabled: false
+  # Public key (ed25519:...) bundles must be signed with. Set by the first
+  # `alien-deploy sync --trusted-key`, and checked on every later one.
+  bundleSigningKey: ""
+
+tunnel:
+  # Serve requests the control plane sends through the manager to the stack's
+  # declared tunnel endpoints, over the Operator's outbound connection.
+  # false closes the tunnel; nothing else changes.
+  enabled: true
+
+clusterBootstrap:
+  metricsServer:
+    enabled: false
+    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1
+  storageClass:
+    default:
+      enabled: false
+      name: ""
+      provisioner: ""
+      parameters: {}
+  ingress:
+    eksAutoMode:
+      enabled: false
+      name: alb
+      controller: eks.amazonaws.com/alb
+      scheme: internet-facing
+      subnetIds: []
+    azureApplicationGatewayForContainers:
+      enabled: false
+      applicationLoadBalancer:
+        name: ""
+        namespace: ""
+        associationSubnetId: ""
+  compute:
+    eksAutoMode:
+      arm64NodePool:
+        enabled: false
+        name: general-purpose-arm64
+        nodeClassName: default
+        capacityType: on-demand
+        instanceCategories:
+          - c
+          - m
+          - r
+        minInstanceGeneration: "5"
+        limits:
+          cpu: "1000"
+          memory: 1000Gi
+
+serviceAccounts:
+  runtime:
+    annotations: {}
+    labels: {}
+
+stackSettings: null
+
+infrastructure: null
+infrastructureExistingSecret: ""
+
+basePlatform: null
+basePlatformConfig:
+  gcp:
+    projectId: ""
+    region: ""
+  aws:
+    region: ""
+  azure:
+    location: ""
+    subscriptionId: ""
+    tenantId: ""
+serviceAccountPrefix: ""
+managerServiceAccount:
+  annotations: {}
+  labels: {}
+
+services:
+  api:
+    type: clusterIp
+    port: 80
+    targetPort: 8080
+    component: 'worker'
+
+publicEndpoints: {}
+
+persistentStorage:
+  storageClassName: ""
+
+ephemeralStorage:
+  nodeSelector: {}
