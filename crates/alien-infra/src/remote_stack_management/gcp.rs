@@ -544,6 +544,20 @@ impl GcpRemoteStackManagementController {
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
+        // Outside a setup run this identity may not write its own project role bindings: the
+        // update makes no cloud call and keeps the recorded revision and bindings as setup left
+        // them. The next setup run still sees any difference (`needs_update`) and applies it.
+        if !ctx.deployment_config.setup_run {
+            info!(
+                config_id = %config.id,
+                "Management permissions are setup-owned; leaving them as setup made them"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         info!(
             config_id = %config.id,
             "Updating GCP management service account permissions"
@@ -1081,6 +1095,7 @@ mod tests {
 
     use super::*;
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+    use alien_core::{InitialSetupAuthority, ResourceLifecycle};
     use alien_gcp_clients::iam::{ListRolesResponse, MockIamApi, Role};
     use alien_gcp_clients::resource_manager::MockResourceManagerApi;
 
@@ -1965,5 +1980,141 @@ mod tests {
 
         assert_eq!(project_bindings.len(), 1);
         assert_eq!(project_bindings[0].target, GcpBindingTargetScope::Project);
+    }
+
+    const RECORDED_REVISION: &str = "recorded-by-an-earlier-setup";
+
+    fn recorded_controller(
+        state: GcpRemoteStackManagementState,
+    ) -> GcpRemoteStackManagementController {
+        GcpRemoteStackManagementController {
+            state,
+            management_permissions_revision: Some(RECORDED_REVISION.to_string()),
+            ..ready_management_controller("acme")
+        }
+    }
+
+    async fn management_executor(
+        controller: GcpRemoteStackManagementController,
+        authority: InitialSetupAuthority,
+        setup_run: bool,
+        provider: MockPlatformServiceProvider,
+    ) -> SingleControllerExecutor {
+        SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .resource_prefix("acme")
+            .initial_setup_authority(authority)
+            .setup_run(setup_run)
+            .service_provider(Arc::new(provider))
+            .build()
+            .await
+            .expect("executor builds")
+    }
+
+    /// Outside a setup run the update makes no cloud call under either authority and keeps what
+    /// setup recorded; the next setup run still sees the difference.
+    #[tokio::test]
+    async fn an_update_outside_a_setup_run_writes_nothing_and_leaves_the_record_for_setup() {
+        let mut after_ordinary_run = None;
+        for authority in [
+            InitialSetupAuthority::DirectSetup,
+            InitialSetupAuthority::ImportedHandoff,
+        ] {
+            // No expectations: any IAM or Resource Manager request panics.
+            let mut runtime = management_executor(
+                recorded_controller(GcpRemoteStackManagementState::UpdateStart),
+                authority,
+                false,
+                MockPlatformServiceProvider::new(),
+            )
+            .await;
+            runtime.run_until_terminal().await.unwrap();
+            assert_eq!(runtime.status(), ResourceStatus::Running, "{authority:?}");
+            let after = runtime
+                .internal_state::<GcpRemoteStackManagementController>()
+                .unwrap();
+            assert_eq!(
+                after.management_permissions_revision.as_deref(),
+                Some(RECORDED_REVISION),
+                "{authority:?}"
+            );
+            assert!(after.role_bound, "{authority:?}");
+            after_ordinary_run = Some(after.clone());
+        }
+
+        let setup = management_executor(
+            after_ordinary_run.unwrap(),
+            InitialSetupAuthority::DirectSetup,
+            true,
+            MockPlatformServiceProvider::new(),
+        )
+        .await;
+        assert!(setup.needs_update().unwrap());
+    }
+
+    /// The same update inside a setup run writes the bindings and records the new revision.
+    #[tokio::test]
+    async fn an_update_inside_a_setup_run_still_writes_the_bindings_and_the_revision() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().returning(|name| {
+            Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "role".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        iam.expect_create_role()
+            .returning(|_, request| Ok(request.role));
+        let iam = Arc::new(iam);
+
+        let writes = Arc::new(Mutex::new(0u32));
+        let mut resource_manager = MockResourceManagerApi::new();
+        resource_manager
+            .expect_get_project_iam_policy()
+            .returning(|_, _| {
+                Ok(IamPolicy::builder()
+                    .version(3)
+                    .etag("initial-revision".to_string())
+                    .bindings(Vec::new())
+                    .build())
+            });
+        let count = writes.clone();
+        resource_manager
+            .expect_set_project_iam_policy()
+            .returning(move |_, policy, _| {
+                *count.lock().unwrap() += 1;
+                Ok(policy)
+            });
+        let resource_manager = Arc::new(resource_manager);
+
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(resource_manager.clone()));
+
+        let mut runtime = management_executor(
+            recorded_controller(GcpRemoteStackManagementState::UpdateStart),
+            InitialSetupAuthority::DirectSetup,
+            true,
+            provider,
+        )
+        .await;
+        runtime.step().await.expect("the update step succeeds");
+
+        assert_eq!(*writes.lock().unwrap(), 1, "the project policy is written");
+        let after = runtime
+            .internal_state::<GcpRemoteStackManagementController>()
+            .unwrap();
+        assert_ne!(
+            after.management_permissions_revision.as_deref(),
+            Some(RECORDED_REVISION)
+        );
     }
 }
