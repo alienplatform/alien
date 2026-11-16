@@ -66,6 +66,7 @@ impl OssAuthz {
             s.role,
             Role::OperatorSync
                 | Role::RegistryPull
+                | Role::OperatorAccessRequests
                 | Role::ImageRepositoryProvisioner
                 | Role::VerifiedSetupImporter
                 | Role::SandboxImagePusher

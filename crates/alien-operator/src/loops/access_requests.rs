@@ -94,6 +94,19 @@ pub trait AccessRequestSyncLoop: Send + Sync + 'static {
     async fn run(self: Arc<Self>, state: Arc<OperatorState>);
 }
 
+/// The bearer for one round of access-request calls. An enrolled Operator asks
+/// the manager for a fresh short-lived credential limited to this purpose; an
+/// installation that connects with a token keeps using that token. Ask again
+/// on every round: the credential is short-lived and cached for its lifetime.
+pub async fn access_requests_token(state: &OperatorState) -> Result<String, String> {
+    crate::daily_identity::request_token(
+        state,
+        serde_json::json!({"type":"operatorAccessRequests"}),
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
 /// Default no-op implementation used when no real loop is wired in (OSS builds,
 /// tests, airgapped binaries). Logs once and waits for shutdown so the
 /// supervisor doesn't treat the unused loop as an unexpected exit.
