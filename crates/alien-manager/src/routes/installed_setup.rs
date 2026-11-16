@@ -32,6 +32,9 @@ fn chart_renders(resource_type: &str, base_platform: Option<Platform>) -> bool {
     match resource_type {
         "compute-cluster" => true,
         "service-account" => base_platform.is_none(),
+        // Without a base cloud the Operator keeps a vault as Kubernetes Secrets in the
+        // install's namespace; with one, setup creates the cloud's secret store.
+        "vault" => base_platform.is_none(),
         _ => false,
     }
 }
@@ -682,7 +685,7 @@ pub(super) mod tests {
         CreateDeploymentGroupParams, CreateImportedDeploymentParams, CreateReleaseParams,
         DeploymentStore, ReleaseStore,
     };
-    use alien_core::{RuntimeMetadata, ServiceAccount, StackState, Storage};
+    use alien_core::{RuntimeMetadata, ServiceAccount, StackState, Storage, Vault};
     use axum::{body::to_bytes, http::Method};
     use chrono::Utc;
     use std::{collections::BTreeMap, sync::Arc};
@@ -702,6 +705,20 @@ pub(super) mod tests {
             Stack::new("extra".to_string())
                 .add(
                     ServiceAccount::new("reader-sa".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+                .resources,
+        );
+        next
+    }
+
+    fn with_vault(stack: &Stack) -> Stack {
+        let mut next = stack.clone();
+        next.resources.extend(
+            Stack::new("extra".to_string())
+                .add(
+                    Vault::new("secrets".to_string()).build(),
                     ResourceLifecycle::Frozen,
                 )
                 .build()
@@ -1064,6 +1081,45 @@ pub(super) mod tests {
             reason.contains("run your cloud setup, then upgrade"),
             "{reason}"
         );
+    }
+
+    #[test]
+    fn a_vault_added_or_removed_without_a_base_cloud_is_a_chart_upgrade() {
+        // Without a base cloud the Operator keeps the vault as Kubernetes Secrets, so there is
+        // nothing in a cloud account to create or delete.
+        let without = baseline();
+        let with = with_vault(&without);
+        for (installed, target) in [(&without, &with), (&with, &without)] {
+            let decision = decide(
+                &deployment(installed.clone()),
+                &report("rel_2"),
+                target,
+                None,
+            );
+            let ReportDecision::Mint(authorization) = decision else {
+                panic!("expected a mint, got {decision:?}");
+            };
+            assert_eq!(
+                authorization.target_frozen_digest,
+                target.setup_update_digest()
+            );
+        }
+    }
+
+    #[test]
+    fn a_vault_added_or_removed_on_a_base_cloud_still_needs_the_cloud_setup() {
+        let without = baseline();
+        let with = with_vault(&without);
+        for (installed, target) in [(&without, &with), (&with, &without)] {
+            let mut on_cloud = deployment(installed.clone());
+            on_cloud.base_platform = Some(Platform::Aws);
+            let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), target, None)
+            else {
+                panic!("expected a refusal");
+            };
+            assert!(reason.contains("secrets"), "{reason}");
+            assert!(reason.contains("run your cloud setup"), "{reason}");
+        }
     }
 
     #[test]
