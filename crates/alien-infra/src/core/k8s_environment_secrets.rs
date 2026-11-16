@@ -1042,6 +1042,8 @@ mod tests {
             logs_auth_header: "authorization=Bearer logs".to_string(),
             metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
             metrics_auth_header: None,
+            traces_endpoint: Some("https://manager.test/v1/traces".to_string()),
+            traces_auth_header: None,
             resource_attributes: Default::default(),
         });
 
@@ -1054,6 +1056,12 @@ mod tests {
         assert_eq!(
             headers
                 .get(OTEL_EXPORTER_OTLP_METRICS_HEADERS)
+                .map(String::as_str),
+            Some("authorization=Bearer logs")
+        );
+        assert_eq!(
+            headers
+                .get(super::super::environment_variables::OTEL_EXPORTER_OTLP_TRACES_HEADERS)
                 .map(String::as_str),
             Some("authorization=Bearer logs")
         );

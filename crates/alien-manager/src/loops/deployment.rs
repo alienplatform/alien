@@ -2174,8 +2174,10 @@ fn build_monitoring_config(
     (otlp_enabled && !telemetry_off).then(|| alien_core::OtlpConfig {
         logs_endpoint: format!("{}/v1/logs", config.base_url()),
         logs_auth_header: format!("authorization=Bearer {}", token),
-        metrics_endpoint: None,
-        metrics_auth_header: None,
+        metrics_endpoint: Some(format!("{}/v1/metrics", config.base_url())),
+        metrics_auth_header: Some(format!("authorization=Bearer {}", token)),
+        traces_endpoint: Some(format!("{}/v1/traces", config.base_url())),
+        traces_auth_header: Some(format!("authorization=Bearer {}", token)),
         resource_attributes: std::collections::HashMap::new(),
     })
 }
