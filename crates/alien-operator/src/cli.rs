@@ -770,9 +770,11 @@ async fn run_operator_cli(
         // A start from an empty cache has no deployment state yet; an
         // observe-only environment starts as running, as it does when it
         // registers itself.
-        if starts_observe_only(args.identity_secret.is_some(), join_token.is_some())
-            && args.initial_desired_release == InitialDesiredReleaseArg::None
-            && db.get_deployment_state().await?.is_none()
+        if starts_observe_only(
+            args.identity_secret.is_some(),
+            join_token.is_some(),
+            args.initial_desired_release,
+        ) && db.get_deployment_state().await?.is_none()
         {
             db.set_deployment_state(&observe_only_initial_state(
                 args.platform,
@@ -2254,10 +2256,17 @@ fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<Operat
 }
 
 /// Whether a start with no deployment state writes the observe-only one: with the
-/// Secret identity store (as before), and for an install enrolled by a join token,
-/// which has no Secret on a machine or a Docker host.
-fn starts_observe_only(identity_secret: bool, join_token: bool) -> bool {
-    identity_secret || join_token
+/// Secret identity store when no release is wanted (as before), and for every install
+/// enrolled by a join token, which has no Secret on a machine or a Docker host. The initial
+/// desired release only matters when the Operator registers a new deployment, and an
+/// enrolled install is registered before it starts, so it does not decide this: a Docker
+/// command that does not set it would otherwise leave the deployment `pending` for good.
+fn starts_observe_only(
+    identity_secret: bool,
+    join_token: bool,
+    initial_desired_release: InitialDesiredReleaseArg,
+) -> bool {
+    join_token || (identity_secret && initial_desired_release == InitialDesiredReleaseArg::None)
 }
 
 /// The enrollment token from its file when that exists, else from the
@@ -2502,13 +2511,20 @@ mod tests {
 
     #[test]
     fn the_observe_only_start_state_is_kept_for_the_secret_store_and_added_for_join_tokens() {
-        // A Kubernetes install with the identity Secret, whatever it enrolls with.
-        assert!(super::starts_observe_only(true, false));
-        assert!(super::starts_observe_only(true, true));
-        // A machine or Docker host enrolled by a join token.
-        assert!(super::starts_observe_only(false, true));
+        use super::InitialDesiredReleaseArg::{Active, None as NoRelease};
+        // A Kubernetes install with the identity Secret that wants no release, as before.
+        assert!(super::starts_observe_only(true, false, NoRelease));
+        assert!(super::starts_observe_only(true, true, NoRelease));
+        // A Secret install that asks for the active release registers and runs it itself.
+        assert!(!super::starts_observe_only(true, false, Active));
+        // A machine or Docker host enrolled by a join token, whatever the release setting:
+        // the default is `active`, and a command that leaves it out must still reach `running`.
+        assert!(super::starts_observe_only(false, true, NoRelease));
+        assert!(super::starts_observe_only(false, true, Active));
+        assert!(super::starts_observe_only(true, true, Active));
         // A local install with neither starts with no state, as before.
-        assert!(!super::starts_observe_only(false, false));
+        assert!(!super::starts_observe_only(false, false, NoRelease));
+        assert!(!super::starts_observe_only(false, false, Active));
     }
 
     #[tokio::test]
