@@ -4,7 +4,7 @@
 //!
 //! Without signing arguments the chart is unprotected.
 
-use alien_core::{Stack, StackSettings, StackSigning};
+use alien_core::{Postgres, ResourceLifecycle, Stack, StackSettings, StackSigning};
 use alien_helm::{
     generate_helm_chart, generate_signed_helm_chart, HelmOptions, HelmRegistry, SignedChartPins,
 };
@@ -13,7 +13,13 @@ use std::{env, fs, path::Path};
 fn main() {
     let args: Vec<String> = env::args().collect();
     let out = Path::new(args.get(1).expect("usage: render_chart <out-dir> [...]"));
-    let stack = Stack::new("signing-test".to_string()).build();
+    // `RENDER_CHART_POSTGRES=<id>` adds an in-cluster Postgres to the stack.
+    let stack = match env::var("RENDER_CHART_POSTGRES") {
+        Ok(id) => Stack::new("signing-test".to_string())
+            .add(Postgres::new(id).build(), ResourceLifecycle::Frozen)
+            .build(),
+        Err(_) => Stack::new("signing-test".to_string()).build(),
+    };
     let registry = HelmRegistry::built_in();
     let options = |stack_settings| HelmOptions {
         registry: &registry,

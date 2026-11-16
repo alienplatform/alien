@@ -3122,6 +3122,7 @@ fn cloudformation_import_request_from_outputs(
         stack_settings,
         management_config: Some(management_config),
         input_values: Default::default(),
+        accepts_short_lived_deployment_token: false,
         resources,
     })
 }
@@ -3355,6 +3356,7 @@ fn terraform_import_request_from_outputs(
         stack_settings,
         management_config,
         input_values,
+        accepts_short_lived_deployment_token: false,
         resources,
     })
 }

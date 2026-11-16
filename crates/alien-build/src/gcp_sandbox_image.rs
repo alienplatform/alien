@@ -79,6 +79,7 @@ pub async fn build_gcp_sandbox_image(
             arch: Arch::Amd64,
             contract: GCP_AGENT_PLATFORM,
             image_command_env: true,
+            caller_authorization_header: true,
         },
     )
     .await
@@ -107,6 +108,7 @@ pub async fn build_azure_sandbox_image(
             arch: Arch::Amd64,
             contract: AZURE_SANDBOX,
             image_command_env: true,
+            caller_authorization_header: false,
         },
     )
     .await
@@ -121,6 +123,10 @@ pub(crate) struct AgentLayering {
     /// Whether the image itself turns on supervised startup of the base command. AWS turns it on
     /// when it builds the MicroVM image instead, together with the capability grant it needs.
     pub(crate) image_command_env: bool,
+    /// Whether the image names the header a preview caller's bearer travels in. GCP's edge
+    /// consumes `Authorization`; the agent reads the other name from the image, so setting it
+    /// anywhere else would make the agent drop the bearer callers still send as `Authorization`.
+    pub(crate) caller_authorization_header: bool,
 }
 
 pub(crate) async fn build_sandbox_agent_image(
@@ -276,6 +282,14 @@ pub(crate) async fn build_sandbox_agent_image(
             }
             for (name, value) in contract.contract_env_vars() {
                 builder = builder.env(name, &value);
+            }
+            // The GCP edge consumes `Authorization`, so a preview caller's bearer needs a header
+            // of its own; the agent reads which one from here. Every other cloud leaves it unset.
+            if layering.caller_authorization_header {
+                builder = builder.env(
+                    alien_core::sandbox_image::ENV_CALLER_AUTHORIZATION_HEADER,
+                    alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER,
+                );
             }
             Ok(builder)
         },
@@ -764,6 +778,69 @@ mod tests {
                 SESSION_ROOT_MODE
             )
         );
+    }
+
+    /// The header a preview caller's bearer travels in is named by the GCP image alone. Azure, AWS
+    /// and Kubernetes callers still send their bearer as `Authorization`, so naming another header
+    /// there would make the agent drop it.
+    #[tokio::test]
+    async fn only_the_gcp_image_names_the_caller_authorization_header() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let agent_image = format!("{host}/alien/agent:test");
+        push_image(&agent_image, &[(AGENT_PATH, b"#!/bin/sh\nexit 0\n")]).await;
+        let named = format!(
+            "{}={}",
+            alien_core::sandbox_image::ENV_CALLER_AUTHORIZATION_HEADER,
+            alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER
+        );
+        for (cloud, layering, expected) in [
+            ("gcp", crate::SandboxAgentLayering::GCP, true),
+            ("azure", crate::SandboxAgentLayering::AZURE, false),
+            ("kubernetes", crate::SandboxAgentLayering::KUBERNETES, false),
+            ("aws", crate::SandboxAgentLayering::AWS, false),
+        ] {
+            let base_image = format!("{host}/proj/{cloud}:base");
+            let base = push_image(
+                &base_image,
+                &[("/etc/passwd", b"root:x:0:0::/root:/bin/sh\n")],
+            )
+            .await;
+            let protocol = ClientProtocol::HttpsExcept(vec![host.to_string()]);
+            let layered = build_sandbox_agent_image(
+                "box",
+                base,
+                &base_image,
+                &agent_image,
+                protocol,
+                RegistryAuth::Anonymous,
+                default_cache(),
+                // The stand-in agent is amd64 only; the layering's other choices are the cloud's.
+                AgentLayering {
+                    arch: Arch::Amd64,
+                    ..layering.for_build()
+                },
+            )
+            .await
+            .expect("the agent layers onto the base");
+            let target = format!("{base_image}-agent");
+            layered
+                .image
+                .push(
+                    &target,
+                    &PushOptions {
+                        protocol: ClientProtocol::Http,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("the layered image pushes");
+            let config = pushed_config(&target).await;
+            let env: Vec<&str> = config["config"]["Env"]
+                .as_array()
+                .map(|values| values.iter().filter_map(|value| value.as_str()).collect())
+                .unwrap_or_default();
+            assert_eq!(env.contains(&named.as_str()), expected, "{cloud}: {env:?}");
+        }
     }
 
     /// A scratch or distroless base has no `/etc/passwd` to merge into. Nothing runs inside the

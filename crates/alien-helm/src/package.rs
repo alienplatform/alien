@@ -122,6 +122,26 @@ pub fn apply_package_defaults(
         }
     }
 
+    if let Some(image) = defaults.operator_image {
+        // The Operator release this chart installs, as a literal the values cannot change.
+        // A dev or latest build has no release version and gets no override.
+        let release = image
+            .tag
+            .split('@')
+            .next()
+            .unwrap_or_default()
+            .trim_start_matches('v');
+        if release.split('.').count() == 3 && release.split('.').all(|p| p.parse::<u64>().is_ok()) {
+            let identity = file_mut(&mut chart, "templates/_runtime-identity.tpl")?;
+            replace_once(
+                identity,
+                "{{- define \"deployment.operatorVersion\" -}}{{- end -}}",
+                &format!(
+                    "{{{{- define \"deployment.operatorVersion\" -}}}}{release}{{{{- end -}}}}"
+                ),
+            )?;
+        }
+    }
     let values = file_mut(&mut chart, "values.yaml")?;
     if let Some(url) = defaults.management_url {
         replace_once(
@@ -130,17 +150,21 @@ pub fn apply_package_defaults(
             &format!("  defaultUrl: {}\n", quote(url)?),
         )?;
     }
+    let mut embedded_tag: Option<String> = None;
     if let Some(image) = defaults.operator_image {
         match pinned_operator_digest(values) {
-            None => replace_once(
-                values,
-                "    repository: registry.example.com/deployment/operator\n    tag: latest\n",
-                &format!(
-                    "    repository: {}\n    tag: {}\n",
-                    quote(image.repository)?,
-                    quote(image.tag)?
-                ),
-            )?,
+            None => {
+                embedded_tag = Some(image.tag.to_string());
+                replace_once(
+                    values,
+                    "    repository: registry.example.com/deployment/operator\n    tag: latest\n",
+                    &format!(
+                        "    repository: {}\n    tag: {}\n",
+                        quote(image.repository)?,
+                        quote(image.tag)?
+                    ),
+                )?
+            }
             // A chart with release signing runs the Operator digest it pins; the package
             // picks where it comes from and its tag label only.
             Some(digest) => {
@@ -160,6 +184,7 @@ pub fn apply_package_defaults(
                     "    repository: registry.example.com/deployment/operator\n",
                     &format!("    repository: {}\n", quote(image.repository)?),
                 )?;
+                embedded_tag = Some(tag.clone());
                 replace_once(
                     values,
                     &format!("    tag: \"latest@{digest}\"\n"),
@@ -191,6 +216,25 @@ pub fn apply_package_defaults(
             readme,
             "Log collection is off by default. Enable it and choose one mode:",
             &format!("Log collection is on by default in `{mode}` mode. To change it, set:"),
+        )?;
+    }
+    if let (Some(image), Some(tag)) = (defaults.operator_image, embedded_tag) {
+        // The default Operator image, as literals the values cannot change. `helm upgrade
+        // --reuse-values` replaces values.yaml with the earlier chart's, so a default kept only
+        // there would be stale.
+        let identity = file_mut(&mut chart, "templates/_runtime-identity.tpl")?;
+        replace_once(
+            identity,
+            "{{- define \"deployment.operatorImageRepository\" -}}{{- end -}}",
+            &format!(
+                "{{{{- define \"deployment.operatorImageRepository\" -}}}}{}{{{{- end -}}}}",
+                image.repository
+            ),
+        )?;
+        replace_once(
+            identity,
+            "{{- define \"deployment.operatorImageTag\" -}}{{- end -}}",
+            &format!("{{{{- define \"deployment.operatorImageTag\" -}}}}{tag}{{{{- end -}}}}"),
         )?;
     }
     Ok(chart)

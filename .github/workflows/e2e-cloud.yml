@@ -130,7 +130,11 @@ on:
         default: azure-target-1
         options:
           - azure-target-1
-  merge_group:
+  # Nightly, and only when main changed since the last green run. These tests create real
+  # cloud resources and take long, so pull requests do not run them; a pull request opts in
+  # with the `run-e2e` label.
+  schedule:
+    - cron: "47 0 * * *"
   pull_request:
     types: [opened, reopened, synchronize, labeled]
 
@@ -157,7 +161,25 @@ jobs:
   # Centralises all event-gating and input-filtering so downstream jobs
   # only need a simple `if: needs.compute-matrix.outputs.<flag> == 'true'`.
 
+  # Skips the scheduled run when main has not changed since this workflow last passed on it.
+  gate:
+    name: Main changed since the last green run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      changed: ${{ steps.gate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: gate
+        uses: ./.github/actions/changed-since-last-success
+
   compute-matrix:
+    needs: gate
     runs-on: ubuntu-latest
     outputs:
       push_matrix: ${{ steps.set.outputs.push_matrix }}
@@ -184,6 +206,7 @@ jobs:
       - id: set
         env:
           MATRIX_EVENT_NAME: ${{ github.event_name }}
+          MATRIX_MAIN_CHANGED: ${{ needs.gate.outputs.changed }}
           MATRIX_IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
           MATRIX_HAS_LABEL: ${{ contains(join(github.event.pull_request.labels.*.name, ','), 'run-e2e') }}
           MATRIX_RUN_PUSH_AWS_CLI: ${{ inputs.run_push_aws_cli }}

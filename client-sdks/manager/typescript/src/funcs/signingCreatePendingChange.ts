@@ -3,7 +3,7 @@
  */
 
 import { AlienManagerCore } from "../core.js";
-import { encodeJSON } from "../lib/encodings.js";
+import { encodeJSON, encodeSimple } from "../lib/encodings.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
@@ -21,19 +21,18 @@ import {
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
+import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
-/**
- * `POST /v1/tokens` — create a scoped token (admin only).
- */
-export function tokensCreateToken(
+export function signingCreatePendingChange(
   client: AlienManagerCore,
-  request: models.CreateTokenRequest,
+  project: string,
+  createPendingChangeRequest: models.CreatePendingChangeRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    models.CreatedTokenResponse,
+    models.PendingChangeResponse,
     | AlienManagerError
     | ResponseValidationError
     | ConnectionError
@@ -46,19 +45,21 @@ export function tokensCreateToken(
 > {
   return new APIPromise($do(
     client,
-    request,
+    project,
+    createPendingChangeRequest,
     options,
   ));
 }
 
 async function $do(
   client: AlienManagerCore,
-  request: models.CreateTokenRequest,
+  project: string,
+  createPendingChangeRequest: models.CreatePendingChangeRequest,
   options?: RequestOptions,
 ): Promise<
   [
     Result<
-      models.CreatedTokenResponse,
+      models.PendingChangeResponse,
       | AlienManagerError
       | ResponseValidationError
       | ConnectionError
@@ -71,18 +72,33 @@ async function $do(
     APICall,
   ]
 > {
+  const input: operations.CreatePendingChangeRequest = {
+    project: project,
+    createPendingChangeRequest: createPendingChangeRequest,
+  };
+
   const parsed = safeParse(
-    request,
-    (value) => models.CreateTokenRequest$outboundSchema.parse(value),
+    input,
+    (value) =>
+      operations.CreatePendingChangeRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload, { explode: true });
+  const body = encodeJSON("body", payload.CreatePendingChangeRequest, {
+    explode: true,
+  });
 
-  const path = pathToFunc("/v1/tokens")();
+  const pathParams = {
+    project: encodeSimple("project", payload.project, {
+      explode: false,
+      charEncoding: "percent",
+    }),
+  };
+
+  const path = pathToFunc("/v1/projects/{project}/pending-changes")(pathParams);
 
   const headers = new Headers(compactMap({
     "Content-Type": "application/json",
@@ -96,7 +112,7 @@ async function $do(
   const context = {
     options: client._options,
     baseURL: options?.serverURL ?? client._baseURL ?? "",
-    operationID: "create_token",
+    operationID: "create_pending_change",
     oAuth2Scopes: null,
 
     resolvedSecurity: requestSecurity,
@@ -135,7 +151,7 @@ async function $do(
   const response = doResult.value;
 
   const [result] = await M.match<
-    models.CreatedTokenResponse,
+    models.PendingChangeResponse,
     | AlienManagerError
     | ResponseValidationError
     | ConnectionError
@@ -145,7 +161,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(201, models.CreatedTokenResponse$inboundSchema),
+    M.json(201, models.PendingChangeResponse$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
   )(response, req);

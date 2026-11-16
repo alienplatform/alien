@@ -7,6 +7,7 @@ pub mod commands;
 pub mod deployment_tracking;
 pub mod error;
 pub mod output;
+pub mod rerun_credential;
 
 use crate::commands::{
     down_command, inputs_command, join_command, leave_command, list_command, operator_command,

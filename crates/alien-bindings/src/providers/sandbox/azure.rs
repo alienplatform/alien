@@ -17,8 +17,8 @@ use futures::stream::{self, BoxStream};
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{checked_env_name, guard_for, Bounded, TimeoutReport};
 use crate::traits::{
-    Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart, PreviewCapability,
-    ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
+    Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart,
+    PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
     egress_policy, CreateSandbox, EgressPolicy, SandboxDataPlaneApi, ALLOW, DENY, FULL_INSPECTION,
@@ -143,7 +143,9 @@ impl AzureSandbox {
             if !valid {
                 return Err(AlienError::new(ErrorData::InvalidInput {
                     operation_context: CREATE.into(),
-                    details: format!("label '{key}' is not one a caller may set, or its value is malformed"),
+                    details: format!(
+                        "label '{key}' is not one a caller may set, or its value is malformed"
+                    ),
                     field_name: Some("labels".into()),
                 }));
             }
@@ -606,35 +608,37 @@ impl Sandbox for AzureSandbox {
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         Self::checked_sandbox_id("sandbox.get", sandbox_id)?;
+        // A caller's own key is not an id Azure knows: it names sandboxes through the label
+        // `get_or_create` stamped on them. They are tried in the order `get_or_create` tries
+        // them, and one built for another declaration is skipped, untouched, as it is there.
         if !can_name_a_sandbox(sandbox_id) {
+            for candidate in self
+                .request_key_candidates(sandbox_id, "sandbox.get")
+                .await?
+            {
+                match self.get_as_declared(&candidate.id).await {
+                    Err(error) if error.code == "SANDBOX_NOT_AS_DECLARED" => {}
+                    found => {
+                        if let Some(instance) = found? {
+                            return Ok(Some(instance));
+                        }
+                    }
+                }
+            }
             return Ok(None);
         }
-        // A 404 is "gone", which is a valid answer. Anything else is a real failure and must not
-        // be flattened into None, or a throttle would read as an expired sandbox.
-        let Some(sandbox) = self.read_sandbox("sandbox.get", sandbox_id).await? else {
-            return Ok(None);
-        };
-
-        let state = sandbox_state("sandbox.get", sandbox.state.as_deref())?;
-
-        // This is the path a reconnect takes: a sandbox outlives the declaration it was created
-        // under, so a caller holding its id would otherwise be handed whatever containment it was
-        // built with. Only the two ends of the lifecycle carry no policy, and that is not a
-        // mismatch.
-        self.judge_if_judgeable(&sandbox)?;
-
-        Ok(Some(SandboxInstance {
-            sandbox_id: sandbox.id,
-            state,
-            generation: 1,
-        }))
+        self.get_as_declared(sandbox_id).await
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
         if let Some(policy) = request.egress.as_ref() {
             self.requested_policy(Some(policy))?;
         }
-        if let Some(id) = request.sandbox_id.as_deref().filter(|id| can_name_a_sandbox(id)) {
+        if let Some(id) = request
+            .sandbox_id
+            .as_deref()
+            .filter(|id| can_name_a_sandbox(id))
+        {
             // `create` returns a sandbox that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring
             // it up, judge it there, and refuse it if it does not match.
@@ -680,7 +684,10 @@ impl Sandbox for AzureSandbox {
         let created = self.create(request).await?;
         // Two callers can both have looked before either created. The oldest sandbox with the key
         // wins and the other deletes its own, so the pair converge on one.
-        match self.find_by_request_key(&id, Some(&created.sandbox_id)).await {
+        match self
+            .find_by_request_key(&id, Some(&created.sandbox_id))
+            .await
+        {
             Ok(Some(winner)) if winner.sandbox_id != created.sandbox_id => {
                 if let Err(error) = self.terminate(&created.sandbox_id).await {
                     warn!(sandbox_id = %created.sandbox_id, %error, "could not delete the losing duplicate create");
@@ -992,8 +999,13 @@ impl Sandbox for AzureSandbox {
             "/v1/activate",
         )
         .await?;
-        super::agent_protocol::AgentTransport::send(self, sandbox_id, activation, "sandbox.activate")
-            .await?;
+        super::agent_protocol::AgentTransport::send(
+            self,
+            sandbox_id,
+            activation,
+            "sandbox.activate",
+        )
+        .await?;
         let agent = self.bound_agent(sandbox_id).await?;
         super::interactive::run_interactive(agent, request).await
     }
@@ -1101,6 +1113,52 @@ impl Sandbox for AzureSandbox {
 }
 
 impl AzureSandbox {
+    /// Reads one sandbox by id and judges it against the declaration, without waking it.
+    async fn get_as_declared(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
+        // A 404 is "gone", which is a valid answer. Anything else is a real failure and must not
+        // be flattened into None, or a throttle would read as an expired sandbox.
+        let Some(sandbox) = self.read_sandbox("sandbox.get", sandbox_id).await? else {
+            return Ok(None);
+        };
+
+        let state = sandbox_state("sandbox.get", sandbox.state.as_deref())?;
+
+        // This is the path a reconnect takes: a sandbox outlives the declaration it was created
+        // under, so a caller holding its id would otherwise be handed whatever containment it was
+        // built with. Only the two ends of the lifecycle carry no policy, and that is not a
+        // mismatch.
+        self.judge_if_judgeable(&sandbox)?;
+
+        Ok(Some(SandboxInstance {
+            sandbox_id: sandbox.id,
+            state,
+            generation: 1,
+        }))
+    }
+
+    /// The live sandboxes carrying a caller key's request-key label, oldest first.
+    async fn request_key_candidates(
+        &self,
+        requested_id: &str,
+        operation: &str,
+    ) -> Result<Vec<alien_azure_clients::azure::sandbox_data_plane::ListedSandbox>> {
+        let key = request_key(requested_id);
+        let mut candidates: Vec<_> = self
+            .client
+            .list_sandboxes(&self.sandbox_group)
+            .await
+            .map_err(|error| Self::failed(operation, error))?
+            .into_iter()
+            .filter(|listed| {
+                listed.labels.get(REQUEST_KEY_LABEL) == Some(&key)
+                    && !listed.state.eq_ignore_ascii_case("Deleting")
+                    && !listed.state.eq_ignore_ascii_case("Failed")
+            })
+            .collect();
+        candidates.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(candidates)
+    }
+
     /// Brings a sandbox the caller named back into service, or says why it cannot be.
     ///
     /// The one path that replaces rather than only refusing: `get_or_create` asked for a usable
@@ -1116,20 +1174,9 @@ impl AzureSandbox {
         requested_id: &str,
         own: Option<&str>,
     ) -> Result<Option<SandboxInstance>> {
-        let key = request_key(requested_id);
-        let mut candidates: Vec<_> = self
-            .client
-            .list_sandboxes(&self.sandbox_group)
-            .await
-            .map_err(|error| Self::failed(GET_OR_CREATE, error))?
-            .into_iter()
-            .filter(|listed| {
-                listed.labels.get(REQUEST_KEY_LABEL) == Some(&key)
-                    && !listed.state.eq_ignore_ascii_case("Deleting")
-                    && !listed.state.eq_ignore_ascii_case("Failed")
-            })
-            .collect();
-        candidates.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        let candidates = self
+            .request_key_candidates(requested_id, GET_OR_CREATE)
+            .await?;
         for candidate in candidates {
             if Some(candidate.id.as_str()) == own {
                 // Nothing older was usable, so the sandbox this call made is the answer.
@@ -2059,7 +2106,10 @@ mod tests {
             })
             .await
             .expect("ordinary legacy reconnect remains usable");
-        assert_eq!(found.sandbox.sandbox_id, "30d94857-032c-55f2-8955-b92c759bc22e");
+        assert_eq!(
+            found.sandbox.sandbox_id,
+            "30d94857-032c-55f2-8955-b92c759bc22e"
+        );
     }
 
     /// The declared image has to reach the create call, not a default chosen here.
@@ -2152,7 +2202,10 @@ mod tests {
             "2048Mi".to_string(),
             None,
         );
-        let (base, body) = sandbox.verified_create(env.clone(), BTreeMap::new()).await.expect("body");
+        let (base, body) = sandbox
+            .verified_create(env.clone(), BTreeMap::new())
+            .await
+            .expect("body");
         sandbox
             .create(CreateSandboxRequest {
                 env: env.clone(),
@@ -2224,7 +2277,9 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].len(), 2);
         assert_eq!(sent[0][REQUEST_KEY_LABEL], request_key("ask-1"));
-        assert!(alien_core::is_valid_request_key(&sent[0][REQUEST_KEY_LABEL]));
+        assert!(alien_core::is_valid_request_key(
+            &sent[0][REQUEST_KEY_LABEL]
+        ));
         assert!(alien_core::is_valid_sandbox_expiry(
             &sent[0][SANDBOX_EXPIRY_LABEL]
         ));
@@ -2251,13 +2306,19 @@ mod tests {
         ] {
             let labels = BTreeMap::from([(key.to_string(), value.to_string())]);
             assert!(
-                sandbox.verified_create(BTreeMap::new(), labels).await.is_err(),
+                sandbox
+                    .verified_create(BTreeMap::new(), labels)
+                    .await
+                    .is_err(),
                 "{key}={value} was accepted"
             );
         }
         let ok = BTreeMap::from([
             (REQUEST_KEY_LABEL.to_string(), request_key("ask-1")),
-            (SANDBOX_EXPIRY_LABEL.to_string(), "1700000000000".to_string()),
+            (
+                SANDBOX_EXPIRY_LABEL.to_string(),
+                "1700000000000".to_string(),
+            ),
         ]);
         let (_, body) = sandbox
             .verified_create(BTreeMap::new(), ok.clone())
@@ -3226,7 +3287,10 @@ mod tests {
         request.command = String::new();
         request.env = BTreeMap::from([("SECRET".to_string(), "hunter2".to_string())]);
 
-        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request).await {
+        let error = match sandbox_with(client)
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request)
+            .await
+        {
             Ok(_) => panic!("a command with no program must not run"),
             Err(error) => error,
         };
@@ -3252,7 +3316,10 @@ mod tests {
         request.args = vec!["printenv".to_string()];
         request.env = BTreeMap::from([("TOKEN".to_string(), "t".to_string())]);
 
-        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request).await {
+        let error = match sandbox_with(client)
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request)
+            .await
+        {
             Ok(_) => panic!("a command env would swallow must not be sent"),
             Err(error) => error,
         };
@@ -3302,7 +3369,10 @@ mod tests {
             assert_eq!(error.code, "INVALID_INPUT", "{path}: {error}");
 
             sandbox
-                .write_files("80b3969a-1016-5a27-86d1-a7bce44ced9b", BTreeMap::from([(path.to_string(), vec![1u8])]))
+                .write_files(
+                    "80b3969a-1016-5a27-86d1-a7bce44ced9b",
+                    BTreeMap::from([(path.to_string(), vec![1u8])]),
+                )
                 .await
                 .expect_err(&format!("'{path}' must be refused on write too"));
         }
@@ -3337,7 +3407,10 @@ mod tests {
                 .insert(agent::TRANSPORT_LABEL.into(), "unknown-version".into());
             Ok(record)
         });
-        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5)).await {
+        let error = match sandbox_with(client)
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5))
+            .await
+        {
             Ok(_) => panic!("unknown transport must be refused"),
             Err(error) => error,
         };
@@ -3353,7 +3426,9 @@ mod tests {
         client
             .expect_read_file()
             .withf(|group, sandbox_id, path| {
-                group == "grp" && sandbox_id == "80b3969a-1016-5a27-86d1-a7bce44ced9b" && path == "src/app.py"
+                group == "grp"
+                    && sandbox_id == "80b3969a-1016-5a27-86d1-a7bce44ced9b"
+                    && path == "src/app.py"
             })
             .times(1)
             .returning(|_, _, _| Ok(b"print(1)\n".to_vec()));
@@ -3475,7 +3550,10 @@ mod tests {
                     message: "the data plane is unavailable".to_string(),
                 }))
             });
-        let command = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5)).await {
+        let command = match sandbox_with(client)
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5))
+            .await
+        {
             Ok(_) => panic!("an unavailable data plane is an error"),
             Err(error) => error,
         };
@@ -3599,7 +3677,10 @@ mod tests {
         client
             .expect_create_sandbox()
             .withf(|_, request| {
-                request.environment.get("ALIEN_SANDBOX_PREVIEW_PORTS").map(String::as_str)
+                request
+                    .environment
+                    .get("ALIEN_SANDBOX_PREVIEW_PORTS")
+                    .map(String::as_str)
                     == Some("8080,8081")
                     && request.environment.get("TOKEN").map(String::as_str) == Some("t")
             })
@@ -3648,25 +3729,33 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().returning(|_, id| {
             if id == "ask-1" {
-                Err(AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
-                    resource_type: "sandbox".to_string(),
-                    resource_name: id.to_string(),
-                }))
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "sandbox".to_string(),
+                        resource_name: id.to_string(),
+                    },
+                ))
             } else {
                 Ok(running(id, None))
             }
         });
-        client
-            .expect_list_sandboxes()
-            .returning(|_| Ok(vec![listed("azure-7", "ask-1", 30), listed("other", "ask-2", 60)]));
+        client.expect_list_sandboxes().returning(|_| {
+            Ok(vec![
+                listed("azure-7", "ask-1", 30),
+                listed("other", "ask-2", 60),
+            ])
+        });
         client.expect_create_sandbox().never();
-        let resolved = sandbox_with(client).get_or_create(asks_for("ask-1")).await.unwrap();
+        let resolved = sandbox_with(client)
+            .get_or_create(asks_for("ask-1"))
+            .await
+            .unwrap();
         assert_eq!(resolved.sandbox.sandbox_id, "azure-7");
         assert!(!resolved.created, "found, not created");
     }
 
-    /// A caller's own key is not a sandbox id, so neither verb reads it from the data plane: `get`
-    /// answers none and `get_or_create` goes straight to the request-key lookup.
+    /// A caller's own key is not a sandbox id, so neither verb reads it from the data plane: both
+    /// find the sandbox by the key's request-key label, and `get` answers none when there is none.
     #[tokio::test]
     async fn a_key_that_is_not_a_guid_is_never_read_as_a_sandbox_id() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -3680,10 +3769,75 @@ mod tests {
             .returning(|_| Ok(vec![listed("azure-7", "ask-1", 30)]));
         client.expect_create_sandbox().never();
         let sandbox = sandbox_with(client);
-        assert!(sandbox.get("ask-1").await.unwrap().is_none());
+        let got = sandbox
+            .get("ask-1")
+            .await
+            .unwrap()
+            .expect("the key finds its sandbox");
+        assert_eq!(got.sandbox_id, "azure-7");
+        assert!(
+            sandbox.get("ask-2").await.unwrap().is_none(),
+            "an unused key finds nothing"
+        );
         let resolved = sandbox.get_or_create(asks_for("ask-1")).await.unwrap();
         assert_eq!(resolved.sandbox.sandbox_id, "azure-7");
         assert!(!resolved.created);
+    }
+
+    /// After a declaration changes, the oldest sandbox with a key may be built for the old one.
+    /// `get` answers with the newest-matching one in the same order `get_or_create` tries them,
+    /// and leaves the mismatched one untouched: it may be another revision's.
+    #[tokio::test]
+    async fn get_by_key_skips_an_older_sandbox_built_for_another_declaration() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_list_sandboxes()
+            .returning(|_| Ok(vec![listed("old", "ask-1", 60), listed("new", "ask-1", 5)]));
+        client.expect_get_sandbox().returning(|_, id| {
+            if id == "old" {
+                return Ok(running(id, None));
+            }
+            Ok(running(
+                id,
+                Some(EgressPolicy {
+                    default_action: "Deny".to_string(),
+                    host_rules: vec![EgressHostRule {
+                        pattern: "*".to_string(),
+                        action: "Deny".to_string(),
+                    }],
+                    rules: Vec::new(),
+                    unmodelled: Default::default(),
+                    traffic_inspection: Some("Full".to_string()),
+                }),
+            ))
+        });
+        client.expect_delete_sandbox().never();
+        client.expect_resume_sandbox().never();
+        client.expect_create_sandbox().never();
+
+        let sandbox = sandbox_denying(client, SandboxEgress::None);
+        let got = sandbox
+            .get("ask-1")
+            .await
+            .unwrap()
+            .expect("the matching sandbox is found");
+        assert_eq!(got.sandbox_id, "new");
+    }
+
+    /// When every sandbox with the key mismatches, `get` answers none rather than an error.
+    #[tokio::test]
+    async fn get_by_key_is_none_when_no_sandbox_with_the_key_matches() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_list_sandboxes()
+            .returning(|_| Ok(vec![listed("old", "ask-1", 60)]));
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running(id, None)));
+        client.expect_delete_sandbox().never();
+        client.expect_resume_sandbox().never();
+        let sandbox = sandbox_denying(client, SandboxEgress::None);
+        assert!(sandbox.get("ask-1").await.unwrap().is_none());
     }
 
     /// A GUID the data plane rejects with a 400 is a real failure, not "no such sandbox".
@@ -3705,10 +3859,12 @@ mod tests {
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_get_sandbox().returning(|_, id| {
             if id == "ask-1" {
-                Err(AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
-                    resource_type: "sandbox".to_string(),
-                    resource_name: id.to_string(),
-                }))
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "sandbox".to_string(),
+                        resource_name: id.to_string(),
+                    },
+                ))
             } else {
                 Ok(running(id, None))
             }
@@ -3717,15 +3873,19 @@ mod tests {
         let counted = lists.clone();
         client.expect_list_sandboxes().returning(move |_| {
             // Empty before this call creates; afterwards the other caller's older sandbox shows.
-            Ok(if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                vec![]
-            } else {
-                vec![listed("theirs", "ask-1", 5), listed("mine", "ask-1", 0)]
-            })
+            Ok(
+                if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    vec![]
+                } else {
+                    vec![listed("theirs", "ask-1", 5), listed("mine", "ask-1", 0)]
+                },
+            )
         });
         client
             .expect_create_sandbox()
-            .withf(|_, request| request.labels.get(REQUEST_KEY_LABEL) == Some(&request_key("ask-1")))
+            .withf(|_, request| {
+                request.labels.get(REQUEST_KEY_LABEL) == Some(&request_key("ask-1"))
+            })
             .times(1)
             .returning(|_, request| {
                 let mut record = running("mine", request.egress);
@@ -3738,7 +3898,10 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
         settles_running(&mut client, None);
-        let resolved = sandbox_with(client).get_or_create(asks_for("ask-1")).await.unwrap();
+        let resolved = sandbox_with(client)
+            .get_or_create(asks_for("ask-1"))
+            .await
+            .unwrap();
         assert_eq!(resolved.sandbox.sandbox_id, "theirs");
         assert!(!resolved.created);
     }
@@ -3799,7 +3962,10 @@ mod tests {
                     "deny is written as a rule too, so it does not rest on how the proxy treats a \
                      policy with no rules"
                 );
-                Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", Some(policy)))
+                Ok(running(
+                    "80b3969a-1016-5a27-86d1-a7bce44ced9b",
+                    Some(policy),
+                ))
             });
         settles_running(
             &mut client,
@@ -3835,7 +4001,10 @@ mod tests {
                         action: "Allow".to_string(),
                     }]
                 );
-                Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", Some(policy)))
+                Ok(running(
+                    "80b3969a-1016-5a27-86d1-a7bce44ced9b",
+                    Some(policy),
+                ))
             });
         settles_running(
             &mut client,
@@ -3907,7 +4076,12 @@ mod tests {
             client
                 .expect_create_sandbox()
                 .times(1)
-                .returning(move |_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", effective.clone())));
+                .returning(move |_, _| {
+                    Ok(running(
+                        "80b3969a-1016-5a27-86d1-a7bce44ced9b",
+                        effective.clone(),
+                    ))
+                });
             settles_running(&mut client, came_up_with.clone());
             client
                 .expect_delete_sandbox()
@@ -4183,7 +4357,12 @@ mod tests {
             client
                 .expect_create_sandbox()
                 .times(1)
-                .returning(move |_, _| Ok(running("80b3969a-1016-5a27-86d1-a7bce44ced9b", Some(effective.clone()))));
+                .returning(move |_, _| {
+                    Ok(running(
+                        "80b3969a-1016-5a27-86d1-a7bce44ced9b",
+                        Some(effective.clone()),
+                    ))
+                });
             settles_running(&mut client, Some(came_up_with.clone()));
             client
                 .expect_delete_sandbox()
@@ -4829,7 +5008,10 @@ mod tests {
         let mut request = command(5);
         request.env = BTreeMap::from([("X; curl evil".to_string(), "1".to_string())]);
 
-        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request).await {
+        let error = match sandbox_with(client)
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", request)
+            .await
+        {
             Ok(_) => panic!("a name the shell would run must not reach the shell"),
             Err(error) => error,
         };
@@ -5133,7 +5315,10 @@ mod tests {
             .expect_err("a suspended sandbox takes no content");
         assert_eq!(wrote.code, "SANDBOX_COMMAND_FAILED", "{wrote}");
 
-        let ran = match sandbox.run_command("45b46c53-eb37-5fd0-9154-07b293107be7", command(5)).await {
+        let ran = match sandbox
+            .run_command("45b46c53-eb37-5fd0-9154-07b293107be7", command(5))
+            .await
+        {
             Ok(_) => panic!("a suspended sandbox runs no code"),
             Err(error) => error,
         };
@@ -5351,7 +5536,10 @@ mod tests {
             .await
             .expect("a compliant sleeping sandbox is woken and returned");
 
-        assert_eq!(sandbox.sandbox.sandbox_id, "5dbc9969-2839-5da4-b475-dab6c06b0880");
+        assert_eq!(
+            sandbox.sandbox.sandbox_id,
+            "5dbc9969-2839-5da4-b475-dab6c06b0880"
+        );
         assert!(
             !sandbox.created,
             "waking a sleeping sandbox is not creating one"
@@ -5405,7 +5593,10 @@ mod tests {
             .await
             .expect("an absent policy on a sleeping record is unknown, not a mismatch");
 
-        assert_eq!(sandbox.sandbox.sandbox_id, "62d855ac-ab1b-57b9-9ac5-aba8ddf73566");
+        assert_eq!(
+            sandbox.sandbox.sandbox_id,
+            "62d855ac-ab1b-57b9-9ac5-aba8ddf73566"
+        );
         assert!(
             !sandbox.created,
             "waking a sleeping sandbox is not creating one"
@@ -5466,7 +5657,10 @@ mod tests {
         client.expect_execute_shell_command().never();
         client.expect_resume_sandbox().never();
 
-        let error = match sandbox_with(client).run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5)).await {
+        let error = match sandbox_with(client)
+            .run_command("80b3969a-1016-5a27-86d1-a7bce44ced9b", command(5))
+            .await
+        {
             Ok(_) => panic!("an unreadable state must not take work"),
             Err(error) => error,
         };

@@ -233,6 +233,7 @@ mod tests {
             additional_roles: Vec::new(),
             id: "sa_01HXYZ".to_string(),
             kind: ServiceAccountSubjectKind::ServiceAccount,
+            purpose: None,
             role,
             scope,
             workspace_id: "ws_4b21".to_string(),

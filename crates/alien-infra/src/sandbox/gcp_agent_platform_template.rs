@@ -180,10 +180,19 @@ fn build_template_body(
     };
 
     // Ingress only reaches a port the template declares: the agent's own, then every preview port.
-    let mut declared_ports = vec![i32::from(GCP_AGENT_PLATFORM.port)];
-    declared_ports.extend(sandbox.preview_ports.iter().map(|port| i32::from(*port)));
-    declared_ports.sort_unstable();
-    declared_ports.dedup();
+    // The agent's port is first because `:execute` goes to the FIRST declared port (measured: with
+    // the ports sorted, a preview port below the agent's received the control traffic).
+    let agent_port = i32::from(GCP_AGENT_PLATFORM.port);
+    let mut preview_ports: Vec<i32> = sandbox
+        .preview_ports
+        .iter()
+        .map(|port| i32::from(*port))
+        .filter(|port| *port != agent_port)
+        .collect();
+    preview_ports.sort_unstable();
+    preview_ports.dedup();
+    let mut declared_ports = vec![agent_port];
+    declared_ports.extend(preview_ports);
 
     Ok(SandboxEnvironmentTemplate {
         name: None,
@@ -284,6 +293,13 @@ pub struct GcpAgentPlatformTemplateController {
     /// Ready. `None` is state saved before the field existed; the binding reads it as deny.
     #[serde(default)]
     pub(crate) allow_egress: Option<bool>,
+    /// Preview ports the declaration names, carried into the binding.
+    #[serde(default)]
+    pub(crate) preview_ports: Vec<u16>,
+    /// Identity setup created to sign the preview edge credential; imported, never created here,
+    /// and carried into the binding so a deployed workload can sign.
+    #[serde(default)]
+    pub(crate) preview_service_account: Option<String>,
 }
 
 #[controller]
@@ -325,6 +341,7 @@ impl GcpAgentPlatformTemplateController {
         self.project_id = Some(gcp_config.project_id.clone());
         self.region = Some(gcp_config.region.clone());
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
+        self.preview_ports = config.preview_ports.clone();
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
 
@@ -599,6 +616,7 @@ impl GcpAgentPlatformTemplateController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
+        self.preview_ports = config.preview_ports.clone();
         let previous = ctx.previous_resource_config::<Sandbox>()?;
 
         // The template is immutable, so an unchanged body needs no work and a changed one is a
@@ -725,6 +743,11 @@ impl GcpAgentPlatformTemplateController {
                 value.egress = Some(egress.clone().into());
             }
             value.default_policy = self.default_policy.clone();
+            value.preview_ports = self.preview_ports.clone();
+            value.preview_service_account = self
+                .preview_service_account
+                .clone()
+                .map(BindingValue::value);
         }
 
         Ok(Some(
@@ -758,6 +781,7 @@ impl GcpAgentPlatformTemplateController {
         self.region = None;
         self.max_lifetime_seconds = None;
         self.allow_egress = None;
+        self.preview_ports = Vec::new();
         self.egress = None;
         self.default_policy = None;
     }
@@ -801,6 +825,8 @@ impl GcpAgentPlatformTemplateController {
             default_policy: None,
             egress: None,
             allow_egress: None,
+            preview_ports: Vec::new(),
+            preview_service_account: None,
             _internal_stay_count: None,
         }
     }
@@ -1169,6 +1195,35 @@ mod tests {
             }
             other => panic!("expected a GCP Agent Platform binding, got {other:?}"),
         }
+    }
+
+    /// The binding a deployed workload reads must carry what preview needs: the declared ports
+    /// and the signing identity setup created. Without the identity a deployed sandbox's
+    /// `preview()` fails at runtime.
+    #[test]
+    fn the_binding_carries_the_preview_ports_and_the_signer_setup_created() {
+        use crate::core::ResourceController;
+        let mut controller = GcpAgentPlatformTemplateController::mock_ready("eng", "tpl1");
+        controller.preview_ports = vec![8080, 8081];
+        controller.preview_service_account =
+            Some("agents-preview@p.iam.gserviceaccount.com".into());
+        let params = controller
+            .get_binding_params()
+            .expect("binding serializes")
+            .expect("a ready template has a binding");
+        let alien_core::bindings::SandboxBinding::GcpAgentPlatform(b) =
+            serde_json::from_value(params).expect("parses")
+        else {
+            panic!("expected a GCP Agent Platform binding");
+        };
+        assert_eq!(b.preview_ports, vec![8080, 8081]);
+        assert_eq!(
+            b.preview_service_account
+                .expect("signer present")
+                .into_value("b", "previewServiceAccount")
+                .expect("literal"),
+            "agents-preview@p.iam.gserviceaccount.com"
+        );
     }
 
     #[test]
@@ -1641,6 +1696,43 @@ mod tests {
         check_sandbox_template(&sandbox, "pfx", "123", &other_port).expect_err("another port");
     }
 
+    /// The preview ports the signed sandbox declares are the ones the verifier lets the template
+    /// carry: the controller's own body passes, a port nobody signed or a missing one does not.
+    #[test]
+    fn the_verifier_accepts_exactly_the_signed_preview_ports() {
+        use alien_verifier::cloud_write::resource::check_sandbox_template;
+        let mut sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        sandbox.preview_ports = vec![8081, 8090, 8080];
+        let body = build_template_body(&sandbox, "pfx-agent-sbx", &deployment_config(None, None))
+            .expect("a valid sandbox builds a body");
+        let wire = serde_json::to_value(&body).expect("the template body serializes");
+        check_sandbox_template(&sandbox, "pfx", "123", &wire).expect("the controller's own body");
+
+        let mut extra = wire.clone();
+        extra["customContainerEnvironment"]["ports"]
+            .as_array_mut()
+            .expect("ports")
+            .push(serde_json::json!({"port": 9999, "protocol": "TCP"}));
+        check_sandbox_template(&sandbox, "pfx", "123", &extra).expect_err("an unsigned port");
+
+        // `:execute` goes to the first declared port, so the agent's port must be the first.
+        let mut sorted = wire.clone();
+        sorted["customContainerEnvironment"]["ports"]
+            .as_array_mut()
+            .expect("ports")
+            .sort_by_key(|port| port["port"].as_i64());
+        check_sandbox_template(&sandbox, "pfx", "123", &sorted)
+            .expect_err("the agent's port is not first");
+
+        let mut missing = wire;
+        missing["customContainerEnvironment"]["ports"]
+            .as_array_mut()
+            .expect("ports")
+            .remove(0);
+        check_sandbox_template(&sandbox, "pfx", "123", &missing)
+            .expect_err("a signed port left out");
+    }
+
     #[test]
     fn build_template_body_declares_preview_ports_and_disk() {
         let mut sandbox = sandbox_with(SandboxEgress::Internet, "ubuntu:24.04", None, None);
@@ -1656,8 +1748,8 @@ mod tests {
             .collect();
         assert_eq!(
             ports,
-            vec![8080, 8081, 8090, 8971],
-            "agent port once, then each preview port"
+            vec![8971, 8080, 8081, 8090],
+            "agent port first (`:execute` goes to the first declared port), then each preview port"
         );
         assert_eq!(
             wire["customContainerEnvironment"]["resources"]["limits"]["ephemeral-storage"],

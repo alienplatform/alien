@@ -1,4 +1,4 @@
-"""HTTP and WebSocket on 8080, 8081 and 8090. Every request needs the bearer token.
+"""HTTP and WebSocket on 8080, 8081 and 8090. Every request needs the bearer token. A WebSocket upgrade that offers subprotocols is answered with the first one.
 
 A 200 reply carries the SHA-256 of the Authorization header the server received, so a
 caller can prove it arrived unchanged. WebSocket messages are echoed back unchanged.
@@ -60,8 +60,11 @@ def frame(opcode, data):
 
 async def websocket(reader, writer, headers):
     accept = base64.b64encode(hashlib.sha1(headers["sec-websocket-key"].encode() + GUID).digest())
+    # A daemon with its own protocol picks it; the first one offered is the caller's own.
+    offered = [name.strip() for name in headers.get("sec-websocket-protocol", "").split(",") if name.strip()]
+    chosen = b"Sec-WebSocket-Protocol: " + offered[0].encode() + b"\r\n" if offered else b""
     writer.write(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
-                 b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n\r\n")
+                 b"Connection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n" + chosen + b"\r\n")
     await writer.drain()
     message, kind = b"", 0
     while True:

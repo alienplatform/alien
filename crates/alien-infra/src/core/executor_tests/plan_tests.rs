@@ -555,9 +555,10 @@ fn refresh_failure_waiting_for_a_dependency_is_pending_recovery() -> Result<()> 
     assert!(executor_for(&unchanged)?
         .pending_recovery_updates(&state)?
         .is_empty());
+    // Running on the release it should have: the consumer updates against it.
     state.resources.insert(
         "dependency".into(),
-        create_running_function_state("dependency", "image-v1"),
+        create_running_function_state("dependency", "test-image-dependency"),
     );
     assert!(executor.plan(&state)?.updates.contains_key("consumer"));
     Ok(())
@@ -808,7 +809,8 @@ async fn test_plan_leaves_held_resources_alone() -> Result<()> {
         .build();
 
     let free = new_executor(&stack_v2)?.plan(&installed)?;
-    assert!(free.updates.contains_key("api") && free.updates.contains_key("jobs"));
+    // `jobs` links `api`: it follows once `api` has rolled to v2.
+    assert!(free.updates.contains_key("api") && !free.updates.contains_key("jobs"));
     assert!(free.creates.contains(&"cache".to_string()));
 
     let held = executor_holding(&stack_v2, &["api", "jobs", "cache"])?.plan(&installed)?;

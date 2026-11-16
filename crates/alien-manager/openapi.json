@@ -1494,6 +1494,48 @@
         ]
       }
     },
+    "/v1/deployments/{id}/setup-credential": {
+      "post": {
+        "tags": [
+          "identity"
+        ],
+        "summary": "Issue a short-lived key for rerunning an installation, to its own Operator.",
+        "description": "The caller proves itself with the Operator's live key as the bearer token.\nIt is not a session: the key is checked against this deployment only, so\nevery other caller gets the same refusal.",
+        "operationId": "issueSetupCredential",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedSetupCredential"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": ""
+          },
+          "409": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/v1/deployments/{id}/status-report": {
       "post": {
         "tags": [
@@ -2917,6 +2959,34 @@
             "bearer": []
           }
         ]
+      },
+      "delete": {
+        "tags": [
+          "values"
+        ],
+        "description": "Removes every value of a setup link or registration scope, for when the link is revoked or the registration expires. A deployment scope is refused: its values go with the deployment.",
+        "operationId": "delete_scope",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "link:<setupLinkId> or reg:<registrationId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, or there was nothing to delete"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/v1/values/{scope}/export": {
@@ -2966,6 +3036,46 @@
           },
           "502": {
             "description": "The target refused or could not be reached"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/values/{scope}/move": {
+      "post": {
+        "tags": [
+          "values"
+        ],
+        "description": "Copies a setup link's values, or moves a registration's values, into the deployment created from it. Needs a signed claim that names the source and the deployment; nothing in the request body or path chooses the destination. Repeating a finished move changes nothing.",
+        "operationId": "move_values",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "path",
+            "description": "link:<setupLinkId> or reg:<registrationId>",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Metadata of the values now held by the deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValueSlotsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The claim does not cover this move"
           }
         },
         "security": [
@@ -9033,7 +9143,11 @@
           },
           "body": {
             "type": "object",
-            "description": "The next list's body (`previous`, `adminThreshold`, `signers`,\n`deny`, `recovered`)."
+            "description": "The next list's body (`previous`, `adminThreshold`, `signers`,\n`deny`, `recovered`).",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "summary": {
             "type": "string",
@@ -12569,6 +12683,24 @@
             "type": "string"
           }
         }
+      },
+      "IssuedSetupCredential": {
+        "type": "object",
+        "description": "A key that updates one installation for a few minutes, and its deadline.\nNot `Debug`: it holds a key.",
+        "required": [
+          "token",
+          "expiresAt"
+        ],
+        "properties": {
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "token": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "KeyHeartbeatData": {
         "oneOf": [
@@ -17213,7 +17345,11 @@
           },
           "body": {
             "type": "object",
-            "description": "The next list's body."
+            "description": "The next list's body.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "createdAt": {
             "type": "string"
@@ -17701,7 +17837,11 @@
         "properties": {
           "setupHosting": {
             "type": "object",
-            "description": "What this manager renders setup templates with, so the digests a\nrelease signs are of the templates installs get."
+            "description": "What this manager renders setup templates with, so the digests a\nrelease signs are of the templates installs get.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -21713,6 +21853,10 @@
           "resources"
         ],
         "properties": {
+          "acceptsShortLivedDeploymentToken": {
+            "type": "boolean",
+            "description": "Set by a client that can use a short-lived deployment token for this run\nonly and will not store it. Without it, the response carries no new\ntoken for an installation whose Operator already holds its own key."
+          },
           "basePlatform": {
             "oneOf": [
               {
@@ -21837,6 +21981,14 @@
             ],
             "description": "Deployment bearer token for the imported deployment, when available."
           },
+          "deploymentTokenExpiresAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When `deployment_token` stops working. Set only for a short-lived token,\nwhich a client uses for this run and does not store."
+          },
           "stackSettings": {
             "$ref": "#/components/schemas/StackSettings",
             "description": "Stack settings persisted for the deployment."
@@ -21880,6 +22032,10 @@
               "$ref": "#/components/schemas/ResourceRef"
             },
             "description": "Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition."
+          },
+          "dependencyUpdatePending": {
+            "type": "boolean",
+            "description": "Whether this resource owes an update because a dependency is changing, though its own\nconfig is not. The update waits until the dependency has rolled to the release being\napplied, so the owed update must survive between plans and restarts. Cleared when the\nupdate starts. State written before this field existed reads as not owing one."
           },
           "description": {
             "type": [
@@ -21954,6 +22110,13 @@
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "requestedUpdateRan": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rollout in which an update ran because the controller asked for one while the\nconfig was unchanged. While the controller keeps asking in that same rollout, its\ndependents no longer wait for it, so a check that never settles cannot hold them back\nfor good. A later rollout is a new request and is waited for again. Cleared once the\ncontroller stops asking. State written before this field existed (it was a flag then)\nreads as none."
           },
           "retryAttempt": {
             "type": "integer",

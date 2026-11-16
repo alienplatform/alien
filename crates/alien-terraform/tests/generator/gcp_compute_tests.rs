@@ -576,3 +576,87 @@ fn a_gcp_remote_sandbox_management_role_heartbeats_without_reaching_a_session() 
          alone:\n{rendered}"
     );
 }
+
+/// Two sandboxes that declare preview ports share one project-wide custom role for signing the
+/// edge credential: its id is fixed, so one Terraform address per sandbox would create the same
+/// role twice and fail at apply. Every signer binding points to the one address.
+#[test]
+fn two_gcp_preview_sandboxes_share_one_signing_role() {
+    let sandbox = |name: &str, engine: &str| {
+        (
+            GcpAgentPlatformEngine::new(engine.to_string()).build(),
+            Sandbox::new(name.to_string())
+                .code(SandboxCode::Image {
+                    image: "python:3.12".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::None)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .preview_ports(vec![8080])
+                .build(),
+            ResourceRef::new(GcpAgentPlatformEngine::RESOURCE_TYPE, engine.to_string()),
+        )
+    };
+    let (engine_a, sandbox_a, depends_a) = sandbox("agents", "agents-engine");
+    let (engine_b, sandbox_b, depends_b) = sandbox("jobs", "jobs-engine");
+    let stack = Stack::new("acme-two".to_string())
+        .add(
+            ServiceAccount::new("worker-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(engine_a, ResourceLifecycle::Frozen)
+        .add(engine_b, ResourceLifecycle::Frozen)
+        .add_with_dependencies(sandbox_a, ResourceLifecycle::Frozen, vec![depends_a])
+        .add_with_dependencies(sandbox_b, ResourceLifecycle::Frozen, vec![depends_b])
+        .permission(
+            "worker",
+            alien_core::permissions::PermissionProfile::new()
+                .resource("agents", ["sandbox/execute"])
+                .resource("jobs", ["sandbox/execute"]),
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let roles = rendered
+        .matches("role_%s_sandbox_preview_sign\", local.gcp_custom_role_prefix) title")
+        .count();
+    assert_eq!(roles, 1, "one signing role for the stack:\n{rendered}");
+    assert_eq!(
+        rendered
+            .matches("resource \"google_project_iam_custom_role\" \"gcp_role_sandbox_preview_sign\"")
+            .count(),
+        1,
+        "{rendered}"
+    );
+    // Each signer account has its own binding, and both name the one role.
+    for signer in ["agents_preview", "jobs_preview"] {
+        let binding = format!("resource \"google_service_account_iam_member\" \"{signer}_sign_worker_sa\"");
+        let block = rendered
+            .split(&binding)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{signer} has a signing binding:\n{rendered}"))
+            .split(" resource ")
+            .next()
+            .unwrap();
+        assert!(
+            block.contains("google_project_iam_custom_role.gcp_role_sandbox_preview_sign[0].name"),
+            "{signer}: {block}"
+        );
+    }
+
+    assert_terraform_valid(&module, "two gcp preview sandboxes");
+    snapshot_module("gcp_two_preview_sandboxes", &module);
+}

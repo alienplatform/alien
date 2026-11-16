@@ -214,6 +214,7 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         charts: None,
+        runtime_identity: None,
         release_channels: None,
         signing: None,
         bundle_signing_key: None,
@@ -256,7 +257,7 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
             Role::SandboxImagePusher,
             Role::VerifiedSetupImporter,
             Role::OperatorSync,
-            ] {
+        ] {
             let (status, body) = pull(&state, role, path).await;
             assert_eq!(
                 status,
@@ -1219,7 +1220,10 @@ mod runtime_credentials {
     #[tokio::test]
     async fn long_command_still_completes_after_the_relay_capability_expires() {
         let (mut state, deployment_id, tmp) = state().await;
-        let clock = Arc::new(AtomicI64::new(Utc::now().timestamp()));
+        // Local storage presigns with the real clock, while the credential and
+        // command clocks are frozen. Start them a minute ahead of real time so a
+        // slow machine cannot push a presigned expiry past the frozen deadline.
+        let clock = Arc::new(AtomicI64::new(Utc::now().timestamp() + 60));
         let server_clock = clock.clone();
         let registry = Arc::new(InMemoryCommandRegistry::new());
         registry

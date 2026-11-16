@@ -232,6 +232,78 @@ mod tests {
 
     use super::{build_worker_deployment, KubernetesWorkerController};
 
+    /// A release written before the security profile existed has no `security`
+    /// field: its pod gets no security context, volumes or mounts. Only an
+    /// explicit `restricted` profile restricts it.
+    #[tokio::test]
+    async fn worker_pod_is_restricted_only_when_the_release_says_so() {
+        let render = |security: Option<alien_core::ContainerSecurity>| async move {
+            let mut worker = Worker::new("api".to_string())
+                .code(WorkerCode::Image {
+                    image: "registry.example.com/api:1".to_string(),
+                })
+                .permissions("default".to_string())
+                .build();
+            worker.security = security;
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(worker.clone()), Vec::new());
+            let manifest = build_worker_deployment(
+                &KubernetesWorkerController::default(),
+                &worker,
+                "api",
+                "test-ns",
+                "api-sa",
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .unwrap();
+            manifest.spec.unwrap().template.spec.unwrap()
+        };
+        let old = render(None).await;
+        assert!(old.security_context.is_none());
+        assert!(old.volumes.is_none());
+        assert!(old.containers[0].security_context.is_none());
+        assert!(old.containers[0].volume_mounts.is_none());
+
+        let restricted = render(Some(alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: Some(1000),
+            run_as_group: Some(1000),
+            read_only_root_filesystem: None,
+            writable_paths: vec!["/cache".to_string()],
+        }))
+        .await;
+        let pod = restricted.security_context.expect("pod security");
+        assert_eq!(pod.run_as_non_root, Some(true));
+        assert_eq!(pod.run_as_user, Some(1000));
+        let container = restricted.containers[0]
+            .security_context
+            .as_ref()
+            .expect("container security");
+        assert_eq!(container.read_only_root_filesystem, Some(true));
+        let mounts: Vec<_> = restricted.containers[0]
+            .volume_mounts
+            .as_ref()
+            .expect("mounts")
+            .iter()
+            .map(|mount| mount.mount_path.as_str())
+            .collect();
+        assert!(mounts.contains(&"/tmp") && mounts.contains(&"/cache"), "{mounts:?}");
+
+        let opted_out = render(Some(alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Unrestricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        }))
+        .await;
+        assert!(opted_out.security_context.is_none());
+        assert!(opted_out.containers[0].security_context.is_none());
+    }
+
     #[tokio::test]
     async fn worker_manifest_matches_the_stack_source_build_architecture() {
         let worker = Worker::new("api".to_string())
