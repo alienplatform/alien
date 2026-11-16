@@ -1473,9 +1473,8 @@ impl Sandbox for GcpAgentPlatformSandbox {
             match &identity {
                 Some(first) if *first != seen => {
                     if restarted {
-                        return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                            operation: READ_FILE.to_string(),
-                            reason: format!("'{path}' changed while it was being read; try again"),
+                        return Err(AlienError::new(ErrorData::SandboxFileChanged {
+                            path: path.to_string(),
                         }));
                     }
                     restarted = true;

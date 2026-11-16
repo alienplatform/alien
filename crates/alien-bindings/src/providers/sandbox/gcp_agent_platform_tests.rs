@@ -3436,7 +3436,8 @@ async fn read_file_fails_retryably_when_the_file_keeps_changing() {
         .await
         .expect_err("changing file");
     assert!(error.retryable, "{error:?}");
-    assert!(error.to_string().contains("changed while"), "{error}");
+    assert_eq!(error.code, "SANDBOX_FILE_CHANGED", "{error}");
+    assert!(error.to_string().contains("'f'"), "{error}");
 }
 
 /// A file that does not change is read in one pass, one call per page, with no restart.
