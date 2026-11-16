@@ -28,6 +28,17 @@ fn failed(operation: &str) -> ErrorData {
     reason = "Alien errors retain structured metadata and causal context"
 )]
 async fn main() -> Result<()> {
+    // `alien-egress-gateway --self-check`: the release build runs it. A gateway built without the
+    // cloud providers boots, cannot read its configuration vault and restarts forever on a VM,
+    // so a build that lacks them must fail where it is built.
+    if env::args().nth(1).as_deref() == Some("--self-check") {
+        let cloud = cfg!(feature = "cloud");
+        println!(
+            "cloud providers: {}",
+            if cloud { "compiled in" } else { "MISSING" }
+        );
+        std::process::exit(if cloud { 0 } else { 1 });
+    }
     tracing_subscriber::registry()
         .with(logging::json_layer(std::io::stdout))
         .with(EnvFilter::from_default_env())

@@ -20,7 +20,7 @@
 #   AZURE_INTERNET_LOCATION    region, default eastus
 #   AZURE_INTERNET_VM_SIZE     gateway VM size, default Standard_D2s_v4 (pick one with quota)
 #   AGENT_BINARY               path to a static (musl) alien-sandbox-agent
-#   GATEWAY_BINARY             path to a static (musl) alien-egress-gateway built from this branch with `--features cloud`
+#   GATEWAY_BINARY             path to a static (musl) alien-egress-gateway built from this branch with `--features cloud` (`--self-check` fails a build without it)
 #                              (the pinned release image can predate the admin protocol; bump the pin at release)
 #   AZURE_INTERNET_TEST        driver test to run: live_internet_proof (default) or live_leak_probes (needs AZURE_INTERNET_LISTENER_IP)
 #   AZURE_INTERNET_KEEP        set to keep the resources after the run (debugging); tear down with the `teardown` command
@@ -118,6 +118,7 @@ save_gateway_logs() { # save_gateway_logs <tag>
 
 if [ "$cmd" = teardown ]; then teardown; exit 0; fi
 : "${AGENT_BINARY:?}" "${GATEWAY_BINARY:?}"
+"$GATEWAY_BINARY" --self-check || { echo "GATEWAY_BINARY lacks the cloud providers: build it with --features cloud"; exit 1; }
 export PATH="$HOME/bin:$PATH"
 command -v terraform >/dev/null || { echo "terraform is required"; exit 1; }
 
