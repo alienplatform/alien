@@ -1,15 +1,13 @@
 //! Whether a command can obtain cloud credentials or an instance identity from the node's
 //! metadata service.
 //!
-//! On Kubernetes the agent has no packet redirect, so a NetworkPolicy is the only thing between a
-//! command and the metadata address, and some clusters leave that address reachable (EKS Auto
-//! Mode with the isolated sandbox runtime does, and its NetworkPolicy cannot close it). What must
-//! hold is that nothing useful comes back, so this asks for credentials the way each cloud's
-//! tooling would. It fails closed: the only replies that count as "nothing here" are a refused
-//! connection or no connection (nothing to found, and a dropped connection is how a NetworkPolicy
-//! blocks), and an HTTP 401, 403 or 404. Data, a redirect, a 429 or 5xx, an unparseable or cut-off
-//! reply, a read timeout after the connection opened, all fail the check. Run it as the identity
-//! that runs commands.
+//! On Kubernetes the agent has no packet redirect, so whether the metadata address is reachable
+//! from a command depends on the cluster. What must hold is that nothing useful comes back, so
+//! this asks for credentials and instance data the way each cloud's tooling would. It fails
+//! unless every reply is a refusal: only no connection (nothing answers, and a dropped connection
+//! is how a NetworkPolicy blocks traffic) and an HTTP 401, 403 or 404 count as "nothing here".
+//! Data, a redirect, a 429 or 5xx, an unparseable or cut-off reply, and a read timeout after the
+//! connection opened all fail the check. Run it as the identity that runs commands.
 use std::{
     fmt,
     io::{Read, Write},
@@ -162,7 +160,7 @@ pub fn credentials_obtainable() -> Result<(), Exposure> {
 /// What one request showed.
 #[derive(Debug, PartialEq, Eq)]
 enum Reply {
-    /// The connection could not be made: nothing to found (a dropped connection is a policy).
+    /// The connection could not be made: nothing to return (a dropped connection is a policy).
     Unreachable,
     /// A complete status line, and whatever body arrived.
     Status(u16, String),
