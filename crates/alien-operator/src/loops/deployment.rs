@@ -274,9 +274,20 @@ async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Durat
 /// it reaches the manager and the API. Errors inside the step loop already do: they
 /// fail the deployment. The status is kept, so the next pass retries.
 async fn record_pass_error(state: &OperatorState, error: &AlienError<ErrorData>) -> Result<()> {
-    let Some(mut current) = state.db.get_deployment_state().await? else {
+    let Some(observed) = state.db.get_deployment_state().await? else {
         return Ok(());
     };
+    record_pass_error_from(state, observed, error).await
+}
+
+/// Save the error on top of `observed`, only if the state is still exactly `observed`. A
+/// target the sync loop accepted in between wins; the next pass reports the error again.
+async fn record_pass_error_from(
+    state: &OperatorState,
+    observed: DeploymentState,
+    error: &AlienError<ErrorData>,
+) -> Result<()> {
+    let mut current = observed.clone();
     if current.target_release.is_none()
         || current.status.is_failed()
         || matches!(current.status, DeploymentStatus::Running)
@@ -290,8 +301,13 @@ async fn record_pass_error(state: &OperatorState, error: &AlienError<ErrorData>)
         return Ok(());
     }
     current.error = Some(recorded);
-    state.db.set_deployment_state(&current).await?;
-    state.db.request_sync();
+    if state
+        .db
+        .compare_and_set_deployment_state(&observed, &current)
+        .await?
+    {
+        state.db.request_sync();
+    }
     Ok(())
 }
 
@@ -303,9 +319,10 @@ const BASE_CLOUD_PASS_ERROR_CODES: [&str; 2] = ["BASE_CLOUD_UNAVAILABLE", "BASE_
 /// so the deployment does not keep showing a problem that is gone. A failed deployment keeps
 /// its error; that one belongs to the failure.
 async fn clear_base_cloud_pass_error(state: &OperatorState) -> Result<()> {
-    let Some(mut current) = state.db.get_deployment_state().await? else {
+    let Some(observed) = state.db.get_deployment_state().await? else {
         return Ok(());
     };
+    let mut current = observed.clone();
     let stale = !current.status.is_failed()
         && current
             .error
@@ -315,8 +332,13 @@ async fn clear_base_cloud_pass_error(state: &OperatorState) -> Result<()> {
         return Ok(());
     }
     current.error = None;
-    state.db.set_deployment_state(&current).await?;
-    state.db.request_sync();
+    if state
+        .db
+        .compare_and_set_deployment_state(&observed, &current)
+        .await?
+    {
+        state.db.request_sync();
+    }
     Ok(())
 }
 
@@ -2846,6 +2868,33 @@ mod tests {
         record_pass_error(&state, &error).await.unwrap();
         let unchanged = state.db.get_deployment_state().await.unwrap().unwrap();
         assert!(unchanged.error.is_none());
+    }
+
+    /// A target accepted between reading the state and saving the error is kept: the error
+    /// write is dropped instead of restoring the older target.
+    #[tokio::test]
+    async fn an_error_never_overwrites_a_target_accepted_meanwhile() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        let mut observed = state.db.get_deployment_state().await.unwrap().unwrap();
+        observed.status = DeploymentStatus::Pending;
+        observed.error = None;
+        observed.target_release = observed.current_release.clone();
+        state.db.set_deployment_state(&observed).await.unwrap();
+
+        // Sync accepts a newer target after the pass read `observed`.
+        let mut newer = observed.clone();
+        newer.status = DeploymentStatus::UpdatePending;
+        state.db.set_deployment_state(&newer).await.unwrap();
+
+        let error = AlienError::new(ErrorData::ConfigurationError {
+            message: "No region for the base cloud".to_string(),
+        });
+        record_pass_error_from(&state, observed, &error)
+            .await
+            .unwrap();
+        let after = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(after.status, DeploymentStatus::UpdatePending);
+        assert!(after.error.is_none());
     }
 
     /// The base cloud error an earlier pass recorded is removed once a pass runs again; any
