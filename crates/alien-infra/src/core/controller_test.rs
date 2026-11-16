@@ -819,6 +819,7 @@ pub struct SingleControllerExecutorBuilder {
     initial_setup_authority: alien_core::InitialSetupAuthority,
     resource_prefix: String,
     permission_profiles: Vec<(String, alien_core::permissions::PermissionProfile)>,
+    remote_access: bool,
     delay_mode: DelayMode,
 }
 
@@ -861,6 +862,7 @@ impl SingleControllerExecutorBuilder {
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             resource_prefix: "test".to_string(),
             permission_profiles: Vec::new(),
+            remote_access: false,
             delay_mode: DelayMode::default(),
         }
     }
@@ -889,6 +891,12 @@ impl SingleControllerExecutorBuilder {
     /// that branches on ownership needs the Frozen shape to be constructible too.
     pub fn resource_lifecycle(mut self, lifecycle: ResourceLifecycle) -> Self {
         self.resource_lifecycle = lifecycle;
+        self
+    }
+
+    /// Declares the resource under test with remote access, as `add_with_remote_access` does.
+    pub fn remote_access(mut self, remote_access: bool) -> Self {
+        self.remote_access = remote_access;
         self
     }
 
@@ -1348,7 +1356,7 @@ impl SingleControllerExecutorBuilder {
                     .collect(),
                 display_name: None,
                 description: None,
-                remote_access: false,
+                remote_access: self.remote_access,
                 enabled_when: None,
             },
         );

@@ -2017,8 +2017,15 @@ mod wildcard_sandbox_tests {
             ("sandbox/heartbeat", false),
             ("sandbox/bundle-write", false),
         ] {
-            assert_eq!(wildcard_sandbox_set_is_group_only(false, &name(id)), reaches, "{id}");
-            assert!(!wildcard_sandbox_set_is_group_only(true, &name(id)), "{id} on a published group");
+            assert_eq!(
+                wildcard_sandbox_set_is_group_only(false, &name(id)),
+                reaches,
+                "{id}"
+            );
+            assert!(
+                !wildcard_sandbox_set_is_group_only(true, &name(id)),
+                "{id} on a published group"
+            );
         }
     }
 }

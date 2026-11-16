@@ -22,30 +22,12 @@ pub enum DirectSetup {
 
 /// Items the Google Cloud sandbox emitter produces, keyed by what each one is for.
 pub const GCP_SANDBOX_ITEMS: &[(&str, DirectSetup)] = &[
-    (
-        "engine-grant:access",
-        DirectSetup::Pending("remote caller's engine grant"),
-    ),
-    (
-        "engine-grant:templates",
-        DirectSetup::Pending("management's template grant on the engine"),
-    ),
-    (
-        "engine-grant:preview",
-        DirectSetup::Pending("preview signing identity's engine grant"),
-    ),
-    (
-        "preview-signer-account",
-        DirectSetup::Pending("preview signing service account"),
-    ),
-    (
-        "preview-sign-role",
-        DirectSetup::Pending("custom role holding only signJwt"),
-    ),
-    (
-        "preview-sign-binding",
-        DirectSetup::Pending("signJwt on the signer for each execute owner"),
-    ),
+    ("engine-grant:access", DirectSetup::Creates),
+    ("engine-grant:templates", DirectSetup::Creates),
+    ("engine-grant:preview", DirectSetup::Creates),
+    ("preview-signer-account", DirectSetup::Creates),
+    ("preview-sign-role", DirectSetup::Creates),
+    ("preview-sign-binding", DirectSetup::Creates),
 ];
 
 /// Items the Azure sandbox emitter produces, keyed by what each one is for.

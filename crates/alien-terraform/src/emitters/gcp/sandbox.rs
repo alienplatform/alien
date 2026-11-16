@@ -1027,24 +1027,17 @@ mod tests {
                 "the emitter's items and alien_core::sandbox_setup_parity::GCP_SANDBOX_ITEMS differ"
             );
 
-            // The honest state today: these are the known gaps. Flip one to `Creates` in the same
-            // change that makes direct setup create it, and add its controller test.
+            // Every item is created by direct setup: the controller tests in alien-infra
+            // (`gcp_engine_setup_tests`) prove the same role, scope and member for each. A new
+            // Pending item has to be listed here on purpose.
             let pending: BTreeSet<&str> = GCP_SANDBOX_ITEMS
                 .iter()
                 .filter(|(_, status)| matches!(status, DirectSetup::Pending(_)))
                 .map(|(item, _)| *item)
                 .collect();
-            assert_eq!(
-                pending,
-                BTreeSet::from([
-                    "engine-grant:access",
-                    "engine-grant:preview",
-                    "engine-grant:templates",
-                    "preview-sign-binding",
-                    "preview-sign-role",
-                    "preview-signer-account",
-                ]),
-                "a Pending item changed status: update this list with it"
+            assert!(
+                pending.is_empty(),
+                "a Pending item has no controller test yet: {pending:?}"
             );
         }
 

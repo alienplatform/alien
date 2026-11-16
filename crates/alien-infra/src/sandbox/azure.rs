@@ -219,10 +219,12 @@ impl AzureSandboxController {
                 state: ApplyingGroupPermissions,
                 suggested_delay: None,
             }),
-            Some("Failed") | Some("Canceled") => Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("Azure sandbox group '{group}' failed to provision"),
-                resource_id: Some(config.id.clone()),
-            })),
+            Some("Failed") | Some("Canceled") => {
+                Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!("Azure sandbox group '{group}' failed to provision"),
+                    resource_id: Some(config.id.clone()),
+                }))
+            }
             _ => Ok(HandlerAction::Stay {
                 max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
@@ -1150,8 +1152,9 @@ impl AzureSandboxController {
         let azure_config = ctx.get_azure_config()?;
         let region = azure_config.region.clone().ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
-                message: "the Azure region is not set; set AZURE_REGION to create the sandbox group"
-                    .to_string(),
+                message:
+                    "the Azure region is not set; set AZURE_REGION to create the sandbox group"
+                        .to_string(),
                 resource_id: Some(config.id.clone()),
             })
         })?;
@@ -1166,7 +1169,8 @@ impl AzureSandboxController {
                 resource_id: Some(config.id.clone()),
             }));
         }
-        let resource_group = crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
+        let resource_group =
+            crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let group = sandbox_group_name(ctx.resource_prefix, &config.id);
         let arm = ctx
             .service_provider
@@ -3036,7 +3040,9 @@ mod direct_setup_tests {
         groups
             .expect_create_or_update_sandbox_group()
             .withf(|rg, name, location| {
-                rg == "default-resource-group" && name == "test-prefix-box-one" && location == "eastus"
+                rg == "default-resource-group"
+                    && name == "test-prefix-box-one"
+                    && location == "eastus"
             })
             .times(1)
             .returning(|_, _, _| Ok(group("Creating")));
@@ -3059,11 +3065,20 @@ mod direct_setup_tests {
         .await;
         drive(&mut executor).await;
         let controller = executor.internal_state::<AzureSandboxController>().unwrap();
-        assert_eq!(controller.sandbox_group.as_deref(), Some("test-prefix-box-one"));
+        assert_eq!(
+            controller.sandbox_group.as_deref(),
+            Some("test-prefix-box-one")
+        );
         assert_eq!(controller.region.as_deref(), Some("eastus"));
-        assert_eq!(controller.resource_group.as_deref(), Some("default-resource-group"));
+        assert_eq!(
+            controller.resource_group.as_deref(),
+            Some("default-resource-group")
+        );
         assert!(controller.created_group);
-        assert!(polls.load(Ordering::SeqCst) >= 2, "waits for the group to finish");
+        assert!(
+            polls.load(Ordering::SeqCst) >= 2,
+            "waits for the group to finish"
+        );
     }
 
     /// The setup principal holds no data-plane role on the group, so a setup run makes no
@@ -3134,7 +3149,10 @@ mod direct_setup_tests {
         drive(&mut executor).await;
         let controller = executor.internal_state::<AzureSandboxController>().unwrap();
         assert_eq!(controller.state, AzureSandboxState::Ready);
-        assert!(controller.disk_image_id.is_none(), "nothing was built in setup");
+        assert!(
+            controller.disk_image_id.is_none(),
+            "nothing was built in setup"
+        );
     }
 
     /// A group a Terraform package created arrives through its import and is adopted: this
@@ -3200,7 +3218,10 @@ mod direct_setup_tests {
             .await;
             drive(&mut executor).await;
             let controller = executor.internal_state::<AzureSandboxController>().unwrap();
-            assert_eq!(controller.sandbox_group.as_deref(), Some("test-prefix-box-one"));
+            assert_eq!(
+                controller.sandbox_group.as_deref(),
+                Some("test-prefix-box-one")
+            );
         }
     }
 

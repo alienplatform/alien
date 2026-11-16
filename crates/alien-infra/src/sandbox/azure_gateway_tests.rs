@@ -26,13 +26,7 @@ async fn executor(
     wrong_source: bool,
     settings: NetworkSettings,
 ) -> SingleControllerExecutor {
-    executor_with(
-        TestVault::Local(directory),
-        None,
-        wrong_source,
-        settings,
-    )
-    .await
+    executor_with(TestVault::Local(directory), None, wrong_source, settings).await
 }
 
 async fn executor_with(

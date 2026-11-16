@@ -300,6 +300,10 @@ pub struct GcpAgentPlatformTemplateController {
     /// and carried into the binding so a deployed workload can sign.
     #[serde(default)]
     pub(crate) preview_service_account: Option<String>,
+    /// What a direct setup run created around the engine (signing identity, signing role, engine
+    /// grants), so teardown removes exactly that. Empty when a setup package made them.
+    #[serde(default)]
+    pub(crate) engine_setup: crate::sandbox::gcp_engine_setup::EngineSetupRecord,
 }
 
 #[controller]
@@ -344,6 +348,21 @@ impl GcpAgentPlatformTemplateController {
         self.preview_ports = config.preview_ports.clone();
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
+
+        // A direct setup run has no package to place the grants and the preview signing identity
+        // around the engine, so it places them here, the same ones the package would.
+        if ctx.is_direct_setup_run() {
+            let signer = crate::sandbox::gcp_engine_setup::set_up_engine_access(
+                ctx,
+                config,
+                &engine,
+                &mut self.engine_setup,
+            )
+            .await?;
+            if signer.is_some() {
+                self.preview_service_account = signer;
+            }
+        }
 
         info!(id=%config.id, engine=%engine, "Creating sandbox environment template");
         let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
@@ -689,6 +708,14 @@ impl GcpAgentPlatformTemplateController {
             }
         }
 
+        if self.engine_setup != Default::default() {
+            crate::sandbox::gcp_engine_setup::tear_down_engine_access(
+                ctx,
+                &engine,
+                &self.engine_setup,
+            )
+            .await?;
+        }
         self.clear_state();
         info!(id=%config.id, "sandbox template teardown complete");
         Ok(HandlerAction::Continue {
@@ -784,6 +811,7 @@ impl GcpAgentPlatformTemplateController {
         self.preview_ports = Vec::new();
         self.egress = None;
         self.default_policy = None;
+        self.engine_setup = Default::default();
     }
 
     fn engine_and_template(&self, resource_id: &str) -> Result<(String, String)> {
@@ -827,6 +855,7 @@ impl GcpAgentPlatformTemplateController {
             allow_egress: None,
             preview_ports: Vec::new(),
             preview_service_account: None,
+            engine_setup: Default::default(),
             _internal_stay_count: None,
         }
     }

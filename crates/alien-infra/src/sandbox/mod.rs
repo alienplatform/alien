@@ -85,6 +85,10 @@ pub use gcp_agent_platform_template::*;
 #[cfg(feature = "gcp")]
 mod gcp_agent_platform_engine;
 #[cfg(feature = "gcp")]
+pub(crate) mod gcp_engine_setup;
+#[cfg(all(test, feature = "gcp"))]
+mod gcp_engine_setup_tests;
+#[cfg(feature = "gcp")]
 pub use gcp_agent_platform_engine::*;
 
 #[cfg(feature = "gcp")]

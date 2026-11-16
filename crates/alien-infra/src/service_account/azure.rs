@@ -1207,7 +1207,9 @@ mod stack_grant_tests {
         let execute = alien_permissions::get_permission_set("sandbox/execute").unwrap();
         let storage = alien_permissions::get_permission_set("storage/data-read").unwrap();
         let sets = vec![execute.clone(), storage.clone()];
-        let kept: Vec<_> = stack_bound_permission_sets(&sets).map(|s| s.id.clone()).collect();
+        let kept: Vec<_> = stack_bound_permission_sets(&sets)
+            .map(|s| s.id.clone())
+            .collect();
         assert_eq!(kept, vec![storage.id.clone()]);
     }
 }
