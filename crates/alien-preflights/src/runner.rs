@@ -413,14 +413,16 @@ impl PreflightRunner {
 
             debug!("Applying mutation: {}", mutation.description());
 
-            current_stack = mutation
-                .mutate(current_stack, stack_state, config)
-                .await
-                .context(ErrorData::StackMutationFailed {
+            current_stack = match mutation.mutate(current_stack, stack_state, config).await {
+                // The deployer's own choice cannot be satisfied: say so directly rather than
+                // behind a generic mutation failure.
+                Err(error) if error.code == "SETUP_PLACEMENT_UNSUPPORTED" => return Err(error),
+                other => other.context(ErrorData::StackMutationFailed {
                     mutation_name: mutation.description().to_string(),
                     message: "Mutation execution failed".to_string(),
                     resource_id: None,
-                })?;
+                })?,
+            };
         }
 
         // Generated containers need the same capability checks as developer input.

@@ -577,7 +577,8 @@ async fn a_database_an_existing_cluster_cannot_reach_is_refused_in_every_format(
             } else {
                 let message = existing.expect_err(&format!("{format:?} {resource} is refused"));
                 assert!(
-                    message.contains(&format!(
+                    message.contains("SETUP_PLACEMENT_UNSUPPORTED")
+                        && message.contains(&format!(
                         "Setup cannot yet place the {resource} '{resource}' on an existing cluster's network"
                     )) && message.contains("Use a cluster that setup creates")
                         && message.contains(&format!("or remove the {resource}")),

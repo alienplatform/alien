@@ -210,14 +210,14 @@ fn refuse_databases_an_existing_cluster_cannot_reach(
         if entry.enabled_when.is_none()
             && !alien_core::existing_cluster_network_hosts(entry, cloud_platform)
         {
-            return Err(AlienError::new(ErrorData::StackMutationFailed {
-                mutation_name: "Add Network resource for VPC networking".to_string(),
+            return Err(AlienError::new(ErrorData::SetupPlacementUnsupported {
                 message: alien_core::existing_cluster_network_refusal(
                     entry.config.resource_type().as_ref(),
                     id,
                     Some("set the stack's network to the cluster's own network"),
                 ),
-                resource_id: Some(id.to_string()),
+                resource_type: entry.config.resource_type().to_string(),
+                resource_id: id.to_string(),
             }));
         }
     }
@@ -824,7 +824,11 @@ mod tests {
             }
             let result = NetworkMutation.mutate(stack, &state, &config).await;
             if refused {
-                let message = format!("{:?}", result.expect_err("refused"));
+                let error = result.expect_err("refused");
+                assert_eq!(error.code, "SETUP_PLACEMENT_UNSUPPORTED");
+                assert_eq!(error.http_status_code, Some(422));
+                assert!(!error.retryable);
+                let message = error.message.clone();
                 assert!(
                     message.contains("cannot yet place the")
                         && message.contains("Use a cluster that setup creates")

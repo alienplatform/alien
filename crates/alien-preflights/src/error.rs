@@ -16,6 +16,23 @@ pub enum ErrorData {
     )]
     InvalidQuotaOverride { quota_id: String, platform: String },
 
+    /// Setup cannot put a resource where the chosen cluster could use it.
+    #[error(
+        code = "SETUP_PLACEMENT_UNSUPPORTED",
+        message = "{message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 422
+    )]
+    SetupPlacementUnsupported {
+        /// What to change, in plain words.
+        message: String,
+        /// Type of the resource that cannot be placed.
+        resource_type: String,
+        /// Id of the resource that cannot be placed.
+        resource_id: String,
+    },
+
     /// The requested deployment needs choices or resources owned by setup.
     #[error(
         code = "DEPLOYMENT_SETUP_REQUIRED",
