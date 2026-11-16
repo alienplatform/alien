@@ -25,6 +25,7 @@ mod lifecycle_tests;
 mod mid_flow_config_tests;
 mod parallel_tests;
 mod plan_tests;
+mod requested_update_wait_tests;
 mod replace_tests;
 mod update_tests;
 

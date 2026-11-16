@@ -1967,13 +1967,27 @@ impl StackExecutor {
                                 current_resource_state,
                                 state,
                             )? {
-                                debug!(
-                                    "Scheduling UPDATE transition for '{}' due to deployment config drift",
-                                    resource_id
-                                );
-                                plan_result
-                                    .updates
-                                    .insert(resource_id.clone(), desired_config.resource.clone());
+                                // A requested update waits for the resource's dependencies
+                                // like a config-change update does.
+                                if self.dependencies_allow_update(
+                                    current_resource_state,
+                                    desired_config,
+                                    state,
+                                )? {
+                                    debug!(
+                                        "Scheduling UPDATE transition for '{}' due to deployment config drift",
+                                        resource_id
+                                    );
+                                    plan_result.updates.insert(
+                                        resource_id.clone(),
+                                        desired_config.resource.clone(),
+                                    );
+                                } else {
+                                    debug!(
+                                        "Deferring the requested update of '{}' - dependencies not ready yet",
+                                        resource_id
+                                    );
+                                }
                             } else if current_resource_state.requested_update_ran.is_some() {
                                 plan_result
                                     .requested_update_settled
@@ -2387,6 +2401,9 @@ impl StackExecutor {
             }
         }
         if apply_plan && self.resume_unchanged_failed_resources {
+            // Dependencies are judged by the state before any resume, so the result does not
+            // depend on the order resources are visited in.
+            let before_resume = state.clone();
             for (resource_id, resource_state) in &mut state.resources {
                 if !matches!(
                     resource_state.status,
@@ -2403,6 +2420,15 @@ impl StackExecutor {
                     || resource_state.dependencies != desired.dependencies
                     || self.external_binding_drifted(resource_id, resource_state)?
                 {
+                    continue;
+                }
+                // A failed resource resumes once its dependencies have rolled, like a new
+                // update would; until then the dependency is the one to recover.
+                if !self.dependencies_allow_update(resource_state, desired, &before_resume)? {
+                    debug!(
+                        "Not resuming failed resource '{}' - dependencies not ready yet",
+                        resource_id
+                    );
                     continue;
                 }
                 if resource_state.retry_failed()? {
