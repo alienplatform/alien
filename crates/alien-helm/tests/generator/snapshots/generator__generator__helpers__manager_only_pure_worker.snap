@@ -117,6 +117,7 @@ runtime:
       runAsUser: 10001
       runAsGroup: 10001
       fsGroup: 10001
+      fsGroupChangePolicy: OnRootMismatch
       seccompProfile:
         type: RuntimeDefault
     containerSecurityContext:
@@ -3704,6 +3705,7 @@ spec:
         runAsUser: 999
         runAsGroup: 999
         fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       {{- with $.Values.runtime.imagePullSecrets }}

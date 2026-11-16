@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -472,14 +473,14 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         });
     };
 
-    if !load_balancer_endpoint_dns_resolves(&endpoint).await {
+    let Some(load_balancer_addrs) = resolve_load_balancer_endpoint(&endpoint).await else {
         state.public_url = None;
         state.named_public_endpoints.clear();
         state.load_balancer_endpoint = None;
         return Ok(KubernetesEndpointAction::Waiting {
             suggested_delay: ENDPOINT_WAIT,
         });
-    }
+    };
 
     let public_url = plan
         .public_url
@@ -487,7 +488,16 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         .unwrap_or_else(|| load_balancer_endpoint_url(&endpoint));
 
     if let Some(health_check_path) = target.health_check_path.as_deref() {
-        if !public_endpoint_health_check_succeeds(&public_url, health_check_path).await {
+        // The probe is pinned to the observed load balancer: the platform publishes the DNS
+        // record for the public name only from this endpoint's outputs, so the name cannot be
+        // required to resolve before they are written.
+        if !public_endpoint_health_check_succeeds(
+            &public_url,
+            health_check_path,
+            &load_balancer_addrs,
+        )
+        .await
+        {
             state.public_url = None;
             state.named_public_endpoints.clear();
             state.load_balancer_endpoint = None;
@@ -2563,21 +2573,24 @@ fn load_balancer_endpoint_url(endpoint: &LoadBalancerEndpoint) -> String {
     }
 }
 
-async fn load_balancer_endpoint_dns_resolves(endpoint: &LoadBalancerEndpoint) -> bool {
+/// The addresses the load balancer currently resolves to, or `None` while it does not resolve.
+async fn resolve_load_balancer_endpoint(
+    endpoint: &LoadBalancerEndpoint,
+) -> Option<Vec<SocketAddr>> {
     let (host, port) = dns_lookup_target(&endpoint.dns_name);
     let lookup_result = lookup_host((host.as_str(), port)).await;
     match lookup_result {
         Ok(addrs) => {
             let addrs = addrs.collect::<Vec<_>>();
             if !addrs.is_empty() {
-                return true;
+                return Some(addrs);
             }
             info!(
                 dns_name = %endpoint.dns_name,
                 host = %host,
                 "Kubernetes public endpoint DNS resolved no addresses yet"
             );
-            false
+            None
         }
         Err(err) => {
             info!(
@@ -2586,17 +2599,34 @@ async fn load_balancer_endpoint_dns_resolves(endpoint: &LoadBalancerEndpoint) ->
                 error = %err,
                 "Kubernetes public endpoint DNS is not ready yet"
             );
-            false
+            None
         }
     }
 }
 
-async fn public_endpoint_health_check_succeeds(public_url: &str, health_check_path: &str) -> bool {
+/// Probe the public URL through the load balancer's own addresses. The request keeps the public
+/// host name (Host header, SNI and certificate validation) but connects to `load_balancer_addrs`.
+async fn public_endpoint_health_check_succeeds(
+    public_url: &str,
+    health_check_path: &str,
+    load_balancer_addrs: &[SocketAddr],
+) -> bool {
     let health_check_url = endpoint_health_check_url(public_url, health_check_path);
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
+    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(5));
+    if let Some(host) = reqwest::Url::parse(&health_check_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .filter(|host| host.parse::<IpAddr>().is_err() && !host.starts_with('['))
     {
+        // Port 0 leaves the port to the URL (scheme default or explicit): the load balancer
+        // lookup carries a default port (80) that must not override an https URL's 443.
+        let pinned = load_balancer_addrs
+            .iter()
+            .map(|addr| SocketAddr::new(addr.ip(), 0))
+            .collect::<Vec<_>>();
+        builder = builder.resolve_to_addrs(&host, &pinned);
+    }
+    let client = match builder.build() {
         Ok(client) => client,
         Err(err) => {
             info!(
@@ -3616,12 +3646,79 @@ mod tests {
             .await;
 
         assert!(
-            !public_endpoint_health_check_succeeds(&server.base_url(), "/not-ready").await,
+            !public_endpoint_health_check_succeeds(&server.base_url(), "/not-ready", &[]).await,
             "non-success health responses must keep the endpoint waiting"
         );
         assert!(
-            public_endpoint_health_check_succeeds(&server.base_url(), "/health").await,
+            public_endpoint_health_check_succeeds(&server.base_url(), "/health", &[]).await,
             "success health response should allow the endpoint to publish the URL"
+        );
+    }
+
+    /// The load balancer answers for a generated name that has no DNS record yet.
+    #[tokio::test]
+    async fn health_check_reaches_a_name_that_does_not_resolve_through_the_load_balancer() {
+        let server = MockServer::start_async().await;
+        let _ready = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/health")
+                    .header("host", format!("app.generated.invalid:{}", server.port()));
+                then.status(200).body("ok");
+            })
+            .await;
+        let url = format!("http://app.generated.invalid:{}", server.port());
+
+        assert!(
+            !public_endpoint_health_check_succeeds(&url, "/health", &[]).await,
+            "the name has no DNS record, so an unpinned probe cannot connect"
+        );
+        assert!(
+            public_endpoint_health_check_succeeds(&url, "/health", &[*server.address()]).await,
+            "pinned to the load balancer address the probe succeeds with the public Host"
+        );
+    }
+
+    /// A custom domain whose DNS record was never created still reports ready: the probe reaches
+    /// the load balancer directly, so Running does not prove the customer's DNS points at it.
+    #[tokio::test]
+    async fn custom_domain_without_a_dns_record_is_ready_when_the_load_balancer_answers() {
+        let server = MockServer::start_async().await;
+        let _ready = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/healthz")
+                    .header("host", format!("app.customer-domain.invalid:{}", server.port()));
+                then.status(204);
+            })
+            .await;
+        let url = format!("http://app.customer-domain.invalid:{}", server.port());
+
+        assert!(
+            public_endpoint_health_check_succeeds(&url, "/healthz", &[*server.address()]).await,
+            "a custom domain with no DNS record is Running once the load balancer serves it"
+        );
+    }
+
+    /// The load balancer lookup of a bare IP or host name carries port 80; the probe must still
+    /// connect to the port of the public URL (443 for https).
+    #[tokio::test]
+    async fn health_check_pin_uses_the_url_port_not_the_lookup_port() {
+        let server = MockServer::start_async().await;
+        let _ready = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/health");
+                then.status(200).body("ok");
+            })
+            .await;
+        let url = format!("http://app.generated.invalid:{}", server.port());
+        let (_, lookup_port) = dns_lookup_target("127.0.0.1");
+        assert_eq!(lookup_port, 80);
+        let lookup_addr = SocketAddr::new(server.address().ip(), lookup_port);
+
+        assert!(
+            public_endpoint_health_check_succeeds(&url, "/health", &[lookup_addr]).await,
+            "the pinned address must not force the lookup's port 80 onto the URL"
         );
     }
 
