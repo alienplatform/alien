@@ -24,14 +24,19 @@ use super::AppState;
 use crate::auth::{Scope, Subject};
 use crate::traits::deployment_store::{DeploymentRecord, UpdateImportedDeploymentParams};
 
-/// Whether a `helm upgrade` carries a frozen resource of this type: its
-/// controller only observes a Kubernetes object the chart renders. A compute
-/// cluster always does. A service account does only without a base cloud; with
-/// one, its controller creates a cloud identity, which needs cloud credentials.
-fn chart_renders(resource_type: &str, base_platform: Option<Platform>) -> bool {
-    match resource_type {
+/// Whether a `helm upgrade` carries a frozen resource: its controller only observes a
+/// Kubernetes object the chart renders. A compute cluster always does. A service account does
+/// when the Operator serves it without a cloud client (the same answer the Operator uses): one
+/// that grants nothing on the base cloud does, one that grants something creates a cloud
+/// identity, which needs cloud credentials.
+fn chart_renders(entry: &alien_core::ResourceEntry, base_platform: Option<Platform>) -> bool {
+    match entry.config.resource_type().as_ref() {
         "compute-cluster" => true,
-        "service-account" => base_platform.is_none(),
+        "service-account" => alien_infra::served_by_kubernetes_controller(
+            &entry.config,
+            entry.lifecycle,
+            base_platform,
+        ),
         _ => false,
     }
 }
@@ -176,7 +181,7 @@ fn changes_needing_cloud_setup(
         if unchanged {
             continue;
         }
-        if !chart_renders(entry.config.resource_type().as_ref(), base_platform) {
+        if !chart_renders(entry, base_platform) {
             return Some(format!(
                 "This release adds or changes '{id}', which lives in your cloud account"
             ));
@@ -710,6 +715,26 @@ pub(super) mod tests {
         next
     }
 
+    /// A service account whose permission set grants something on every base cloud.
+    fn with_granting_service_account(stack: &Stack) -> Stack {
+        let set = alien_permissions::get_permission_set("storage/data-read")
+            .expect("registry set")
+            .clone();
+        let mut next = stack.clone();
+        next.resources.extend(
+            Stack::new("extra".to_string())
+                .add(
+                    ServiceAccount::new("reader-sa".to_string())
+                        .stack_permission_set(set)
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+                .resources,
+        );
+        next
+    }
+
     fn with_storage(stack: &Stack) -> Stack {
         let mut next = stack.clone();
         next.resources.extend(
@@ -1067,9 +1092,21 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_service_account_on_a_base_cloud_is_refused_because_it_needs_a_cloud_identity() {
+    fn a_service_account_with_no_cloud_grants_on_a_base_cloud_is_carried_by_the_chart() {
         let installed = baseline();
         let target = with_service_account(&installed);
+        let mut on_cloud = deployment(installed);
+        on_cloud.base_platform = Some(Platform::Aws);
+        assert!(matches!(
+            decide(&on_cloud, &report("rel_2"), &target, None),
+            ReportDecision::Mint(_)
+        ));
+    }
+
+    #[test]
+    fn a_service_account_on_a_base_cloud_is_refused_because_it_needs_a_cloud_identity() {
+        let installed = baseline();
+        let target = with_granting_service_account(&installed);
         let mut on_cloud = deployment(installed);
         on_cloud.base_platform = Some(Platform::Aws);
         let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), &target, None)

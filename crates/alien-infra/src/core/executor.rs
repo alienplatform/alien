@@ -261,6 +261,22 @@ fn controller_platform_for_entry(
     }
 }
 
+/// Whether the Kubernetes controller (no cloud client) serves this resource of a Kubernetes
+/// stack with `base_platform`. The one answer shared by the Operator (does the stack need the
+/// base cloud) and the manager (does a Helm upgrade carry the resource).
+pub fn served_by_kubernetes_controller(
+    resource: &Resource,
+    lifecycle: ResourceLifecycle,
+    base_platform: Option<Platform>,
+) -> bool {
+    controller_platform_for_entry(
+        Platform::Kubernetes,
+        base_platform,
+        lifecycle,
+        Some(resource),
+    ) == Platform::Kubernetes
+}
+
 /// True when a permission set carries at least one entry for `platform`.
 pub(crate) fn permission_set_grants_on(
     set: &alien_core::PermissionSet,
