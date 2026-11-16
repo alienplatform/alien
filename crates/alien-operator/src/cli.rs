@@ -102,6 +102,14 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_IDENTITY_SECRET")]
     pub identity_secret: Option<String>,
 
+    /// Name or ARN of an AWS Secrets Manager secret that holds the enrolled
+    /// identity and the local database key, for installs on Amazon ECS. Like
+    /// `OPERATOR_IDENTITY_SECRET`, it makes the data directory a cache; set
+    /// `OPERATOR_DATA_PERSISTENT=false`. The task role needs get, put,
+    /// describe and version-stage updates on this one secret.
+    #[arg(long, env = "OPERATOR_IDENTITY_AWS_SECRET")]
+    pub identity_aws_secret: Option<String>,
+
     /// Exact manager audience supplied by installation configuration.
     #[arg(long, env = "ALIEN_MANAGER_AUDIENCE")]
     pub manager_audience: Option<String>,
@@ -600,6 +608,7 @@ async fn run_operator_cli(
             open_operator_db(
                 &data_dir,
                 args.identity_secret.as_deref(),
+                args.identity_aws_secret.as_deref(),
                 args.namespace.clone(),
                 args.encryption_key_file.as_deref(),
                 args.data_persistent,
@@ -1960,35 +1969,61 @@ async fn load_owned_secret(
 async fn open_operator_db(
     data_dir: &str,
     identity_secret: Option<&str>,
+    identity_aws_secret: Option<&str>,
     namespace: Option<String>,
     encryption_key_file: Option<&std::path::Path>,
     data_persistent: Option<bool>,
     has_join_token: bool,
 ) -> Result<(crate::db::OperatorDb, String)> {
-    let Some(secret_name) = identity_secret else {
-        let key = match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
-            Some(path) => load_or_create_local_key(&path).await?,
-            None => load_encryption_key(encryption_key_file).await?,
-        };
-        return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
+    if identity_secret.is_some() && identity_aws_secret.is_some() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Set only one of OPERATOR_IDENTITY_SECRET and OPERATOR_IDENTITY_AWS_SECRET"
+                .into(),
+        }));
+    }
+    let (backend, secret_name): (
+        std::sync::Arc<dyn crate::identity_store::SecretBackend>,
+        &str,
+    ) = match (identity_secret, identity_aws_secret) {
+        (Some(secret_name), _) => {
+            let namespace = match namespace {
+                Some(namespace) => namespace,
+                None => tokio::fs::read_to_string(IN_CLUSTER_NAMESPACE_FILE)
+                    .await
+                    .map(|namespace| namespace.trim().to_string())
+                    .ok()
+                    .filter(|namespace| !namespace.is_empty())
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ConfigurationError {
+                            message: "OPERATOR_IDENTITY_SECRET needs the operator's namespace"
+                                .into(),
+                        })
+                    })?,
+            };
+            (
+                std::sync::Arc::new(
+                    crate::identity_store::KubernetesSecret::in_cluster(&namespace, secret_name)
+                        .await?,
+                ),
+                secret_name,
+            )
+        }
+        (None, Some(secret_id)) => (
+            std::sync::Arc::new(
+                crate::identity_store_aws::AwsSecret::from_environment(secret_id).await?,
+            ),
+            secret_id,
+        ),
+        (None, None) => {
+            let key = match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
+                Some(path) => load_or_create_local_key(&path).await?,
+                None => load_encryption_key(encryption_key_file).await?,
+            };
+            return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
+        }
     };
-    let namespace = match namespace {
-        Some(namespace) => namespace,
-        None => tokio::fs::read_to_string(IN_CLUSTER_NAMESPACE_FILE)
-            .await
-            .map(|namespace| namespace.trim().to_string())
-            .ok()
-            .filter(|namespace| !namespace.is_empty())
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ConfigurationError {
-                    message: "OPERATOR_IDENTITY_SECRET needs the operator's namespace".into(),
-                })
-            })?,
-    };
-    let backend =
-        crate::identity_store::KubernetesSecret::in_cluster(&namespace, secret_name).await?;
     let store = std::sync::Arc::new(crate::identity_store::SecretIdentityStore::new(
-        std::sync::Arc::new(backend),
+        backend,
         secret_name,
     ));
     let key = identity_secret_key(&store).await?;

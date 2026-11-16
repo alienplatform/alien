@@ -1827,6 +1827,7 @@ mod access_requests_switch_tests {
 mod daily_identity;
 mod enrollment_token;
 mod identity_store;
+mod identity_store_aws;
 
 /// Whether this Operator has finished enrolling and so holds a daily key.
 ///
