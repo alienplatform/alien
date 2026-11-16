@@ -850,11 +850,14 @@ impl PreflightRunner {
             {
                 // The management policy is limited to the subnets setup wrote it for. A runtime
                 // update would create the gateway subnets, and the management role could not use
-                // them. Setup creates them and rewrites the policy in the same run.
+                // them. A setup run creates them and rewrites the policy in the same run when
+                // management waits for the network; when the network waits for management (see
+                // `add_management_network_dependency`) the policy is rewritten without them and
+                // names them only in the next setup run.
                 return Err(AlienError::new(ErrorData::SetupRequired {
                     message: "this release needs internet access for a sandbox, which needs new \
                               network subnets and a management permissions update that only setup \
-                              applies. Run a setup update, then deploy this release again"
+                              applies. Run a setup update"
                         .to_string(),
                 }));
             } else {
@@ -907,9 +910,13 @@ impl PreflightRunner {
 }
 
 /// Whether the target needs the sandbox gateway while the installed network has recorded no
-/// sandbox subnets, on an install whose management permissions carry a recorded revision (a
-/// policy written by a version that limits it to the network's subnets). Installs without a
-/// recorded revision have no such limit and are not asked.
+/// sandbox subnets, on an install whose management permissions carry a recorded revision.
+///
+/// The recorded revision exists since the policy was first versioned, earlier than the limit to
+/// the network's subnets, so an install set up in between has a revision and no limit and is
+/// asked for a setup update it does not strictly need. Telling them apart needs the revision
+/// digest computed without the network scope, which lives in alien-infra; this accepts the cost.
+/// Installs without a recorded revision have no limit and are not asked.
 #[cfg(feature = "runtime-checks")]
 fn sandbox_gateway_subnets_missing(target: &Stack, installed: &StackState) -> bool {
     if !alien_core::sandbox_egress::has_sandbox_gateway(target) {
