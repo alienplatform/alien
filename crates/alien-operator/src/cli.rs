@@ -20,6 +20,7 @@ use alien_core::{
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_k8s_clients::{KubernetesClient, KubernetesClientConfig, KubernetesClientConfigExt as _};
 use alien_manager_api::{types::HelmRelease, SdkResultExt as _};
 use clap::{Parser, ValueEnum};
 use std::net::IpAddr;
@@ -159,6 +160,20 @@ pub struct Args {
 
     #[arg(long, env = "OPERATOR_ENCRYPTION_KEY_FILE")]
     pub encryption_key_file: Option<PathBuf>,
+
+    /// Secret the Operator owns, in its namespace. It holds the encryption key and the
+    /// other values the chart would otherwise generate. The Operator creates what is
+    /// missing and never replaces a value.
+    #[arg(long, env = "OPERATOR_OWNED_SECRET")]
+    pub owned_secret: Option<String>,
+
+    /// The keys to keep in the owned Secret, as `key=kind` pairs separated by commas.
+    #[arg(long, env = "OPERATOR_OWNED_SECRET_KEYS", default_value = "encryption-key=hex32")]
+    pub owned_secret_keys: String,
+
+    /// Secret an upgrading chart fills with the values an earlier chart installed.
+    #[arg(long, env = "OPERATOR_MIGRATION_SECRET")]
+    pub migration_secret: Option<String>,
 
     #[arg(long, env = "KUBERNETES_NAMESPACE")]
     pub namespace: Option<String>,
@@ -529,11 +544,25 @@ async fn run_operator_cli(
     info!("   Platform: {}", args.platform);
     info!("   Data directory: {}", data_dir);
 
-    let encryption_key = load_encryption_key(args.encryption_key_file.as_deref()).await?;
+    let owned_values = load_owned_secret(
+        args.owned_secret.as_deref(),
+        &args.owned_secret_keys,
+        args.migration_secret.as_deref(),
+        args.namespace.as_deref(),
+        &data_dir_path,
+    )
+    .await?;
+    let encryption_key = match owned_values.get("encryption-key") {
+        Some(key) => key.clone(),
+        None => load_encryption_key(args.encryption_key_file.as_deref()).await?,
+    };
     let db = std::sync::Arc::new(crate::db::OperatorDb::new(&data_dir, &encryption_key).await?);
 
     let cli_sync_token = load_sync_token(args.sync_token_file.as_deref()).await?;
-    let collector_token = load_collector_token(args.collector_token_file.as_deref()).await?;
+    let collector_token = match owned_values.get("collector-token") {
+        Some(token) => Some(token.clone()),
+        None => load_collector_token(args.collector_token_file.as_deref()).await?,
+    };
 
     let effective_sync_url = args
         .sync_url
@@ -1748,6 +1777,46 @@ fn is_secret_file_mode_allowed(mode: u32) -> bool {
     let has_owner_execute = mode & 0o100 != 0;
 
     has_owner_read && !has_owner_execute && !has_group_write_or_execute && !has_world_access
+}
+
+/// The values in the Secret the Operator owns, created first if they are missing. Empty when
+/// the chart names no such Secret (an Operator started with a key file or variable).
+async fn load_owned_secret(
+    name: Option<&str>,
+    keys: &str,
+    migration: Option<&str>,
+    namespace: Option<&str>,
+    data_dir: &std::path::Path,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let Some(name) = name else {
+        return Ok(Default::default());
+    };
+    let namespace = namespace.ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "OPERATOR_OWNED_SECRET needs KUBERNETES_NAMESPACE".to_string(),
+        })
+    })?;
+    let owned = crate::owned_secret::OwnedSecret::parse(name, keys, migration)?;
+    let client = KubernetesClient::new(
+        KubernetesClientConfig::try_incluster()
+            .await
+            .context(ErrorData::ConfigurationError {
+                message: "loading in-cluster credentials for the Operator's Secret".to_string(),
+            })?,
+    )
+    .await
+    .context(ErrorData::ConfigurationError {
+        message: "creating the Kubernetes client for the Operator's Secret".to_string(),
+    })?;
+    let ensured = crate::owned_secret::ensure(
+        &client,
+        namespace,
+        &owned,
+        crate::owned_secret::has_state(data_dir),
+    )
+    .await?;
+    crate::owned_secret::report(&owned, &ensured);
+    Ok(ensured.values)
 }
 
 pub(crate) async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
