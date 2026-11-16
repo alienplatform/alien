@@ -1317,16 +1317,17 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // Past here a sandbox exists the caller has no id for, so every failure deletes it.
         match self.settle(CREATE, &sandbox_id).await {
             Ok(generation) => {
-                // The first marker, so that a container that later replaces this one is told
-                // from this one by the marker it lacks. The display name is already tagged, so a
-                // sandbox handed out without a marker would report a healthy container as lost
-                // at its first resume: a failed write deletes the sandbox and fails the create.
-                // An image without /bin/sh cannot hold a marker, so it cannot be created here.
+                // The first marker, best effort: it lets a container that later replaces this
+                // one be told from this one by the marker it lacks. A failed write never fails
+                // the create (and never deletes the sandbox, which another caller may already
+                // have found by its key): `pause` writes the marker again before pausing and
+                // fails with a marker error if it cannot, and `resume` reports a lost memory only
+                // when the marker script ran and found nothing.
                 if let Err(error) = self
                     .write_marker_with_retries(CREATE, &sandbox_id, generation)
                     .await
                 {
-                    return Err(self.discard(&sandbox_id, error).await);
+                    warn!(%sandbox_id, %error, "the first pause marker could not be written; pause will write it");
                 }
                 Ok(SandboxInstance {
                     sandbox_id,

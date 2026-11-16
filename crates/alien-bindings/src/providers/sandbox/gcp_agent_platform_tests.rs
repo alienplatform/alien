@@ -249,11 +249,10 @@ async fn a_requested_lifetime_reaches_the_create_body_and_cannot_raise_the_decla
     }
 }
 
-/// The display name is tagged at create, so a sandbox handed out without its first marker would
-/// later report a healthy container as lost: a marker that cannot be written deletes the sandbox
-/// and fails the create.
+/// The first marker is best effort: when every write fails, create still returns the sandbox and
+/// does not delete it (another caller may already hold it by its key).
 #[tokio::test(start_paused = true)]
-async fn create_deletes_the_sandbox_when_the_first_marker_cannot_be_written() {
+async fn create_returns_the_sandbox_when_the_first_marker_cannot_be_written() {
     let mut client = MockAgentPlatformApi::new();
     client
         .expect_create_sandbox()
@@ -268,15 +267,13 @@ async fn create_deletes_the_sandbox_when_the_first_marker_cannot_be_written() {
             Err(execute_refused())
         }
     });
-    client
-        .expect_delete_sandbox()
-        .times(1)
-        .returning(|_, _| Ok(()));
+    client.expect_delete_sandbox().never();
 
-    provider(client)
+    let instance = provider(client)
         .create(CreateSandboxRequest::default())
         .await
-        .expect_err("no marker, no sandbox");
+        .expect("a failed first marker does not fail the create");
+    assert_eq!(instance.sandbox_id, "s1");
 }
 
 /// Delete-on-create-failure: a probe the agent never answers deletes the sandbox the caller never
