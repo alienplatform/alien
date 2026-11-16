@@ -667,3 +667,167 @@ fn chunk_recognition_uses_the_exact_generated_name_even_after_truncation() {
         ));
     }
 }
+
+/// An update outside a setup run (an ordinary release on an automatic-setup install, or a retry
+/// of one that failed) makes no cloud call at all, whichever state of the update flow it
+/// resumes in, and leaves the recorded revision and boundary as setup wrote them. The next
+/// setup run therefore still sees the difference and applies it.
+#[tokio::test]
+async fn an_update_outside_a_setup_run_writes_nothing_and_leaves_the_record_for_setup() {
+    let recorded = || {
+        let mut controller =
+            AwsRemoteStackManagementController::mock_ready("test-prefix-management");
+        controller.management_permissions_revision =
+            Some("recorded-by-an-earlier-setup".to_string());
+        controller.permissions_boundary_arn = Some(ARN.to_string());
+        controller.permissions_boundary_document = Some(serde_json::json!({ "older": true }));
+        controller
+    };
+    let mut after_ordinary_run: Option<AwsRemoteStackManagementController> = None;
+    for authority in [
+        InitialSetupAuthority::DirectSetup,
+        InitialSetupAuthority::ImportedHandoff,
+    ] {
+        let mut resumed = recorded();
+        resumed.state = AwsRemoteStackManagementState::UpdateStart;
+        // No expectations: any IAM, SSM or other client request panics.
+        let mut runtime = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .controller(resumed)
+            .platform(Platform::Aws)
+            .resource_prefix("test-prefix")
+            .initial_setup_authority(authority)
+            .setup_run(false)
+            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .build()
+            .await
+            .unwrap();
+        runtime.run_until_terminal().await.unwrap();
+        assert_eq!(runtime.status(), ResourceStatus::Running, "{authority:?}");
+        let after = runtime
+            .internal_state::<AwsRemoteStackManagementController>()
+            .unwrap();
+        let before = recorded();
+        after_ordinary_run = Some(after.clone());
+        assert_eq!(
+            after.management_permissions_revision,
+            before.management_permissions_revision
+        );
+        assert_eq!(
+            after.permissions_boundary_arn,
+            before.permissions_boundary_arn
+        );
+        assert_eq!(
+            after.permissions_boundary_document,
+            before.permissions_boundary_document
+        );
+    }
+
+    // What the no-op run left, met by a direct setup run, still differs: setup applies it.
+    let setup = SingleControllerExecutor::builder()
+        .resource(RemoteStackManagement::new("management".to_string()).build())
+        .resource_lifecycle(ResourceLifecycle::Frozen)
+        .controller(after_ordinary_run.unwrap())
+        .platform(Platform::Aws)
+        .resource_prefix("test-prefix")
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .setup_run(true)
+        .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+        .build()
+        .await
+        .unwrap();
+    assert!(setup.needs_update().unwrap());
+}
+
+/// The same resumed update inside a setup run does write: the IAM calls happen and the recorded
+/// revision moves, so a changed network scope still reaches an old install at its next setup run.
+#[tokio::test]
+async fn an_update_inside_a_setup_run_still_writes_the_policies_and_the_revision() {
+    let created = Arc::new(Mutex::new(0u32));
+    let attached = Arc::new(Mutex::new(0u32));
+    let mut iam = MockIamApi::new();
+    let count = created.clone();
+    iam.expect_create_policy().returning(move |name, _, _, _| {
+        *count.lock().unwrap() += 1;
+        Ok(CreatePolicyResponse {
+            create_policy_result: CreatePolicyResult {
+                policy: Policy {
+                    policy_name: Some(name.to_string()),
+                    policy_id: None,
+                    arn: format!("arn:aws:iam::123456789012:policy/{name}"),
+                    path: None,
+                    description: None,
+                    default_version_id: None,
+                    attachment_count: None,
+                    is_attachable: None,
+                    create_date: None,
+                    update_date: None,
+                },
+            },
+        })
+    });
+    let count = attached.clone();
+    iam.expect_attach_role_policy().returning(move |_, _| {
+        *count.lock().unwrap() += 1;
+        Ok(())
+    });
+    iam.expect_list_attached_role_policies().returning(|_| {
+        Ok(ListAttachedRolePoliciesResponse {
+            list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                attached_policies: None,
+                is_truncated: Some(false),
+                marker: None,
+            },
+        })
+    });
+    iam.expect_delete_role_policy().returning(|_, _| Ok(()));
+    iam.expect_get_policy().returning(|arn| {
+        Err(AlienError::new(ClientError::RemoteResourceNotFound {
+            resource_type: "policy".to_string(),
+            resource_name: arn.to_string(),
+        }))
+    });
+    let iam = Arc::new(iam);
+    let mut ssm = alien_aws_clients::ssm::MockSsmApi::new();
+    ssm.expect_get_parameter().returning(|request| {
+        Err(AlienError::new(ClientError::RemoteResourceNotFound {
+            resource_type: "SSM Resource".to_string(),
+            resource_name: request.name.clone(),
+        }))
+    });
+    let ssm = Arc::new(ssm);
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_aws_iam_client()
+        .returning(move |_| Ok(iam.clone()));
+    provider
+        .expect_get_aws_ssm_client()
+        .returning(move |_| Ok(ssm.clone()));
+    let mut controller = AwsRemoteStackManagementController::mock_ready("test-prefix-management");
+    controller.management_permissions_revision = Some("recorded-by-an-earlier-setup".to_string());
+    controller.state = AwsRemoteStackManagementState::UpdateStart;
+    let mut runtime = SingleControllerExecutor::builder()
+        .resource(RemoteStackManagement::new("management".to_string()).build())
+        .resource_lifecycle(ResourceLifecycle::Frozen)
+        .controller(controller)
+        .platform(Platform::Aws)
+        .resource_prefix("test-prefix")
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .setup_run(true)
+        .service_provider(Arc::new(provider))
+        .build()
+        .await
+        .unwrap();
+    runtime.run_until_terminal().await.unwrap();
+    assert_eq!(runtime.status(), ResourceStatus::Running);
+    assert!(*created.lock().unwrap() > 0, "policies are written");
+    assert!(*attached.lock().unwrap() > 0, "policies are attached");
+    let after = runtime
+        .internal_state::<AwsRemoteStackManagementController>()
+        .unwrap();
+    assert_ne!(
+        after.management_permissions_revision.as_deref(),
+        Some("recorded-by-an-earlier-setup")
+    );
+}
