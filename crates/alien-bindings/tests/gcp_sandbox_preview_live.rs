@@ -601,13 +601,23 @@ async fn live_preview_reaches_a_daemon_with_its_own_protocol() {
         let post = |credential: String| {
             let (preview, path, header) = (&preview, &path, &header);
             async move {
+                // The edge consumes `Authorization` for its own credential, and the agent reads
+                // the caller's bearer from `caller_authorization_header` only. A daemon that
+                // reads `Authorization` therefore gets the credential through `bearer`; a
+                // daemon that reads another header gets it as that header, unchanged.
+                let (bearer, extra): (Option<&str>, Vec<(&str, &str)>) =
+                    if header.eq_ignore_ascii_case("authorization") {
+                        (Some(credential.as_str()), Vec::new())
+                    } else {
+                        (None, vec![(header.as_str(), credential.as_str())])
+                    };
                 request_with(
                     preview,
                     reqwest::Method::POST,
                     path,
-                    None,
+                    bearer,
                     Some(serde_json::json!({})),
-                    &[(header.as_str(), credential.as_str())],
+                    &extra,
                 )
                 .await
             }
