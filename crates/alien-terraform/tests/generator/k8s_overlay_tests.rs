@@ -1791,8 +1791,13 @@ enum Source {
 /// An EKS module for `source`, rendered from the stack the preflights prepare for it, the way
 /// `alien render` does: the network and cluster are the ones the mutations add.
 async fn render_prepared_eks(source: Source) -> alien_terraform::ModuleFiles {
+    render_prepared(source, TerraformTarget::Eks).await
+}
+
+/// [`render_prepared_eks`] for any Kubernetes target.
+async fn render_prepared(source: Source, target: TerraformTarget) -> alien_terraform::ModuleFiles {
     let mut builder =
-        Stack::new("eks-network-gate".to_string()).permission("app", PermissionProfile::new());
+        Stack::new("k8s-network-gate".to_string()).permission("app", PermissionProfile::new());
     if matches!(source, Source::GatedDatabase) {
         builder = builder.inputs(vec![gate_input(
             "databaseEnabled",
@@ -1813,8 +1818,8 @@ async fn render_prepared_eks(source: Source) -> alien_terraform::ModuleFiles {
             "databaseEnabled",
         ),
     };
-    let stack = prepare_for_target(builder.build(), TerraformTarget::Eks).await;
-    render(&stack, TerraformTarget::Eks, StackSettings::default())
+    let stack = prepare_for_target(builder.build(), target).await;
+    render(&stack, target, StackSettings::default())
 }
 
 /// A stack that declares a cluster and has a `default-network` in it: one the stack declares
@@ -1901,6 +1906,38 @@ async fn eks_creates_and_registers_a_default_network_only_with_a_created_cluster
         "network must be registered only for a created cluster: {settings}"
     );
     assert_terraform_valid(&module, "eks_network_gated_on_cluster_mode");
+}
+
+/// The same rule holds for GKE and AKS: an existing cluster has its own network, so the module
+/// neither creates nor registers `default-network` unless it creates the cluster.
+#[tokio::test]
+async fn gke_and_aks_create_and_register_a_default_network_only_with_a_created_cluster() {
+    for target in [TerraformTarget::Gke, TerraformTarget::Aks] {
+        let module = render_prepared(Source::Workload, target).await;
+        let locals = compact(module.get("locals.tf").expect("locals.tf"));
+        assert!(
+            locals.contains(&format!(
+                "deployment_resources = concat({NETWORK_GATE} ? [{{ id = \"default-network\""
+            )),
+            "{target:?}: {locals}"
+        );
+        let network = compact(
+            module
+                .get("default_network.tf")
+                .expect("default_network.tf"),
+        );
+        assert!(network.contains(NETWORK_GATE), "{target:?}: {network}");
+        assert_terraform_valid(&module, &format!("{target:?}_network_gated_on_cluster_mode"));
+    }
+}
+
+/// A stack with a cloud database keeps its network in every mode on every cloud.
+#[tokio::test]
+async fn gke_and_aks_keep_the_default_network_for_a_stack_with_a_database() {
+    for target in [TerraformTarget::Gke, TerraformTarget::Aks] {
+        let module = render_prepared(Source::Database, target).await;
+        assert_network_in_every_mode(&module);
+    }
 }
 
 /// The manager still gives a stack with a cloud database a network of its own for an existing
@@ -2116,5 +2153,79 @@ fn destroy_guard_is_destroyed_before_every_other_resource() {
                 );
             }
         }
+    }
+}
+
+/// A real plan of the GKE/AKS module in existing-cluster mode, with mocked providers: the
+/// module creates no network, registers none, and nothing that reads the network's outputs is
+/// evaluated (a gated network has no instance to read).
+#[tokio::test]
+async fn gke_and_aks_existing_cluster_plans_with_no_network() {
+    for (target, mocks, variables) in [
+        (
+            TerraformTarget::Gke,
+            r#"mock_provider "google" {
+  mock_data "google_container_cluster" {
+    defaults = { workload_identity_config = [{ workload_pool = "p.svc.id.goog" }] }
+  }
+}"#,
+            r#"gke_cluster_name = "c"
+  gke_cluster_location = "us-central1""#,
+        ),
+        (
+            TerraformTarget::Aks,
+            r#"mock_provider "azurerm" {
+  mock_data "azurerm_client_config" {
+    defaults = { tenant_id = "00000000-0000-0000-0000-000000000001", object_id = "00000000-0000-0000-0000-000000000001", client_id = "00000000-0000-0000-0000-000000000001" }
+  }
+}"#,
+            r#"aks_cluster_name = "c"
+  aks_cluster_resource_group_name = "rg""#,
+        ),
+    ] {
+        let module = render_prepared(Source::Workload, target).await;
+        let mut files: indexmap::IndexMap<String, String> = module
+            .iter()
+            .filter(|(path, _)| path.ends_with(".tf"))
+            .map(|(path, body)| (path.to_string(), body.to_string()))
+            .collect();
+        // Every string variable the module requires gets a placeholder.
+        let required = hcl::parse(files.get("variables.tf").expect("variables.tf"))
+            .expect("variables.tf parses")
+            .blocks()
+            .filter(|block| block.identifier() == "variable")
+            .filter(|block| !block.body().attributes().any(|a| a.key() == "default"))
+            .filter_map(|block| block.labels().first().map(|label| label.as_str().to_string()))
+            .filter(|name| name != "kubernetes_cluster_mode" && !name.contains("cluster_"))
+            .map(|name| format!("{name} = \"xx\""))
+            .collect::<Vec<_>>()
+            .join("\n  ");
+        files.insert(
+            "existing.tftest.hcl".to_string(),
+            format!(
+                r#"{mocks}
+variables {{
+  {required}
+  management_url = "https://manager.example.com"
+  kubernetes_cluster_mode = "existing"
+  {variables}
+}}
+run "existing_cluster" {{
+  command = plan
+  assert {{
+    condition = !contains([for r in local.deployment_resources : r.id], "default-network")
+    error_message = "an existing cluster registers no network"
+  }}
+}}
+"#
+            ),
+        );
+        if std::env::var("DUMP_MOD").is_ok() {
+            for (n, b) in &files {
+                std::fs::write(format!("/tmp/probe/{target:?}-{n}"), b).unwrap();
+            }
+        }
+        let run = super::helpers::test_utils::terraform_test(&files);
+        run.assert_ok(format!("{target:?} existing-cluster plan"));
     }
 }

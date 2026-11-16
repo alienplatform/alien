@@ -406,6 +406,30 @@ pub(crate) fn render_terraform_module(
             availability_zones: 2,
         });
     }
+    // An AKS module has no `network_mode` variable: the network setting it registers is a fixed
+    // default. For an existing cluster the manager prepares the stack with no network, so that
+    // default is registered only while the module expects the network (see `effective_gate`).
+    let mut conditional_network_setting: Option<(String, String)> = None;
+    if target == TerraformTarget::Aks {
+        if let Some(settings) = stack_settings.network.clone() {
+            let gate = stack.resources().find_map(|(id, entry)| {
+                if entry.config.resource_type() != Network::RESOURCE_TYPE {
+                    return None;
+                }
+                effective_gate(stack, id, entry, target)
+                    .filter(|_| alien_core::is_prepared_network(id, entry))
+            });
+            if let Some(gate) = gate {
+                let json = serde_json::to_string(&settings).into_alien_error().map_err(|err| {
+                    AlienError::new(ErrorData::JsonSerializationFailed {
+                        reason: format!("failed to serialize the network setting: {err}"),
+                    })
+                })?;
+                conditional_network_setting = Some((gate, json));
+                stack_settings.network = None;
+            }
+        }
+    }
     let stack_inputs = stack_inputs_for_terraform(stack, target);
     validate_stack_inputs_for_terraform(&stack_inputs)?;
 
@@ -801,6 +825,7 @@ pub(crate) fn render_terraform_module(
             has_remote_management,
             setup_only,
             profile,
+            conditional_network_setting.as_ref(),
         )?)?,
     );
 
@@ -2715,7 +2740,7 @@ fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
 }
 
 /// The gate a resource's blocks and registration entry follow: its own `enabled_when`, or, for
-/// the network the preflight added to an EKS module, whether the manager will expect it.
+/// the network the preflight added to a Kubernetes module, whether the manager will expect it.
 ///
 /// An existing cluster is already attached to a network, so the manager prepares a stack with no
 /// network for it and setup must create no VPC and register none. The manager still expects the
@@ -2724,8 +2749,6 @@ fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
 /// `enabled_when` counts only while its gate is on, because the manager drops declined frozen
 /// resources before it prepares the stack.
 ///
-/// GKE and AKS modules are left as they were: their cluster emitters read the network's outputs
-/// in every mode, so gating it needs its own change.
 fn effective_gate(
     stack: &Stack,
     resource_id: &str,
@@ -2735,7 +2758,7 @@ fn effective_gate(
     if let Some(input_id) = &resource.enabled_when {
         return Some(input_id.clone());
     }
-    if target != TerraformTarget::Eks
+    if !target.is_kubernetes()
         || resource.config.resource_type() != Network::RESOURCE_TYPE
         || !alien_core::is_prepared_network(resource_id, resource)
     {
@@ -4443,6 +4466,7 @@ fn locals_body(
     has_remote_management: bool,
     setup_only: bool,
     profile: alien_core::SetupConfigurationProfile,
+    conditional_network_setting: Option<&(String, String)>,
 ) -> Result<Body> {
     let mut body: Vec<Structure> = Vec::new();
 
@@ -4515,7 +4539,7 @@ fn locals_body(
         };
         body.push(attr("advanced_settings", advanced_settings));
     }
-    if matches!(target, TerraformTarget::Eks) {
+    if target.is_kubernetes() {
         // The settings above send `network` only through `local.advanced_settings`, so a network
         // the deployer asked for there is exactly what the network gate must follow.
         body.push(attr(
@@ -4583,7 +4607,12 @@ fn locals_body(
             ("heartbeats", Expression::String("on".to_string())),
         ])
     } else {
-        stack_settings_expression(target, stack_settings, profile)
+        stack_settings_expression(
+            target,
+            stack_settings,
+            profile,
+            conditional_network_setting,
+        )
     };
     // A protected install registers as protected: the signing settings the module pins ride in
     // the settings it reports, last, so nothing merged before them can change them.
@@ -4698,6 +4727,7 @@ fn stack_settings_expression(
     target: TerraformTarget,
     stack_settings: &StackSettings,
     profile: alien_core::SetupConfigurationProfile,
+    conditional_network_setting: Option<&(String, String)>,
 ) -> Expression {
     let operational = if profile == alien_core::SetupConfigurationProfile::Advanced {
         "var"
@@ -4765,8 +4795,17 @@ fn stack_settings_expression(
             ));
         }
         _ if target.is_kubernetes() => {
+            // The deployer's own network setting (advanced settings) overrides the default.
+            let default_network = conditional_network_setting
+                .map(|(gate, json)| {
+                    format!(
+                        "jsondecode({gate_expr} ? jsonencode({{ network = jsondecode({json:?}) }}) : \"{{}}\"), ",
+                        gate_expr = crate::emitters::enabled::gate_variable(gate),
+                    )
+                })
+                .unwrap_or_default();
             return expr::raw(format!(
-                r#"merge(local.advanced_settings, {{
+                r#"merge({default_network}local.advanced_settings, {{
   deploymentModel = var.deployment_model
   updates    = {operational}.updates_mode
   telemetry  = {operational}.telemetry_mode
