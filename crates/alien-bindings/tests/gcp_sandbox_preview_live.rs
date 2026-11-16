@@ -14,8 +14,18 @@
 //! `GCP_OWNER_TOKEN`, `GCP_ADMIN_TOKEN`, `GCP_NOEXEC_SA`, `GCP_NOEXEC_TOKEN`. Optional:
 //! `GCP_PREVIEW_PORTS` (default `8080,8081,8090`), `GCP_DAEMON_TOKEN` (the fixture's bearer).
 //!
+//! Two tests, each run by its exact name, because they need different images:
+//!
 //! ```text
-//! cargo test -p alien-bindings --features gcp --test gcp_sandbox_preview_live -- --ignored --nocapture
+//! # The conformance fixture, on every declared port (the image above).
+//! cargo test -p alien-bindings --features gcp --test gcp_sandbox_preview_live -- \
+//!     --ignored --nocapture --exact live_preview_is_owner_access
+//!
+//! # A workload's own daemon on 8080 (an image that carries it); also needs `GCP_APP_BEARER`,
+//! # `GCP_APP_HTTP_PATH`, `GCP_APP_WS_PATH`, `GCP_APP_SUBPROTOCOLS` and `GCP_APP_PICKS`, and
+//! # optionally `GCP_APP_HTTP_HEADER`. It names any that are missing before it creates anything.
+//! cargo test -p alien-bindings --features gcp --test gcp_sandbox_preview_live -- \
+//!     --ignored --nocapture --exact live_preview_reaches_a_daemon_with_its_own_protocol
 //! ```
 
 #![cfg(feature = "gcp")]
@@ -42,6 +52,20 @@ const AGENT_PORT: u16 = alien_core::sandbox_image::AGENT_PORT;
 
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} must be set"))
+}
+
+/// Names every missing variable at once, before a test creates anything in the cloud.
+fn require_env(names: &[&str]) {
+    let missing: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| std::env::var(name).is_err())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "this test needs these variables set, and nothing was created: {}",
+        missing.join(", ")
+    );
 }
 
 fn config(token: String) -> GcpClientConfig {
@@ -585,6 +609,20 @@ async fn live_preview_is_owner_access() {
 #[ignore = "needs a live GCP project, an engine, an image that carries the daemon and four identities"]
 async fn live_preview_reaches_a_daemon_with_its_own_protocol() {
     let _ = rustls::crypto::ring::default_provider().install_default();
+    require_env(&[
+        "GCP_PROJECT",
+        "GCP_REGION",
+        "GCP_ENGINE",
+        "GCP_IMAGE",
+        "GCP_PREVIEW_SA",
+        "GCP_OWNER_TOKEN",
+        "GCP_ADMIN_TOKEN",
+        "GCP_APP_BEARER",
+        "GCP_APP_HTTP_PATH",
+        "GCP_APP_WS_PATH",
+        "GCP_APP_SUBPROTOCOLS",
+        "GCP_APP_PICKS",
+    ]);
     let live = Live::start(&env("GCP_IMAGE"), &[8080]).await;
     let outcome = std::panic::AssertUnwindSafe(async {
         let preview = live
