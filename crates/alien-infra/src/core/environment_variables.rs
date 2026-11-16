@@ -7,7 +7,7 @@ use alien_core::{
     daemon_runtime_environment_contract, kubernetes_base_platform_runtime_environment_plan,
     public_url_host, render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
-    worker_runtime_environment_contract, Container, Daemon, EnvironmentVariable,
+    worker_runtime_environment_contract, ClientConfig, Container, Daemon, EnvironmentVariable,
     EnvironmentVariableType, Resource, ResourceRef, ResourceStatus, RuntimeEnvironmentBindingEntry,
     RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
     ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
@@ -662,6 +662,24 @@ impl EnvironmentVariableBuilder {
     ) -> Result<()> {
         if ctx.platform != alien_core::Platform::Kubernetes {
             return Ok(());
+        }
+
+        // Without a base cloud client the cloud values below render as absent. That is right
+        // for a containers-only stack; when the stack has resources that need the cloud it
+        // would roll out pods without AWS_REGION and friends, so the step fails (retryable)
+        // and the pods stay as they are.
+        if let (ClientConfig::Kubernetes(_), Some(base_platform)) =
+            (&ctx.client_config, ctx.deployment_config.base_platform)
+        {
+            if crate::core::executor::stack_needs_base_cloud(
+                ctx.desired_stack,
+                ctx.platform,
+                Some(base_platform),
+            ) {
+                return Err(AlienError::new(ErrorData::BaseCloudUnavailable {
+                    required_platform: base_platform,
+                }));
+            }
         }
 
         for (name, value) in render_runtime_environment_entries(

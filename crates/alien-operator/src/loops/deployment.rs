@@ -1118,8 +1118,23 @@ const BASE_CLOUD_RETRY_AFTER: Duration = Duration::from_secs(300);
 static BASE_CLOUD_FAILURE: std::sync::Mutex<Option<(Platform, std::time::Instant)>> =
     std::sync::Mutex::new(None);
 
-/// The base cloud client, or `None` when its region or credentials cannot be resolved.
-/// The reason is logged once per failure window.
+/// The last base cloud client this process built. Once the Operator has had a working
+/// cloud client it never drops to plain Kubernetes: a later failure to resolve it again
+/// keeps using this one, so pods are not rolled out without their cloud environment.
+static BASE_CLOUD_LAST_GOOD: std::sync::Mutex<Option<(Platform, ClientConfig)>> =
+    std::sync::Mutex::new(None);
+
+fn last_good_base_cloud(base_platform: Platform) -> Option<ClientConfig> {
+    BASE_CLOUD_LAST_GOOD
+        .lock()
+        .ok()
+        .and_then(|good| good.clone())
+        .filter(|(platform, _)| *platform == base_platform)
+        .map(|(_, cloud)| cloud)
+}
+
+/// The base cloud client, or `None` when its region or credentials cannot be resolved and
+/// none has ever been built. The reason is logged once per failure window.
 async fn base_cloud_client(base_platform: Platform) -> Option<ClientConfig> {
     let recently_failed = BASE_CLOUD_FAILURE
         .lock()
@@ -1129,26 +1144,35 @@ async fn base_cloud_client(base_platform: Platform) -> Option<ClientConfig> {
             platform == base_platform && at.elapsed() < BASE_CLOUD_RETRY_AFTER
         });
     if recently_failed {
-        return None;
+        return last_good_base_cloud(base_platform);
     }
     match ClientConfig::from_std_env(base_platform).await {
         Ok(cloud) => {
             if let Ok(mut failure) = BASE_CLOUD_FAILURE.lock() {
                 *failure = None;
             }
+            if let Ok(mut good) = BASE_CLOUD_LAST_GOOD.lock() {
+                *good = Some((base_platform, cloud.clone()));
+            }
             Some(cloud)
         }
         Err(error) => {
+            let last_good = last_good_base_cloud(base_platform);
             warn!(
                 base_platform = %base_platform,
                 error = %error,
                 retry_after_secs = BASE_CLOUD_RETRY_AFTER.as_secs(),
-                "Base cloud client unavailable; running as plain Kubernetes"
+                "Base cloud client unavailable; {}",
+                if last_good.is_some() {
+                    "keeping the last working one"
+                } else {
+                    "running as plain Kubernetes"
+                }
             );
             if let Ok(mut failure) = BASE_CLOUD_FAILURE.lock() {
                 *failure = Some((base_platform, std::time::Instant::now()));
             }
-            None
+            last_good
         }
     }
 }
@@ -1211,8 +1235,69 @@ pub(super) async fn resolve_client_config(
 
 #[cfg(test)]
 mod base_cloud_client_tests {
-    use super::resolve_client_config;
+    use super::{resolve_client_config, BASE_CLOUD_FAILURE, BASE_CLOUD_LAST_GOOD};
     use alien_core::{ClientConfig, Platform};
+
+    fn reset_cache() {
+        *BASE_CLOUD_FAILURE.lock().unwrap() = None;
+        *BASE_CLOUD_LAST_GOOD.lock().unwrap() = None;
+    }
+
+    fn resolve(base: Platform) -> ClientConfig {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(resolve_client_config(
+                Platform::Kubernetes,
+                Some(base),
+                "/tmp/unused",
+                Some("alien".to_string()),
+                None,
+            ))
+            .expect("a missing base cloud must not stop the deployment")
+    }
+
+    /// Once the Operator has built the base cloud client it keeps using it: a later
+    /// failure to resolve the cloud identity does not replace it with plain Kubernetes.
+    #[test]
+    fn a_working_base_cloud_client_is_never_dropped() {
+        let working = [
+            ("AWS_ACCESS_KEY_ID", Some("AKIAEXAMPLE")),
+            ("AWS_SECRET_ACCESS_KEY", Some("secret")),
+            ("AWS_REGION", Some("us-east-1")),
+            ("AWS_ACCOUNT_ID", Some("123456789012")),
+        ];
+        let broken = [
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+            ("AWS_REGION", None),
+            ("AWS_DEFAULT_REGION", None),
+            ("AWS_ACCOUNT_ID", None),
+            ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
+            ("AWS_CONTAINER_CREDENTIALS_FULL_URI", None),
+            ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", None),
+            // Don't wait for a metadata service that is not there.
+            ("AWS_EC2_METADATA_DISABLED", Some("true")),
+        ];
+        // One outer `with_vars` keeps the process-wide environment lock across both phases,
+        // so the other test's cache reset cannot run in between.
+        temp_env::with_vars(working, || {
+            reset_cache();
+            let config = resolve(Platform::Aws);
+            assert!(matches!(config, ClientConfig::KubernetesCloud { .. }), "{config:?}");
+            temp_env::with_vars(broken, || {
+                // Expire the failure window so the resolution is attempted again.
+                *BASE_CLOUD_FAILURE.lock().unwrap() = None;
+                let config = resolve(Platform::Aws);
+                assert!(matches!(config, ClientConfig::KubernetesCloud { .. }), "{config:?}");
+                // And a cloud that was never built stays plain Kubernetes.
+                let config = resolve(Platform::Gcp);
+                assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+            });
+        });
+        reset_cache();
+    }
 
     /// A Kubernetes deployment whose base cloud has no project, region or credentials
     /// still gets a Kubernetes client: nothing in a plain Kubernetes stack needs the cloud.
@@ -1231,6 +1316,7 @@ mod base_cloud_client_tests {
                 ("GCE_METADATA_HOST", Some("127.0.0.1:9")),
             ],
             || {
+                reset_cache();
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()

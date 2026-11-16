@@ -249,6 +249,27 @@ fn controller_platform_for_entry(
     }
 }
 
+/// True when a resource of this stack runs on the base cloud's controllers (cloud resources,
+/// bindings and links to them, cloud permissions), so its API or identity is required. A
+/// Kubernetes stack with only Kubernetes-native resources (containers, pools, sandboxes) is
+/// plain Kubernetes: the base cloud is only a label.
+pub(crate) fn stack_needs_base_cloud(
+    stack: &alien_core::Stack,
+    stack_platform: Platform,
+    base_platform: Option<Platform>,
+) -> bool {
+    stack_platform == Platform::Kubernetes
+        && base_platform.is_some()
+        && stack.resources().any(|(_, entry)| {
+            controller_platform_for_entry(
+                stack_platform,
+                base_platform,
+                entry.lifecycle,
+                Some(&entry.config),
+            ) != Platform::Kubernetes
+        })
+}
+
 fn controller_platform_for_state(stack_platform: Platform, state: &StackResourceState) -> Platform {
     state.controller_platform.unwrap_or_else(|| {
         controller_platform_for_entry(
@@ -314,6 +335,43 @@ mod controller_platform_tests {
                 }
             }
         }
+    }
+
+    fn stack_with(resources: Vec<(Resource, ResourceLifecycle)>) -> alien_core::Stack {
+        let mut builder = alien_core::Stack::new("test".to_string());
+        for (resource, lifecycle) in resources {
+            builder = builder.add_entry(alien_core::ResourceEntry {
+                display_name: None,
+                description: None,
+                config: resource,
+                lifecycle,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            });
+        }
+        builder.build()
+    }
+
+    #[test]
+    fn a_stack_needs_the_base_cloud_only_when_a_resource_runs_on_it() {
+        let compute = (
+            Resource::new(alien_core::ComputeCluster::new("compute".to_string()).build()),
+            ResourceLifecycle::Frozen,
+        );
+        let storage = (
+            Resource::new(Storage::new("bucket".to_string()).build()),
+            ResourceLifecycle::Frozen,
+        );
+        let plain = stack_with(vec![compute.clone()]);
+        let with_storage = stack_with(vec![compute, storage]);
+        for base in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            assert!(!stack_needs_base_cloud(&plain, Platform::Kubernetes, Some(base)));
+            assert!(stack_needs_base_cloud(&with_storage, Platform::Kubernetes, Some(base)));
+        }
+        // No base cloud, or not a Kubernetes stack: nothing to resolve.
+        assert!(!stack_needs_base_cloud(&with_storage, Platform::Kubernetes, None));
+        assert!(!stack_needs_base_cloud(&with_storage, Platform::Aws, Some(Platform::Aws)));
     }
 
     #[test]
