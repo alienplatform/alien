@@ -18,7 +18,9 @@ use std::{collections::BTreeMap, path::Path};
 
 use alien_error::AlienError;
 use alien_k8s_clients::{ErrorData as KubernetesErrorData, SecretsApi};
-use k8s_openapi::{api::core::v1::Secret, apimachinery::pkg::apis::meta::v1::ObjectMeta, ByteString};
+use k8s_openapi::{
+    api::core::v1::Secret, apimachinery::pkg::apis::meta::v1::ObjectMeta, ByteString,
+};
 use tracing::info;
 
 use crate::error::{ErrorData, Result};
@@ -63,7 +65,9 @@ impl OwnedSecret {
         Ok(Self {
             name: name.to_string(),
             keys: parsed,
-            migration: migration.filter(|name| !name.is_empty()).map(str::to_string),
+            migration: migration
+                .filter(|name| !name.is_empty())
+                .map(str::to_string),
         })
     }
 }
@@ -198,9 +202,7 @@ async fn attempt(
         // we read, so a concurrent change is refused instead of overwritten.
         Some(mut secret) => {
             secret.data = Some(data.clone());
-            secrets
-                .update_secret(namespace, &owned.name, &secret)
-                .await
+            secrets.update_secret(namespace, &owned.name, &secret).await
         }
     };
     match written {
@@ -217,10 +219,7 @@ async fn attempt(
         {
             Ok(Outcome::Raced)
         }
-        Err(error) => Err(failed(format!(
-            "writing Secret '{}': {error}",
-            owned.name
-        ))),
+        Err(error) => Err(failed(format!("writing Secret '{}': {error}", owned.name))),
     }
 }
 
@@ -239,7 +238,10 @@ async fn read(secrets: &dyn SecretsApi, namespace: &str, name: &str) -> Result<O
     }
 }
 
-fn decode(data: &BTreeMap<String, ByteString>, owned: &OwnedSecret) -> Result<BTreeMap<String, String>> {
+fn decode(
+    data: &BTreeMap<String, ByteString>,
+    owned: &OwnedSecret,
+) -> Result<BTreeMap<String, String>> {
     owned
         .keys
         .iter()
@@ -321,8 +323,8 @@ pub(crate) fn report(owned: &OwnedSecret, ensured: &Ensured) {
 mod tests {
     use std::sync::Mutex;
 
-    use k8s_openapi::List;
     use async_trait::async_trait;
+    use k8s_openapi::List;
 
     use super::*;
 
@@ -378,7 +380,9 @@ mod tests {
                 },
                 data: Some(
                     data.iter()
-                        .map(|(key, value)| (key.to_string(), ByteString(value.as_bytes().to_vec())))
+                        .map(|(key, value)| {
+                            (key.to_string(), ByteString(value.as_bytes().to_vec()))
+                        })
                         .collect(),
                 ),
                 ..Default::default()
@@ -437,7 +441,12 @@ mod tests {
         ) -> ClientResult<List<Secret>> {
             unimplemented!()
         }
-        async fn update_secret(&self, _: &str, name: &str, secret: &Secret) -> ClientResult<Secret> {
+        async fn update_secret(
+            &self,
+            _: &str,
+            name: &str,
+            secret: &Secret,
+        ) -> ClientResult<Secret> {
             if let Some(interfere) = self.interfere.lock().unwrap().take() {
                 interfere(&mut self.secrets.lock().unwrap());
             }
@@ -448,7 +457,13 @@ mod tests {
             }
             self.writes.lock().unwrap().push(format!("update {name}"));
             let mut stored = secret.clone();
-            let version: u32 = current.metadata.resource_version.as_ref().unwrap().parse().unwrap();
+            let version: u32 = current
+                .metadata
+                .resource_version
+                .as_ref()
+                .unwrap()
+                .parse()
+                .unwrap();
             stored.metadata.resource_version = Some((version + 1).to_string());
             secrets.insert(name.to_string(), stored.clone());
             Ok(stored)
@@ -477,10 +492,17 @@ mod tests {
         assert_eq!(first.generated.len(), 3);
         assert!(first.migrated.is_empty());
         assert_eq!(first.values["encryption-key"].len(), 64);
-        assert!(first.values["encryption-key"].chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(first.values["encryption-key"]
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
         assert_eq!(first.values["collector-token"].len(), 48);
-        assert!(first.values["collector-token"].chars().all(|c| c.is_ascii_alphanumeric()));
-        assert_ne!(first.values["collector-token"], first.values["postgres-main-password"]);
+        assert!(first.values["collector-token"]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric()));
+        assert_ne!(
+            first.values["collector-token"],
+            first.values["postgres-main-password"]
+        );
 
         // A restart reads the same values and writes nothing.
         let second = ensure(&cluster, NS, &owned(true), true).await.unwrap();
@@ -492,7 +514,13 @@ mod tests {
     #[tokio::test]
     async fn create_only_never_overwrites_a_value_that_is_there() {
         let cluster = Cluster::default();
-        cluster.put("app-operator", &[("encryption-key", OLD_KEY), ("collector-token", "kept-token")]);
+        cluster.put(
+            "app-operator",
+            &[
+                ("encryption-key", OLD_KEY),
+                ("collector-token", "kept-token"),
+            ],
+        );
         // The migration Secret holds other values for keys the Operator already has.
         cluster.put(
             "app-migration",
@@ -506,10 +534,18 @@ mod tests {
         // Only the missing key is added: from the migration Secret, not generated.
         assert_eq!(ensured.migrated, ["postgres-main-password"]);
         assert!(ensured.generated.is_empty());
-        assert_eq!(cluster.read("app-operator", "encryption-key").as_deref(), Some(OLD_KEY));
-        assert_eq!(cluster.read("app-operator", "collector-token").as_deref(), Some("kept-token"));
         assert_eq!(
-            cluster.read("app-operator", "postgres-main-password").as_deref(),
+            cluster.read("app-operator", "encryption-key").as_deref(),
+            Some(OLD_KEY)
+        );
+        assert_eq!(
+            cluster.read("app-operator", "collector-token").as_deref(),
+            Some("kept-token")
+        );
+        assert_eq!(
+            cluster
+                .read("app-operator", "postgres-main-password")
+                .as_deref(),
             Some("migrated-password")
         );
     }
@@ -532,7 +568,10 @@ mod tests {
         let ensured = ensure(&cluster, NS, &owned(false), false).await.unwrap();
         assert_eq!(ensured.values["encryption-key"], OLD_KEY);
         assert_eq!(ensured.values["collector-token"], "winner-token");
-        assert!(ensured.generated.is_empty(), "the loser keeps the winner's values");
+        assert!(
+            ensured.generated.is_empty(),
+            "the loser keeps the winner's values"
+        );
         assert!(cluster.writes.lock().unwrap().is_empty());
     }
 
@@ -544,7 +583,10 @@ mod tests {
             put(
                 secrets,
                 "app-operator",
-                &[("encryption-key", OLD_KEY), ("collector-token", "winner-token")],
+                &[
+                    ("encryption-key", OLD_KEY),
+                    ("collector-token", "winner-token"),
+                ],
             );
         }));
         let ensured = ensure(&cluster, NS, &owned(false), true).await.unwrap();
@@ -557,7 +599,10 @@ mod tests {
         let cluster = Cluster::default();
         cluster.put(
             "app-migration",
-            &[("encryption-key", OLD_KEY), ("collector-token", "old-token")],
+            &[
+                ("encryption-key", OLD_KEY),
+                ("collector-token", "old-token"),
+            ],
         );
         let ensured = ensure(&cluster, NS, &owned(true), true).await.unwrap();
         assert_eq!(ensured.values["encryption-key"], OLD_KEY);
@@ -565,15 +610,26 @@ mod tests {
         assert_eq!(ensured.migrated, ["encryption-key", "collector-token"]);
         // Only what the earlier chart never had is generated.
         assert_eq!(ensured.generated, ["postgres-main-password"]);
-        assert_eq!(cluster.read("app-operator", "encryption-key").as_deref(), Some(OLD_KEY));
+        assert_eq!(
+            cluster.read("app-operator", "encryption-key").as_deref(),
+            Some(OLD_KEY)
+        );
     }
 
     #[tokio::test]
     async fn saved_state_without_its_key_is_refused_and_nothing_is_generated() {
         let cluster = Cluster::default();
         let error = ensure(&cluster, NS, &owned(true), true).await.unwrap_err();
-        assert!(error.to_string().contains("saved state but no encryption key"), "{error}");
-        assert!(cluster.secrets.lock().unwrap().is_empty(), "nothing was written");
+        assert!(
+            error
+                .to_string()
+                .contains("saved state but no encryption key"),
+            "{error}"
+        );
+        assert!(
+            cluster.secrets.lock().unwrap().is_empty(),
+            "nothing was written"
+        );
     }
 
     #[tokio::test]
@@ -582,7 +638,12 @@ mod tests {
         cluster.put("app-migration", &[("encryption-key", "short")]);
         let error = ensure(&cluster, NS, &owned(true), false).await.unwrap_err();
         assert!(error.to_string().contains("wrong form"), "{error}");
-        assert!(cluster.secrets.lock().unwrap().get("app-operator").is_none());
+        assert!(cluster
+            .secrets
+            .lock()
+            .unwrap()
+            .get("app-operator")
+            .is_none());
     }
 
     #[test]

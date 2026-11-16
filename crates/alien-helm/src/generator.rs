@@ -4079,8 +4079,8 @@ fn values_yaml(analysis: &ChartAnalysis, stack_settings: &StackSettings) -> Resu
   # One-hour, one-use code that enrolls the Operator for a registered
   # deployment, instead of token. The Operator then keeps its own key, which
   # it replaces every day. Requires deploymentId, audience and persistence.
-  # Once the Operator is enrolled it ignores the code, so a GitOps tool that
-  # applies the same values again changes nothing.
+  # Once the Operator is enrolled it ignores the code, so applying the same
+  # values again changes nothing.
   enrollmentCode: ""
   # Keep the code out of Git: name a Secret you created, and the key that holds
   # the code. Used instead of enrollmentCode. The chart cannot read that Secret to
@@ -4253,8 +4253,6 @@ logCollector:
   # nodeAgent: a Fluent Bit DaemonSet reads selected Pod logs on each node.
   mode: nodeAgent
   maxStreams: 32
-  # nodeAgent only. Generated on first install and retained on upgrade.
-  token: ""
   # nodeAgent only. Pull secrets for the collector image; defaults to runtime.imagePullSecrets.
   imagePullSecrets: []
   image:
@@ -4946,15 +4944,6 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
       "required": ["token", "updates", "telemetry", "healthChecks"],
       "properties": {
         "token": { "type": "string" },
-        "existingSecret": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "Read only while upgrading from a chart that took the management token from a Secret you made. Remove it from your values after the upgrade.",
-          "properties": {
-            "name": { "type": "string" },
-            "tokenKey": { "type": "string", "minLength": 1 }
-          }
-        },
         "enrollmentCode": { "type": "string" },
         "enrollmentCodeSecret": {
           "type": "object",
@@ -4984,7 +4973,6 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
           "audience": { "minLength": 1 },
           "deploymentId": { "type": "string", "minLength": 1 },
           "token": { "enum": [""] },
-          "existingSecret": { "properties": { "name": { "enum": [""] } } },
           "enrollmentCodeSecret": { "properties": { "name": { "enum": [""] } } }
         }
       },
@@ -5045,22 +5033,6 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         },
         "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
         "automountServiceAccountToken": { "type": "boolean" },
-        "encryption": {
-          "type": "object",
-          "additionalProperties": false,
-          "description": "Read only while upgrading from a chart that took the encryption key from values or a Secret you made. The Operator now keeps the key in its own Secret. Remove it from your values after the upgrade.",
-          "properties": {
-            "key": { "type": "string", "pattern": "^$|^[a-fA-F0-9]{64}$" },
-            "existingSecret": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "name": { "type": "string" },
-                "key": { "type": "string", "minLength": 1 }
-              }
-            }
-          }
-        },
         "replicas": { "type": "integer", "minimum": 1, "maximum": 1 },
         "resources": { "type": "object" },
         "api": {
@@ -5234,7 +5206,6 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "enabled": { "type": "boolean" },
         "mode": { "type": "string", "enum": ["nodeAgent", "podApi"] },
         "maxStreams": { "type": "integer", "minimum": 1, "maximum": 256 },
-        "token": { "type": "string", "description": "Node collector credential; ignored in podApi mode." },
         "imagePullSecrets": {
           "type": "array",
           "description": "Pull secrets for the node collector image. Defaults to runtime.imagePullSecrets.",
@@ -5373,7 +5344,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
         "additionalProperties": false,
         "properties": {
           "enabled": { "type": "boolean", "description": "Run this database in the cluster as a StatefulSet. Off by default: supply an infrastructure binding instead." },
-          "existingPasswordSecret": { "type": "string", "description": "Secret with a `password` key. Required for GitOps and offline rendering." },
+          "existingPasswordSecret": { "type": "string", "description": "Secret you manage, with a `password` key, used instead of the password the Operator creates for this database." },
           "recordedImage": { "type": "string", "description": "The retained PVC's alien.dev/postgres-image annotation. Required for offline rendering." },
           "image": {
             "type": "object",
@@ -5779,10 +5750,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
                         "management": {
                             "required": ["token"],
                             "properties": {
-                                "token": { "enum": [""] },
-                                "existingSecret": {
-                                    "properties": { "name": { "enum": [""] } }
-                                }
+                                "token": { "enum": [""] }
                             }
                         }
                     }
@@ -5872,7 +5840,7 @@ fn stack_inputs_tpl(stack: &Stack) -> Result<String> {
         };
         template.push_str(&format!("{{{{- if not (and (hasKey $conditions {reference:?}) (eq (toJson (get $conditions {reference:?})) {expected:?})) -}}}}{{{{- $_ := unset $values {id:?} -}}}}", reference=when.input, expected=when.equals.to_string(), id=input.id));
         if input.required && input.default.is_none() && !is_deployer_secret_input(input) {
-            template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token (include "deployment.enrollmentCodeSecretName" .) (include "deployment.legacyManagementSecretName" .)) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
+            template.push_str(&format!(r#"{{{{- else if and (not .Values.management.deploymentId) (or .Values.management.token (include "deployment.enrollmentCodeSecretName" .)) (not (hasKey $values {id:?})) -}}}}{{{{- fail {message:?} -}}}}"#, id=input.id, message=format!("Stack input '{}' is required", input.id)));
         }
         template.push_str("{{- end -}}\n");
     }
@@ -6271,52 +6239,58 @@ roleRef:
     .to_string()
 }
 
-/// Bootstrap pull credentials for an Operator image served by the manager. The
-/// registry is the image's host. A token install pulls with its token and an
-/// enrollment install with its one-hour code, so the first Pod can start. The
-/// Secret is a pure function of the values: two renders are identical. The
-/// Operator never writes it. Once enrolled it writes its own, longer-lived pull
-/// credential to a separate Secret that the chart never renders, so a GitOps tool
-/// re-applying this one cannot overwrite it.
+/// Pull credentials for an Operator image served by the manager. The registry is the image's
+/// host. A token install pulls with its token and an enrollment install with its one-hour
+/// code, so the first Pod can start: that bootstrap Secret is a pure function of the values,
+/// so two renders are identical. The chart does not render `<fullname>-registry` on a new
+/// install. The Operator creates it with its own, longer-lived credential and keeps it
+/// refreshed, so a GitOps tool that applies the chart again has nothing of the Operator's to
+/// overwrite.
 ///
-/// An enrollment code kept in a Secret (`management.enrollmentCodeSecret`) cannot be
-/// read at render time, so no bootstrap Secret exists for it: supply
-/// `runtime.imagePullSecrets` for the first pull.
+/// An enrollment code kept in a Secret (`management.enrollmentCodeSecret`) cannot be read at
+/// render time, so it has no bootstrap Secret: supply `runtime.imagePullSecrets` for the first
+/// pull.
 fn registry_secret_tpl() -> String {
     r#"{{- $pull := dig "pullWithManagementToken" false .Values.runtime.image }}
+{{- if $pull }}
+{{- $credential := default .Values.management.token .Values.management.enrollmentCode }}
+{{- if $credential }}
 {{- $registry := first (splitList "/" .Values.runtime.image.repository) }}
-{{- $name := printf "%s-registry" (include "deployment.fullname" .) }}
 {{- $user := default "deployment" .Values.management.name }}
-{{- $config := "" }}
-{{- if .Values.management.token }}
-{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.token | b64enc))) | toJson | b64enc }}
-{{- else if .Values.management.enrollmentCode }}
-{{- $config = dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user .Values.management.enrollmentCode | b64enc))) | toJson | b64enc }}
-{{- end }}
-{{- /* Migration only (remove one release after migration is reported): an earlier chart's
-Operator refreshed this Secret in place. On upgrade, keep what it holds unless a token is
-given, so the Pod that starts next can still pull its image. The Operator now writes its
-refreshed credential to its own Secret. */ -}}
-{{- if and $pull .Release.IsUpgrade (not .Values.management.token) }}
-{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
-{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") (or (not .Values.management.enrollmentCode) (eq (dig "metadata" "annotations" "alien.dev/enrollment-code-sha256" "" $existing) (.Values.management.enrollmentCode | sha256sum))) }}
-{{- $config = index $existing.data ".dockerconfigjson" }}
-{{- end }}
-{{- end }}
-{{- if and $pull $config }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ $name }}
+  name: {{ include "deployment.bootstrapPullSecretName" . }}
   labels:
     {{- include "deployment.labels" . | nindent 4 }}
-  {{- if .Values.management.enrollmentCode }}
-  annotations:
-    alien.dev/enrollment-code-sha256: {{ .Values.management.enrollmentCode | sha256sum | quote }}
-  {{- end }}
 type: kubernetes.io/dockerconfigjson
 data:
-  .dockerconfigjson: {{ $config }}
+  .dockerconfigjson: {{ dict "auths" (dict $registry (dict "auth" (printf "%s:%s" $user $credential | b64enc))) | toJson | b64enc }}
+{{- end }}
+{{- /* Migration only (remove one release after migration is reported): an earlier chart rendered
+<fullname>-registry and its Operator refreshed it in place. On upgrade, keep rendering the
+Secret with the data it holds, unchanged, and tell Helm never to delete it: the Pod that
+starts next may be on a node that has not cached its image, and the Operator that would
+recreate the Secret cannot start without it. */ -}}
+{{- if .Release.IsUpgrade }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (include "deployment.registrySecretName" .) }}
+{{- if and $existing (hasKey (default dict $existing.data) ".dockerconfigjson") }}
+{{- if $credential }}
+---
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "deployment.registrySecretName" . }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ index $existing.data ".dockerconfigjson" }}
+{{- end }}
+{{- end }}
 {{- end }}
 "#
     .to_string()
@@ -6751,6 +6725,10 @@ metadata:
     "helm.sh/hook": pre-delete
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # Argo CD does not run Helm's pre-delete hooks. This is its own PreDelete hook (Argo CD 3.3
+    # and newer): the Job runs when the Application is deleted, before its resources go.
+    argocd.argoproj.io/hook: PreDelete
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
 spec:
   # A failed cleanup Job stays for debugging, then Kubernetes removes it.
   ttlSecondsAfterFinished: 86400
@@ -7201,7 +7179,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "legacySecret" (include "deployment.legacyManagementSecretName" .) "enrollmentCode" .Values.management.enrollmentCode "enrollmentCodeSecret" (default dict .Values.management.enrollmentCodeSecret)) | sha256sum | quote }}
+        checksum/management-credential: {{ toJson (dict "token" .Values.management.token "enrollmentCode" .Values.management.enrollmentCode "enrollmentCodeSecret" (default dict .Values.management.enrollmentCodeSecret)) | sha256sum | quote }}
         checksum/pod-log-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
         {{- with .Values.runtime.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -7211,17 +7189,17 @@ spec:
       automountServiceAccountToken: {{ .Values.runtime.automountServiceAccountToken }}
       securityContext:
         {{- toYaml .Values.runtime.security.podSecurityContext | nindent 8 }}
-      {{- $pullWithToken := and (dig "pullWithManagementToken" false .Values.runtime.image) (or .Values.management.token .Values.management.enrollmentCode .Release.IsUpgrade) }}
-      {{- if or .Values.runtime.imagePullSecrets (dig "pullWithManagementToken" false .Values.runtime.image) }}
+      {{- $pullWithToken := dig "pullWithManagementToken" false .Values.runtime.image }}
+      {{- if or .Values.runtime.imagePullSecrets $pullWithToken }}
       imagePullSecrets:
         {{- with .Values.runtime.imagePullSecrets }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-        {{- if $pullWithToken }}
-        - name: {{ include "deployment.fullname" . }}-registry
+        {{- if and $pullWithToken (or .Values.management.token .Values.management.enrollmentCode) }}
+        - name: {{ include "deployment.bootstrapPullSecretName" . }}
         {{- end }}
-        {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
-        - name: {{ include "deployment.operatorPullSecretName" . }}
+        {{- if $pullWithToken }}
+        - name: {{ include "deployment.registrySecretName" . }}
         {{- end }}
       {{- end }}
       {{- with .Values.runtime.scheduling.nodeSelector }}
@@ -7352,14 +7330,14 @@ spec:
               value: /etc/deployment/secrets/enrollment-code
             - name: ALIEN_MANAGER_AUDIENCE
               value: {{ .Values.management.audience | quote }}
-            {{- else if or .Values.management.token (include "deployment.legacyManagementSecretName" .) }}
+            {{- else if .Values.management.token }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
             {{- end }}
             {{- end }}
             {{- if dig "pullWithManagementToken" false .Values.runtime.image }}
             - name: OPERATOR_REGISTRY_SECRET
-              value: {{ include "deployment.operatorPullSecretName" . | quote }}
+              value: {{ include "deployment.registrySecretName" . | quote }}
             {{- end }}
             - name: OPERATOR_OWNED_SECRET
               value: {{ include "deployment.operatorSecretName" . | quote }}
@@ -7711,7 +7689,6 @@ spec:
         app.kubernetes.io/component: log-collector
         alien.dev/log-collector-exclude: "true"
       annotations:
-        checksum/collector-credential: {{ toJson .Values.logCollector.token | sha256sum | quote }}
         checksum/collector-scope: {{ toJson .Values.logCollector.scope | sha256sum | quote }}
     spec:
       serviceAccountName: {{ include "deployment.logCollectorName" . }}
@@ -8317,7 +8294,7 @@ fn aks_values_example(analysis: &ChartAnalysis) -> String {
 /// Values a GitOps install sets, written as the `values` of a Flux
 /// HelmRelease or the `valuesObject` of an Argo CD Application. `indent` is
 /// the number of spaces the block starts at. The values are the ones the Helm CLI
-/// install uses; GitOps has no mode of its own.
+/// install uses.
 fn gitops_values(indent: usize) -> String {
     let block = r#"management:
   url: https://manager.example.com
@@ -8580,21 +8557,13 @@ makes the stored state readable, and a missing key must be restored, not regener
 Operator refuses to start on existing state without it. Uninstalling the release leaves the
 Secret in place, with the retained runtime volume.
 
-The Operator writes its own image pull credential to `<release>-pull`. The chart renders a
-separate bootstrap pull Secret from the code or token, so a GitOps tool that applies the
-chart again cannot overwrite the refreshed credential. With `enrollmentCodeSecret` the chart
-cannot build that bootstrap Secret: set `runtime.imagePullSecrets` for the first image pull.
+The code or token in the values becomes a bootstrap pull Secret (`<release>-bootstrap-pull`)
+for the first image pull. The Operator creates `<release>-registry` and keeps its own,
+longer-lived pull credential there; the chart does not render it on a new install, so a tool
+that applies the chart again cannot overwrite it. With `enrollmentCodeSecret` the chart cannot
+read the code, so set `runtime.imagePullSecrets` for the first image pull.
 
 The Operator image changes with the chart version. `runtime.image.selfUpdate` is off by default.
-
-**Upgrading from an earlier chart.** Earlier charts generated the encryption key, the
-collector token and the Postgres passwords into the release Secret, or read them from
-`management.existingSecret` and `runtime.encryption.existingSecret`. This release reads those
-values once, on `helm upgrade`, and passes them unchanged to the Operator through
-`<release>-migration`; the Operator copies them into `<release>-operator`, which it then
-uses. Nothing is generated. The old fields are accepted only for this migration; remove
-them from your values afterwards. The migration reads the cluster, so upgrade with Helm or
-Flux, or keep the old Secrets in place while Argo CD renders offline.
 
 Runtime persistence is on by default and required for bootstrap installations.
 The identity, deployment credential, and log cursor survive Pod replacement.
@@ -8695,12 +8664,13 @@ Use an Operator image built with this chart version for that transition.
 
 ## Flux and Argo CD
 
-There is one install path. Flux and Argo CD install this chart with the values the Helm
-CLI uses: the manager URL, the enrollment code and, if the stack needs them, its
+Flux and Argo CD install this chart with the values the Helm CLI uses: the manager URL,
+the enrollment code (or the Secret that holds it) and, if the stack needs them, its
 infrastructure bindings. `examples/gitops/flux.yaml` and `examples/gitops/argocd.yaml` show
 the full setup. Use one namespace per install. The chart renders the same manifests with
 and without cluster access, so Argo CD can render it offline. Re-applying the same values
 after the code is spent changes nothing. The Operator image changes with the chart version.
+Deleting an Argo CD Application (3.3 or newer) runs the cleanup Job as a PreDelete hook.
 
 The Remote Operator depends on Helm release history and runs under Helm or Flux only, not
 Argo CD.
@@ -10618,9 +10588,9 @@ mod tests {
                 .collect();
             assert!(!names.is_empty(), "{password}: no pull Secret");
             for name in names {
-                if name == "test-release-pull" {
-                    // The Operator writes this Secret. The chart never renders it, so a
-                    // GitOps tool that applies the chart again cannot overwrite it.
+                if name == "test-release-registry" {
+                    // The Operator creates and refreshes this Secret. A new install never
+                    // renders it, so applying the chart again cannot overwrite it.
                     assert!(
                         !secrets
                             .iter()
@@ -10810,19 +10780,48 @@ mod tests {
         };
         let first = crate::test_utils::helm_template(&chart.files, Some(install.as_str()));
         first.assert_ok("install with a code");
-        assert_eq!(registry_secret(&first), (true, true, true));
+        // The bootstrap Secret carries the code; `<fullname>-registry` is the Operator's.
+        assert_eq!(registry_secret(&first), (false, true, true));
         let upgraded =
             crate::test_utils::helm_template_as_upgrade(&chart.files, Some(upgrade.as_str()));
         upgraded.assert_ok("upgrade without a code");
-        // Without cluster access there is no earlier Secret to keep, so none is rendered
-        // (a live upgrade keeps the one the earlier chart's Operator refreshed; the Kind
-        // upgrade test covers that). The Pod's references stay, so it can pull with the
-        // credential the Operator writes to its own Secret.
+        // Without cluster access there is no earlier Secret to keep, so none is rendered.
+        // The Pod's references stay, so it can pull with the credential the Operator keeps.
         assert_eq!(
             registry_secret(&upgraded),
             (false, true, true),
-            "the Pod references both pull Secrets and the Operator keeps its own"
+            "the Pod references the pull Secret and the Operator keeps its own"
         );
+
+        // On a live upgrade the Secret an earlier chart made is kept as it is, and Helm is told
+        // never to delete it: the Operator that would recreate it cannot start without it.
+        let mut files = chart.files.clone();
+        let template = files.get_mut("templates/registry-secret.yaml").unwrap();
+        *template = template.replace(
+            "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.registrySecretName\" .)",
+            "(dict \"data\" (dict \".dockerconfigjson\" \"b3BlcmF0b3ItY3JlZGVudGlhbA==\"))",
+        );
+        let kept = crate::test_utils::helm_template_as_upgrade(&files, Some(upgrade.as_str()));
+        kept.assert_ok("upgrade that keeps the registry Secret");
+        let docs = parse_manifest_docs(&kept.stdout);
+        let registry = docs_by_kind(&docs, "Secret")
+            .into_iter()
+            .find(|secret| secret["metadata"]["name"] == "test-release-registry")
+            .expect("the existing Secret is rendered on upgrade");
+        assert_eq!(
+            registry["data"][".dockerconfigjson"],
+            "b3BlcmF0b3ItY3JlZGVudGlhbA=="
+        );
+        assert_eq!(
+            registry["metadata"]["annotations"]["helm.sh/resource-policy"],
+            "keep"
+        );
+        // The same render as a new install never renders it.
+        let fresh = crate::test_utils::helm_template(&files, Some(install.as_str()));
+        fresh.assert_ok("fresh install");
+        assert!(!docs_by_kind(&parse_manifest_docs(&fresh.stdout), "Secret")
+            .iter()
+            .any(|secret| secret["metadata"]["name"] == "test-release-registry"));
     }
 
     /// The Operator enrolls itself only where its daily key survives a Pod
@@ -11057,8 +11056,6 @@ management:
   url: https://manager.example.test
   deploymentId: null
 runtime:
-  encryption:
-    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   image:
     repository: ghcr.io/vendor/operator
     tag: "1.2.3"
@@ -11066,7 +11063,6 @@ runtime:
 logCollector:
   enabled: true
   mode: nodeAgent
-  token: collector-token
 "#
         );
         for (label, chart) in [("chart", sample_product_chart_with_collector(true))] {
@@ -11112,8 +11108,6 @@ management:
   url: https://manager.example.test
   deploymentId: null
 runtime:
-  encryption:
-    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   imagePullSecrets:
     - name: site-registry
 logCollector:
@@ -11159,8 +11153,6 @@ management:
   url: https://manager.example.test
   deploymentId: null
 runtime:
-  encryption:
-    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   imagePullSecrets:
     - name: site-registry
   cleanup:
@@ -11228,9 +11220,6 @@ management:
   name: prod
   url: https://manager.example.test
   deploymentId: null
-runtime:
-  encryption:
-    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 "#;
         let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
         rendered.assert_ok("operator pod render");
@@ -11358,9 +11347,6 @@ management:
   name: prod
   url: https://manager.example.test
   deploymentId: null
-runtime:
-  encryption:
-    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 inputValues:
   ingestUrl: https://ingest.example.test
   enabled: true
@@ -11451,9 +11437,6 @@ management:
   token: ax_dg_example
   name: prod
   url: https://manager.example.test
-runtime:
-  encryption:
-    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 infrastructureExistingSecret: customer-bindings
 "#;
         let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
@@ -11515,7 +11498,7 @@ infrastructureExistingSecret: customer-bindings
         )
         .unwrap();
         crate::test_utils::helm_lint(&chart.files).assert_ok("conditional chart defaults");
-        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\n";
         let rendered = crate::test_utils::helm_template(
             &chart.files,
             Some(&format!(
@@ -11588,7 +11571,7 @@ infrastructureExistingSecret: customer-bindings
                 },
             )
             .unwrap();
-            let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: dep_test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+            let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: dep_test\n";
             let rendered = crate::test_utils::helm_template(&chart.files, Some(values));
             rendered.assert_ok("unconditional default install");
             let documents: Vec<YamlValue> = serde_yaml::Deserializer::from_str(&rendered.stdout)
@@ -11645,7 +11628,7 @@ infrastructureExistingSecret: customer-bindings
             "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.fullname\" .)",
             "(dict \"data\" (dict \"input-values.json\" (b64enc \"{}\")))",
         );
-        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: dep_test\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        let base = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: dep_test\n";
         crate::test_utils::helm_template(&chart.files, Some(base))
             .assert_ok("legacy omitted defaults survive upgrade");
         let changed = crate::test_utils::helm_template(
@@ -11700,7 +11683,7 @@ infrastructureExistingSecret: customer-bindings
         )
         .expect("chart");
         crate::test_utils::helm_lint(&chart.files).assert_ok("lint chart defaults");
-        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\ninputValues:\n  ingestUrl: https://ingest.example.test\n";
+        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\ninputValues:\n  ingestUrl: https://ingest.example.test\n";
         crate::test_utils::helm_template(&chart.files, Some(values))
             .assert_ok("valid input values");
         let registered = values
@@ -11784,7 +11767,7 @@ infrastructureExistingSecret: customer-bindings
 
         // A required deployer secret is not a required Helm value: the
         // bootstrap installs without it.
-        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        let values = "management:\n  token: ax_test\n  name: test\n  url: https://manager.example.test\n  deploymentId: null\n";
         crate::test_utils::helm_template(&chart.files, Some(values))
             .assert_ok("install without deployer secret values");
         let rendered = crate::test_utils::helm_render_notes(&chart.files, values, "shop", "apps");
@@ -11851,9 +11834,7 @@ infrastructureExistingSecret: customer-bindings
     #[test]
     fn an_http_management_url_still_installs_and_is_warned_about_in_the_notes() {
         let files = sample_chart_files();
-        let values = |url: &str| {
-            format!("management:\n  token: test-credential\n  url: {url}\nruntime:\n  encryption:\n    key: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n")
-        };
+        let values = |url: &str| format!("management:\n  token: test-credential\n  url: {url}\n");
         let http = values("http://manager.example.test:8080");
         // The chart never fails on the scheme: existing installs and GitOps renders keep working.
         crate::test_utils::helm_template(&files, Some(&http)).assert_ok("http url install");
@@ -13883,11 +13864,9 @@ logCollector:
             .iter()
             .all(|secret| secret["stringData"]["collector-token"].is_null()
                 && secret["data"]["collector-token"].is_null()));
-        // A value for it in the install values changes nothing: the chart renders no token.
+        // There is no value for it: the Operator creates the token.
         let with_token = values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: ignored");
-        let ignored = crate::test_utils::helm_template(&chart.files, Some(&with_token));
-        ignored.assert_ok("collector token value");
-        assert!(!ignored.stdout.contains("ignored"));
+        assert!(!crate::test_utils::helm_template(&chart.files, Some(&with_token)).is_ok());
 
         let mut remote_files = chart.files.clone();
         remote_files.shift_remove("templates/remote-operator-checks.yaml");
@@ -13936,6 +13915,217 @@ logCollector:
         assert_eq!(
             revised_collector["spec"]["template"]["spec"]["containers"][0]["env"][1]["value"],
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+    }
+
+    /// Render `chart` as an upgrade with `installed` standing in for the cluster's Secrets
+    /// (`name -> data`, values base64-encoded). Helm's offline `lookup` is empty, so the
+    /// migration's reads are pointed at a values map instead.
+    fn render_upgrade_with_installed_secrets(
+        chart: &HelmChart,
+        values: &str,
+        installed: serde_json::Value,
+    ) -> crate::test_utils::LinterRun {
+        let mut files = chart.files.clone();
+        files.shift_remove("values.schema.json");
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let template = files.get_mut("templates/migration-secret.yaml").unwrap();
+        for (call, name) in [
+            (
+                "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.fullname\" .)",
+                "(include \"deployment.fullname\" .)",
+            ),
+            (
+                "lookup \"v1\" \"Secret\" .Release.Namespace (include \"deployment.operatorSecretName\" .)",
+                "(include \"deployment.operatorSecretName\" .)",
+            ),
+            (
+                "lookup \"v1\" \"Secret\" $.Release.Namespace $database.name",
+                "$database.name",
+            ),
+        ] {
+            assert!(template.contains(call), "{call}");
+            *template = template.replace(
+                call,
+                &format!("(get (default dict $.Values.installedSecrets) {name})"),
+            );
+        }
+        let secrets: serde_json::Map<String, serde_json::Value> = installed
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, data)| (name.clone(), serde_json::json!({ "data": data })))
+            .collect();
+        let values = format!(
+            "{values}\ninstalledSecrets: {}\n",
+            serde_json::Value::Object(secrets)
+        );
+        crate::test_utils::helm_template_for_release_as_upgrade(&files, Some(&values), "app")
+    }
+
+    fn database_stack() -> Stack {
+        Stack::new("shop".into())
+            .add(
+                alien_core::Postgres::new("main".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build()
+    }
+
+    const OLD_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn b64(text: &str) -> String {
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, text)
+    }
+
+    fn migration_data(rendered: &crate::test_utils::LinterRun) -> Option<serde_json::Value> {
+        let docs = parse_manifest_docs(&rendered.stdout);
+        docs_by_kind(&docs, "Secret")
+            .into_iter()
+            .find(|secret| secret["metadata"]["name"] == "app-migration")
+            .map(|secret| serde_json::to_value(&secret["data"]).unwrap())
+    }
+
+    const MIGRATION_VALUES: &str = "management:\n  token: ax_test\n  url: https://manager.example.test\n  deploymentId: dep_test\nlogCollector:\n  enabled: true\n  mode: nodeAgent\n  scope:\n    deploymentLabelValue: shop\npostgres:\n  main:\n    enabled: true\n";
+
+    #[test]
+    fn migration_carries_what_the_earlier_chart_installed_and_generates_nothing() {
+        let chart = product_chart_for_stack(&database_stack(), true, None);
+        // The database Secret's name comes from the render itself.
+        let first = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(MIGRATION_VALUES),
+            "app",
+        );
+        first.assert_ok("new install");
+        // A new install has no earlier values to carry.
+        assert!(migration_data(&first).is_none());
+        let docs = parse_manifest_docs(&first.stdout);
+        let database = docs_by_kind(&docs, "StatefulSet")[0]["metadata"]["name"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let installed = serde_json::json!({
+            "app": {
+                "encryption-key": b64(OLD_KEY),
+                "collector-token": b64("old-collector-token"),
+                "sync-token": b64("irrelevant"),
+            },
+            database.as_str(): { "password": b64("old-database-password") },
+        });
+        let upgraded = render_upgrade_with_installed_secrets(&chart, MIGRATION_VALUES, installed);
+        upgraded.assert_ok("upgrade that migrates");
+        // Exactly the installed values, byte for byte; nothing else.
+        assert_eq!(
+            migration_data(&upgraded),
+            Some(serde_json::json!({
+                "encryption-key": b64(OLD_KEY),
+                "collector-token": b64("old-collector-token"),
+                "postgres-main-password": b64("old-database-password"),
+            }))
+        );
+        // The Operator reads it, and the render itself is the same every time.
+        let operator = docs_by_kind(&parse_manifest_docs(&upgraded.stdout), "Deployment")
+            .into_iter()
+            .find(|deployment| {
+                deployment["spec"]["template"]["spec"]["containers"][0]["name"] == "operator"
+            })
+            .unwrap();
+        assert_eq!(
+            operator_env_value(&operator, "OPERATOR_MIGRATION_SECRET"),
+            Some("app-migration")
+        );
+
+        // Nothing installed: nothing is invented.
+        let empty =
+            render_upgrade_with_installed_secrets(&chart, MIGRATION_VALUES, serde_json::json!({}));
+        empty.assert_ok("upgrade with nothing to carry");
+        assert!(migration_data(&empty).is_none());
+        assert!(!empty.stdout.contains("encryption-key:"));
+
+        // Only what exists is carried.
+        let partial = render_upgrade_with_installed_secrets(
+            &chart,
+            MIGRATION_VALUES,
+            serde_json::json!({ "app": { "encryption-key": b64(OLD_KEY) } }),
+        );
+        partial.assert_ok("partial upgrade");
+        assert_eq!(
+            migration_data(&partial),
+            Some(serde_json::json!({ "encryption-key": b64(OLD_KEY) }))
+        );
+    }
+
+    #[test]
+    fn migration_keeps_the_key_the_operator_already_has_and_refuses_a_different_one() {
+        let chart = product_chart_for_stack(&database_stack(), false, None);
+        let carried = serde_json::json!({
+            "app": { "encryption-key": b64(OLD_KEY) },
+            "app-operator": { "encryption-key": b64(OLD_KEY) },
+        });
+        let rendered = render_upgrade_with_installed_secrets(&chart, MIGRATION_VALUES, carried);
+        rendered.assert_ok("the Operator already has the key");
+        // It is not carried a second time, so the migration Secret goes away.
+        assert!(migration_data(&rendered).is_none());
+
+        let other = "f".repeat(64);
+        for installed in [
+            serde_json::json!({
+                "app": { "encryption-key": b64(OLD_KEY) },
+                "app-operator": { "encryption-key": b64(&other) },
+            }),
+            serde_json::json!({ "app": { "encryption-key": b64("not-a-key") } }),
+        ] {
+            let refused =
+                render_upgrade_with_installed_secrets(&chart, MIGRATION_VALUES, installed);
+            assert!(!refused.is_ok(), "{}", refused.stdout);
+        }
+    }
+
+    /// A release with the Remote Operator still has a runtime Operator and its databases, and the
+    /// earlier chart generated their values the same way. They are carried too.
+    #[test]
+    fn migration_also_runs_when_the_remote_operator_is_enabled() {
+        let chart = product_chart_for_stack(&database_stack(), false, None);
+        let values = format!(
+            "{MIGRATION_VALUES}remoteOperator:\n  enabled: true\n  existingSecret:\n    name: setup-owned\n    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        );
+        let rendered = render_upgrade_with_installed_secrets(
+            &chart,
+            &values,
+            serde_json::json!({ "app": { "encryption-key": b64(OLD_KEY) } }),
+        );
+        rendered.assert_ok("remote operator upgrade");
+        assert_eq!(
+            migration_data(&rendered),
+            Some(serde_json::json!({ "encryption-key": b64(OLD_KEY) }))
+        );
+    }
+
+    #[test]
+    fn the_cleanup_job_runs_when_argo_cd_deletes_the_application() {
+        let chart = sample_product_chart();
+        let rendered = crate::test_utils::helm_template(
+            &chart.files,
+            Some("management:\n  token: ax_test\n  url: https://manager.example.test\n  deploymentId: dep_test\n"),
+        );
+        rendered.assert_ok("render");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let cleanup = docs_by_kind(&docs, "Job")
+            .into_iter()
+            .find(|job| {
+                job["metadata"]["annotations"]["helm.sh/hook"] == "pre-delete"
+                    && job["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.ends_with("-cleanup"))
+            })
+            .expect("runtime cleanup Job");
+        let annotations = &cleanup["metadata"]["annotations"];
+        assert_eq!(annotations["argocd.argoproj.io/hook"], "PreDelete");
+        assert_eq!(
+            annotations["argocd.argoproj.io/hook-delete-policy"],
+            "HookSucceeded"
         );
     }
 

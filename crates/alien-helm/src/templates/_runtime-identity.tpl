@@ -56,9 +56,15 @@ the values the install would otherwise have to generate at render time. */ -}}
 {{- printf "%s-operator" (include "deployment.fullname" . | trunc 54 | trimSuffix "-") -}}
 {{- end -}}
 
-{{- /* The pull credential the Operator refreshes. The chart never renders it. */ -}}
-{{- define "deployment.operatorPullSecretName" -}}
-{{- printf "%s-pull" (include "deployment.fullname" . | trunc 58 | trimSuffix "-") -}}
+{{- /* The pull credential the Operator keeps refreshed. The chart does not render it on a new
+install; on upgrade it keeps rendering the Secret an earlier chart made, unchanged. */ -}}
+{{- define "deployment.registrySecretName" -}}
+{{- printf "%s-registry" (include "deployment.fullname" .) -}}
+{{- end -}}
+
+{{- /* Pull credential for the first Pod, rendered from the code or token in the values. */ -}}
+{{- define "deployment.bootstrapPullSecretName" -}}
+{{- printf "%s-bootstrap-pull" (include "deployment.fullname" . | trunc 49 | trimSuffix "-") -}}
 {{- end -}}
 
 {{- /* Values carried over from an earlier chart on upgrade. Rendered only while
@@ -71,14 +77,8 @@ that migration is needed. */ -}}
 {{- dig "name" "" (default dict .Values.management.enrollmentCodeSecret) -}}
 {{- end -}}
 
-{{- /* Migration only (remove one release after migration is reported): the Secrets an earlier
-chart read the management token and the encryption key from. */ -}}
-{{- define "deployment.legacyManagementSecretName" -}}
-{{- dig "existingSecret" "name" "" .Values.management -}}
-{{- end -}}
-
 {{- define "deployment.managementSecretName" -}}
-{{- default (default (include "deployment.fullname" .) (include "deployment.legacyManagementSecretName" .)) (include "deployment.enrollmentCodeSecretName" .) -}}
+{{- default (include "deployment.fullname" .) (include "deployment.enrollmentCodeSecretName" .) -}}
 {{- end -}}
 
 {{- define "deployment.managementSecretTokenKey" -}}
@@ -87,7 +87,7 @@ chart read the management token and the encryption key from. */ -}}
 {{- else if .Values.management.enrollmentCode -}}
 enrollment-code
 {{- else -}}
-{{- default "sync-token" (dig "existingSecret" "tokenKey" "" .Values.management) -}}
+sync-token
 {{- end -}}
 {{- end -}}
 

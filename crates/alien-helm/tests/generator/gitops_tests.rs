@@ -94,8 +94,11 @@ fn the_chart_renders_neither_operator_owned_secret() {
     // The bootstrap pull Secret is rendered from the code; the Operator's refreshed pull
     // credential and its own Secret are written by the Operator, so a GitOps tool that
     // applies the chart again has nothing of theirs to overwrite.
-    assert!(secret_names.contains(&"app-registry"), "{secret_names:?}");
-    assert!(!secret_names.contains(&"app-pull"), "{secret_names:?}");
+    assert!(
+        secret_names.contains(&"app-bootstrap-pull"),
+        "{secret_names:?}"
+    );
+    assert!(!secret_names.contains(&"app-registry"), "{secret_names:?}");
     assert!(!secret_names.contains(&"app-operator"), "{secret_names:?}");
     for document in &documents {
         for key in ["encryption-key", "collector-token"] {
@@ -114,7 +117,7 @@ fn the_chart_renders_neither_operator_owned_secret() {
         .iter()
         .map(|reference| reference["name"].as_str().unwrap())
         .collect();
-    assert_eq!(pull, ["app-registry", "app-pull"]);
+    assert_eq!(pull, ["app-bootstrap-pull", "app-registry"]);
     let env = |name: &str| -> Option<String> {
         pod["containers"][0]["env"]
             .as_sequence()?
@@ -126,7 +129,10 @@ fn the_chart_renders_neither_operator_owned_secret() {
         env("OPERATOR_OWNED_SECRET").as_deref(),
         Some("app-operator")
     );
-    assert_eq!(env("OPERATOR_REGISTRY_SECRET").as_deref(), Some("app-pull"));
+    assert_eq!(
+        env("OPERATOR_REGISTRY_SECRET").as_deref(),
+        Some("app-registry")
+    );
     assert_eq!(
         env("OPERATOR_OWNED_SECRET_KEYS").as_deref(),
         Some("encryption-key=hex32,collector-token=token48,postgres-metadata-password=token48")

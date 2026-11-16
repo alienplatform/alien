@@ -168,7 +168,11 @@ pub struct Args {
     pub owned_secret: Option<String>,
 
     /// The keys to keep in the owned Secret, as `key=kind` pairs separated by commas.
-    #[arg(long, env = "OPERATOR_OWNED_SECRET_KEYS", default_value = "encryption-key=hex32")]
+    #[arg(
+        long,
+        env = "OPERATOR_OWNED_SECRET_KEYS",
+        default_value = "encryption-key=hex32"
+    )]
     pub owned_secret_keys: String,
 
     /// Secret an upgrading chart fills with the values an earlier chart installed.
@@ -1797,13 +1801,11 @@ async fn load_owned_secret(
         })
     })?;
     let owned = crate::owned_secret::OwnedSecret::parse(name, keys, migration)?;
-    let client = KubernetesClient::new(
-        KubernetesClientConfig::try_incluster()
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: "loading in-cluster credentials for the Operator's Secret".to_string(),
-            })?,
-    )
+    let client = KubernetesClient::new(KubernetesClientConfig::try_incluster().await.context(
+        ErrorData::ConfigurationError {
+            message: "loading in-cluster credentials for the Operator's Secret".to_string(),
+        },
+    )?)
     .await
     .context(ErrorData::ConfigurationError {
         message: "creating the Kubernetes client for the Operator's Secret".to_string(),

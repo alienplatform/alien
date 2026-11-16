@@ -459,7 +459,10 @@ mod tests {
                 let name = secret["metadata"]["name"].as_str().unwrap().to_string();
                 let mut secrets = cluster.secrets.lock().unwrap();
                 if secrets.contains_key(&name) {
-                    return (StatusCode::CONFLICT, Json(json!({"reason": "AlreadyExists"})));
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(json!({"reason": "AlreadyExists"})),
+                    );
                 }
                 cluster.writes.lock().unwrap().push(name.clone());
                 secrets.insert(name, secret.clone());
@@ -474,7 +477,10 @@ mod tests {
                     "/api/v1/namespaces/{ns}/secrets/{name}",
                     get(read).put(write),
                 )
-                .route("/api/v1/namespaces/{ns}/secrets", axum::routing::post(create))
+                .route(
+                    "/api/v1/namespaces/{ns}/secrets",
+                    axum::routing::post(create),
+                )
                 .with_state(self.clone());
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let server_url = format!("http://{}", listener.local_addr().unwrap());
@@ -639,13 +645,23 @@ mod tests {
         .await
         .unwrap());
         let created = cluster.secret("gone-registry");
-        assert_eq!(created.type_.as_deref(), Some("kubernetes.io/dockerconfigjson"));
+        assert_eq!(
+            created.type_.as_deref(),
+            Some("kubernetes.io/dockerconfigjson")
+        );
         assert_eq!(password_for(&created, HOST), "deployment:ax_cap_v1_pull");
         // The next refresh finds it right and writes nothing.
         let writes = cluster.writes().len();
-        assert!(refresh_secrets(&client, "ns", Some("gone-registry"), None, HOST, "ax_cap_v1_pull")
-            .await
-            .unwrap());
+        assert!(refresh_secrets(
+            &client,
+            "ns",
+            Some("gone-registry"),
+            None,
+            HOST,
+            "ax_cap_v1_pull"
+        )
+        .await
+        .unwrap());
         assert_eq!(cluster.writes().len(), writes);
     }
 }
