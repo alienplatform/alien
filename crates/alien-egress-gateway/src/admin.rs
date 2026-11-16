@@ -212,6 +212,7 @@ async fn exchange(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     match operation.as_str() {
+        "identity" => gateway.replication.instance().to_string().into_response(),
         "summary" => match gateway.policies.summary() {
             Ok(summary) => Json(summary).into_response(),
             Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),

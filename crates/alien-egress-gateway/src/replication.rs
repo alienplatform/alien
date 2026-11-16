@@ -31,6 +31,19 @@ pub struct Replication {
     port: u16,
     resolver: hickory_resolver::TokioResolver,
     client: reqwest::Client,
+    /// Random per process. A replica asked for it by a peer address answers with it, so a replica
+    /// can tell whether an address it was given leads back to itself.
+    instance: String,
+    /// What the identity answer was for each address: `true` when that address is this replica.
+    identified: std::sync::Mutex<std::collections::HashMap<SocketAddr, bool>>,
+}
+fn new_instance_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let random = std::collections::hash_map::RandomState::new();
+    let high = random.build_hasher().finish();
+    let mut low = random.build_hasher();
+    low.write_u64(high);
+    format!("{high:016x}{:016x}", low.finish())
 }
 impl Replication {
     pub fn new(
@@ -54,7 +67,13 @@ impl Replication {
             port,
             resolver,
             client,
+            instance: new_instance_id(),
+            identified: Default::default(),
         })
+    }
+    /// The answer to the authenticated identity request.
+    pub fn instance(&self) -> &str {
+        &self.instance
     }
     pub fn enabled(&self) -> bool {
         self.service.is_some()
@@ -137,9 +156,33 @@ impl Replication {
         }
         Err(denied("invalid replica signature"))
     }
+    /// Whether `address` leads back to this replica. The route check is free but only sees the
+    /// container's own addresses: in a bridge network the VM's address is not one of them, so a
+    /// replica would list itself as a peer. The identity answer settles what the route cannot.
+    async fn is_self(&self, address: SocketAddr) -> Result<bool> {
+        if Self::routes_to_self(address.ip(), address.port()).await? {
+            return Ok(true);
+        }
+        self.identity_is_self(address).await
+    }
+    async fn identity_is_self(&self, address: SocketAddr) -> Result<bool> {
+        if let Some(known) = self.identified.lock().unwrap().get(&address) {
+            return Ok(*known);
+        }
+        // An unreachable or older replica is a peer: only an answer that is ours says otherwise.
+        let Ok((200, bytes)) = self
+            .request(address, "/v1/replicas/identity", b"null".to_vec())
+            .await
+        else {
+            return Ok(false);
+        };
+        let own = bytes == self.instance.as_bytes();
+        self.identified.lock().unwrap().insert(address, own);
+        Ok(own)
+    }
     /// The selected route identifies our source interface even on multi-homed containers.
     /// UDP connect sends no packet; it avoids an extra configured replica identifier.
-    async fn is_self(ip: IpAddr, port: u16) -> Result<bool> {
+    async fn routes_to_self(ip: IpAddr, port: u16) -> Result<bool> {
         let socket = tokio::net::UdpSocket::bind("0.0.0.0:0")
             .await
             .into_alien_error()
@@ -174,7 +217,7 @@ impl Replication {
             addresses.dedup();
             let mut peers = Vec::new();
             for address in addresses {
-                if !(address.port() == self.port && Self::is_self(address.ip(), address.port()).await?) {
+                if !(address.port() == self.port && self.is_self(address).await?) {
                     peers.push(address);
                 }
             }
@@ -214,7 +257,7 @@ impl Replication {
             .filter_map(|record| record.data.ip_addr())
             .filter(IpAddr::is_ipv4)
         {
-            if !Self::is_self(ip, self.port).await? {
+            if !self.is_self(SocketAddr::new(ip, service.port)).await? {
                 peers.push(SocketAddr::new(ip, service.port));
             }
         }
@@ -296,10 +339,7 @@ impl Replication {
         .into_alien_error()
         .context(unavailable("encode replica record"))?;
         for peer in self.peers().await? {
-            let (status, _) = match self
-                .request(peer, "/v1/replicas/write", body.clone())
-                .await
-            {
+            let (status, _) = match self.request(peer, "/v1/replicas/write", body.clone()).await {
                 Ok(answer) => answer,
                 Err(error) => {
                     tracing::warn!(%peer, code = %error.code, "fan-out to a peer failed");
@@ -431,6 +471,7 @@ pub async fn run(live: Arc<LiveGateway>) -> Result<()> {
 #[cfg(all(test, feature = "local"))]
 mod tests {
     use super::*;
+    use crate::runtime::LiveGateway;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use ed25519_compact::{KeyPair, Seed};
     use hickory_resolver::{
@@ -464,6 +505,69 @@ mod tests {
         .unwrap();
         let peers = own.peers().await.unwrap();
         assert_eq!(peers, vec!["192.0.2.7:3129".parse::<SocketAddr>().unwrap()]);
+    }
+
+    /// A replica in a bridge network sees only the container's addresses, so the route check
+    /// cannot tell that the VM's address is its own. Two real replicas answer on a real
+    /// non-loopback address; each is recognised by its own answer and not by the other's.
+    #[tokio::test]
+    async fn identity_answer_tells_this_replica_from_another_on_a_non_loopback_address() {
+        // The address the box would use to reach the outside; skip where there is no route.
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        if probe.connect("192.0.2.1:9").is_err() {
+            return;
+        }
+        let ip = probe.local_addr().unwrap().ip();
+        assert!(!ip.is_loopback() && !ip.is_unspecified());
+        let pair = KeyPair::from_seed(Seed::new([4; 32]));
+        let secret = STANDARD.encode([7u8; 32]);
+        let mut replicas = Vec::new();
+        for _ in 0..2 {
+            let listener = tokio::net::TcpListener::bind((ip, 0)).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let config = serde_json::json!({"listen":"127.0.0.1:3128","admin":address.to_string(),"audiences":["p/r"],"keys":[{"kid":"test","publicKey":STANDARD.encode(pair.pk.as_ref())}],"deniedRanges":[],"policyMemoryBytes":1048576,"replicaSecret":secret,"peers":{"static":["192.0.2.7:3129"]}});
+            let bindings = Arc::new(
+                alien_bindings::Bindings::from_env_map(HashMap::from([(
+                    "ALIEN_DEPLOYMENT_TYPE".into(),
+                    "local".into(),
+                )]))
+                .unwrap(),
+            );
+            let gateway = crate::runtime::build(
+                &config.to_string(),
+                bindings,
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            )
+            .await
+            .unwrap();
+            let live = Arc::new(LiveGateway::static_config(gateway));
+            let served = live.clone();
+            tokio::spawn(async move {
+                axum::serve(listener, crate::admin::router(served))
+                    .await
+                    .unwrap();
+            });
+            replicas.push((live.snapshot().unwrap(), address, live));
+        }
+        let (first, first_address, _first_live) = &replicas[0];
+        let (_, second_address, _second_live) = &replicas[1];
+        assert!(first
+            .replication
+            .identity_is_self(*first_address)
+            .await
+            .unwrap());
+        assert!(!first
+            .replication
+            .identity_is_self(*second_address)
+            .await
+            .unwrap());
+        // Nothing listens there: an unreachable replica stays a peer.
+        assert!(!first
+            .replication
+            .identity_is_self("192.0.2.7:3129".parse().unwrap())
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

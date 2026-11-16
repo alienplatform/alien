@@ -20,8 +20,9 @@
 #   AZURE_INTERNET_LOCATION    region, default eastus
 #   AZURE_INTERNET_VM_SIZE     gateway VM size, default Standard_D2s_v4 (pick one with quota)
 #   AGENT_BINARY               path to a static (musl) alien-sandbox-agent
-#   GATEWAY_BINARY             path to a static (musl) alien-egress-gateway built from this branch
+#   GATEWAY_BINARY             path to a static (musl) alien-egress-gateway built from this branch with `--features cloud`
 #                              (the pinned release image can predate the admin protocol; bump the pin at release)
+#   AZURE_INTERNET_TEST        driver test to run: live_internet_proof (default) or live_leak_probes (needs AZURE_INTERNET_LISTENER_IP)
 #   AZURE_INTERNET_KEEP        set to keep the resources after the run (debugging); tear down with the `teardown` command
 #   AZURE_INTERNET_WORK        working directory, default ./azure-internet-work (kept for the evidence)
 #
@@ -222,7 +223,7 @@ exe=$(cd "$REPO" && cargo test -p alien-bindings --features azure --test azure_s
   | jq -r 'select(.profile.test==true and .target.name=="azure_sandbox_internet_live") | .executable' | tail -1)
 drv="$WORK/driver-image"; rm -rf "$drv"; mkdir -p "$drv"
 cp "$exe" "$drv/driver"
-printf 'FROM ubuntu:24.04\nRUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*\nCOPY driver /driver\nENTRYPOINT ["/driver","--ignored","--nocapture","--exact","live_internet_proof"]\n' > "$drv/Dockerfile"
+printf 'FROM ubuntu:24.04\nRUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*\nCOPY driver /driver\nENTRYPOINT ["/driver","--ignored","--nocapture","--exact","%s"]\n' "${AZURE_INTERNET_TEST:-live_internet_proof}" > "$drv/Dockerfile"
 docker build -q -t "$REGISTRY/driver:1" "$drv" >/dev/null
 docker push -q "$REGISTRY/driver:1" >/dev/null
 ENV_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/managedEnvironments/$P-aca"
@@ -237,7 +238,7 @@ gwbinding=$(jq -c . "$WORK/gateway-binding.json")
 job=$(jq -n --arg env "$ENV_ID" --arg loc "$LOCATION" --arg reg "$REGISTRY" --arg user "$ACR_USER" --arg pass "$ACR_PASS" \
   --arg image "$REGISTRY/driver:1" --arg sub "$SUB" --arg tenant "$AZURE_TARGET_TENANT_ID" --arg cid "$AZURE_TARGET_CLIENT_ID" \
   --arg csecret "$AZURE_TARGET_CLIENT_SECRET" --arg rg "$RG" --arg vault "$vault" --arg binding "$binding" --arg gwbinding "$gwbinding" --arg ips "$ips" \
-  --arg only "${AZURE_INTERNET_ONLY:-}" --arg vms "$vms" --arg probe "$private_probe" --arg region "$LOCATION" '
+  --arg only "${AZURE_INTERNET_ONLY:-}" --arg listener "${AZURE_INTERNET_LISTENER_IP:-}" --arg vms "$vms" --arg probe "$private_probe" --arg region "$LOCATION" '
   {location:$loc, properties:{environmentId:$env, workloadProfileName:"Consumption",
    configuration:{triggerType:"Manual", replicaTimeout:3000, replicaRetryLimit:0,
      manualTriggerConfig:{parallelism:1, replicaCompletionCount:1},
@@ -249,7 +250,7 @@ job=$(jq -n --arg env "$ENV_ID" --arg loc "$LOCATION" --arg reg "$REGISTRY" --ar
      {name:"AZURE_RESOURCE_GROUP",value:$rg},{name:"AZURE_SANDBOX_REGION",value:$region},
      {name:"AZURE_INTERNET_VAULT_NAME",value:$vault},{name:"AZURE_INTERNET_BINDING",value:$binding},{name:"AZURE_INTERNET_GATEWAY_BINDING",value:$gwbinding},
      {name:"AZURE_INTERNET_GATEWAY_IPS",value:$ips},{name:"AZURE_INTERNET_GATEWAY_VMS",value:$vms},
-     {name:"AZURE_INTERNET_ONLY",value:$only},{name:"AZURE_INTERNET_PRIVATE_PROBES",value:$probe},{name:"AZURE_INTERNET_RESULT_SECRET",value:"azure-internet-proof-log"}]}]}}}')
+     {name:"AZURE_INTERNET_ONLY",value:$only},{name:"AZURE_INTERNET_LISTENER_IP",value:$listener},{name:"AZURE_INTERNET_PRIVATE_PROBES",value:$probe},{name:"AZURE_INTERNET_RESULT_SECRET",value:"azure-internet-proof-log"}]}]}}}')
 JOB_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.App/jobs/$P-driver"
 arm PUT "$JOB_ID?api-version=2024-03-01" -d "$job" | jq -e '.id' >/dev/null
 arm POST "$JOB_ID/start?api-version=2024-03-01" -d '' >/dev/null
@@ -265,5 +266,5 @@ secret=$(curl -fsS -H "Authorization: Bearer $(token https://vault.azure.net/.de
   "https://$vault.vault.azure.net/secrets/azure-internet-proof-log?api-version=7.4" | jq -r .value)
 echo "$secret" | tee "$WORK/proof.log"
 verdict=$(head -1 <<<"$secret")
-[ "$verdict" = PASS ] || { echo "proof failed"; exit 1; }
+{ [ "$verdict" = PASS ] || [ "$verdict" = DONE ]; } || { echo "proof failed"; exit 1; }
 echo "proof passed; evidence in $WORK"

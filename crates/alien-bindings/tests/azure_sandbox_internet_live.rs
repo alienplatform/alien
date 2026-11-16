@@ -683,3 +683,150 @@ async fn live_internet_proof() {
     }
     assert!(proof.failures.is_empty(), "failed: {:#?}", proof.failures);
 }
+
+/// Leak probes from inside an `internet` sandbox to a listener the operator controls
+/// (`AZURE_INTERNET_LISTENER_IP`, ports 80 and 443, TCP and UDP). The sandbox allows only
+/// `ALLOWED_PROBE_HOST`; the listener is neither allowed by IP nor by name. Each probe prints one
+/// `PROBE <label> <outcome>` line; whether anything reached the listener is read from the
+/// listener's own log and packet capture, keyed by the nonce and the time. The guest has only
+/// python3, so every probe is a python socket (an `ssl` handshake without SNI, raw bytes, a
+/// hand-written HTTP/1.0 request, the h2c prior-knowledge preface, an SSH banner, UDP datagrams, SNI
+/// of an allowed name against the listener's address, and a plain request with an allowed Host).
+const LEAK_PROBE: &str = r#"
+import socket, ssl, sys, time
+ip, nonce = sys.argv[1], sys.argv[2]
+def out(label, outcome): print("PROBE", label, outcome, flush=True)
+def tcp(label, port, payload=b"", tls=None):
+    t = time.time()
+    try:
+        s = socket.create_connection((ip, port), timeout=8)
+    except Exception as e:
+        return out(label, "CONNECT-" + type(e).__name__ + " " + str(round(time.time() - t, 1)) + "s")
+    try:
+        if tls is not None:
+            c = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
+            s.settimeout(8)
+            s = c.wrap_socket(s, server_hostname=tls or None)
+            return out(label, "TLS-HANDSHAKE-OK " + str(s.version()))
+        s.settimeout(6); s.sendall(payload)
+        try:
+            d = s.recv(80); out(label, "CONNECTED reply=" + repr(d[:60]))
+        except Exception as e:
+            out(label, "CONNECTED no-reply " + type(e).__name__)
+    except Exception as e:
+        out(label, "CONNECTED-then-" + type(e).__name__ + " " + str(e)[:60])
+    finally:
+        try: s.close()
+        except Exception: pass
+def udp(label, port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(4)
+    try:
+        s.sendto(("udp-" + label + "-" + nonce).encode(), (ip, port))
+        try: d = s.recv(100); out(label, "UDP-REPLY " + repr(d[:40]))
+        except Exception as e: out(label, "UDP-SENT no-reply " + type(e).__name__)
+    except Exception as e:
+        out(label, "UDP-ERR " + type(e).__name__)
+import threading
+JOBS = []
+def job(f, *a, **k): JOBS.append(threading.Thread(target=f, args=a, kwargs=k))
+job(tcp, "1-tls-nosni-443", 443, tls="")
+job(tcp, "2a-raw-443", 443, ("hello-raw-" + nonce).encode())
+job(tcp, "2b-raw-80", 80, ("hello-raw-" + nonce).encode())
+job(tcp, "3-http10-nohost-80", 80, ("GET /" + nonce + " HTTP/1.0\r\n\r\n").encode())
+job(tcp, "4-h2c-prior-80", 80, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" + b"\x00\x00\x00\x04\x00\x00\x00\x00\x00")
+job(tcp, "5-ssh-banner-443", 443, ("SSH-2.0-test-" + nonce + "\r\n").encode())
+job(udp, "6a-udp-443", 443)
+job(udp, "6b-udp-80", 80)
+job(tcp, "7-tls-sni-allowed-443", 443, tls="example.com")
+job(tcp, "8-http-host-allowed-80", 80, ("GET /" + nonce + " HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n").encode())
+# Wireserver (finding 3), recorded exactly.
+def wire(label, port, path):
+    t = time.time()
+    try:
+        s = socket.create_connection(("168.63.129.16", port), timeout=8); s.settimeout(8)
+        s.sendall(("GET " + path + " HTTP/1.1\r\nHost: 168.63.129.16\r\nConnection: close\r\n\r\n").encode())
+        d = s.recv(200); out(label, "CONNECTED reply=" + repr(d[:150]))
+    except Exception as e:
+        out(label, type(e).__name__ + " " + str(e)[:60] + " " + str(round(time.time() - t, 1)) + "s")
+job(wire, "wire-80-versions", 80, "/?comp=versions")
+job(wire, "wire-32526-vmSettings", 32526, "/vmSettings")
+[j.start() for j in JOBS]
+[j.join() for j in JOBS]
+"#;
+
+#[tokio::test]
+#[ignore = "live Azure: run inside the deployment's VNet via scripts/azure-internet-live.sh"]
+async fn live_leak_probes() {
+    let listener = env("AZURE_INTERNET_LISTENER_IP");
+    let region = env("AZURE_SANDBOX_REGION");
+    let binding: serde_json::Value =
+        serde_json::from_str(&env("AZURE_INTERNET_BINDING")).expect("binding JSON");
+    let bindings = HashMap::from([
+        ("box".to_string(), binding),
+        (
+            "secrets".to_string(),
+            serde_json::json!({"service": "key-vault", "vaultName": env("AZURE_INTERNET_VAULT_NAME")}),
+        ),
+        (
+            "sandbox-egress-gateway".to_string(),
+            serde_json::from_str(&env("AZURE_INTERNET_GATEWAY_BINDING"))
+                .expect("gateway binding JSON"),
+        ),
+    ]);
+    let config = ClientConfig::Azure(Box::new(AzureClientConfig {
+        subscription_id: env("AZURE_TARGET_SUBSCRIPTION_ID"),
+        tenant_id: env("AZURE_TARGET_TENANT_ID"),
+        region: Some(region),
+        credentials: AzureCredentials::ServicePrincipal {
+            client_id: env("AZURE_TARGET_CLIENT_ID"),
+            client_secret: env("AZURE_TARGET_CLIENT_SECRET"),
+        },
+        service_overrides: None,
+    }));
+    let provider = BindingsProvider::new(config, bindings).expect("bindings");
+    let sandbox = provider.load_sandbox("box").await.expect("loads");
+    let sandbox: &dyn alien_bindings::traits::Sandbox = sandbox.as_ref();
+
+    let body = async {
+        let created = sandbox
+            .create(CreateSandboxRequest {
+                egress: Some(allow(&["example.com"])),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| format!("create: {error}"))?;
+        let id = created.sandbox_id.clone();
+        let nonce = format!(
+            "{:x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        );
+        let mut log = vec![format!("nonce={nonce} listener={listener} sandbox={id}")];
+        log.push(
+            run(
+                sandbox,
+                &id,
+                "python3",
+                &["-c", LEAK_PROBE, &listener, &nonce],
+            )
+            .await,
+        );
+        let _ = sandbox.terminate(&id).await;
+        Ok::<String, String>(log.join("\n"))
+    }
+    .await;
+    let body = match body {
+        Ok(log) => format!("DONE\n{log}"),
+        Err(error) => format!("ERROR\n{error}"),
+    };
+    eprintln!("{body}");
+    if let Ok(name) = std::env::var("AZURE_INTERNET_RESULT_SECRET") {
+        let vault = provider.load_vault("secrets").await.expect("vault");
+        vault
+            .set_secret(&name, &body)
+            .await
+            .expect("publish the probe log");
+    }
+}
