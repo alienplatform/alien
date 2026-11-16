@@ -332,7 +332,7 @@ pub(crate) async fn tear_down_engine_access(
             tracing::warn!(engine=%engine, error=%error, "could not remove engine grants during teardown, continuing");
         }
     }
-    if record.signer_created.is_none() && record.sign_role.is_none() {
+    if record.signer_created.is_none() {
         return Ok(());
     }
     let iam = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
@@ -346,16 +346,9 @@ pub(crate) async fn tear_down_engine_access(
             }
         }
     }
-    if let Some(role) = &record.sign_role {
-        if let Err(error) = iam.delete_role(role.clone()).await {
-            if !matches!(
-                error.error,
-                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-            ) {
-                tracing::warn!(role=%role, error=%error, "could not delete the signing role, continuing");
-            }
-        }
-    }
+    // The signing role is one project-wide role shared by every preview sandbox of the
+    // deployment, so one sandbox's teardown must not delete it. Its description names the
+    // deployment prefix, so the deployment-wide custom role cleanup removes it.
     Ok(())
 }
 

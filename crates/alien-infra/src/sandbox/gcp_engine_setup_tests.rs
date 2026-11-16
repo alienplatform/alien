@@ -305,10 +305,10 @@ async fn a_direct_setup_places_the_preview_signer_and_its_grants_then_removes_th
     assert_eq!(executor.status(), ResourceStatus::Deleted);
     let calls = calls.lock().unwrap();
     assert_eq!(calls.deleted_accounts.len(), 1, "the signer is removed");
-    assert!(calls
-        .deleted_roles
-        .iter()
-        .any(|r| r.ends_with("sandbox_preview_sign")));
+    assert!(
+        calls.deleted_roles.is_empty(),
+        "the shared signing role outlives one sandbox"
+    );
     let on_engine = calls.engine_policy.as_ref().unwrap();
     assert!(
         !on_engine

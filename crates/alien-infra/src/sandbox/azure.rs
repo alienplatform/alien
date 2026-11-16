@@ -517,21 +517,24 @@ impl AzureSandboxController {
                 (self.sandbox_group.as_ref(), self.resource_group.as_ref())
             {
                 // The assignments go with the group, so what they used is read first.
-                self.group_role_definitions =
-                    crate::core::ResourcePermissionsHelper::azure_role_definitions_in_use(
-                        ctx,
-                        ctx.desired_config.id(),
-                        group,
-                        alien_azure_clients::authorization::Scope::Resource {
-                            resource_group_name: resource_group.clone(),
-                            resource_provider: "Microsoft.App".to_string(),
-                            parent_resource_path: None,
-                            resource_type: "sandboxGroups".to_string(),
-                            resource_name: group.clone(),
-                        },
-                        "sandbox",
-                    )
-                    .await?;
+                let read = crate::core::ResourcePermissionsHelper::azure_role_definitions_in_use(
+                    ctx,
+                    ctx.desired_config.id(),
+                    group,
+                    alien_azure_clients::authorization::Scope::Resource {
+                        resource_group_name: resource_group.clone(),
+                        resource_provider: "Microsoft.App".to_string(),
+                        parent_resource_path: None,
+                        resource_type: "sandboxGroups".to_string(),
+                        resource_name: group.clone(),
+                    },
+                    "sandbox",
+                )
+                .await?;
+                // A retry may find the assignments already gone; keep what an earlier read found.
+                if !read.is_empty() {
+                    self.group_role_definitions = read;
+                }
                 let arm = ctx
                     .service_provider
                     .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
