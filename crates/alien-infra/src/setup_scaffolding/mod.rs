@@ -144,6 +144,7 @@ pub fn changes_requiring_setup(
     client_config: &ClientConfig,
     installed: &Stack,
     records: &BTreeMap<String, SetupScaffolding>,
+    stack_state: &StackState,
     target: &Stack,
     platform: Platform,
 ) -> Result<Vec<String>> {
@@ -193,7 +194,7 @@ pub fn changes_requiring_setup(
         }
     }
     if platform == Platform::Gcp {
-        changes.extend(gcp_frozen_sandbox_image_changes(installed, records, target));
+        changes.extend(gcp_frozen_sandbox_image_changes(installed, records, stack_state, target));
     }
     Ok(changes)
 }
@@ -205,6 +206,7 @@ pub fn changes_requiring_setup(
 fn gcp_frozen_sandbox_image_changes(
     installed: &Stack,
     records: &BTreeMap<String, SetupScaffolding>,
+    stack_state: &StackState,
     target: &Stack,
 ) -> Vec<String> {
     target
@@ -224,13 +226,17 @@ fn gcp_frozen_sandbox_image_changes(
             if installed.code == target.code {
                 return None;
             }
-            match records.get(resource_id) {
+            let writer_granted = matches!(
+                records.get(resource_id),
                 Some(SetupScaffolding::GcpSandbox {
                     writer_granted: true,
-                    templates_granted: true,
                     ..
-                }) => None,
-                _ => Some(format!(
+                })
+            );
+            match writer_granted && gcp_sandbox::templates_grant_recorded(stack_state, resource_id)
+            {
+                true => None,
+                false => Some(format!(
                     "sandbox '{resource_id}' changes its image, and this setup did not give the \
                      manager the access to roll an image on its own. Running the deployment's \
                      setup once enables image-only releases"

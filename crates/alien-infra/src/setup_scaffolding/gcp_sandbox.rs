@@ -114,6 +114,26 @@ fn management_member(stack_state: &StackState) -> Result<Option<String>> {
     Ok(None)
 }
 
+/// Whether the setup run recorded, in the sandbox's own controller state, that it gave management
+/// the `sandbox/templates` grant on the engine. Read as JSON so this holds whether or not the
+/// controller carries the record yet: a state without it reads as not granted, which asks for the
+/// setup run that places it.
+pub(super) fn templates_grant_recorded(stack_state: &StackState, sandbox_id: &str) -> bool {
+    stack_state
+        .resources
+        .get(sandbox_id)
+        .and_then(|state| state.internal_state.as_ref())
+        .and_then(|internal| internal.get("engineSetup")?.get("engineGrants")?.as_array())
+        .is_some_and(|grants| {
+            grants.iter().any(|grant| {
+                grant
+                    .get(0)
+                    .and_then(|role| role.as_str())
+                    .is_some_and(|role| role.contains("templates"))
+            })
+        })
+}
+
 pub(super) async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
     stack_state: &StackState,
@@ -255,7 +275,6 @@ fn record(
             image_repository: repository.to_string(),
             write_role: role_id.to_string(),
             writer_granted: false,
-            templates_granted: false,
         });
 }
 
@@ -466,7 +485,6 @@ mod tests {
                 image_repository: "acme-agents-img".to_string(),
                 write_role: "acme_agents_image_write".to_string(),
                 writer_granted: false,
-                templates_granted: false,
             }
         );
     }
@@ -597,7 +615,6 @@ mod tests {
                 image_repository: "acme-agents-img".to_string(),
                 write_role: "acme_agents_image_write".to_string(),
                 writer_granted: true,
-                templates_granted: false,
             },
         )]);
         let first = super::super::teardown(&ctx, &mut records).await.unwrap();
@@ -627,23 +644,49 @@ mod tests {
             .build()
     }
 
-    fn record(writer: bool, templates: bool) -> BTreeMap<String, SetupScaffolding> {
+    fn record(writer: bool) -> BTreeMap<String, SetupScaffolding> {
         BTreeMap::from([(
             "agents".to_string(),
             SetupScaffolding::GcpSandbox {
                 image_repository: "acme-agents-img".to_string(),
                 write_role: "acme_agents_image_write".to_string(),
                 writer_granted: writer,
-                templates_granted: templates,
             },
         )])
     }
 
-    fn image_changes(records: &BTreeMap<String, SetupScaffolding>) -> Vec<String> {
+    /// The sandbox's state as a setup run leaves it: with or without the template grant recorded.
+    fn state_with_grant(granted: bool) -> StackState {
+        let mut state = StackState::new(Platform::Gcp);
+        let mut resource = StackResourceState::builder()
+            .resource_type(alien_core::Sandbox::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::Running)
+            .config(alien_core::Resource::new(
+                stack_with_image("x").resources["agents"]
+                    .config
+                    .downcast_ref::<alien_core::Sandbox>()
+                    .unwrap()
+                    .clone(),
+            ))
+            .lifecycle(ResourceLifecycle::Frozen)
+            .build();
+        resource.internal_state = Some(if granted {
+            serde_json::json!({"type": "GcpAgentPlatformTemplateController", "engineSetup": {
+                "engineGrants": [["projects/p/roles/templates_role", MANAGER]]
+            }})
+        } else {
+            serde_json::json!({"type": "GcpAgentPlatformTemplateController"})
+        });
+        state.resources.insert("agents".to_string(), resource);
+        state
+    }
+
+    fn image_changes(records: &BTreeMap<String, SetupScaffolding>, granted: bool) -> Vec<String> {
         super::super::changes_requiring_setup(
             &client_config(),
             &stack_with_image("registry.example/a@sha256:1"),
             records,
+            &state_with_grant(granted),
             &stack_with_image("registry.example/a@sha256:2"),
             Platform::Gcp,
         )
@@ -654,9 +697,13 @@ mod tests {
     /// write access and the template grant. Any other install gets the one message.
     #[test]
     fn an_image_only_release_rolls_only_with_both_grants_recorded() {
-        assert!(image_changes(&record(true, true)).is_empty());
-        for records in [record(true, false), record(false, true), BTreeMap::new()] {
-            let changes = image_changes(&records);
+        assert!(image_changes(&record(true), true).is_empty());
+        for (records, granted) in [
+            (record(true), false),
+            (record(false), true),
+            (BTreeMap::new(), true),
+        ] {
+            let changes = image_changes(&records, granted);
             assert_eq!(changes.len(), 1, "{records:?}");
             assert!(changes[0].contains("Running the deployment's setup once enables"));
         }
@@ -665,6 +712,7 @@ mod tests {
             &client_config(),
             &stack_with_image("registry.example/a@sha256:1"),
             &BTreeMap::new(),
+            &state_with_grant(false),
             &stack_with_image("registry.example/a@sha256:1"),
             Platform::Gcp,
         )

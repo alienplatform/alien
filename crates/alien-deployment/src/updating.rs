@@ -466,6 +466,7 @@ pub async fn handle_update_pending(
                 .runtime_metadata
                 .as_ref()
                 .map_or(&nothing_recorded, |metadata| &metadata.setup_scaffolding),
+            &stack_state,
             &mutated_stack,
             current.platform,
         )?;
@@ -500,6 +501,7 @@ fn refuse_changes_requiring_setup(
     client_config: &alien_core::ClientConfig,
     installed_stack: &Stack,
     records: &BTreeMap<String, SetupScaffolding>,
+    stack_state: &StackState,
     target_stack: &Stack,
     platform: Platform,
 ) -> Result<()> {
@@ -507,6 +509,7 @@ fn refuse_changes_requiring_setup(
         client_config,
         installed_stack,
         records,
+        stack_state,
         target_stack,
         platform,
     )

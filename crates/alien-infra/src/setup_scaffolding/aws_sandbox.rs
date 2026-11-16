@@ -1353,6 +1353,7 @@ mod tests {
             &client_config(),
             installed,
             &records,
+            &StackState::new(platform),
             target,
             platform,
         )
@@ -1502,6 +1503,7 @@ mod tests {
                 &client_config(),
                 &allow,
                 &BTreeMap::new(),
+                &StackState::new(Platform::Aws),
                 &allow,
                 Platform::Aws
             )

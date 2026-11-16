@@ -346,10 +346,6 @@ pub enum SetupScaffolding {
         /// Whether the manager holds `write_role` on the repository.
         #[serde(default)]
         writer_granted: bool,
-        /// Whether the manager may create sandbox templates on the sandbox's engine, which an
-        /// image change needs. Written by the step that grants it.
-        #[serde(default)]
-        templates_granted: bool,
     },
 }
 
