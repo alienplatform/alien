@@ -322,7 +322,7 @@ impl PreflightRunner {
             return Ok((None, results));
         };
         Ok((
-            Self::with_chosen_machines(prepared, stack_state, &chosen),
+            Self::with_chosen_machines(prepared, stack_state, &chosen)?,
             results,
         ))
     }
@@ -344,9 +344,11 @@ impl PreflightRunner {
         stack: &Stack,
         stack_state: &StackState,
         chosen: &DeploymentConfig,
-    ) -> Option<Stack> {
+    ) -> Result<Option<Stack>> {
         use alien_core::ComputeCluster;
-        let settings = chosen.stack_settings.compute.as_ref()?;
+        let Some(settings) = chosen.stack_settings.compute.as_ref() else {
+            return Ok(None);
+        };
         let mut updated = stack.clone();
         let mut changed = false;
         for entry in updated.resources.values_mut() {
@@ -357,10 +359,10 @@ impl PreflightRunner {
                 let already_created = stack_state.resources.values().any(|state| {
                     crate::mutations::compute_cluster::group_was_created(state, &group.group_id)
                 });
-                let Some(machine) = settings
+                let Some((selection, machine)) = settings
                     .pools
                     .get(&group.group_id)
-                    .and_then(|selection| selection.machine())
+                    .and_then(|selection| Some((selection, selection.machine()?)))
                 else {
                     continue;
                 };
@@ -373,22 +375,17 @@ impl PreflightRunner {
                     to = %machine,
                     "Automatic machine selection moved a pool that has no machines yet"
                 );
-                group.instance_type = Some(machine.to_string());
-                // The profile is the machine's hardware: it moves with the machine, or the
-                // first update sees a frozen compute change.
-                if let (Some(old_profile), Some(spec)) = (
-                    group.profile.as_ref(),
-                    alien_core::instance_catalog::find_instance_type(stack_state.platform, machine),
-                ) {
-                    let mut profile =
-                        spec.to_machine_profile_for_storage(old_profile.ephemeral_storage_bytes);
-                    profile.data_disk = old_profile.data_disk.clone();
-                    group.profile = Some(profile);
-                }
+                // The same validation and profile derivation as every other compute selection:
+                // the profile is the machine's hardware, and a pick it refuses is an error.
+                crate::mutations::compute_cluster::materialize_selected_group(
+                    group,
+                    stack_state.platform,
+                    selection,
+                )?;
                 changed = true;
             }
         }
-        changed.then_some(updated)
+        Ok(changed.then_some(updated))
     }
 
     /// Apply all stack mutations to a stack.
@@ -1149,6 +1146,7 @@ mod setup_update_authorization_tests {
         });
 
         let updated = PreflightRunner::with_chosen_machines(&stack, &state, &chosen)
+            .unwrap()
             .expect("the pool without machines moves");
         let machines: Vec<(String, Option<String>)> = updated
             .resources
@@ -1165,7 +1163,11 @@ mod setup_update_authorization_tests {
             ]
         );
         // Nothing to move once the pick matches the stack.
-        assert!(PreflightRunner::with_chosen_machines(&updated, &state, &chosen).is_none());
+        assert!(
+            PreflightRunner::with_chosen_machines(&updated, &state, &chosen)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// The profile is derived from the machine, so a pool moved to another family carries that
@@ -1203,7 +1205,7 @@ mod setup_update_authorization_tests {
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
                     machines: 1,
-                    machine: Some("Standard_F8s_v2".to_string()),
+                    machine: Some("Standard_E8s_v5".to_string()),
                     failure_domains: None,
                     data_disk_gib: None,
                 },
@@ -1217,6 +1219,7 @@ mod setup_update_authorization_tests {
             &StackState::new(Platform::Azure),
             &chosen,
         )
+        .unwrap()
         .expect("the pool moves");
         let group = updated
             .resources
@@ -1225,8 +1228,8 @@ mod setup_update_authorization_tests {
             .flat_map(|cluster| cluster.capacity_groups.iter())
             .next()
             .unwrap();
-        assert_eq!(group.instance_type.as_deref(), Some("Standard_F8s_v2"));
-        let expected = profile_of("Standard_F8s_v2");
+        assert_eq!(group.instance_type.as_deref(), Some("Standard_E8s_v5"));
+        let expected = profile_of("Standard_E8s_v5");
         assert_eq!(group.profile.as_ref().map(|p| &p.cpu), Some(&expected.cpu));
         assert_eq!(
             group.profile.as_ref().map(|p| p.memory_bytes),
@@ -1237,6 +1240,53 @@ mod setup_update_authorization_tests {
             Some(profile_of("Standard_D8s_v5")),
             "the profile still belongs to the machine the pool moved from"
         );
+    }
+
+    /// A pick the compute selection refuses is an error, not a silent machine-only move.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_refused_by_compute_validation_is_an_error() {
+        use alien_core::{
+            instance_catalog, CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
+        };
+        let profile = instance_catalog::find_instance_type(Platform::Azure, "Standard_D8s_v5")
+            .unwrap()
+            .to_machine_profile_for_storage(0);
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("Standard_D8s_v5".to_string()),
+                profile: Some(profile),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        let stack = Stack::new("azure-pool".into())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .build();
+        let mut chosen = deployment_config();
+        chosen.stack_settings.compute = Some(ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("Standard_NoSuchMachine".to_string()),
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into(),
+            containers: Default::default(),
+        });
+        assert!(PreflightRunner::with_chosen_machines(
+            &stack,
+            &StackState::new(Platform::Azure),
+            &chosen
+        )
+        .is_err());
     }
 
     #[cfg(feature = "runtime-checks")]

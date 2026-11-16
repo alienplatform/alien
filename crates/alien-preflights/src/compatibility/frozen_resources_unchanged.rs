@@ -1309,6 +1309,11 @@ mod tests {
         invented.capacity_groups[0].profile.as_mut().unwrap().cpu = "3.0".to_string();
         let result = check(stale, invented).await;
         assert!(!result.success);
+        // An install whose profile already is its own machine's keeps it: a different profile
+        // under the same machine is a real hardware change and stays refused.
+        let own = cluster("Standard_F8s_v2", "Standard_F8s_v2");
+        let result = check(own, cluster("Standard_F8s_v2", "Standard_D8s_v5")).await;
+        assert!(!result.success);
     }
 
     #[tokio::test]
