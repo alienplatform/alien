@@ -1783,6 +1783,28 @@ mod project_policy_writer_tests {
         // The next release drops the write grant.
         let (executor, _) =
             fixture_with(project.clone(), management(&["vault/data-read"], &[]), &[]);
+        // The vault asks for its own update, so it waits for the management
+        // identity's update first: the plan holds the manager only.
+        let plan = executor.plan(&state).unwrap();
+        assert!(
+            plan.updates.contains_key("manager"),
+            "{:?}",
+            plan.updates.keys()
+        );
+        assert!(!plan.updates.contains_key("app-secrets"));
+        let mut state = state;
+        for _ in 0..50 {
+            if executor
+                .plan(&state)
+                .unwrap()
+                .updates
+                .contains_key("app-secrets")
+            {
+                break;
+            }
+            state = executor.step(state).await.unwrap().next_state;
+        }
+        // Once the manager has settled, the plan holds the vault.
         assert!(executor
             .plan(&state)
             .unwrap()
@@ -1812,6 +1834,65 @@ mod project_policy_writer_tests {
             .any(|grant| grant.starts_with("roles/secretmanager.secretAccessor ")));
         let plan = executor.plan(&state).unwrap();
         assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
+    }
+
+    #[tokio::test]
+    async fn removed_write_grant_is_dropped_when_the_vault_writes_before_the_manager() {
+        let project = Arc::new(Mutex::new(Project::default()));
+        let granted = management(&["vault/data-read", "vault/data-write"], &[]);
+        let (executor, state) = fixture_with(project.clone(), granted, &[]);
+        let state = step_until_settled(&executor, state).await;
+        let write_role = {
+            let mut project = project.lock().unwrap();
+            let roles = project.unconditional_custom_roles(MANAGER);
+            assert_eq!(roles.len(), 1, "{:#?}", project.bindings);
+            roles[0].clone()
+        };
+
+        // The management identity's recorded grants already match the next
+        // release (they were written by an earlier setup run), so only the
+        // vault asks for an update and it writes first.
+        let reduced = management(&["vault/data-read"], &[]);
+        let (settled_executor, settled_state) = fixture_with(
+            Arc::new(Mutex::new(Project::default())),
+            reduced.clone(),
+            &[],
+        );
+        let settled_state = step_until_settled(&settled_executor, settled_state).await;
+        let revision = settled_state.resources["manager"]
+            .get_internal_controller_typed::<GcpRemoteStackManagementController>()
+            .unwrap()
+            .management_permissions_revision;
+        let mut state = state;
+        {
+            let resource = state.resources.get_mut("manager").unwrap();
+            let mut controller = resource
+                .get_internal_controller_typed::<GcpRemoteStackManagementController>()
+                .unwrap();
+            controller.management_permissions_revision = revision;
+            resource
+                .set_internal_controller(Some(Box::new(controller)))
+                .unwrap();
+        }
+        let (executor, _) = fixture_with(project.clone(), reduced, &[]);
+        let plan = executor.plan(&state).unwrap();
+        assert!(
+            !plan.updates.contains_key("manager"),
+            "{:?}",
+            plan.updates.keys()
+        );
+        assert!(plan.updates.contains_key("app-secrets"));
+
+        let state = step_until_settled(&executor, state).await;
+        assert_eq!(
+            state.resources["app-secrets"].status,
+            ResourceStatus::Running
+        );
+        let project = project.lock().unwrap();
+        assert!(!project
+            .unconditional_custom_roles(MANAGER)
+            .contains(&write_role));
+        assert!(executor.plan(&state).unwrap().updates.is_empty());
     }
 
     #[tokio::test]
