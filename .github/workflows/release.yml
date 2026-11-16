@@ -48,6 +48,12 @@ on:
         description: Validate without publishing
         type: boolean
         default: false
+      abandon_unreleased_version:
+        description: >-
+          Prepare only. The unreleased version on main whose stable publish
+          cannot finish (no tag); the next version is bumped from it instead
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -113,6 +119,8 @@ jobs:
       - name: Compute next version
         id: bump
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        env:
+          ABANDON_VERSION: ${{ inputs.abandon_unreleased_version }}
         run: |
           LATEST_TAG=$(git tag --list "v[0-9]*" --sort=-v:refname | head -n1)
           if [ -z "$LATEST_TAG" ]; then
@@ -123,7 +131,30 @@ jobs:
 
           WORKSPACE_VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
           if [ "$WORKSPACE_VERSION" != "$CURRENT_VERSION" ]; then
-            echo "::error::main already contains unreleased version v${WORKSPACE_VERSION}; run the stable publish action instead"
+            # A stable publish that stopped part way leaves its version on main
+            # without a tag, and some of its packages already on registries, so
+            # that version can never be published cleanly. Naming it here bumps
+            # past it. Only the exact untagged version on main is accepted.
+            if [ -z "$ABANDON_VERSION" ]; then
+              echo "::error::main already contains unreleased version v${WORKSPACE_VERSION}; run the stable publish action instead"
+              exit 1
+            fi
+            if [ "$ABANDON_VERSION" != "$WORKSPACE_VERSION" ]; then
+              echo "::error::abandon_unreleased_version is ${ABANDON_VERSION}, but main's unreleased version is ${WORKSPACE_VERSION}"
+              exit 1
+            fi
+            if git rev-parse --verify --quiet "refs/tags/v${WORKSPACE_VERSION}" >/dev/null; then
+              echo "::error::v${WORKSPACE_VERSION} is tagged, so it is released and cannot be abandoned"
+              exit 1
+            fi
+            if [ "$(printf '%s\n%s\n' "$CURRENT_VERSION" "$WORKSPACE_VERSION" | sort -V | tail -n1)" != "$WORKSPACE_VERSION" ]; then
+              echo "::error::v${WORKSPACE_VERSION} is not newer than the latest tag ${LATEST_TAG}"
+              exit 1
+            fi
+            echo "Abandoning unreleased v${WORKSPACE_VERSION}; bumping from it"
+            CURRENT_VERSION=$WORKSPACE_VERSION
+          elif [ -n "$ABANDON_VERSION" ]; then
+            echo "::error::abandon_unreleased_version is set, but main has no unreleased version"
             exit 1
           fi
 
