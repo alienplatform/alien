@@ -644,6 +644,12 @@ impl AgentPlatformApi for WedgedAgent {
         self.deletes.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
+    async fn pause_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn resume_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
     async fn snapshot(
         &self,
         _engine: &str,
@@ -1519,17 +1525,237 @@ async fn a_relayed_agent_404_is_a_refusal_not_a_gone_sandbox() {
 
 // ---- pause / resume / snapshot ----------------------------------------------------------------
 
-/// The capability row says no pause, and the provider agrees without calling the API: a resume
-/// that reports success on a fresh container must never reach a caller as a kept sandbox.
+/// A refused call as the real client reports it: the transport's `HttpResponseError` under the
+/// client's `RequestFailed`.
+fn http_error(status: u16, message: &str) -> AlienError<AgentPlatformErrorData> {
+    AlienError::new(alien_client_core::ErrorData::HttpResponseError {
+        message: format!("Request failed with HTTP {status}"),
+        url: "https://example.invalid/sandbox".to_string(),
+        http_status: status,
+        http_request_text: None,
+        http_response_text: Some(
+            serde_json::json!({ "error": { "code": status, "message": message } }).to_string(),
+        ),
+    })
+    .context(AgentPlatformErrorData::RequestFailed {
+        operation: "resume sandbox".to_string(),
+        message: "s1".to_string(),
+    })
+}
+
+/// What a fake Agent Platform holds for one sandbox: the state the API reports and the boot id its
+/// agent answers with.
+struct FakeSandbox {
+    state: std::sync::Mutex<&'static str>,
+    boot_id: std::sync::Mutex<&'static str>,
+}
+
+impl FakeSandbox {
+    fn running(boot_id: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            state: std::sync::Mutex::new("STATE_RUNNING"),
+            boot_id: std::sync::Mutex::new(boot_id),
+        })
+    }
+
+    fn set_state(&self, state: &'static str) {
+        *self.state.lock().unwrap() = state;
+    }
+}
+
+/// A client whose `:pause` and `:resume` move the fake between states, with `boot_after_resume` the
+/// boot id the agent answers with once it has been resumed.
+fn pausing_client(
+    fake: &Arc<FakeSandbox>,
+    boot_after_resume: &'static str,
+) -> MockAgentPlatformApi {
+    let mut client = MockAgentPlatformApi::new();
+    let state = fake.clone();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(sandbox_in_state(id, *state.state.lock().unwrap())));
+    let boot = fake.clone();
+    client
+        .expect_execute()
+        .withf(|_, _, input| op_of(input) == "health")
+        .returning(move |_, _, _| {
+            let boot_id = *boot.boot_id.lock().unwrap();
+            Ok(health_reply_with_boot(boot_id))
+        });
+    let paused = fake.clone();
+    client.expect_pause_sandbox().returning(move |_, _| {
+        paused.set_state("STATE_PAUSED");
+        Ok(done_op(serde_json::json!({})))
+    });
+    let resumed = fake.clone();
+    client.expect_resume_sandbox().returning(move |_, _| {
+        resumed.set_state("STATE_RUNNING");
+        *resumed.boot_id.lock().unwrap() = boot_after_resume;
+        Ok(done_op(serde_json::json!({})))
+    });
+    client
+}
+
+#[test]
+fn the_capability_row_offers_pause_and_resume() {
+    assert!(SandboxCapabilities::gcp_agent_platform().pause_resume);
+}
+
+/// A pause is `:pause` to `STATE_PAUSED`, and a resume that finds the container it paused returns.
 #[tokio::test]
-async fn pause_and_resume_are_refused_as_unsupported() {
-    assert!(!SandboxCapabilities::gcp_agent_platform().pause_resume);
-    let provider = provider(MockAgentPlatformApi::new());
-    for error in [
-        provider.pause("s1").await.expect_err("pause is refused"),
-        provider.resume("s1").await.expect_err("resume is refused"),
-    ] {
-        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+async fn pause_then_resume_keeps_the_generation() {
+    let fake = FakeSandbox::running("boot-a");
+    let provider = provider(pausing_client(&fake, "boot-a"));
+    let before = provider.get("s1").await.unwrap().unwrap().generation;
+
+    provider.pause("s1").await.expect("pause");
+    assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
+    provider.resume("s1").await.expect("resume");
+
+    let after = provider.get("s1").await.unwrap().unwrap();
+    assert_eq!(after.state, SandboxState::Running);
+    assert_eq!(after.generation, before, "the same container is back");
+}
+
+/// The regression guard: a container the service replaced under a stable sandbox name must never
+/// reach a caller as a kept one.
+#[tokio::test]
+async fn a_resume_that_finds_a_new_container_is_an_error_not_a_kept_sandbox() {
+    let fake = FakeSandbox::running("boot-a");
+    let provider = provider(pausing_client(&fake, "boot-b"));
+
+    provider.pause("s1").await.expect("pause");
+    let lost = provider
+        .resume("s1")
+        .await
+        .expect_err("a fresh container is not a resume");
+
+    assert_eq!(lost.code, "SANDBOX_COMMAND_FAILED", "{lost}");
+    assert!(!lost.retryable, "a retry cannot bring the memory back");
+    assert!(
+        lost.message.contains("memory") && lost.message.contains("restarted"),
+        "{}",
+        lost.message
+    );
+}
+
+/// `:resume` is refused with a 400 while the pause is under way; that is waited out.
+#[tokio::test]
+async fn a_resume_refused_during_pausing_is_retried() {
+    let fake = FakeSandbox::running("boot-a");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *fake.state.lock().unwrap())));
+    }
+    {
+        let fake = fake.clone();
+        client
+            .expect_execute()
+            .returning(move |_, _, _| Ok(health_reply_with_boot(*fake.boot_id.lock().unwrap())));
+    }
+    {
+        let fake = fake.clone();
+        let calls = calls.clone();
+        client.expect_resume_sandbox().returning(move |_, _| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(http_error(
+                    400,
+                    "Sandbox environment is pausing and cannot be resumed",
+                ));
+            }
+            fake.set_state("STATE_RUNNING");
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    fake.set_state("STATE_PAUSED");
+
+    provider(client)
+        .resume("s1")
+        .await
+        .expect("the refusal during pausing is retried");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+/// A request that reached the paused sandbox first started the wake; the 503 says so, and the
+/// resume waits for it instead of failing.
+#[tokio::test]
+async fn a_503_while_paused_is_a_wake_in_progress_and_is_waited_out() {
+    let fake = FakeSandbox::running("boot-a");
+    fake.set_state("STATE_PAUSED");
+    let probes = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        let reads = Arc::new(AtomicUsize::new(0));
+        client.expect_get_sandbox().returning(move |_, id| {
+            // The wake completes a few reads after the refusal.
+            if reads.fetch_add(1, Ordering::SeqCst) >= 3 {
+                fake.set_state("STATE_RUNNING");
+            }
+            Ok(sandbox_in_state(id, *fake.state.lock().unwrap()))
+        });
+    }
+    client.expect_resume_sandbox().times(1).returning(|_, _| {
+        Err(http_error(
+            503,
+            "Sandbox environment is paused; resume has been initiated",
+        ))
+    });
+    {
+        let probes = probes.clone();
+        client.expect_execute().returning(move |_, _, _| {
+            // The proxy answers the same 503 until the agent is back.
+            if probes.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(http_error(
+                    503,
+                    "Sandbox environment is paused; resume has been initiated",
+                ));
+            }
+            Ok(health_reply_with_boot("boot-a"))
+        });
+    }
+
+    provider(client)
+        .resume("s1")
+        .await
+        .expect("a wake in progress is waited out");
+}
+
+/// A 400 that is not the pausing refusal, and any other failure, is the caller's to see.
+#[tokio::test]
+async fn a_resume_the_service_refuses_for_another_reason_is_reported() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_PAUSED")));
+    client
+        .expect_resume_sandbox()
+        .returning(|_, _| Err(http_error(403, "permission denied")));
+
+    let refused = provider(client).resume("s1").await.expect_err("refused");
+    assert_eq!(refused.code, "SANDBOX_COMMAND_FAILED", "{refused}");
+}
+
+/// Pausing a sandbox that is not there, or already ended, says so without calling `:pause`.
+#[tokio::test]
+async fn pause_of_a_gone_or_ended_sandbox_is_refused_without_a_call() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(|_, id| {
+        if id == "gone" {
+            Err(not_found())
+        } else {
+            Ok(sandbox_in_state(id, "STATE_STOPPED"))
+        }
+    });
+    client.expect_pause_sandbox().never();
+    let provider = provider(client);
+    for id in ["gone", "ended"] {
+        let refused = provider.pause(id).await.expect_err("nothing to pause");
+        assert_eq!(refused.code, "SANDBOX_COMMAND_FAILED", "{refused}");
     }
 }
 

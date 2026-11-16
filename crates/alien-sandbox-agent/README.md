@@ -519,9 +519,17 @@ Limits the plan refuses with a message, rather than discovering them at the firs
   Google ships an egress allowlist for Agent Platform, or when a deployment accepts VPC Service
   Controls;
 - a preview port equal to the agent's own (8971);
-- an idle pause policy. `pause_resume` is off: on the default network placement every
-  `:pause`/`:resume` cycle measured returned a fresh container (new boot id, process gone, uptime
-  reset), with the agent and with a bare workload alike, so a paused sandbox keeps nothing.
+- an idle pause policy. Google has no idle policy and Alien does not watch for idleness there;
+  pause the sandbox explicitly with `pause()` instead.
+
+`pause()` and `resume()` keep the sandbox's memory and running processes (`pause_resume` is on).
+The binding records the container's generation before the pause and fails a `resume()` that finds
+another one, saying the sandbox restarted and its memory was lost, so a fresh container never
+reaches a caller as a kept one. The record lives in the process that paused; a caller resuming from
+another process compares the generation `get` reported before the pause. Any request to a paused
+sandbox, a command or a preview call included, wakes it: Google offers no way to turn that off, so
+a paused sandbox stays paused only while nothing talks to it. A `resume()` after such a wake
+returns once the sandbox answers and changes nothing.
 
 Images must be linux/amd64 and their container must keep running in the foreground: a template
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.

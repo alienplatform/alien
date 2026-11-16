@@ -66,6 +66,14 @@ const AGENT_READY_POLL: Duration = Duration::from_millis(5);
 const OPERATION_POLL_ATTEMPTS: u32 = 150;
 const OPERATION_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long `pause` and `resume` poll the sandbox record for the state they wait for, and how
+/// often. A pause or resume takes 6 to 9 seconds in practice; the budget leaves room for a slow one.
+const LIFECYCLE_POLL_ATTEMPTS: u32 = 60;
+#[cfg(not(test))]
+const LIFECYCLE_POLL_INTERVAL: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const LIFECYCLE_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
 /// How long `terminate` polls the sandbox to `not-found`, turning an accepted delete into a
 /// confirmed one.
 const TERMINATE_POLL_ATTEMPTS: u32 = 30;
@@ -87,6 +95,8 @@ const JOB_START: &str = "sandbox.jobStart";
 const JOB_POLL: &str = "sandbox.jobPoll";
 const JOB_CANCEL: &str = "sandbox.jobCancel";
 const TERMINATE: &str = "sandbox.terminate";
+const PAUSE: &str = "sandbox.pause";
+const RESUME: &str = "sandbox.resume";
 
 /// The generation of a sandbox whose live container identity was not established: a state with no
 /// reachable agent, or a bulk `list` that does not probe each sandbox. Never a value
@@ -151,6 +161,12 @@ pub struct GcpAgentPlatformSandbox {
     /// Granted capabilities, per sandbox and port. Only the grant is cached: the routing token
     /// and edge credential are short-lived and read fresh for every call.
     grants: std::sync::Mutex<std::collections::HashMap<(String, u16), CachedGrant>>,
+    /// The generation each sandbox this binding paused had just before the pause. `resume` compares
+    /// the sandbox it wakes against it, so a container the service replaced is reported as lost
+    /// memory instead of being handed back as the one that was paused. Held in this process only:
+    /// a resume from another process has nothing to compare, and its caller compares the
+    /// generation `get` reported before the pause.
+    paused_generations: std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 /// Mints the credential the sandbox edge requires on every ingress request: a JWT signed by a
@@ -377,6 +393,7 @@ impl GcpAgentPlatformSandbox {
             preview_signer: None,
             preview_ports: Vec::new(),
             grants: Default::default(),
+            paused_generations: Default::default(),
         }
     }
 
@@ -394,13 +411,39 @@ impl GcpAgentPlatformSandbox {
         })
     }
 
-    /// Refused rather than forwarded: Agent Platform's `:resume` can return a fresh container while
-    /// reporting success, so nothing the sandbox held is guaranteed to survive a pause.
-    fn pause_resume_unsupported(&self) -> AlienError<ErrorData> {
-        self.unsupported(
-            alien_core::SandboxCapability::PauseResume.as_str(),
-            "Agent Platform sandboxes cannot be paused and resumed with their state kept",
-        )
+    /// Polls the sandbox record until the API reports `wanted`, so a lifecycle call returns when
+    /// the sandbox is in the state the caller asked for and not when the service accepted the call.
+    async fn wait_for_state(&self, operation: &str, sandbox_id: &str, wanted: &str) -> Result<()> {
+        for attempt in 0..LIFECYCLE_POLL_ATTEMPTS {
+            if attempt > 0 {
+                tokio::time::sleep(LIFECYCLE_POLL_INTERVAL).await;
+            }
+            let Some(sandbox) = self.read_sandbox(operation, sandbox_id).await? else {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".to_string(),
+                    reason: format!("{operation}: sandbox '{sandbox_id}' does not exist"),
+                }));
+            };
+            let state = sandbox.state.as_deref();
+            if state == Some(wanted) {
+                return Ok(());
+            }
+            if sandbox_state(operation, state)? == SandboxState::Terminated {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxTerminated".to_string(),
+                    reason: format!(
+                        "{operation}: sandbox '{sandbox_id}' reached a terminal state"
+                    ),
+                }));
+            }
+        }
+        Err(AlienError::new(ErrorData::SandboxUnreachable {
+            operation: operation.to_string(),
+            reason: format!(
+                "sandbox '{sandbox_id}' was not {wanted} after {}s",
+                LIFECYCLE_POLL_ATTEMPTS as u64 * LIFECYCLE_POLL_INTERVAL.as_secs()
+            ),
+        }))
     }
 
     /// A sandbox id that stays a single path segment.
@@ -1267,14 +1310,153 @@ impl Sandbox for GcpAgentPlatformSandbox {
         })
     }
 
+    /// Pauses the sandbox with its memory and running processes kept: `:pause`, then wait for
+    /// `STATE_PAUSED`.
+    ///
+    /// Google offers no switch that stops a paused sandbox from waking: any request to it, a
+    /// command or a preview call included, resumes it, so a paused sandbox stays paused only while
+    /// nothing talks to it. The sandbox's generation is read first and kept for `resume`.
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
-        Self::checked_sandbox_id("sandbox.pause", sandbox_id)?;
-        Err(self.pause_resume_unsupported())
+        Self::checked_sandbox_id(PAUSE, sandbox_id)?;
+        let Some(sandbox) = self.read_sandbox(PAUSE, sandbox_id).await? else {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sandboxGone".to_string(),
+                reason: format!("{PAUSE}: sandbox '{sandbox_id}' does not exist"),
+            }));
+        };
+
+        match sandbox.state.as_deref() {
+            Some("STATE_PAUSED") => return Ok(()),
+            Some("STATE_PAUSING") => {
+                return self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await
+            }
+            _ => {}
+        }
+        if sandbox_state(PAUSE, sandbox.state.as_deref())? != SandboxState::Running {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sandboxNotRunning".to_string(),
+                reason: format!(
+                    "{PAUSE}: sandbox '{sandbox_id}' is not running, so there is nothing to pause"
+                ),
+            }));
+        }
+
+        // Read before the call: after a pause the agent is not reachable to ask.
+        let generation = self.probe_agent(PAUSE, sandbox_id).await?;
+        self.paused_generations
+            .lock()
+            .expect("paused generations lock")
+            .insert(sandbox_id.to_string(), generation);
+
+        let paused = async {
+            let started = self
+                .client
+                .pause_sandbox(&self.engine, sandbox_id)
+                .await
+                .context(ErrorData::SandboxCommandFailed {
+                    failure: "pauseFailed".to_string(),
+                    reason: format!("{PAUSE}: sandbox '{sandbox_id}' could not be paused"),
+                })?;
+            self.await_operation(PAUSE, started).await?;
+            self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await
+        }
+        .await;
+        if paused.is_err() {
+            // Not paused, so nothing waits to be compared on a later resume.
+            self.paused_generations
+                .lock()
+                .expect("paused generations lock")
+                .remove(sandbox_id);
+        }
+        paused
     }
 
+    /// Wakes a paused sandbox: `:resume`, then wait for `STATE_RUNNING` and for the agent to answer.
+    ///
+    /// Fails, without a retry being worth making, when the container that answers is not the one
+    /// this binding paused. Google has reported a resumed sandbox with a new container
+    /// before, and what the sandbox held is gone then; handing that back as a kept sandbox would
+    /// lose state silently.
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
-        Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
-        Err(self.pause_resume_unsupported())
+        Self::checked_sandbox_id(RESUME, sandbox_id)?;
+
+        let mut attempt = 0;
+        loop {
+            let Some(sandbox) = self.read_sandbox(RESUME, sandbox_id).await? else {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".to_string(),
+                    reason: format!("{RESUME}: sandbox '{sandbox_id}' does not exist"),
+                }));
+            };
+            match sandbox.state.as_deref() {
+                // Already up, or being woken by a request that reached it first.
+                Some("STATE_RUNNING" | "STATE_RESUMING") => break,
+                // `:resume` is refused with a 400 while the pause is still under way.
+                Some("STATE_PAUSING") => {}
+                other => {
+                    if sandbox_state(RESUME, other)? == SandboxState::Terminated {
+                        return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                            failure: "sandboxTerminated".to_string(),
+                            reason: format!(
+                                "{RESUME}: sandbox '{sandbox_id}' has ended and cannot be resumed"
+                            ),
+                        }));
+                    }
+                    match self.client.resume_sandbox(&self.engine, sandbox_id).await {
+                        Ok(started) => {
+                            self.await_operation(RESUME, started).await?;
+                            break;
+                        }
+                        // A request reached the paused sandbox first and its wake is under way.
+                        Err(error) if is_wake_in_progress(&error) => break,
+                        Err(error) if http_status(&error) == Some(400) => {}
+                        Err(error) => {
+                            return Err(error.context(ErrorData::SandboxCommandFailed {
+                                failure: "resumeFailed".to_string(),
+                                reason: format!(
+                                    "{RESUME}: sandbox '{sandbox_id}' could not be resumed"
+                                ),
+                            }))
+                        }
+                    }
+                }
+            }
+            attempt += 1;
+            if attempt >= LIFECYCLE_POLL_ATTEMPTS {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: RESUME.to_string(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' was still pausing after {}s, so it could not be \
+                         resumed",
+                        LIFECYCLE_POLL_ATTEMPTS as u64 * LIFECYCLE_POLL_INTERVAL.as_secs()
+                    ),
+                }));
+            }
+            tokio::time::sleep(LIFECYCLE_POLL_INTERVAL).await;
+        }
+
+        self.wait_for_state(RESUME, sandbox_id, "STATE_RUNNING")
+            .await?;
+        let generation = self.settle(sandbox_id).await?;
+
+        let paused_as = self
+            .paused_generations
+            .lock()
+            .expect("paused generations lock")
+            .remove(sandbox_id);
+        match paused_as {
+            Some(before) if before != generation => Err(AlienError::new(
+                ErrorData::SandboxCommandFailed {
+                    failure: "memoryLost".to_string(),
+                    reason: format!(
+                        "{RESUME}: sandbox '{sandbox_id}' restarted while it was paused, so its \
+                         memory and running processes were lost; it is running a new container \
+                         and holds only what its image provides"
+                    ),
+                },
+            )),
+            _ => Ok(()),
+        }
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {
@@ -1321,6 +1503,10 @@ impl Sandbox for GcpAgentPlatformSandbox {
             // Nothing can use a grant for a sandbox that is gone, and a long-lived binding that
             // creates sandboxes continually would otherwise hold every one it ever granted.
             self.forget_grants(sandbox_id);
+            self.paused_generations
+                .lock()
+                .expect("paused generations lock")
+                .remove(sandbox_id);
         }
         outcome
     }
@@ -1898,6 +2084,31 @@ fn is_not_found(error: &AlienError<AgentPlatformErrorData>) -> bool {
         node = current.source.as_deref();
     }
     false
+}
+
+/// The HTTP status of the response a client error records on its chain, if any layer has one.
+fn http_status(error: &AlienError<AgentPlatformErrorData>) -> Option<u16> {
+    let mut context = error.context.as_ref();
+    let mut layer = error.source.as_deref();
+    loop {
+        if let Some(status) = context
+            .and_then(|context| context.get("http_status"))
+            .and_then(serde_json::Value::as_u64)
+        {
+            return u16::try_from(status).ok();
+        }
+        let current = layer?;
+        context = current.context.as_ref();
+        layer = current.source.as_deref();
+    }
+}
+
+/// Whether the API answered a request to a paused sandbox with its "resume has been initiated"
+/// 503: the request itself woke the sandbox, which is what was wanted, not a failure.
+fn is_wake_in_progress(error: &AlienError<AgentPlatformErrorData>) -> bool {
+    http_status(error) == Some(503)
+        && super::refusal::response_text(error)
+            .is_some_and(|text| text.contains("resume has been initiated"))
 }
 
 /// A body short enough to sit in an error message without carrying a whole response into it.

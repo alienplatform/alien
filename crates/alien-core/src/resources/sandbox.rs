@@ -542,9 +542,12 @@ impl SandboxCapabilities {
             // WebSocket. The edge consumes `Authorization` for its own JWT, so the caller's bearer
             // travels in its own header and the agent hands it to the workload as `Authorization`.
             preview: true,
-            // `:resume` can return a fresh container while reporting success, so a pause does not
-            // keep the sandbox's state.
-            pause_resume: false,
+            // `:pause` and `:resume` keep memory and running processes: the binding records the
+            // container's generation before a pause and fails a resume that finds another, so a
+            // fresh container is an error and never a kept sandbox. Any request to a paused
+            // sandbox wakes it, and Google has no idle policy, so idle pause stays refused at plan
+            // time and only an explicit `pause` is offered.
+            pause_resume: true,
             // The create path never sends `sandbox_environment_snapshot`, so no sandbox state is
             // reachable through the trait; declared false until the client carries it.
             snapshot: false,
@@ -1291,7 +1294,7 @@ impl Sandbox {
             // says that instead of the generic pause refusal.
             if platform == Platform::Gcp {
                 return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
-                    capability: "idle pause policy: the GCP Agent Platform backend has no idle policy and cannot keep a sandbox's state across a pause; remove the idle policy".to_string(),
+                    capability: "idle pause policy: the GCP Agent Platform backend has no idle policy and Alien does not watch for idleness there; remove the idle policy and pause the sandbox explicitly".to_string(),
                     platform: platform.to_string(),
                 }));
             }
@@ -2161,8 +2164,8 @@ mod tests {
             "preview is owner access: the edge credential is the caller's execute right"
         );
         assert!(
-            !row.pause_resume,
-            ":resume can return a fresh container, so a pause keeps no state"
+            row.pause_resume,
+            "pause and resume keep memory, and a resume that finds a new container is an error"
         );
         assert!(
             !row.snapshot,

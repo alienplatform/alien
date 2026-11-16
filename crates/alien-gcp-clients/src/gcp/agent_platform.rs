@@ -472,6 +472,12 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     /// body is redacted out of any error. `input` is opaque JSON bytes; the decoded reply is returned.
     async fn execute(&self, engine: &str, sandbox: &str, input: &[u8]) -> Result<Vec<u8>>;
 
+    /// Pause a sandbox (`:pause`). Single-attempt state transition; returns the operation to poll.
+    async fn pause_sandbox(&self, engine: &str, sandbox: &str) -> Result<Operation>;
+    /// Resume a paused sandbox (`:resume`). Single-attempt state transition; returns the operation
+    /// to poll. The service refuses it with a 400 while the sandbox is still `STATE_PAUSING`.
+    async fn resume_sandbox(&self, engine: &str, sandbox: &str) -> Result<Operation>;
+
     /// Snapshot a sandbox. Single-attempt state transition; returns the operation to poll.
     async fn snapshot(&self, engine: &str, sandbox: &str, display_name: &str) -> Result<Operation>;
 
@@ -523,6 +529,30 @@ impl AgentPlatformClient {
 
     fn sandboxes_path(&self, engine: &str) -> String {
         format!("{}/sandboxEnvironments", self.engine_path(engine))
+    }
+
+    /// A `:pause` or `:resume` call. Sent once, because a repeat of a state transition that already
+    /// started is refused or ignored, and the caller decides what a refusal means.
+    async fn sandbox_transition(
+        &self,
+        engine: &str,
+        sandbox: &str,
+        verb: &str,
+    ) -> Result<Operation> {
+        let path = format!("{}:{verb}", self.sandbox_path(engine, sandbox));
+        self.base
+            .execute_request_once(
+                Method::POST,
+                &path,
+                None,
+                Some(serde_json::json!({})),
+                sandbox,
+            )
+            .await
+            .context(AgentPlatformErrorData::RequestFailed {
+                operation: format!("{verb} sandbox"),
+                message: sandbox.to_string(),
+            })
     }
 
     fn sandbox_path(&self, engine: &str, sandbox: &str) -> String {
@@ -870,6 +900,14 @@ impl AgentPlatformApi for AgentPlatformClient {
             })
     }
 
+    async fn pause_sandbox(&self, engine: &str, sandbox: &str) -> Result<Operation> {
+        self.sandbox_transition(engine, sandbox, "pause").await
+    }
+
+    async fn resume_sandbox(&self, engine: &str, sandbox: &str) -> Result<Operation> {
+        self.sandbox_transition(engine, sandbox, "resume").await
+    }
+
     async fn snapshot(&self, engine: &str, sandbox: &str, display_name: &str) -> Result<Operation> {
         let path = format!("{}:snapshot", self.sandbox_path(engine, sandbox));
         self.base
@@ -1074,6 +1112,34 @@ mod tests {
             .await
             .expect_err("snapshot should surface the failure");
         assert_eq!(snapshot.hits_async().await, 1, "snapshot must be sent once");
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_are_sent_once_to_their_verbs() {
+        let server = MockServer::start_async().await;
+        let pause = server
+            .mock_async(|when, then| {
+                when.method(POST).path(format!("{SANDBOX_PATH}:pause"));
+                then.status(503);
+            })
+            .await;
+        let resume = server
+            .mock_async(|when, then| {
+                when.method(POST).path(format!("{SANDBOX_PATH}:resume"));
+                then.status(400);
+            })
+            .await;
+        let client = client(&server);
+        client
+            .pause_sandbox(ENGINE, SANDBOX)
+            .await
+            .expect_err("pause should surface the failure");
+        client
+            .resume_sandbox(ENGINE, SANDBOX)
+            .await
+            .expect_err("resume should surface the failure");
+        assert_eq!(pause.hits_async().await, 1, "pause must be sent once");
+        assert_eq!(resume.hits_async().await, 1, "resume must be sent once");
     }
 
     // ---- Redaction: an execute request body never reaches a serialized error. ----------------

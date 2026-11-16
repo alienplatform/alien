@@ -132,6 +132,28 @@ where
     }
 }
 
+/// The raw response body the transport captured on `error`'s chain, whatever the status. For
+/// matching a known sentence, never for quoting: the body is unclipped and may echo a request.
+#[cfg(feature = "gcp")]
+pub(crate) fn response_text<E>(error: &AlienError<E>) -> Option<String>
+where
+    E: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    let mut context = error.context.as_ref();
+    let mut layer = error.source.as_deref();
+    loop {
+        if let Some(text) = context
+            .and_then(|context| context.get(HTTP_RESPONSE_TEXT))
+            .and_then(serde_json::Value::as_str)
+        {
+            return Some(text.to_string());
+        }
+        let current = layer?;
+        context = current.context.as_ref();
+        layer = current.source.as_deref();
+    }
+}
+
 /// The service's own sentence out of a captured JSON error body — AWS answers `{"message": …}`
 /// and GCP and Azure nest the same field under `error`. A body that is not JSON is left to the
 /// chain's innermost message instead: the first line of an HTML error page says less.
