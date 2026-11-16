@@ -14,6 +14,17 @@ use crate::{error::{ErrorData, Result}, StackMutation};
 const IDENTITY_DESCRIPTION: &str = "The identity the container's HTTPS public endpoint runs as. \
      The cluster's machines are allowed to attach it.";
 
+/// Whether `entry` is an identity like the one this mutation adds: a setup-owned service
+/// account that holds no permissions. One declared by hand in that shape is the same thing; one
+/// that holds permissions would be attachable by the cluster's machines, so it is refused.
+fn is_public_endpoint_identity(entry: &ResourceEntry) -> bool {
+    entry.lifecycle == ResourceLifecycle::Frozen
+        && entry.config.downcast_ref::<ServiceAccount>().is_some_and(|account| {
+            account.stack_permission_sets.is_empty()
+                && account.resource_permission_sets.values().all(|sets| sets.is_empty())
+        })
+}
+
 const RESOURCE_GROUP_ID: &str = "default-resource-group";
 
 /// On Azure an HTTPS public endpoint's load balancer is created at runtime with a
@@ -65,10 +76,7 @@ impl StackMutation for AzurePublicEndpointIdentityMutation {
             // different resource under this id is refused: the cluster's machines are allowed
             // to attach whatever identity lives here.
             if let Some(existing) = stack.resources.get(&identity_id) {
-                let ours = existing.lifecycle == ResourceLifecycle::Frozen
-                    && existing.config.downcast_ref::<ServiceAccount>().is_some()
-                    && existing.description.as_deref() == Some(IDENTITY_DESCRIPTION);
-                if !ours {
+                if !is_public_endpoint_identity(existing) {
                     return Err(AlienError::new(ErrorData::StackMutationFailed {
                         mutation_name: self.description().to_string(),
                         message: format!(
@@ -215,7 +223,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_foreign_resource_under_the_identity_id_is_refused() {
+    async fn a_live_resource_under_the_identity_id_is_refused() {
         let state = StackState::new(Platform::Azure);
         let mut stack = stack(vec![container("api", Some(ExposeProtocol::Http))]);
         stack.resources.insert(
@@ -223,7 +231,7 @@ mod tests {
             ResourceEntry {
                 enabled_when: None,
                 config: Resource::new(ServiceAccount::new("api-appgw-id".to_string()).build()),
-                lifecycle: ResourceLifecycle::Frozen,
+                lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 display_name: None,
                 description: None,
@@ -235,6 +243,35 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("api-appgw-id"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_service_account_with_permissions_under_the_identity_id_is_refused() {
+        let state = StackState::new(Platform::Azure);
+        let mut stack = stack(vec![container("api", Some(ExposeProtocol::Http))]);
+        let holder = ServiceAccount::new("api-appgw-id".to_string())
+            .stack_permission_set(alien_core::PermissionSet {
+                id: "storage/data-read".to_string(),
+                description: "read".to_string(),
+                platforms: alien_core::PlatformPermissions { aws: None, gcp: None, azure: None },
+            })
+            .build();
+        stack.resources.insert(
+            "api-appgw-id".to_string(),
+            ResourceEntry {
+                enabled_when: None,
+                config: Resource::new(holder),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                display_name: None,
+                description: None,
+                remote_access: false,
+            },
+        );
+        assert!(AzurePublicEndpointIdentityMutation
+            .mutate(stack, &state, &config())
+            .await
+            .is_err());
     }
 
     #[tokio::test]
