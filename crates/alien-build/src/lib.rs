@@ -2219,10 +2219,11 @@ async fn push_target(
         layered,
     )
     .await?;
-    if *platform == Platform::Aws {
+    if matches!(platform, Platform::Aws | Platform::Gcp) {
         // Tags are unique per push, not per image. The deployment's bundle names the image in its
         // `FROM` and its key is the bundle's digest, so an unchanged sandbox must keep one
-        // reference across releases or every release would rebuild it.
+        // reference across releases or every release would rebuild it. On GCP the digest is what
+        // the deployment copies into its own project and what a signed install accepts.
         pin_to_digest(target.resource_name(), &agent_uri, push_options).await
     } else {
         Ok(agent_uri)

@@ -27,6 +27,21 @@ pub fn project_repository(prefix: &str, project_id: &str) -> Option<String> {
     .then_some(repository)
 }
 
+/// The Artifact Registry repository that holds a GCP sandbox's image inside the deployment's own
+/// project. It is dedicated to that one sandbox: never the stack's registry (which has a push
+/// service account and workload bindings) and never the manager's. Setup, the controller and the
+/// verifier all derive it from here, so they cannot disagree. `None` when the name would not be a
+/// valid repository id.
+pub fn sandbox_image_repository(prefix: &str, sandbox_id: &str) -> Option<String> {
+    let repository = format!("{prefix}-{sandbox_id}-img");
+    (repository.len() <= 63
+        && repository.starts_with(|c: char| c.is_ascii_lowercase())
+        && repository
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+    .then_some(repository)
+}
+
 /// Return the original project ID only when its path agrees with its repository name.
 pub fn project_id_for_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     let (repository, remainder) = path.split_once('/')?;
@@ -37,6 +52,16 @@ pub fn project_id_for_path<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_image_repository_is_valid_or_none() {
+        assert_eq!(
+            sandbox_image_repository("alien-abc", "sbx").as_deref(),
+            Some("alien-abc-sbx-img")
+        );
+        assert_eq!(sandbox_image_repository("alien-abc", "Sbx_1"), None);
+        assert_eq!(sandbox_image_repository("p", &"x".repeat(60)), None);
+    }
 
     #[test]
     fn project_paths_require_the_matching_project_id() {
