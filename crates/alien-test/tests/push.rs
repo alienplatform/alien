@@ -173,6 +173,31 @@ async fn push_gcp_comprehensive_rust(ctx: &mut GcpPushRust) {
 }
 
 e2e_test_context!(
+    GcpPushSandboxRemote,
+    Platform::Gcp,
+    DeploymentModel::Push,
+    TestApp::SandboxRemote
+);
+
+/// A source-built Frozen sandbox set up directly on GCP: the template runs from a digest-pinned
+/// copy in the deployment's project and a session cut from it runs a command.
+#[test_context(GcpPushSandboxRemote)]
+#[tokio::test]
+async fn push_gcp_sandbox_remote(ctx: &mut GcpPushSandboxRemote) {
+    let gcp = alien_test::config::TestConfig::from_env()
+        .gcp_target
+        .expect("GOOGLE_TARGET_* is set");
+    common::sandbox::check_gcp_template_runs_a_command(
+        &gcp.project_id,
+        &gcp.region,
+        gcp.credentials_json.as_deref().expect("a target key"),
+        &std::env::var("ALIEN_E2E_RESOURCE_PREFIX").expect("a resource prefix"),
+    )
+    .await
+    .expect("a session from the deployed template runs a command");
+}
+
+e2e_test_context!(
     GcpPushTypeScript,
     Platform::Gcp,
     DeploymentModel::Push,

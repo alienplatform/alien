@@ -2002,8 +2002,9 @@ async fn setup_inner(
 
     // Provision the managed test secret via the manager vault API.
     // Only for push mode — pull-mode agents manage secrets directly.
+    // The sandbox-remote stack has no vault to provision into.
     if model == DeploymentModel::Push
-        && app != TestApp::StorageNotifications
+        && !matches!(app, TestApp::StorageNotifications | TestApp::SandboxRemote)
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
     {
         if let Err(e) = provision_managed_test_secret(&manager, &deployment).await {
