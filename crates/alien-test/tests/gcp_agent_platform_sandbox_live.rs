@@ -992,7 +992,7 @@ async fn sweep_orphaned_engines() {
         let matches_suite = engine
             .display_name
             .as_deref()
-            .is_some_and(|name| name.starts_with(LIVE_PREFIX));
+            .is_some_and(|name| name.starts_with(&display_prefix()));
         // An engine without a readable createTime is reaped: an orphan must not outlive the sweep.
         let outlived_any_run = engine
             .extra

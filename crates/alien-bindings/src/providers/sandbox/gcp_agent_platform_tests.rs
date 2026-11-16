@@ -1753,6 +1753,29 @@ async fn a_resume_without_a_pause_marker_is_not_reported_as_kept() {
     assert!(!lost.retryable);
 }
 
+/// Two callers resuming one paused sandbox both get it back: the first does not take the marker
+/// away from the second.
+#[tokio::test]
+async fn two_resumes_of_one_paused_sandbox_both_succeed() {
+    let fake = PausableSandbox::running("boot-a");
+    let client: Arc<dyn AgentPlatformApi> = Arc::new(pausing_client(&fake, "boot-a"));
+    provider_from(client.clone())
+        .pause("s1")
+        .await
+        .expect("pause");
+    // The second caller read the state while the sandbox was still paused, so it is not the
+    // "running on entry" case that tolerates a missing marker.
+    provider_from(client.clone())
+        .resume("s1")
+        .await
+        .expect("first resume");
+    fake.set_state("STATE_PAUSED");
+    provider_from(client)
+        .resume("s1")
+        .await
+        .expect("second resume");
+}
+
 /// A marker that cannot be read is not a missing marker: the sandbox may well have kept its memory,
 /// and saying it lost it would be a false report. The failure passes through as it is.
 #[tokio::test]

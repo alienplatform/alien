@@ -136,7 +136,9 @@ async fn pause_and_resume_keep_memory() {
         .unwrap_or_else(|error| panic!("create failed: {error}"));
     let id = instance.sandbox_id.clone();
 
-    let outcome = async {
+    // A failed assertion must not leave the sandbox running: the body's panic is held until the
+    // sandbox is terminated, then raised again.
+    let outcome = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(async {
         sandbox
             .write_files(
                 &id,
@@ -156,14 +158,18 @@ async fn pause_and_resume_keep_memory() {
         let before = read_probe(sandbox.as_ref(), &id).await;
 
         sandbox.pause(&id).await.expect("pause");
-        // `pause` only accepts the stop; wait until the sandbox reports it.
+        // `pause` only accepts the stop; wait until the sandbox reports it, and fail if it never
+        // does: a sandbox that stayed running would pass every check below.
+        let mut paused = false;
         for _ in 0..30 {
             let state = sandbox.get(&id).await.expect("get").map(|s| s.state);
             if state == Some(SandboxState::Paused) {
+                paused = true;
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
+        assert!(paused, "the sandbox never reported Paused");
         tokio::time::sleep(std::time::Duration::from_secs(pause_seconds)).await;
         sandbox.resume(&id).await.expect("resume");
 
@@ -182,9 +188,11 @@ async fn pause_and_resume_keep_memory() {
         assert_eq!(before.pid, after.pid, "the probe process was replaced");
         assert_eq!(before.token, after.token, "the in-memory token changed");
         assert!(after.ticks > before.ticks, "the counter did not continue");
-    }
+    }))
     .await;
 
     sandbox.terminate(&id).await.expect("terminate");
-    outcome
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
 }

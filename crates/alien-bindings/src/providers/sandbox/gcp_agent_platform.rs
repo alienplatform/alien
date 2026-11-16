@@ -1081,19 +1081,6 @@ impl GcpAgentPlatformSandbox {
         Ok(text.parse::<u64>().ok())
     }
 
-    async fn clear_pause_marker(&self, sandbox_id: &str) {
-        let all = PAUSE_MARKER_DIRS
-            .iter()
-            .map(|dir| format!("{dir}/{PAUSE_MARKER_NAME}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        // Best effort: a marker left behind is compared again by the next resume, which a
-        // generation that matches or a missing marker both pass.
-        let _ = self
-            .marker_script(RESUME, sandbox_id, format!("rm -f {all}; echo ok"))
-            .await;
-    }
-
     /// Runs a command inside the proxy's synchronous window, streaming the buffered NDJSON body.
     async fn run_synchronous(
         &self,
@@ -1881,10 +1868,10 @@ impl Sandbox for GcpAgentPlatformSandbox {
             })
         };
         match self.read_pause_marker(sandbox_id).await? {
-            Some(paused_as) if paused_as == generation => {
-                self.clear_pause_marker(sandbox_id).await;
-                Ok(())
-            }
+            // Left in place: a second caller resuming the same sandbox reads it too, and a later
+            // container that replaced this one has no such file, so a stale marker cannot be
+            // mistaken for a new pause. The next `pause` overwrites it.
+            Some(paused_as) if paused_as == generation => Ok(()),
             Some(_) => Err(memory_lost(
                 "the container that answers is not the one that was paused; it runs a container \
                  that holds only what its image provides",
