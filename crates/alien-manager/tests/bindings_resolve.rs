@@ -211,6 +211,7 @@ async fn build_for_platform(
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         charts: None,
+        runtime_identity: None,
         release_channels: None,
         signing: None,
         bundle_signing_key: None,

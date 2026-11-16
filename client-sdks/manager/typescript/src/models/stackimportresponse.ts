@@ -22,6 +22,13 @@ export type StackImportResponse = {
    */
   deploymentToken?: string | null | undefined;
   /**
+   * When `deployment_token` stops working. Set only for a short-lived token,
+   *
+   * @remarks
+   * which a client uses for this run and does not store.
+   */
+  deploymentTokenExpiresAt?: Date | null | undefined;
+  /**
    * User-customizable deployment settings specified at deploy time.
    *
    * @remarks
@@ -47,6 +54,9 @@ export const StackImportResponse$inboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   deploymentToken: z.nullable(z.string()).optional(),
+  deploymentTokenExpiresAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
   stackSettings: StackSettings$inboundSchema,
   stackState: StackState$inboundSchema,
 });

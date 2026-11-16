@@ -1,7 +1,20 @@
 name: Tests
 
+# Two tiers share one required check, `All tests passed`:
+#
+# - Draft pull requests (every push) run the fast tier: format, lint, typecheck,
+#   generated-file drift, `cargo check` of the whole workspace, and the tests of only the
+#   crates the pull request changed. `All tests passed` fails on a draft on purpose ("full tier
+#   not run: draft PR"): a draft cannot merge, and its result can never satisfy the check later.
+# - Pull requests that are ready for review run the fast and full tiers: the tests of every
+#   crate the change can affect (changed crates and what depends on them), Worker integration,
+#   the whole TypeScript suite and the Node addon portability builds. Marking a draft ready
+#   (`ready_for_review`) starts a new run that replaces the draft's. `merge_group` and pushes of
+#   release commits run both tiers too.
+# - `workflow_dispatch` runs both tiers on the whole workspace, for an on-demand full run.
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   merge_group:
   push:
     branches: [main]
@@ -52,12 +65,22 @@ jobs:
     name: Detect test areas
     needs: pr-conventions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
+      # Ready (non-draft) pull requests, the merge queue, release pushes and manual runs run the
+      # full tier. Draft pull requests run the fast tier only.
+      full_tier: ${{ steps.tier.outputs.full_tier }}
+      # Manual runs also ignore the path filters and test everything.
+      run_all: ${{ steps.tier.outputs.run_all }}
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
       worker_integration: ${{ steps.filter.outputs.worker_integration }}
       platform_sdk: ${{ steps.filter.outputs.platform_sdk }}
       node_addon: ${{ steps.filter.outputs.node_addon }}
+      python: ${{ steps.filter.outputs.python }}
+      tpm: ${{ steps.filter.outputs.tpm }}
       rust_mode: ${{ steps.rust_selection.outputs.mode }}
       rust_packages: ${{ steps.rust_selection.outputs.packages }}
       rust_features: ${{ steps.rust_selection.outputs.features }}
@@ -66,26 +89,64 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Pull requests build and test only the packages their changes can affect: the changed
-      # packages and everything that depends on them. Any change outside the packages (other
-      # than docs) runs the whole workspace, as do pushes, merge groups and manual runs.
+      - name: Select the test tier
+        id: tier
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          full_tier=true
+          run_all=false
+          case "$EVENT" in
+            pull_request)
+              # Read the draft state now, not from the event, so a re-run after marking
+              # the PR ready sees it.
+              draft=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.draft')
+              if [[ "$draft" == "true" ]]; then
+                full_tier=false
+              fi
+              ;;
+            workflow_dispatch) run_all=true ;;
+          esac
+          echo "full_tier=$full_tier" >> "$GITHUB_OUTPUT"
+          echo "run_all=$run_all" >> "$GITHUB_OUTPUT"
+          echo "Tier: full=$full_tier, whole workspace=$run_all ($EVENT)"
+
+      # Draft pull requests test only the crates they changed (and compile the whole workspace
+      # in `Rust check`). Ready pull requests and the merge queue test the changed crates and
+      # everything that depends on them, against the base. Any change outside the packages
+      # (other than docs) is only checked on a draft and fully tested on a ready pull request. Pushes of release
+      # commits and manual runs test the whole workspace.
       - name: Select Rust packages to test
         id: rust_selection
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          EVENT: ${{ github.event_name }}
+          RUN_ALL: ${{ steps.tier.outputs.run_all }}
+          FULL_TIER: ${{ steps.tier.outputs.full_tier }}
           # The repo pins a nightly; stable cargo reads the metadata without installing it.
           RUSTUP_TOOLCHAIN: stable
         run: |
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+          if [[ "$EVENT" != "pull_request" && "$EVENT" != "merge_group" ]] || [[ "$RUN_ALL" == "true" ]]; then
             echo "mode=full" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          flags=()
+          BASE_SHA="$QUEUE_BASE_SHA"
+          if [[ "$EVENT" == "pull_request" ]]; then
+            BASE_SHA="$PR_BASE_SHA"
+            [[ "$FULL_TIER" == "true" ]] || flags+=(--own-only)
+          fi
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          python3 scripts/affected-rust-packages.py "$BASE_SHA" HEAD >> "$GITHUB_OUTPUT"
+          python3 scripts/affected-rust-packages.py "$BASE_SHA" HEAD "${flags[@]}" >> "$GITHUB_OUTPUT"
 
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # A merge group compares against the queue's base, as a pull request does.
+          base: ${{ github.event.merge_group.base_sha }}
           filters: |
             rust:
               - 'Cargo.toml'
@@ -111,6 +172,7 @@ jobs:
             # A dependency bump can break the full client, which workspace builds don't compile.
             platform_sdk:
               - 'client-sdks/platform/rust/**'
+              - 'crates/alien-core/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
             # Build inputs of the Node addon (Rust changes trigger the job through `rust`).
@@ -137,6 +199,26 @@ jobs:
               - 'examples/pnpm-workspace.yaml'
               - 'examples/basic-worker-ts/**'
               - '.github/workflows/ci-fast.yml'
+            python:
+              - 'Cargo.lock'
+              - 'Cargo.toml'
+              - 'mise*.toml'
+              - 'rust-toolchain.toml'
+              - 'crates/alien-bindings/**'
+              - 'crates/alien-ai-gateway/**'
+              - 'crates/alien-core/src/bindings/**'
+              - 'crates/alien-bindings-python/**'
+              - 'crates/alien-local/**'
+              - 'scripts/queue-test-server.py'
+              - 'examples/python-bindings/**'
+              - '.github/workflows/python-bindings.yml'
+            tpm:
+              - 'crates/alien-cli/src/signing/**'
+              - 'crates/alien-cli/src/commands/signing.rs'
+              - 'crates/alien-cli/tests/signing_flow.rs'
+              - 'crates/alien-manager/src/routes/signing.rs'
+              - 'crates/alien-signing/**'
+              - '.github/workflows/tpm-device-key.yml'
             typescript:
               - 'mise*.toml'
               - 'rust-toolchain.toml'
@@ -171,14 +253,20 @@ jobs:
               - 'crates/alien-bindings-node/**'
               - 'crates/alien-bindings/**'
               - 'crates/alien-build/**'
+              # packages/permissions/generated is compiled from this crate. The
+              # check that the generated files are committed runs in the
+              # TypeScript job, so a Rust-only change here has to select it.
+              - 'crates/alien-permissions/**'
 
   rust:
     name: Rust crates
     needs: [pr-conventions, changes]
-    # Skipped when a pull request changed only documentation inside the Rust paths.
+    # A pull request that changed only documentation, or only files outside the crates (which
+    # `Rust check` still compiles), skips the tests.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode != 'none')
+      needs.changes.outputs.run_all == 'true' ||
+      (needs.changes.outputs.rust == 'true' &&
+      (needs.changes.outputs.rust_mode == 'affected' || needs.changes.outputs.rust_mode == 'full'))
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 120
     env:
@@ -395,7 +483,7 @@ jobs:
       - name: Platform SDK full-api tests
         # The workspace builds the filtered client; tests that need operations outside it
         # (`#![cfg(feature = "full-api")]`) run here, when the SDK changes.
-        if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.platform_sdk == 'true'
+        if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.platform_sdk == 'true'
         run: cargo test --locked -p alien-platform-api --features full-api
 
       - name: Local Redis integration tests
@@ -464,7 +552,7 @@ jobs:
   typescript:
     name: TypeScript packages and CLIs
     needs: [pr-conventions, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.typescript == 'true'
+    if: needs.changes.outputs.run_all == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 60
     env:
@@ -566,6 +654,7 @@ jobs:
           sudo mv kubeconform /usr/local/bin/kubeconform
 
       - name: Install zig (needed by cargo-zigbuild for example builds)
+        if: needs.changes.outputs.full_tier == 'true'
         run: pip3 install ziglang
 
       - name: Configure git credentials for cargo
@@ -586,8 +675,9 @@ jobs:
       # `napi build --platform` would only add a generated index.js/index.d.ts, which this
       # crate does not use (see its .gitignore): packages/bindings loads the .node file.
       - name: Build bindings dev addon, CLIs and gateway
+        if: needs.changes.outputs.full_tier == 'true'
         env:
-          BUILD_CLIS: ${{ steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' }}
+          BUILD_CLIS: ${{ steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true' }}
         run: |
           packages=(-p alien-bindings-node)
           if [[ "$BUILD_CLIS" == "true" ]]; then
@@ -598,25 +688,28 @@ jobs:
             crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
 
       - name: Build package-layout dependencies
+        if: needs.changes.outputs.full_tier == 'true'
         run: pnpm --filter @alienplatform/sdk... build
 
       - name: Validate package layout
+        if: needs.changes.outputs.full_tier == 'true'
         run: pnpm validate:package-layout
 
       - name: TypeScript unit tests
+        if: needs.changes.outputs.full_tier == 'true'
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           pnpm --filter @alienplatform/core --filter @alienplatform/permissions --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
       - name: Build TypeScript packages
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
         env:
           NODE_OPTIONS: "--max-old-space-size=12288"
         run: pnpm build && pnpm -C packages/package-layout check
 
       - name: Rust and TypeScript command integration
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
         # Drives the TypeScript command sender/receiver against the Rust command
@@ -648,7 +741,7 @@ jobs:
           git diff --exit-code -- crates/alien-stack-toml/tests/fixtures
 
       - name: Bare-metal worker example tests
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        if: needs.changes.outputs.full_tier == 'true' && (steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || needs.changes.outputs.run_all == 'true')
         # The example is a standalone Cargo workspace, so the repository's cargo commands skip it.
         working-directory: examples/bare-metal-worker
         run: cargo test --locked
@@ -656,8 +749,11 @@ jobs:
   rust-check:
     name: Rust check
     needs: [pr-conventions, changes]
-    # When a pull request tests only its affected packages, this keeps every package compiling.
-    if: needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_mode == 'affected'
+    # Whenever the tests cover only some packages (a pull request's changed crates, the merge
+    # queue's affected ones), this keeps every package compiling.
+    if: >-
+      needs.changes.outputs.rust == 'true' &&
+      (needs.changes.outputs.rust_mode == 'affected' || needs.changes.outputs.rust_mode == 'check-only')
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 45
     env:
@@ -756,10 +852,12 @@ jobs:
     needs: [pr-conventions, changes]
     # The tested packages, alien-test-app, the addon and the gateway depend on most workspace
     # crates, so any Rust change runs this job; worker_integration adds the JS inputs.
+    # Full tier only: ready pull requests, the merge queue, release pushes and manual runs.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.full_tier == 'true' &&
+      (needs.changes.outputs.run_all == 'true' ||
       needs.changes.outputs.rust == 'true' ||
-      needs.changes.outputs.worker_integration == 'true'
+      needs.changes.outputs.worker_integration == 'true')
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 45
     env:
@@ -843,10 +941,12 @@ jobs:
   node-addon-portability:
     name: Node addon (${{ matrix.triple }}, older glibc)
     needs: [pr-conventions, changes]
+    # Full tier only: ready pull requests, the merge queue, release pushes and manual runs.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.full_tier == 'true' &&
+      (needs.changes.outputs.run_all == 'true' ||
       needs.changes.outputs.rust == 'true' ||
-      needs.changes.outputs.node_addon == 'true'
+      needs.changes.outputs.node_addon == 'true')
     strategy:
       fail-fast: false
       matrix:
@@ -907,6 +1007,34 @@ jobs:
       - name: Verify glibc floor and load on older base images
         run: packages/bindings/scripts/verify-addon-portability.sh "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node"
 
+  # Reusable workflows that also run nightly. Full tier only, and only when the change touches
+  # their inputs, so `All tests passed` covers them.
+  python-bindings:
+    name: Python bindings
+    needs: [pr-conventions, changes]
+    if: >-
+      needs.changes.outputs.full_tier == 'true' &&
+      (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.python == 'true')
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/python-bindings.yml
+    secrets: inherit
+    with:
+      linux_only: true
+
+  tpm-device-key:
+    name: TPM device key
+    needs: [pr-conventions, changes]
+    if: >-
+      needs.changes.outputs.full_tier == 'true' &&
+      (needs.changes.outputs.run_all == 'true' || needs.changes.outputs.tpm == 'true')
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/tpm-device-key.yml
+    secrets: inherit
+
   all-tests-passed:
     name: All tests passed
     if: >-
@@ -915,13 +1043,63 @@ jobs:
       github.event.pull_request.head.repo.fork != true) &&
       (github.event_name != 'push' ||
       startsWith(github.event.head_commit.message, 'chore: release '))
-    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration, node-addon-portability]
+    needs: [pr-conventions, changes, rust, rust-check, workspace-hack, typescript, worker-integration, node-addon-portability, python-bindings, tpm-device-key]
     runs-on: ubuntu-latest
     steps:
       - name: Verify every test area
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          FULL_TIER: ${{ needs.changes.outputs.full_tier }}
+          RUN_ALL: ${{ needs.changes.outputs.run_all }}
+          RUST: ${{ needs.changes.outputs.rust }}
+          RUST_MODE: ${{ needs.changes.outputs.rust_mode }}
+          TYPESCRIPT: ${{ needs.changes.outputs.typescript }}
+          WORKER_INTEGRATION: ${{ needs.changes.outputs.worker_integration }}
+          NODE_ADDON: ${{ needs.changes.outputs.node_addon }}
+          PYTHON: ${{ needs.changes.outputs.python }}
+          TPM: ${{ needs.changes.outputs.tpm }}
+          CHANGES: ${{ needs.changes.result }}
+          RUST_TESTS: ${{ needs.rust.result }}
+          TYPESCRIPT_TESTS: ${{ needs.typescript.result }}
+          WORKER_RESULT: ${{ needs.worker-integration.result }}
+          ADDON_RESULT: ${{ needs.node-addon-portability.result }}
+          PYTHON_RESULT: ${{ needs.python-bindings.result }}
+          TPM_RESULT: ${{ needs.tpm-device-key.result }}
         run: |
           for result in $RESULTS; do
             [[ "$result" == "success" || "$result" == "skipped" ]] || exit 1
           done
+          # A skipped job is fine only when its path filter says nothing it covers changed.
+          # Without this, a failed or skipped `Detect test areas` run, or a draft's fast tier,
+          # would pass as if the full suites had run.
+          [[ "$CHANGES" == "success" ]] || { echo "::error::Detect test areas did not succeed"; exit 1; }
+          # A draft pull request runs the fast tier only. Red on purpose: a draft cannot merge, and a
+          # draft's result must never satisfy the required check.
+          if [[ "$FULL_TIER" != "true" ]]; then
+            echo "::error::full tier not run: draft PR"
+            exit 1
+          fi
+          need() {
+            if [[ "$2" != "success" ]]; then
+              echo "::error::$1 was required by the full tier but its result is '$2'"
+              exit 1
+            fi
+          }
+          if [[ "$RUN_ALL" == "true" || ( "$RUST" == "true" && ( "$RUST_MODE" == "affected" || "$RUST_MODE" == "full" ) ) ]]; then
+            need "Rust crates" "$RUST_TESTS"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$TYPESCRIPT" == "true" ]]; then
+            need "TypeScript packages and CLIs" "$TYPESCRIPT_TESTS"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$RUST" == "true" || "$WORKER_INTEGRATION" == "true" ]]; then
+            need "Worker integration" "$WORKER_RESULT"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$RUST" == "true" || "$NODE_ADDON" == "true" ]]; then
+            need "Node addon portability" "$ADDON_RESULT"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$PYTHON" == "true" ]]; then
+            need "Python bindings" "$PYTHON_RESULT"
+          fi
+          if [[ "$RUN_ALL" == "true" || "$TPM" == "true" ]]; then
+            need "TPM device key" "$TPM_RESULT"
+          fi

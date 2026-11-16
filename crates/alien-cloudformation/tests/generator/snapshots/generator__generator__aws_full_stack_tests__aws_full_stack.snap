@@ -2129,25 +2129,27 @@ Resources:
             egressPublicIps:
             - Ref: DefaultNetworkNatEip
             publicSubnetIds:
-            - Ref: DefaultNetworkPublicSubnet1
-            - Fn::If:
+              Fn::If:
               - NetworkCreateUseAz2
-              - Ref: DefaultNetworkPublicSubnet2
-              - Ref: AWS::NoValue
-            - Fn::If:
-              - NetworkCreateUseAz3
-              - Ref: DefaultNetworkPublicSubnet3
-              - Ref: AWS::NoValue
+              - Fn::If:
+                - NetworkCreateUseAz3
+                - - Ref: DefaultNetworkPublicSubnet1
+                  - Ref: DefaultNetworkPublicSubnet2
+                  - Ref: DefaultNetworkPublicSubnet3
+                - - Ref: DefaultNetworkPublicSubnet1
+                  - Ref: DefaultNetworkPublicSubnet2
+              - - Ref: DefaultNetworkPublicSubnet1
             privateSubnetIds:
-            - Ref: DefaultNetworkPrivateSubnet1
-            - Fn::If:
+              Fn::If:
               - NetworkCreateUseAz2
-              - Ref: DefaultNetworkPrivateSubnet2
-              - Ref: AWS::NoValue
-            - Fn::If:
-              - NetworkCreateUseAz3
-              - Ref: DefaultNetworkPrivateSubnet3
-              - Ref: AWS::NoValue
+              - Fn::If:
+                - NetworkCreateUseAz3
+                - - Ref: DefaultNetworkPrivateSubnet1
+                  - Ref: DefaultNetworkPrivateSubnet2
+                  - Ref: DefaultNetworkPrivateSubnet3
+                - - Ref: DefaultNetworkPrivateSubnet1
+                  - Ref: DefaultNetworkPrivateSubnet2
+              - - Ref: DefaultNetworkPrivateSubnet1
             publicRouteTableId:
               Ref: DefaultNetworkPublicRouteTable
             privateRouteTableId:
@@ -2157,24 +2159,34 @@ Resources:
               - DefaultNetworkSecurityGroup
               - GroupId
             availabilityZones:
-            - Fn::Select:
-              - 0
-              - Fn::GetAZs:
-                  Ref: AWS::Region
-            - Fn::If:
+              Fn::If:
               - NetworkUseAz2
-              - Fn::Select:
-                - 1
-                - Fn::GetAZs:
-                    Ref: AWS::Region
-              - Ref: AWS::NoValue
-            - Fn::If:
-              - NetworkUseAz3
-              - Fn::Select:
-                - 2
-                - Fn::GetAZs:
-                    Ref: AWS::Region
-              - Ref: AWS::NoValue
+              - Fn::If:
+                - NetworkUseAz3
+                - - Fn::Select:
+                    - 0
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+                  - Fn::Select:
+                    - 1
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+                  - Fn::Select:
+                    - 2
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+                - - Fn::Select:
+                    - 0
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+                  - Fn::Select:
+                    - 1
+                    - Fn::GetAZs:
+                        Ref: AWS::Region
+              - - Fn::Select:
+                  - 0
+                  - Fn::GetAZs:
+                      Ref: AWS::Region
             isByoVpc: false
           - Fn::If:
             - NetworkModeUseExisting
@@ -2807,47 +2819,63 @@ Outputs:
                 - AllocationId
               - '","egressPublicIps":["'
               - Ref: DefaultNetworkNatEip
-              - '"],"publicSubnetIds":["'
-              - Ref: DefaultNetworkPublicSubnet1
-              - '",'
+              - '"],"publicSubnetIds":'
               - Fn::If:
                 - NetworkCreateUseAz2
                 - Fn::Join:
                   - ''
-                  - - '"'
-                    - Ref: DefaultNetworkPublicSubnet2
-                    - '"'
-                - 'null'
-              - ','
-              - Fn::If:
-                - NetworkCreateUseAz3
+                  - - Fn::If:
+                      - NetworkCreateUseAz3
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Ref: DefaultNetworkPublicSubnet1
+                          - '","'
+                          - Ref: DefaultNetworkPublicSubnet2
+                          - '","'
+                          - Ref: DefaultNetworkPublicSubnet3
+                          - '"]'
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Ref: DefaultNetworkPublicSubnet1
+                          - '","'
+                          - Ref: DefaultNetworkPublicSubnet2
+                          - '"]'
                 - Fn::Join:
                   - ''
-                  - - '"'
-                    - Ref: DefaultNetworkPublicSubnet3
-                    - '"'
-                - 'null'
-              - '],"privateSubnetIds":["'
-              - Ref: DefaultNetworkPrivateSubnet1
-              - '",'
+                  - - '["'
+                    - Ref: DefaultNetworkPublicSubnet1
+                    - '"]'
+              - ',"privateSubnetIds":'
               - Fn::If:
                 - NetworkCreateUseAz2
                 - Fn::Join:
                   - ''
-                  - - '"'
-                    - Ref: DefaultNetworkPrivateSubnet2
-                    - '"'
-                - 'null'
-              - ','
-              - Fn::If:
-                - NetworkCreateUseAz3
+                  - - Fn::If:
+                      - NetworkCreateUseAz3
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Ref: DefaultNetworkPrivateSubnet1
+                          - '","'
+                          - Ref: DefaultNetworkPrivateSubnet2
+                          - '","'
+                          - Ref: DefaultNetworkPrivateSubnet3
+                          - '"]'
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Ref: DefaultNetworkPrivateSubnet1
+                          - '","'
+                          - Ref: DefaultNetworkPrivateSubnet2
+                          - '"]'
                 - Fn::Join:
                   - ''
-                  - - '"'
-                    - Ref: DefaultNetworkPrivateSubnet3
-                    - '"'
-                - 'null'
-              - '],"publicRouteTableId":"'
+                  - - '["'
+                    - Ref: DefaultNetworkPrivateSubnet1
+                    - '"]'
+              - ',"publicRouteTableId":"'
               - Ref: DefaultNetworkPublicRouteTable
               - '","privateRouteTableId":"'
               - Ref: DefaultNetworkPrivateRouteTable
@@ -2855,36 +2883,53 @@ Outputs:
               - Fn::GetAtt:
                 - DefaultNetworkSecurityGroup
                 - GroupId
-              - '","availabilityZones":["'
-              - Fn::Select:
-                - 0
-                - Fn::GetAZs:
-                    Ref: AWS::Region
-              - '",'
+              - '","availabilityZones":'
               - Fn::If:
                 - NetworkUseAz2
                 - Fn::Join:
                   - ''
-                  - - '"'
-                    - Fn::Select:
-                      - 1
-                      - Fn::GetAZs:
-                          Ref: AWS::Region
-                    - '"'
-                - 'null'
-              - ','
-              - Fn::If:
-                - NetworkUseAz3
+                  - - Fn::If:
+                      - NetworkUseAz3
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Fn::Select:
+                            - 0
+                            - Fn::GetAZs:
+                                Ref: AWS::Region
+                          - '","'
+                          - Fn::Select:
+                            - 1
+                            - Fn::GetAZs:
+                                Ref: AWS::Region
+                          - '","'
+                          - Fn::Select:
+                            - 2
+                            - Fn::GetAZs:
+                                Ref: AWS::Region
+                          - '"]'
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Fn::Select:
+                            - 0
+                            - Fn::GetAZs:
+                                Ref: AWS::Region
+                          - '","'
+                          - Fn::Select:
+                            - 1
+                            - Fn::GetAZs:
+                                Ref: AWS::Region
+                          - '"]'
                 - Fn::Join:
                   - ''
-                  - - '"'
+                  - - '["'
                     - Fn::Select:
-                      - 2
+                      - 0
                       - Fn::GetAZs:
                           Ref: AWS::Region
-                    - '"'
-                - 'null'
-              - '],"isByoVpc":false}'
+                    - '"]'
+              - ',"isByoVpc":false}'
           - Fn::Join:
             - ''
             - - Fn::If:

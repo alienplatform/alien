@@ -582,6 +582,7 @@ fn registration_depends_on_the_boundary_for_teardown_ordering() {
                 setup_target: "aws".into(),
                 setup_fingerprint: "test".into(),
                 setup_fingerprint_version: 1,
+                destroy_guard: false,
             }),
             helm_install: None,
             supported_aws_regions: Vec::new(),

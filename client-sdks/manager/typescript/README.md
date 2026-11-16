@@ -144,6 +144,7 @@ run();
 ### [Bindings](docs/sdks/bindings/README.md)
 
 * [resolveBinding](docs/sdks/bindings/README.md#resolvebinding)
+* [createSandbox](docs/sdks/bindings/README.md#createsandbox)
 
 ### [Commands](docs/sdks/commands/README.md)
 
@@ -193,6 +194,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 ### [Identity](docs/sdks/identity/README.md)
 
 * [issueEnrollmentCode](docs/sdks/identity/README.md#issueenrollmentcode) - Issue the code that `management.enrollmentCode` carries into a Helm install.
+* [issueSetupCredential](docs/sdks/identity/README.md#issuesetupcredential) - Issue a short-lived key for rerunning an installation, to its own Operator.
 * [enrollRuntimeIdentity](docs/sdks/identity/README.md#enrollruntimeidentity)
 * [exchangeRuntimeIdentity](docs/sdks/identity/README.md#exchangeruntimeidentity) - Exchange a verified component proof for one bounded runtime purpose.
 * [rotateRuntimeIdentity](docs/sdks/identity/README.md#rotateruntimeidentity)
@@ -218,6 +220,18 @@ caller may read.
 * [getLatestRelease](docs/sdks/releases/README.md#getlatestrelease)
 * [getRelease](docs/sdks/releases/README.md#getrelease)
 * [promoteManagerRelease](docs/sdks/releases/README.md#promotemanagerrelease)
+
+### [Signing](docs/sdks/signing/README.md)
+
+* [listConfigStatements](docs/sdks/signing/README.md#listconfigstatements)
+* [addConfigStatement](docs/sdks/signing/README.md#addconfigstatement)
+* [getPendingChange](docs/sdks/signing/README.md#getpendingchange)
+* [resolvePendingChange](docs/sdks/signing/README.md#resolvependingchange)
+* [listPendingChanges](docs/sdks/signing/README.md#listpendingchanges)
+* [createPendingChange](docs/sdks/signing/README.md#creatependingchange)
+* [listSignerLists](docs/sdks/signing/README.md#listsignerlists)
+* [addSignerList](docs/sdks/signing/README.md#addsignerlist)
+* [getProjectSigning](docs/sdks/signing/README.md#getprojectsigning)
 
 ### [StackImport](docs/sdks/stackimport/README.md)
 
@@ -245,13 +259,13 @@ bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 ### [Tokens](docs/sdks/tokens/README.md)
 
 * [listTokens](docs/sdks/tokens/README.md#listtokens)
-* [createToken](docs/sdks/tokens/README.md#createtoken) - `POST /v1/tokens` — create a scoped token (admin only).
 * [deleteToken](docs/sdks/tokens/README.md#deletetoken)
 
 ### [Values](docs/sdks/values/README.md)
 
 * [listValues](docs/sdks/values/README.md#listvalues)
 * [putValues](docs/sdks/values/README.md#putvalues) - Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.
+* [exportValues](docs/sdks/values/README.md#exportvalues) - Sends the stored values of the named slots to another manager, which writes them with the token given. The values go from this manager to the target; the response carries only the target's metadata. The caller's token must be an export token naming the target URL, and the request may name no other.
 * [verifyValues](docs/sdks/values/README.md#verifyvalues)
 * [deleteValue](docs/sdks/values/README.md#deletevalue)
 
@@ -283,6 +297,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 
 <summary>Available standalone functions</summary>
 
+- [`bindingsCreateSandbox`](docs/sdks/bindings/README.md#createsandbox)
 - [`bindingsResolveBinding`](docs/sdks/bindings/README.md#resolvebinding)
 - [`commandsCreateCommand`](docs/sdks/commands/README.md#createcommand) - Create a new command
 - [`commandsGetCommandPayload`](docs/sdks/commands/README.md#getcommandpayload) - Get command payload (params and response) from KV
@@ -320,6 +335,7 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 - [`identityEnrollRuntimeIdentity`](docs/sdks/identity/README.md#enrollruntimeidentity)
 - [`identityExchangeRuntimeIdentity`](docs/sdks/identity/README.md#exchangeruntimeidentity) - Exchange a verified component proof for one bounded runtime purpose.
 - [`identityIssueEnrollmentCode`](docs/sdks/identity/README.md#issueenrollmentcode) - Issue the code that `management.enrollmentCode` carries into a Helm install.
+- [`identityIssueSetupCredential`](docs/sdks/identity/README.md#issuesetupcredential) - Issue a short-lived key for rerunning an installation, to its own Operator.
 - [`identityRotateRuntimeIdentity`](docs/sdks/identity/README.md#rotateruntimeidentity)
 - [`leasesAcquireLeases`](docs/sdks/leases/README.md#acquireleases) - Acquire leases for polling deployments
 - [`leasesReleaseLease`](docs/sdks/leases/README.md#releaselease) - Release a lease
@@ -334,6 +350,15 @@ passthrough; single-tenant impls ignore it. See the trait doc on
 user). Outbound: caller bearer (passthrough). Returns only releases the
 caller may read.
 - [`releasesPromoteManagerRelease`](docs/sdks/releases/README.md#promotemanagerrelease)
+- [`signingAddConfigStatement`](docs/sdks/signing/README.md#addconfigstatement)
+- [`signingAddSignerList`](docs/sdks/signing/README.md#addsignerlist)
+- [`signingCreatePendingChange`](docs/sdks/signing/README.md#creatependingchange)
+- [`signingGetPendingChange`](docs/sdks/signing/README.md#getpendingchange)
+- [`signingGetProjectSigning`](docs/sdks/signing/README.md#getprojectsigning)
+- [`signingListConfigStatements`](docs/sdks/signing/README.md#listconfigstatements)
+- [`signingListPendingChanges`](docs/sdks/signing/README.md#listpendingchanges)
+- [`signingListSignerLists`](docs/sdks/signing/README.md#listsignerlists)
+- [`signingResolvePendingChange`](docs/sdks/signing/README.md#resolvependingchange)
 - [`stackImportStackImport`](docs/sdks/stackimport/README.md#stackimport) - `POST /v1/stack/import` — Inbound: deployment-group bearer.
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
 `caller: &Subject` is threaded into `DeploymentStore::acquire` so
@@ -351,10 +376,10 @@ bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
 `caller: &Subject` is threaded into `DeploymentStore::release`.
 - [`syncRenew`](docs/sdks/sync/README.md#renew) - Renew an acquired deployment lease without writing deployment state.
-- [`tokensCreateToken`](docs/sdks/tokens/README.md#createtoken) - `POST /v1/tokens` — create a scoped token (admin only).
 - [`tokensDeleteToken`](docs/sdks/tokens/README.md#deletetoken)
 - [`tokensListTokens`](docs/sdks/tokens/README.md#listtokens)
 - [`valuesDeleteValue`](docs/sdks/values/README.md#deletevalue)
+- [`valuesExportValues`](docs/sdks/values/README.md#exportvalues) - Sends the stored values of the named slots to another manager, which writes them with the token given. The values go from this manager to the target; the response carries only the target's metadata. The caller's token must be an export token naming the target URL, and the request may name no other.
 - [`valuesListValues`](docs/sdks/values/README.md#listvalues)
 - [`valuesPutValues`](docs/sdks/values/README.md#putvalues) - Stores the values, replacing any held in the same slots. With the header `If-None-Match: *` the request must carry exactly one value, and it is written only when its slot is empty, atomically: of several concurrent conditional writes to one slot exactly one succeeds. A manager that serves values (`capabilities.values` = 1) honours this header.
 - [`valuesVerifyValues`](docs/sdks/values/README.md#verifyvalues)
@@ -503,8 +528,8 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 61 methods.*
-* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 61 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 72 methods.*
+* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 3 of 72 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>

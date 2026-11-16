@@ -230,6 +230,7 @@ async fn deployment_with_queued_update(manager_has_signing_key: bool) -> Fixture
         ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
         charts: None,
+        runtime_identity: None,
         release_channels: None,
         signing: None,
         bundle_signing_key: None,

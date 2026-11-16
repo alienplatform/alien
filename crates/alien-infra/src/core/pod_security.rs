@@ -1,7 +1,9 @@
 //! Pod Security `restricted` profile for the pods the Operator creates.
 //!
-//! Every container, daemon and worker pod is restricted unless its stack sets
-//! `security.profile` to `unrestricted`. The profile is non-root, seccomp
+//! A container, daemon or worker pod is restricted when its stack sets
+//! `security.profile` to `restricted`. A workload without a `security` setting
+//! (including every release built before the profile existed) gets no security
+//! context, volumes or mounts and runs as its image was built. The profile is non-root, seccomp
 //! `RuntimeDefault`, all capabilities dropped, no privilege escalation and a
 //! read-only root filesystem, with writable emptyDirs for `/tmp` and the
 //! paths the stack declares.
@@ -391,9 +393,28 @@ mod tests {
         assert!(read_only_crash_hint(&[crashing(false)], &template(false), "api").is_none());
     }
 
+    /// A release without a `security` field (every release built before the
+    /// profile existed) runs as its image was built: no security context,
+    /// volumes or mounts.
     #[test]
-    fn absent_security_is_restricted() {
+    fn absent_security_applies_nothing() {
         let security = pod_security("api", None, &[]).unwrap();
+        assert!(security.pod.is_none());
+        assert!(security.container.is_none());
+        assert!(security.volumes.is_empty());
+        assert!(security.mounts.is_empty());
+    }
+
+    #[test]
+    fn explicit_restricted_applies_the_profile() {
+        let declared = ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            run_as_user: None,
+            run_as_group: None,
+            read_only_root_filesystem: None,
+            writable_paths: Vec::new(),
+        };
+        let security = pod_security("api", Some(&declared), &[]).unwrap();
         let pod = security.pod.unwrap();
         assert_eq!(pod.run_as_non_root, Some(true));
         assert_eq!(pod.fs_group, Some(65532));

@@ -19,6 +19,8 @@ use std::{collections::HashMap, sync::OnceLock};
 use tempfile::TempDir;
 use tokio::sync::MutexGuard;
 
+#[path = "test_platform/dependent_rollout.rs"]
+mod dependent_rollout;
 #[path = "test_platform/interrupted_update_recovery.rs"]
 mod interrupted_update_recovery;
 #[path = "test_platform/interruptible_update_takeover.rs"]

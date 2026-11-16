@@ -3,9 +3,11 @@
 use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
+use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{ClientConfig, Platform, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_infra::ClientConfigExt;
 use clap::Parser;
 use std::{future::Future, path::PathBuf, str::FromStr};
@@ -67,9 +69,36 @@ pub struct DownArgs {
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
     pub yes: bool,
+
+    /// Kubernetes namespace of a Kubernetes install (default: the one it was installed in).
+    #[arg(long, env = "ALIEN_KUBERNETES_NAMESPACE")]
+    pub namespace: Option<String>,
+
+    /// Helm release of a Kubernetes install (default: the one it was installed as).
+    #[arg(long, env = "ALIEN_HELM_RELEASE")]
+    pub helm_release: Option<String>,
+
+    /// Kubeconfig path for Kubernetes installs. Defaults to KUBECONFIG or kubectl defaults.
+    #[arg(long, env = "KUBECONFIG")]
+    pub kubeconfig: Option<String>,
+
+    /// Kubernetes context for Kubernetes installs.
+    #[arg(long, env = "ALIEN_KUBE_CONTEXT")]
+    pub kube_context: Option<String>,
 }
 
 pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
+    let in_cluster = InClusterUse::default();
+    down_command_with(args, embedded_config, &in_cluster)
+        .await
+        .map_err(|error| in_cluster.explain(error))
+}
+
+async fn down_command_with(
+    args: DownArgs,
+    embedded_config: Option<&DeployCliConfig>,
+    in_cluster: &InClusterUse,
+) -> Result<()> {
     let delete_action = if args.erase_data {
         alien_manager_api::types::DeleteDeploymentAction::Erase
     } else {
@@ -91,12 +120,29 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
 
     let (token, manager_url, tracked_platform, deployment_id, tracked_local) = match tracked {
         Some(tracked) => {
-            let token = resolve_token(
+            let explicit = resolve_token(
                 args.token.clone(),
                 args.token_file.as_ref(),
                 embedded_config,
-            )?
-            .unwrap_or_else(|| tracked.token.clone());
+            )?;
+            let cli_name = embedded_config
+                .and_then(|config| config.name.as_deref())
+                .unwrap_or("alien-deploy");
+            let rerun = rerun_credential::resolve(
+                explicit,
+                &tracked,
+                &KubeAccess {
+                    release: args.helm_release.clone(),
+                    namespace: args.namespace.clone(),
+                    kubeconfig: args.kubeconfig.clone(),
+                    kube_context: args.kube_context.clone(),
+                },
+                cli_name,
+                "destroy",
+            )
+            .await?;
+            in_cluster.note(&tracked.name, &rerun);
+            let token = rerun.token;
             let url = args
                 .manager_url
                 .clone()
@@ -166,7 +212,8 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         .id(&deployment_id)
         .send()
         .await
-        .into_alien_error()
+        .into_sdk_error()
+        .await
         .context(ErrorData::DeploymentFailed {
             operation: "fetch deployment".to_string(),
         })?;
@@ -224,7 +271,8 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
             })
             .send()
             .await
-            .into_alien_error()
+            .into_sdk_error()
+            .await
             .context(ErrorData::DeploymentFailed {
                 operation: "force deletion".to_string(),
             })?;
@@ -281,7 +329,8 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                 })
                 .send()
                 .await
-                .into_alien_error()
+                .into_sdk_error()
+                .await
                 .context(ErrorData::DeploymentFailed {
                     operation: "request deletion".to_string(),
                 })?;
@@ -311,7 +360,8 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                 })
                 .send()
                 .await
-                .into_alien_error()
+                .into_sdk_error()
+                .await
                 .context(ErrorData::DeploymentFailed {
                     operation: "request deletion".to_string(),
                 })?;
@@ -552,9 +602,10 @@ mod tests {
             .track(
                 "uploads".into(),
                 "dep_uploads".into(),
-                "original-token".into(),
+                Some("original-token".into()),
                 "https://manager.example.com".into(),
                 "local".into(),
+                None,
                 Some(local.clone()),
             )
             .unwrap();
@@ -566,7 +617,7 @@ mod tests {
         let mut recovered = DeploymentTracker::with_path(path.clone()).unwrap();
         let tracked = recovered.get("uploads").expect("retained recovery entry");
         assert_eq!(tracked.deployment_id, "dep_uploads");
-        assert_eq!(tracked.token, "original-token");
+        assert_eq!(tracked.token.as_deref(), Some("original-token"));
         assert_eq!(tracked.manager_url, "https://manager.example.com");
         assert_eq!(
             destroy_client_config(Platform::Local, tracked.local.as_ref())

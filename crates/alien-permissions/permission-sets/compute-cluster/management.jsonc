@@ -1119,11 +1119,16 @@
             "Microsoft.Compute/virtualMachineScaleSets/delete",
             // Scale-in, node-cohort retirement, and rolling replacement delete individual VMs.
             "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/delete",
+            // Writing the node identity user data onto running instances (identity migration of
+            // an installed cluster) is a per-instance write.
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/write",
             // Every scale set PUT (scaling, a size change, a rolling update) re-checks join on
-            // the cluster NSG its network profile links to. The NSG is created at setup, so
-            // nothing else gives the management identity this action.
+            // the cluster NSG its network profile links to.
             // https://learn.microsoft.com/azure/virtual-network/manage-network-security-group#permissions
-            "Microsoft.Network/networkSecurityGroups/join/action"
+            "Microsoft.Network/networkSecurityGroups/join/action",
+            // On an install set up with Terraform or CloudFormation, the first setup step runs
+            // with this role and creates the cluster NSG.
+            "Microsoft.Network/networkSecurityGroups/write"
           ]
         },
         "binding": {

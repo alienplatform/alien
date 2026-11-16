@@ -50,6 +50,7 @@ fn registered_module() -> ModuleFiles {
         setup_target: "aws".to_string(),
         setup_fingerprint: "test".to_string(),
         setup_fingerprint_version: 1,
+        destroy_guard: false,
     }))
 }
 

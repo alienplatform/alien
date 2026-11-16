@@ -1,0 +1,39 @@
+name: Changed since the last successful run
+description: >-
+  For scheduled workflows: reports whether the default branch has a commit that this workflow
+  has not yet run successfully on in a scheduled run (manual runs may cover less). A scheduled job skips when nothing changed since its last
+  green run. Manual runs always report a change.
+
+outputs:
+  changed:
+    description: "'true' when the workflow should run"
+    value: ${{ steps.check.outputs.changed }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WORKFLOW_REF: ${{ github.workflow_ref }}
+        EVENT: ${{ github.event_name }}
+        SHA: ${{ github.sha }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        if [[ "$EVENT" != "schedule" ]]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # `owner/repo/.github/workflows/file.yml@refs/heads/main` -> `file.yml`
+        workflow_file=$(basename "${WORKFLOW_REF%%@*}")
+        # A failed API call must not read as "nothing ran before": let it fail the job.
+        last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_file/runs?branch=$DEFAULT_BRANCH&status=success&event=schedule&per_page=1" \
+          --jq '.workflow_runs[0].head_sha // ""')
+        if [[ "$last" == "$SHA" ]]; then
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          echo "$DEFAULT_BRANCH is still at $SHA, which this workflow already passed on. Skipping."
+        else
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "Last successful run was at '${last:-none}'; $DEFAULT_BRANCH is at $SHA."
+        fi

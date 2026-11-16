@@ -32,7 +32,10 @@ environment variable (the file's contents), or from the working directory.
 - `[artifact-registry.default]` stores release images in ECR, Artifact
   Registry or ACR instead of the manager's own registry
 - `[telemetry]` forwards deployments' OpenTelemetry to your backend
-- `[operator]` sets the Operator image deployments run and update to
+- `[operator]` sets the Operator image deployments run and update to. Installed Operators
+  older than that image keep running as they are; set `update-older-operators = true` to
+  have the manager tell them to swap to it on their next sync. The swap is one-way: test
+  it on the installed chart version first
 - `[commands]` moves command state to DynamoDB, Firestore or Table Storage
 - `[impersonation]` sets the identity used to deploy into customer clouds. With
   `[impersonation.azure]`, the manager also needs `AZURE_TENANT_ID`,

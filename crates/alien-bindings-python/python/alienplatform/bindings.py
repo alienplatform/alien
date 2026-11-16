@@ -509,12 +509,21 @@ class JobResult:
 class SandboxPreview:
     """Reach a port inside a sandbox: send requests to ``endpoint`` with every
     header in ``headers``. Request a new one before ``expires_in_seconds``;
-    ``0`` means it does not expire (the local backend)."""
+    ``0`` means it does not expire (the local backend).
+
+    ``caller_authorization_header`` names the header that carries your own bearer token so it
+    reaches the workload unchanged: ``Authorization`` except where the cloud's edge consumes
+    that header. ``subprotocols`` is what a WebSocket client must offer, in order and after its
+    own protocols, in addition to every header in ``headers``; on GCP a WebSocket needs both, so a
+    client that can only offer subprotocols cannot open one there. It is empty where the headers
+    alone are enough."""
 
     endpoint: str
     headers: Mapping[str, str]
     allowed_ports: tuple[int, ...]
     expires_in_seconds: int
+    caller_authorization_header: str = "Authorization"
+    subprotocols: tuple[str, ...] = ()
 
 
 def _sandbox_info(value: Any) -> SandboxInfo:
@@ -754,6 +763,8 @@ class Sandbox:
             dict(value.headers),
             tuple(value.allowed_ports),
             value.expires_in_seconds,
+            value.caller_authorization_header,
+            tuple(value.subprotocols),
         )
 
     @translate_errors
