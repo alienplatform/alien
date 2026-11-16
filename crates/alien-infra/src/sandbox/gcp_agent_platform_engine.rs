@@ -63,6 +63,11 @@ pub struct GcpAgentPlatformEngineController {
     pub(crate) engine_id: Option<String>,
     /// The create long-running operation being polled to learn the engine's id.
     pub(crate) pending_operation: Option<String>,
+    /// Set when this controller created the engine. A Frozen engine a setup package created is
+    /// removed by that package's `terraform destroy`; one a direct setup created has no package,
+    /// so its own teardown has to remove it or it is orphaned and bills.
+    #[serde(default)]
+    pub(crate) created_here: bool,
 }
 
 #[controller]
@@ -196,6 +201,7 @@ impl GcpAgentPlatformEngineController {
         })?;
         self.engine_id = Some(last_segment(&name).to_string());
         self.pending_operation = None;
+        self.created_here = true;
         info!(id=%config.id, engine=%last_segment(&name), "reasoning engine ready");
 
         Ok(HandlerAction::Continue {
@@ -293,13 +299,14 @@ impl GcpAgentPlatformEngineController {
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
     ) -> Result<bool> {
-        engine_deletion_is_runtime_owned(
+        let runtime_owned = engine_deletion_is_runtime_owned(
             ctx.state
                 .resources
                 .get(resource_id)
                 .and_then(|resource| resource.lifecycle),
             resource_id,
-        )
+        )?;
+        Ok(runtime_owned || self.created_here)
     }
 
     /// Creates a controller already holding a ready engine id, for tests that seed it as a
@@ -310,6 +317,7 @@ impl GcpAgentPlatformEngineController {
             state: GcpAgentPlatformEngineState::Ready,
             engine_id: Some(engine_id.to_string()),
             pending_operation: None,
+            created_here: false,
             _internal_stay_count: None,
         }
     }
@@ -476,6 +484,40 @@ mod tests {
             GcpAgentPlatformEngineController::mock_ready("eng-42"),
         )
         .await;
+
+        executor.delete().expect("delete is accepted");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete runs to terminal");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// A direct setup has no package to run `terraform destroy`, so the engine its own controller
+    /// created is removed by its own teardown, Frozen or not. An imported one (never created
+    /// here) is still left to the package, which the test above pins.
+    #[tokio::test]
+    async fn a_frozen_engine_a_direct_setup_created_is_deleted_by_its_teardown() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_create_engine().returning(|_| Ok(pending_op()));
+        m.expect_get_operation()
+            .returning(|_| Ok(done_engine_op("eng-42")));
+        m.expect_delete_engine()
+            .withf(|engine| engine == "eng-42")
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let mut executor = build_executor_with(
+            provider_with(Arc::new(m)),
+            ResourceLifecycle::Frozen,
+            Default::default(),
+        )
+        .await;
+        executor.run_until_terminal().await.expect("create runs");
+        let controller = executor
+            .internal_state::<GcpAgentPlatformEngineController>()
+            .expect("the controller downcasts");
+        assert!(controller.created_here);
 
         executor.delete().expect("delete is accepted");
         executor
