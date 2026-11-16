@@ -319,6 +319,16 @@ pub enum ErrorData {
     )]
     EnrollmentKeyExists { deployment_id: String },
 
+    /// A deployment that is being removed or retained gets no key for a rerun.
+    #[error(
+        code = "DEPLOYMENT_REMOVING",
+        message = "Deployment '{deployment_id}' is being removed or retained",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentRemoving { deployment_id: String },
+
     /// A value is larger than the store accepts.
     #[error(
         code = "VALUE_TOO_LARGE",

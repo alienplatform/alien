@@ -21,6 +21,7 @@ use crate::core::ResourceController;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::worker::certificate_wait::{CERTIFICATE_WAIT_MAX_POLLS, CERTIFICATE_WAIT_POLL_SECS};
+use crate::worker::ecr_region::ImageInRegion;
 use crate::worker::readiness_probe::{
     run_readiness_probe_with_dns_override, ReadinessProbeDnsOverride, READINESS_PROBE_MAX_ATTEMPTS,
 };
@@ -94,10 +95,20 @@ fn lambda_concurrency_error(error: AlienError<CloudClientErrorData>, region: &st
     error.into_generic()
 }
 
+/// The image of a Lambda update: usable now, or still being replicated (the step returns the
+/// action to come back later).
+enum CheckedImage {
+    Ready(String),
+    Waiting(AwsWorkerHandlerAction),
+}
+
 /// How long a Lambda create or update may stay pending, measured on the wall clock from the
 /// first poll. Matches the AWS SDK waiters for Lambda (FunctionActiveV2 and FunctionUpdatedV2
 /// poll 300 times at 1 s).
 const LAMBDA_WAIT_SECONDS: i64 = 5 * 60;
+/// How long a Lambda create or update waits for ECR replication to bring the image into the
+/// function's region, counted from the first check that did not find it.
+const IMAGE_REPLICATION_WAIT_SECONDS: i64 = 15 * 60;
 
 /// The same wait for a function attached to a VPC. Such a function stays Pending until Lambda
 /// has created its Hyperplane ENI, which AWS documents as taking "several minutes", and VPC
@@ -856,6 +867,12 @@ pub struct AwsWorkerController {
     /// it), so a retry gets a full window.
     #[serde(default)]
     pub(crate) wait_for_lambda_started_at: Option<chrono::DateTime<Utc>>,
+    /// Wall-clock start of the wait for the image to be replicated into the function's region,
+    /// set by the first check that finds it missing and cleared once it is present. Stored so
+    /// the 15-minute bound survives restarts; the `wait_for_*_started_at` name makes a retry
+    /// start a fresh window.
+    #[serde(default)]
+    pub(crate) wait_for_image_started_at: Option<chrono::DateTime<Utc>>,
     /// Retention in days last set on the worker's log group. Workers whose group got a
     /// different value (from earlier code, or none because the role was not allowed) differ
     /// from `AWS_LOG_RETENTION_DAYS`, and Ready sets it.
@@ -1056,7 +1073,10 @@ impl AwsWorkerController {
         // If the image URI points to ECR in a different region (e.g., the management
         // region), rewrite it to reference the local region where the replicated copy
         // lives. ECR private image replication must be configured separately.
-        Self::ensure_image_replicated(ctx, aws_cfg, &image_uri, &cfg.id).await?;
+        let presence = Self::ensure_image_replicated(ctx, aws_cfg, &image_uri, &cfg.id).await?;
+        if let Some(wait) = self.wait_for_image(presence, CreateStart, &cfg.id)? {
+            return Ok(wait);
+        }
         let image_uri = Self::rewrite_ecr_region_if_needed(&image_uri, &aws_cfg.region);
 
         let code = FunctionCode::builder().image_uri(image_uri).build();
@@ -3315,7 +3335,13 @@ impl AwsWorkerController {
         if code_changed && !protected {
             let aws_cfg = ctx.get_aws_config()?;
             let client = ctx.service_provider.get_aws_lambda_client(aws_cfg).await?;
-            let image_uri = Self::checked_function_image_uri(ctx, &current_config).await?;
+            let image_uri = match self
+                .checked_function_image_uri(ctx, &current_config, UpdateCodeStart)
+                .await?
+            {
+                CheckedImage::Ready(uri) => uri,
+                CheckedImage::Waiting(wait) => return Ok(wait),
+            };
 
             let request = UpdateFunctionCodeRequest::builder()
                 .image_uri(image_uri)
@@ -3470,8 +3496,15 @@ impl AwsWorkerController {
             if current_config.code != previous_config.code {
                 // A published version would carry the new image with the previous release's
                 // configuration until the write after this one lands.
+                let image_uri = match self
+                    .checked_function_image_uri(ctx, &current_config, UpdateConfigStart)
+                    .await?
+                {
+                    CheckedImage::Ready(uri) => uri,
+                    CheckedImage::Waiting(wait) => return Ok(wait),
+                };
                 let code = UpdateFunctionCodeRequest::builder()
-                    .image_uri(Self::checked_function_image_uri(ctx, &current_config).await?)
+                    .image_uri(image_uri)
                     .publish(false)
                     .build();
                 writes.push(verifier::CloudWrite::UpdateFunctionCode {
@@ -5661,19 +5694,65 @@ impl AwsWorkerController {
         }
     }
 
-    /// Fails closed before Lambda create/update when the image is in another
-    /// region and the exact image has not reached the Lambda's region.
+    /// Where a missing image waits, in the controller's own state, for ECR replication: the
+    /// bound from the first missing check, after which the step fails with the clear error.
+    /// A step that finds the image present clears the start. The delay grows with the time
+    /// waited (5 s, then about doubling, up to 60 s) and comes from the delayed requeue, never
+    /// from a sleep. Returns `None` when the image is present and the step may go on.
+    fn wait_for_image(
+        &mut self,
+        presence: ImageInRegion,
+        retry_state: AwsWorkerState,
+        resource_id: &str,
+    ) -> Result<Option<AwsWorkerHandlerAction>> {
+        self.wait_for_image_at(presence, retry_state, resource_id, Utc::now())
+    }
+
+    fn wait_for_image_at(
+        &mut self,
+        presence: ImageInRegion,
+        retry_state: AwsWorkerState,
+        resource_id: &str,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Option<AwsWorkerHandlerAction>> {
+        let missing = match presence {
+            ImageInRegion::Present => {
+                self.wait_for_image_started_at = None;
+                return Ok(None);
+            }
+            ImageInRegion::Missing(missing) => missing,
+        };
+        let started_at = *self.wait_for_image_started_at.get_or_insert(now);
+        let waited = now.signed_duration_since(started_at).num_seconds().max(0);
+        if waited >= IMAGE_REPLICATION_WAIT_SECONDS {
+            self.wait_for_image_started_at = None;
+            return Err(missing.into_error(resource_id));
+        }
+        let delay = (waited as u64).clamp(5, 60);
+        info!(
+            resource_id,
+            waited_seconds = waited,
+            "Image has not reached the function's region yet; checking again in {delay}s"
+        );
+        Ok(Some(AwsWorkerHandlerAction::Continue {
+            state: retry_state,
+            suggested_delay: Some(Duration::from_secs(delay)),
+        }))
+    }
+
+    /// Checks, before Lambda create/update, that the image is in the Lambda's region when it
+    /// lives in another one. Never lets Lambda use an image that is not there.
     async fn ensure_image_replicated(
         ctx: &ResourceControllerContext<'_>,
         aws_cfg: &alien_core::AwsClientConfig,
         image_uri: &str,
         resource_id: &str,
-    ) -> Result<()> {
+    ) -> Result<ImageInRegion> {
         let Some(image) = super::ecr_region::parse_ecr_image_ref(image_uri) else {
-            return Ok(());
+            return Ok(ImageInRegion::Present);
         };
         if image.region == aws_cfg.region {
-            return Ok(());
+            return Ok(ImageInRegion::Present);
         }
         let mut source_cfg = aws_cfg.clone();
         source_cfg.region = image.region.clone();
@@ -6244,15 +6323,22 @@ impl AwsWorkerController {
     /// The image URI for a create/update of the function, after checking that the exact
     /// image has reached the function's region. Fails closed before any Lambda write.
     async fn checked_function_image_uri(
+        &mut self,
         ctx: &ResourceControllerContext<'_>,
         config: &Worker,
-    ) -> Result<String> {
+        retry_state: AwsWorkerState,
+    ) -> Result<CheckedImage> {
         let uri = Self::function_image_uri(ctx, config)?;
         let aws_cfg = ctx.get_aws_config()?;
         // The check needs the image's own region, so give it the URI before the region rewrite.
         let source = Self::function_source_image_uri(ctx, config)?;
-        Self::ensure_image_replicated(ctx, aws_cfg, &source, &config.id).await?;
-        Ok(uri)
+        let presence = Self::ensure_image_replicated(ctx, aws_cfg, &source, &config.id).await?;
+        Ok(
+            match self.wait_for_image(presence, retry_state, &config.id)? {
+                Some(wait) => CheckedImage::Waiting(wait),
+                None => CheckedImage::Ready(uri),
+            },
+        )
     }
 
     /// The function's image URI before it is rewritten to the function's region.
@@ -6454,6 +6540,7 @@ impl AwsWorkerController {
             delete_removed_something: false,
             vpc_eni_wait_started_at: None,
             wait_for_lambda_started_at: None,
+            wait_for_image_started_at: None,
             log_retention_days: Some(AWS_LOG_RETENTION_DAYS),
             log_group_denial: None,
             _internal_stay_count: None,
@@ -13267,5 +13354,203 @@ mod tests {
                 "UpdateFunctionConfiguration 512".to_string(),
             ]
         );
+    }
+
+    // ─────────────── IMAGE REPLICATION WAIT TESTS ───────────────────
+
+    const REPLICATED_DIGEST: &str =
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// An image in a region other than the function's, pinned by digest.
+    fn cross_region_image() -> String {
+        format!("123456789012.dkr.ecr.eu-central-1.amazonaws.com/app@{REPLICATED_DIGEST}")
+    }
+
+    /// Adds an ECR client to `provider` whose reads of the function's region report the image
+    /// missing for the first `missing_reads` calls and present afterwards. Returns the call count.
+    fn with_replicating_ecr(
+        provider: &mut Arc<MockPlatformServiceProvider>,
+        missing_reads: usize,
+    ) -> Arc<AtomicUsize> {
+        use alien_aws_clients::ecr::{
+            BatchGetImageResponse, EcrImage, ImageIdentifier, MockEcrApi,
+        };
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let mut ecr = MockEcrApi::new();
+        ecr.expect_batch_get_image().returning(move |_| {
+            let images = if counted.fetch_add(1, Ordering::SeqCst) < missing_reads {
+                vec![]
+            } else {
+                vec![EcrImage {
+                    registry_id: "123456789012".into(),
+                    repository_name: "app".into(),
+                    image_id: ImageIdentifier {
+                        image_tag: None,
+                        image_digest: Some(REPLICATED_DIGEST.into()),
+                    },
+                    image_manifest: "{}".into(),
+                }]
+            };
+            Ok(BatchGetImageResponse {
+                images,
+                failures: vec![],
+            })
+        });
+        let ecr = Arc::new(ecr);
+        Arc::get_mut(provider)
+            .unwrap()
+            .expect_get_aws_ecr_client()
+            .returning(move |_| Ok(ecr.clone()));
+        reads
+    }
+
+    fn state_of(executor: &SingleControllerExecutor) -> AwsWorkerController {
+        executor
+            .internal_state::<AwsWorkerController>()
+            .unwrap()
+            .clone()
+    }
+
+    /// An image that ECR replication has not delivered yet is waited for: the update does not
+    /// fail and does not write to Lambda, then goes on once the image is there.
+    #[tokio::test]
+    async fn test_update_waits_for_the_image_to_be_replicated() {
+        let mut previous = basic_function();
+        previous.id = "replicated".to_string();
+        let mut current = previous.clone();
+        current.code = WorkerCode::Image {
+            image: cross_region_image(),
+        };
+        let lambda_writes = Arc::new(AtomicUsize::new(0));
+        let writes = lambda_writes.clone();
+        let mut lambda = MockLambdaApi::new();
+        lambda.expect_update_function_code().returning(move |_, _| {
+            writes.fetch_add(1, Ordering::SeqCst);
+            Ok(create_successful_function_response("test-replicated"))
+        });
+        let mut provider = setup_mock_service_provider(Arc::new(lambda), None, None);
+        let reads = with_replicating_ecr(&mut provider, 2);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(current)
+            .previous_resource(previous)
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::UpdateCodeStart,
+                ..AwsWorkerController::mock_ready("test-replicated")
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        for _ in 0..2 {
+            executor.step().await.expect("a missing image is a wait");
+            let controller = state_of(&executor);
+            assert_eq!(controller.state, AwsWorkerState::UpdateCodeStart);
+            assert!(controller.wait_for_image_started_at.is_some());
+            assert_eq!(lambda_writes.load(Ordering::SeqCst), 0);
+        }
+        executor.step().await.expect("the image arrived");
+        let controller = state_of(&executor);
+        assert_eq!(controller.state, AwsWorkerState::UpdateCodeWaitForActive);
+        assert!(controller.wait_for_image_started_at.is_none());
+        assert_eq!(lambda_writes.load(Ordering::SeqCst), 1);
+        assert_eq!(reads.load(Ordering::SeqCst), 3);
+    }
+
+    /// After 15 minutes without the image the update fails with the clear error, and the
+    /// bound comes from the stored start, so it holds after a restart.
+    #[tokio::test]
+    async fn test_update_fails_clearly_when_the_image_never_arrives() {
+        let mut previous = basic_function();
+        previous.id = "replicated".to_string();
+        let mut current = previous.clone();
+        current.code = WorkerCode::Image {
+            image: cross_region_image(),
+        };
+        let mut provider = setup_mock_service_provider(Arc::new(MockLambdaApi::new()), None, None);
+        with_replicating_ecr(&mut provider, usize::MAX);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(current)
+            .previous_resource(previous)
+            .controller(AwsWorkerController {
+                state: AwsWorkerState::UpdateCodeStart,
+                wait_for_image_started_at: Some(chrono::Utc::now() - chrono::Duration::minutes(16)),
+                ..AwsWorkerController::mock_ready("test-replicated")
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.expect_err("the bound has passed");
+        let text = error.to_string();
+        assert!(
+            text.contains("eu-central-1") || text.contains("is not in"),
+            "{text}"
+        );
+        assert!(text.contains(REPLICATED_DIGEST), "{text}");
+    }
+
+    /// The same wait for create: no function is created before the image is in the region.
+    #[tokio::test]
+    async fn test_create_waits_for_the_image_to_be_replicated() {
+        let mut worker = basic_function();
+        worker.code = WorkerCode::Image {
+            image: cross_region_image(),
+        };
+        let worker_name = format!("test-{}", worker.id);
+        let (mut provider, _server, _domain, _urls) =
+            setup_mocks_for_function(&worker, &worker_name, true);
+        with_replicating_ecr(&mut provider, 1);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.step().await.expect("a missing image is a wait");
+        let controller = state_of(&executor);
+        assert_eq!(controller.state, AwsWorkerState::CreateStart);
+        assert!(controller.wait_for_image_started_at.is_some());
+        assert!(
+            controller.function_create_token.is_none(),
+            "nothing is created while the image is missing"
+        );
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(state_of(&executor).wait_for_image_started_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_fails_clearly_when_the_image_never_arrives() {
+        let mut worker = basic_function();
+        worker.code = WorkerCode::Image {
+            image: cross_region_image(),
+        };
+        let worker_name = format!("test-{}", worker.id);
+        let (mut provider, _server, _domain, _urls) =
+            setup_mocks_for_function(&worker, &worker_name, false);
+        with_replicating_ecr(&mut provider, usize::MAX);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController {
+                wait_for_image_started_at: Some(chrono::Utc::now() - chrono::Duration::minutes(16)),
+                ..AwsWorkerController::default()
+            })
+            .platform(Platform::Aws)
+            .service_provider(provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        let error = executor.step().await.expect_err("the bound has passed");
+        assert!(error.to_string().contains(REPLICATED_DIGEST), "{error}");
     }
 }

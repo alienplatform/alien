@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Select the Rust packages a pull request can affect, for ci-fast.yml.
 
-Usage: affected-rust-packages.py <base-sha> <head-sha>
+Usage: affected-rust-packages.py <base-sha> <head-sha> [--own-only]
 
 Prints GitHub Actions outputs (key=value lines):
   mode       "affected", "full", or "none" (only documentation changed)
@@ -10,6 +10,12 @@ Prints GitHub Actions outputs (key=value lines):
   core       "true" when alien-core is selected (the image contract test)
   agent      "true" when alien-sandbox-agent is selected (the privileged tests)
   count      number of selected packages
+
+With --own-only (the pull request tier) the outputs describe the changed packages alone,
+without their dependents. A change outside the packages (Cargo.lock, say) does not drop the
+changed packages' tests; with no changed package it reports mode "check-only": the caller
+compiles everything but tests nothing. Ready pull requests run without the flag and tests
+the dependents too.
 
 A package is affected when one of its files changed, or when it depends (normally, as a
 dev-dependency or as a build-dependency) on an affected package. A change to any file
@@ -48,6 +54,7 @@ def run(*args: str) -> str:
 
 def main() -> None:
     base, head = sys.argv[1], sys.argv[2]
+    own_only = "--own-only" in sys.argv[3:]
     metadata = json.loads(run("cargo", "metadata", "--format-version", "1", "--no-deps", "--locked"))
     root = PurePosixPath(metadata["workspace_root"])
     packages = {
@@ -71,8 +78,8 @@ def main() -> None:
         if path.startswith(IGNORED_PREFIXES) or path.endswith(IGNORED_SUFFIXES):
             continue
         if path.startswith(FIXTURE_PREFIXES):
-            full_reason = path
-            break
+            full_reason = full_reason or path
+            continue
         owner = next(
             (name for name, directory in by_depth if PurePosixPath(path).is_relative_to(directory)),
             None,
@@ -80,8 +87,7 @@ def main() -> None:
         if owner is not None:
             changed.add(owner)
         else:
-            full_reason = path
-            break
+            full_reason = full_reason or path
 
     if full_reason is not None:
         selected = set(packages)
@@ -97,6 +103,10 @@ def main() -> None:
             pending.extend(dependents[name] - selected)
         mode = "affected" if selected else "none"
 
+    if own_only:
+        # Changed crates keep their own tests even when another file needs a workspace compile check.
+        selected = set(changed)
+        mode = "affected" if selected else ("check-only" if full_reason is not None else "none")
     if selected:
         # Cargo takes a feature only of a selected package or of one's direct dependency, and
         # most packages reach alien-client-core through others.

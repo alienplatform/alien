@@ -12,7 +12,10 @@ pub(crate) fn values(stack: &Stack) -> Value {
         Some((id.clone(), json!({
             "enabled": false,
             "existingPasswordSecret": "",
-            "recordedImage": "",
+            // Defaults to the image this chart ships, so a render without cluster
+            // access (Argo CD) needs no value. Set it to the retained volume's
+            // `alien.dev/postgres-image` annotation to pin another image.
+            "recordedImage": format!("pgvector/pgvector:pg{}-bookworm", database.version),
             "image": {"repository": "pgvector/pgvector", "tag": format!("pg{}-bookworm", database.version)},
             "storage": kubernetes_size(&database.storage, false),
             "storageClassName": "",
@@ -62,7 +65,7 @@ pub(crate) const HELPERS: &str = r#"
 {{- range $id, $database := .Values.postgres -}}
   {{- if and $database.enabled (not (hasKey (default dict $.Values.infrastructure) $id)) (not (hasKey (default dict (get (default dict $.Values.stackSettings) "externalBindings")) $id)) -}}
     {{- $name := include "deployment.postgresName" (dict "root" $ "id" $id) -}}
-    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" (default $name $database.existingPasswordSecret) "key" "password")) "sslMode" "disable") -}}
+    {{- $_ := set $bindings $id (dict "type" "postgres" "service" "external" "host" (printf "%s.%s.svc" $name $.Release.Namespace) "port" 5432 "database" $id "username" "postgres" "password" (dict "secretKeyRef" (dict "name" (default (include "deployment.operatorSecretName" $) $database.existingPasswordSecret) "key" (ternary "password" (printf "postgres-%s-password" $id) (not (empty $database.existingPasswordSecret))))) "sslMode" "disable") -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -93,40 +96,23 @@ pub(crate) const TEMPLATE: &str = r#"{{- range $id, $database := .Values.postgre
 {{- if and $previousImage (ne (first (splitList "@" $previousImage)) (first (splitList "@" $desiredImage))) }}
   {{- fail "Postgres image changes require an explicit database upgrade; retain the installed image or migrate to an external binding" }}
 {{- end }}
-{{- if and $database.existingPasswordSecret (not (lookup "v1" "Secret" $.Release.Namespace "")) }}
+{{- /* Without cluster access the installed image can't be read, so recordedImage
+(default: the image this chart ships) stands in for it. A wrong image cannot corrupt
+data: the database server reads PG_VERSION in the data directory at start and exits
+with "database files are incompatible with server" when the major version differs
+(the image entrypoint only initialises a directory that has no PG_VERSION). The Pod
+crash-loops with the data intact. With cluster access the PVC annotation check above
+applies unchanged. */ -}}
+{{- if not (lookup "v1" "Secret" $.Release.Namespace "") }}
   {{- $recordedImage := required (printf "Cannot verify the installed Postgres image offline; set postgres.%s.recordedImage to the retained PVC alien.dev/postgres-image annotation (for a fresh database, pin the initial image)" $id) $database.recordedImage }}
   {{- if ne (first (splitList "@" $recordedImage)) (first (splitList "@" $desiredImage)) }}
     {{- fail (printf "Postgres image differs from postgres.%s.recordedImage; retain the recorded image or migrate the database before changing the pin" $id) }}
   {{- end }}
 {{- end }}
-{{- $credentials := default $name $database.existingPasswordSecret }}
-{{- if not $database.existingPasswordSecret }}
-{{- $existing := lookup "v1" "Secret" $.Release.Namespace $name }}
-{{- $password := "" }}
-{{- if $existing }}
-  {{- $password = required "Existing Postgres Secret has no password; restore its original password" (index $existing.data "password") }}
-{{- else }}
-  {{- if lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $name }}
-    {{- fail "Postgres data exists but its credentials Secret is missing; restore the original Secret before installing" }}
-  {{- end }}
-  {{- if not (lookup "v1" "Secret" $.Release.Namespace "") }}
-    {{- fail "Cannot read Secrets in the database namespace; create the namespace before installing, or set postgres.<resource>.existingPasswordSecret to a Secret containing the password key for offline rendering" }}
-  {{- end }}
-  {{- $password = randAlphaNum 48 | b64enc }}
-{{- end }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ $name }}
-  annotations:
-    helm.sh/resource-policy: keep
-  labels:
-    {{- $labels | toYaml | nindent 4 }}
-type: Opaque
-data:
-  password: {{ $password | quote }}
-{{- end }}
+{{- /* The password lives in the Secret the Operator owns, or in the Secret named by
+existingPasswordSecret. The chart generates none: the Pod waits until the Secret exists. */ -}}
+{{- $credentials := default (include "deployment.operatorSecretName" $) $database.existingPasswordSecret }}
+{{- $credentialsKey := ternary "password" (printf "postgres-%s-password" $id) (not (empty $database.existingPasswordSecret)) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -192,6 +178,31 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if regexMatch "^pg[0-9]+" (toString $database.image.tag) }}
+      {{- $major := regexReplaceAll "^pg([0-9]+).*$" (toString $database.image.tag) "${1}" }}
+      initContainers:
+        # Stops with a plain message when the data directory belongs to another Postgres major
+        # version, before the server reads it. A fresh directory has no PG_VERSION and passes.
+        - name: check-data-version
+          image: {{ include "deployment.image" (dict "root" $ "repository" $database.image.repository "tag" $database.image.tag) | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: [sh, -c]
+          args:
+            - |
+              file=/var/lib/postgresql/data/pgdata/PG_VERSION
+              [ -f "$file" ] || exit 0
+              found=$(cat "$file")
+              if [ "$found" != {{ $major | quote }} ]; then
+                echo "The database files were made by Postgres $found, but this chart runs Postgres {{ $major }}. Keep the earlier Postgres image, or migrate the database before changing it." >&2
+                exit 1
+              fi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      {{- end }}
       containers:
         - name: postgres
           image: {{ include "deployment.image" (dict "root" $ "repository" $database.image.repository "tag" $database.image.tag) | quote }}
@@ -211,7 +222,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $credentials }}
-                  key: password
+                  key: {{ $credentialsKey }}
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           readinessProbe:
@@ -236,7 +247,7 @@ pub(crate) const README: &str = r#"
 
 Set `postgres.<resource>.enabled: true` to provision a Frozen Postgres resource as a single-instance StatefulSet with pgvector and a persistent volume. Database provisioning is off by default so existing database bindings remain in use. Enable it only when no database is supplied by your installation or management configuration. Helm owns these databases; application releases do not replace them. The cluster needs a default StorageClass, or set `postgres.<resource>.storageClassName` before installing. Storage encryption comes from that StorageClass. For high availability or a separately managed encryption key, use your own database.
 
-Create the installation namespace before using Helm. Helm generates a password once in a retained Kubernetes Secret and reuses it on upgrades. For GitOps or offline rendering, set `postgres.<resource>.existingPasswordSecret` to a customer-managed Secret with a `password` key; create that Secret before the database starts. Offline renders also require `postgres.<resource>.recordedImage`: copy the retained PVC’s `alien.dev/postgres-image` annotation into this value and keep it unchanged across releases. For a fresh database, pin the initial `repository:tag`. The desired image must match this pin (digest-only refreshes of the same tag remain allowed). Offline rendering cannot verify the cluster, so changing both the image and its pin is an explicit administrative override, not a database migration. The chart never rewrites a supplied credentials Secret. Keep the same Secret and password while retaining the database volume. Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
+The Operator creates the database password once in its own Secret (`<release>-operator`) and reuses it; the chart renders no password, so the same values render the same manifests with or without cluster access. The database Pod starts once that Secret exists. To manage the password yourself, set `postgres.<resource>.existingPasswordSecret` to a Secret with a `password` key; create it before the database starts, and the chart never rewrites it. Renders without cluster access (Argo CD) compare the image with `postgres.<resource>.recordedImage`, which defaults to the image this chart ships; if the retained PVC runs another image, copy its `alien.dev/postgres-image` annotation into this value and keep it unchanged across releases. The desired image must match this pin (digest-only refreshes of the same tag remain allowed). Image changes require a database upgrade plan; the chart records the image on the retained PVC and refuses to change it automatically, including after uninstall. For older volumes without this annotation, upgrade the chart while the original StatefulSet still exists; if it has already been removed, restore the `alien.dev/postgres-image` PVC annotation from the original installation before reinstalling.
 
 To use your own PostgreSQL, create its password Secret in the installation namespace first, then set an external binding:
 
@@ -258,5 +269,5 @@ infrastructure:
 
 Replace `database` with the resource ID in your stack. External bindings are passed through unchanged and create no database or volume. The referenced Secret must be available when workloads start. Use `sslMode: disable` only when plaintext connections are intended on your cluster's private network.
 
-Uninstall removes the database StatefulSet and Service but retains its PVC and credentials Secret together. Back up the data before deleting either retained object. Reinstalling the same release reuses them; deleting only the credentials Secret does not reset the database password. Removing the namespace deletes the retained data too.
+Uninstall removes the database StatefulSet and Service but retains its PVC. Back up the data before deleting it. The password stays in the Operator's Secret; reinstalling the same release reuses both. Removing the namespace deletes the retained data too.
 "#;

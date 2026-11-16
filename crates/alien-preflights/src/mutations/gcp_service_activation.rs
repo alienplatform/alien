@@ -198,9 +198,7 @@ impl GcpServiceActivationMutation {
         // Enable quota reads in new setup artifacts. An installed deployment
         // without this optional API must keep updating with Unknown warnings;
         // adding a Frozen resource would require setup permissions it may lack.
-        if stack_state.resources.is_empty()
-            || stack_state.resources.contains_key("enable-cloud-quotas")
-        {
+        if is_new_setup(stack_state) || stack_state.resources.contains_key("enable-cloud-quotas") {
             services.insert(
                 "enable-cloud-quotas".to_string(),
                 "cloudquotas.googleapis.com".to_string(),
@@ -395,10 +393,52 @@ fn api_display_name(service: &str) -> &str {
     }
 }
 
+/// A state with nothing installed. A registration into an existing Kubernetes cluster seeds the
+/// state with the management identity that the delivered setup installs, which does not make
+/// it an installed deployment.
+fn is_new_setup(stack_state: &StackState) -> bool {
+    stack_state.resources.keys().all(|id| id == "management")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::{Ai, ResourceLifecycle, Stack};
+
+    /// A registration into an existing Kubernetes cluster seeds the state with the management
+    /// identity. The generated setup still enables the Cloud Quotas API, so the expected
+    /// resources must include it.
+    #[tokio::test]
+    async fn quota_activation_is_expected_when_only_the_seeded_management_identity_exists() {
+        let mutation = GcpServiceActivationMutation;
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".into(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .base_platform(Platform::Gcp)
+            .build();
+        let mut state = StackState::new(Platform::Kubernetes);
+        let identity = alien_core::Resource::new(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+        );
+        let mut installed = alien_core::StackResourceState::new_pending(
+            alien_core::RemoteStackManagement::RESOURCE_TYPE.to_string(),
+            identity,
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        installed.status = alien_core::ResourceStatus::Running;
+        state.resources.insert("management".to_string(), installed);
+        let stack = Stack::new("seeded".into()).build();
+        assert!(mutation.should_run(&stack, &state, &config));
+        let stack = mutation.mutate(stack, &state, &config).await.unwrap();
+        assert!(stack.resources.contains_key("enable-cloud-quotas"));
+    }
 
     #[tokio::test]
     async fn quota_activation_is_added_once_for_native_and_imported_gcp_setup() {

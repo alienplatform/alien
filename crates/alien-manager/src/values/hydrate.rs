@@ -83,7 +83,7 @@ pub(super) async fn load_held(
     let slot: ValueSlot = held.slot.parse()?;
     let stored = store.get(scope, &slot).await?.ok_or_else(|| {
         AlienError::new(ErrorData::DeploymentValueMissing {
-            deployment_id: scope.deployment_id().to_string(),
+            deployment_id: scope.id().to_string(),
             slot: held.slot.clone(),
         })
     })?;
@@ -95,7 +95,7 @@ pub(super) async fn load_held(
         || !constant_time_eq(stored.digest(scope)?.as_bytes(), held.digest.as_bytes())
     {
         return Err(AlienError::new(ErrorData::DeploymentValuesChanged {
-            deployment_id: scope.deployment_id().to_string(),
+            deployment_id: scope.id().to_string(),
             slot: held.slot.clone(),
         }));
     }

@@ -621,7 +621,7 @@ async fn report_pods_without_network_ready_endpoint(
 const DEFAULT_WARM_POOL_SIZE: usize = 2;
 
 /// What one replenish pass found and did.
-struct WarmPool {
+pub(crate) struct WarmPool {
     /// Idle pods already waiting when the pass ran.
     idle: usize,
     /// Pods the pass added.
@@ -662,7 +662,76 @@ async fn confirm_runtime_class(
     Ok(())
 }
 
-async fn replenish_warm_pool(
+/// Reads the Operator's own Service and keeps its `ClusterIP:port` as the policy canary.
+///
+/// A sandbox pod proves its NetworkPolicy is enforced by finding this address unreachable. The
+/// Operator pod's address moves with every reschedule (and a pod proven against a dead address
+/// proves nothing); the Service's ClusterIP stays while the Service exists. The Service address is
+/// dropped by the policy on both kinds of network plugin: one that filters before the Service is
+/// translated to a pod, and one that filters after. Without the chart's Service name the literal
+/// address from an older chart is used. A Service that cannot be read is an error, not a pod
+/// without the proof.
+///
+/// The Service is the Operator's own, so it is read from the release namespace, which is not the
+/// sandbox namespace when `sandbox.namespace` places the pods elsewhere.
+pub(crate) async fn resolve_operator_address(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+) -> Result<()> {
+    let Ok(value) = std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) else {
+        return Ok(());
+    };
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message,
+            resource_id: Some(sandbox.id.clone()),
+        })
+    };
+    let (name, port) = value
+        .rsplit_once(':')
+        .filter(|(name, port)| !name.is_empty() && port.parse::<u16>().is_ok())
+        .ok_or_else(|| {
+            invalid(format!(
+                "{} must be <service>:<port>",
+                alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE
+            ))
+        })?;
+    let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+    let client = ctx
+        .service_provider
+        .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
+        .await?;
+    let service =
+        client
+            .get_service(&namespace, name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read the Operator's own Service '{name}'"),
+                resource_id: Some(sandbox.id.clone()),
+            })?;
+    let address = service
+        .spec
+        .and_then(|spec| spec.cluster_ip)
+        .and_then(|address| address.parse::<std::net::Ipv4Addr>().ok())
+        .ok_or_else(|| {
+            invalid(format!(
+                "the Operator's Service '{name}' needs an IPv4 ClusterIP for the sandbox network check"
+            ))
+        })?;
+    // Under the deprecated direct-egress policy only non-public ranges are blocked, so a
+    // publicly numbered Service address would stay reachable and no pod could prove its policy.
+    if matches!(sandbox.egress, alien_core::SandboxEgress::Allow)
+        && alien_core::is_public_ipv4(address)
+    {
+        return Err(invalid(format!(
+            "the Operator's Service '{name}' has the publicly numbered address {address}, which the direct-egress policy cannot block, so a sandbox pod could not prove its network policy; use a private Service range or egress 'internet'"
+        )));
+    }
+    super::kubernetes_spec::remember_operator_address(format!("{address}:{port}"));
+    Ok(())
+}
+
+pub(crate) async fn replenish_warm_pool(
     ctx: &ResourceControllerContext<'_>,
     sandbox: &Sandbox,
     namespace: &str,
@@ -749,11 +818,10 @@ async fn replenish_warm_pool(
         kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
     );
     placement.apply(&mut pod);
+    resolve_operator_address(ctx, sandbox).await?;
     super::kubernetes_spec::require_enforced_policy(
         &mut pod,
-        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
-            .ok()
-            .as_deref(),
+        super::kubernetes_spec::operator_address().as_deref(),
     );
     if let Some(secret_name) = ensure_image_pull_secret(ctx, sandbox, namespace).await? {
         pod.spec

@@ -14,7 +14,8 @@ import { StackSettingsSchema } from "./stack-settings-schema.js";
  * @description Request body for manager-side stack import.
  */
 export const StackImportRequestSchema = z.object({
-    get "basePlatform"(){
+    "acceptsShortLivedDeploymentToken": z.optional(z.boolean().describe("Set by a client that can use a short-lived deployment token for this run\nonly and will not store it. Without it, the response carries no new\ntoken for an installation whose Operator already holds its own key.")),
+get "basePlatform"(){
                 return z.union([PlatformSchema, z.null()]).optional()
               },
 "deploymentGroupToken": z.string().describe("Deployment-group token authorizing the import."),

@@ -1125,7 +1125,10 @@ mod tests {
         ] {
             let stack = |lifecycle| {
                 Stack::new("shop".to_string())
-                    .add(alien_core::Postgres::new("db".to_string()).build(), lifecycle)
+                    .add(
+                        alien_core::Postgres::new("db".to_string()).build(),
+                        lifecycle,
+                    )
                     .build()
             };
             let result = FrozenResourceLifecycleCheck

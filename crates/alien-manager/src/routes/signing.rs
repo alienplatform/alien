@@ -97,7 +97,10 @@ pub struct CreatePendingChangeRequest {
     pub based_on_version: u64,
     /// The next list's body (`previous`, `adminThreshold`, `signers`,
     /// `deny`, `recovered`).
-    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = std::collections::HashMap<String, serde_json::Value>)
+    )]
     pub body: serde_json::Value,
 }
 
@@ -142,7 +145,10 @@ pub struct PendingChangeResponse {
     /// Signer list version the body was prepared from.
     pub based_on_version: u64,
     /// The next list's body.
-    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = std::collections::HashMap<String, serde_json::Value>)
+    )]
     pub body: serde_json::Value,
     /// Who filed it, display only.
     pub requested_by: Option<String>,
@@ -235,7 +241,7 @@ fn signing_already_on(project: &str, first: &SignerListRecord) -> Response {
 pub struct ProjectSigningResponse {
     /// What this manager renders setup templates with, so the digests a
     /// release signs are of the templates installs get.
-    #[cfg_attr(feature = "openapi", schema(value_type = Object))]
+    #[cfg_attr(feature = "openapi", schema(value_type = std::collections::HashMap<String, serde_json::Value>))]
     pub setup_hosting: SetupHostingOptions,
 }
 

@@ -26,6 +26,7 @@ get "controllerPlatform"(){
 get "dependencies"(){
                 return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition.").optional()
               },
+"dependencyUpdatePending": z.optional(z.boolean().describe("Whether this resource owes an update because a dependency is changing, though its own\nconfig is not. The update waits until the dependency has rolled to the release being\napplied, so the owed update must survive between plans and restarts. Cleared when the\nupdate starts. State written before this field existed reads as not owing one.")),
 "description": z.string().nullish(),
 "displayName": z.string().describe("Presentation metadata from the effective resource entry, outside runtime configuration.").nullish(),
 get "error"(){
@@ -44,6 +45,7 @@ get "previousConfig"(){
               },
 "progress": z.string().describe("Last reported step explanation for display only; not a machine-readable status.").nullish(),
 "remoteBindingParams": z.optional(z.any().describe("Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params().")),
+"requestedUpdateRan": z.string().describe("The rollout in which an update ran because the controller asked for one while the\nconfig was unchanged. While the controller keeps asking in that same rollout, its\ndependents no longer wait for it, so a check that never settles cannot hold them back\nfor good. A later rollout is a new request and is waited for again. Cleared once the\ncontroller stops asking. State written before this field existed (it was a flag then)\nreads as none.").nullish(),
 "retryAttempt": z.optional(z.int().min(0).describe("Tracks consecutive retry attempts for the current state transition.")),
 get "status"(){
                 return ResourceStatusSchema.describe("Represents the high-level status of a resource during its lifecycle.")

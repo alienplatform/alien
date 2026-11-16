@@ -597,7 +597,7 @@ async fn list_by_deployment_group_and_name() {
 #[tokio::test]
 async fn update_status() {
     let db = fresh_db().await;
-    let store = SqliteDeploymentStore::new(db);
+    let store = SqliteDeploymentStore::new(db.clone());
     let group_id = create_test_group(&store).await;
 
     let dep = create_test_deployment(&store, &group_id, "dep", Platform::Aws).await;
@@ -642,6 +642,39 @@ async fn update_status() {
         .unwrap()
         .unwrap();
     assert_eq!(fetched.status, "update-pending");
+
+    // A retained or removing installation is not restarted by a redeploy.
+    for (name, status) in [
+        ("req", "retention-required"),
+        ("ret", "retained"),
+        ("pend", "delete-pending"),
+        ("del", "deleting"),
+        ("gone", "deleted"),
+        ("tdreq", "teardown-required"),
+        ("tdfail", "teardown-failed"),
+    ] {
+        let dep = create_test_deployment(&store, &group_id, name, Platform::Aws).await;
+        db.conn()
+            .lock()
+            .await
+            .execute(
+                "UPDATE deployments SET status = ?1 WHERE id = ?2",
+                [status, dep.id.as_str()],
+            )
+            .await
+            .unwrap();
+        let error = store
+            .set_redeploy(&test_subject(), &dep.id)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "DEPLOYMENT_REMOVING");
+        let fetched = store
+            .get_deployment(&test_subject(), &dep.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, status);
+    }
 }
 
 #[tokio::test]

@@ -926,6 +926,13 @@ pub(crate) async fn request_capability(
         })
 }
 
+/// Credentials for the Operator's own operations queue.
+pub(crate) async fn request_operations_credentials(
+    db: &Arc<OperatorDb>,
+) -> Result<Arc<alien_client_core::runtime_credentials::RuntimeCredentials>> {
+    request_credentials(db, json!({"type": "operatorOperations"})).await
+}
+
 async fn request_credentials(
     db: &Arc<OperatorDb>,
     purpose: Value,
@@ -1511,6 +1518,33 @@ mod persistence_tests {
         assert!(saved.current != state.current);
         assert!(saved.pending.is_none());
         assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
+    }
+
+    /// A GitOps tool applies the same values again and again, with the code that
+    /// enrolled the Operator long since spent. That changes nothing: no request
+    /// reaches the manager's enrollment endpoint and the saved key stays.
+    #[tokio::test]
+    async fn applying_a_spent_code_again_is_a_no_op() {
+        let (db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(20)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        for _ in 0..3 {
+            let (deployment, token) = identity
+                .clone()
+                .connect(request(&state, "ax_enroll_original"))
+                .await
+                .unwrap();
+            assert_eq!(deployment, "deployment-one");
+            assert_eq!(token, "ax_cap_v1_recovered");
+        }
+        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!(saved.current, state.current);
+        assert_eq!(
+            saved.enrolled_code_hash.as_deref(),
+            Some(key_hash("ax_enroll_original").as_str())
+        );
     }
 
     /// `helm upgrade` put a new code in the release Secret while the key
@@ -2127,6 +2161,8 @@ mod lost_enrollment_tests {
         installed: Arc<Mutex<Option<String>>>,
         /// What the next `enroll` answer is, after the key is installed (or not).
         answer: Arc<AtomicU8>,
+        /// The purpose of every credential the Operator asked for.
+        purposes: Arc<Mutex<Vec<Value>>>,
     }
 
     async fn issue_code(
@@ -2166,6 +2202,19 @@ mod lost_enrollment_tests {
             .unwrap()
     }
 
+    async fn rotate(
+        axum::extract::State(manager): axum::extract::State<EnrollManager>,
+        axum::Json(body): axum::Json<Value>,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let mut installed = manager.installed.lock().await;
+        if installed.as_deref() != body["key"].as_str().map(key_hash).as_deref() {
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+        *installed = Some(body["successorHash"].as_str().unwrap().to_owned());
+        axum::Json(json!({"expiresAt": Utc::now() + chrono::Duration::hours(24)})).into_response()
+    }
+
     async fn exchange(
         axum::extract::State(manager): axum::extract::State<EnrollManager>,
         axum::Json(body): axum::Json<Value>,
@@ -2175,6 +2224,7 @@ mod lost_enrollment_tests {
         if installed.as_deref() != body["proof"]["key"].as_str().map(key_hash).as_deref() {
             return axum::http::StatusCode::UNAUTHORIZED.into_response();
         }
+        manager.purposes.lock().await.push(body["purpose"].clone());
         axum::Json(json!({
             "token": "ax_cap_v1_fixture",
             "expiresAt": Utc::now() + chrono::Duration::minutes(5),
@@ -2189,6 +2239,7 @@ mod lost_enrollment_tests {
         let manager = EnrollManager {
             installed: Arc::new(Mutex::new(None)),
             answer: Arc::new(AtomicU8::new(answer)),
+            purposes: Arc::new(Mutex::new(Vec::new())),
         };
         let app = axum::Router::new()
             .route(
@@ -2197,6 +2248,7 @@ mod lost_enrollment_tests {
             )
             .route("/v1/identity/enroll", axum::routing::post(enroll))
             .route("/v1/identity/exchange", axum::routing::post(exchange))
+            .route("/v1/identity/rotate", axum::routing::post(rotate))
             .with_state(manager.clone());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let db = Arc::new(
@@ -2246,5 +2298,43 @@ mod lost_enrollment_tests {
             .await
             .expect_err("the manager refuses the enrollment");
         assert!(db.read_daily_identity().await.unwrap().is_none());
+    }
+
+    /// An Operator that is not enrolled has no operations credentials and keeps
+    /// its sync token; once enrolled it asks for the operations purpose, and
+    /// only that purpose, with its key.
+    #[tokio::test]
+    async fn operations_credentials_exist_only_once_enrolled() {
+        let (db, url, manager, _directory) = fixture(LOST).await;
+        assert!(crate::operations_credentials(&db).await.unwrap().is_none());
+        assert!(!crate::is_enrolled(&db).await.unwrap());
+
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_fixture")
+            .await
+            .expect_err("the reply was lost");
+        assert!(
+            crate::operations_credentials(&db).await.unwrap().is_none(),
+            "a key that is not confirmed is no identity"
+        );
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        identity
+            .enroll_with_deployment_token(&url, "deployment-one", "ax_deploy_fixture")
+            .await
+            .unwrap();
+
+        assert!(crate::is_enrolled(&db).await.unwrap());
+        let credentials = crate::operations_credentials(&db)
+            .await
+            .unwrap()
+            .expect("an enrolled Operator has operations credentials");
+        assert_eq!(credentials.token().await.unwrap(), "ax_cap_v1_fixture");
+        // The identity probe asks for telemetry first; the credential itself
+        // is for the operations queue and nothing else.
+        assert_eq!(
+            manager.purposes.lock().await.last(),
+            Some(&json!({"type": "operatorOperations"}))
+        );
     }
 }

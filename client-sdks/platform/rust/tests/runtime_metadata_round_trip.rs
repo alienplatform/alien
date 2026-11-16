@@ -180,6 +180,7 @@ fn fully_populated_state() -> alien_core::DeploymentState {
     }))
     .expect("stack decodes");
     let metadata = RuntimeMetadata {
+        first_setup_machines_unselected: true,
         setup_update_authorization: Some(SetupUpdateAuthorization {
             nonce: "nonce-1".to_string(),
             baseline_frozen_digest: "before".to_string(),

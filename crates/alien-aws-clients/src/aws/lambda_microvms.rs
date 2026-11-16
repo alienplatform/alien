@@ -117,6 +117,24 @@ pub struct MicrovmImageVersion {
     pub state_reason: Option<String>,
 }
 
+/// Whether a version can launch new MicroVMs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicrovmImageVersionStatus {
+    /// Can be run.
+    Active,
+    /// Blocked from launching new MicroVMs.
+    Inactive,
+}
+
+impl MicrovmImageVersionStatus {
+    fn as_wire(self) -> &'static str {
+        match self {
+            Self::Active => "ACTIVE",
+            Self::Inactive => "INACTIVE",
+        }
+    }
+}
+
 /// One build attempt of an image version.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -409,6 +427,15 @@ pub trait LambdaMicrovmsApi: Send + Sync + std::fmt::Debug {
         image_version: &str,
     ) -> Result<()>;
 
+    /// Marks a version `INACTIVE`, which blocks it from launching new MicroVMs. Running and
+    /// suspended MicroVMs are not stopped by it. Reversible by `ACTIVE`.
+    async fn update_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+        status: MicrovmImageVersionStatus,
+    ) -> Result<()>;
+
     /// Deletes an image. Fails while the image is still `CREATING`.
     async fn delete_microvm_image(&self, image_identifier: &str) -> Result<()>;
 
@@ -630,6 +657,33 @@ pub fn is_refused_for_running_microvms(error: &AlienError<ErrorData>) -> bool {
     )
 }
 
+/// Whether a `ServiceQuotaExceededException` is the cap on versions per image, rather than the
+/// memory or concurrency quota. AWS names the quota in `quotaCode` and `resourceType` and says
+/// "maximum number of versions allowed" in the message; any one of them is enough.
+fn is_version_limit(error: &AlienError<ErrorData>) -> bool {
+    let Some(ErrorData::HttpResponseError {
+        http_response_text: Some(text),
+        ..
+    }) = &error.error
+    else {
+        return format!("{error:?}")
+            .to_ascii_lowercase()
+            .contains("number of versions");
+    };
+    let lowered = text.to_ascii_lowercase();
+    if lowered.contains("number of versions") {
+        return true;
+    }
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    ["quotaCode", "resourceType"].iter().any(|field| {
+        body.get(field)
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value.to_ascii_lowercase().contains("version"))
+    })
+}
+
 /// Turns a MicroVMs API failure into the error a caller can act on.
 ///
 /// Quota exhaustion has to arrive as `QuotaExceeded` — it is retryable and names the limit — and
@@ -649,6 +703,15 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
         if *http_status == 404 {
             return ErrorData::RemoteResourceNotFound {
                 resource_type: "Microvm".to_string(),
+                resource_name: operation.to_string(),
+            };
+        }
+        // A role without the retire action gets a 403 AccessDeniedException. Callers branch on
+        // this to skip cleanup when an older role lacks the newer permission. Other calls keep
+        // their own classification so AWS's "not authorized to perform: lambda:..." text survives.
+        if *http_status == 403 && operation == "UpdateMicrovmImageVersion" {
+            return ErrorData::RemoteAccessDenied {
+                resource_type: "MicrovmImage".to_string(),
                 resource_name: operation.to_string(),
             };
         }
@@ -686,7 +749,26 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
     }
 
     let rendered = format!("{error:?}");
-    if rendered.contains("ServiceQuotaExceededException") {
+    // The exception name travels in a response header, not in the body, so a quota refusal is
+    // recognised by its 402 as well as by the name.
+    let quota_refused = rendered.contains("ServiceQuotaExceededException")
+        || matches!(
+            &error.error,
+            Some(ErrorData::HttpResponseError {
+                http_status: 402,
+                ..
+            })
+        );
+    if quota_refused && is_version_limit(error) {
+        // Not the memory quota: a session ending does not clear it, only a version delete does,
+        // so it must not be retried like one.
+        ErrorData::VersionLimitExceeded {
+            message: format!(
+                "Lambda MicroVMs {operation}: the image already holds the maximum number of \
+                 versions AWS allows"
+            ),
+        }
+    } else if quota_refused {
         ErrorData::QuotaExceeded {
             message: format!(
                 "Lambda MicroVMs {operation}: account quota exhausted. MicroVM memory is limited \
@@ -822,6 +904,26 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
                 return Ok(builds);
             }
         }
+    }
+
+    async fn update_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+        status: MicrovmImageVersionStatus,
+    ) -> Result<()> {
+        let _: serde_json::Value = self
+            .send(
+                Method::PATCH,
+                &format!(
+                    "/{API_VERSION}/microvm-images/{image_identifier}/versions/{image_version}"
+                ),
+                &[],
+                Some(serde_json::json!({ "status": status.as_wire() })),
+                "UpdateMicrovmImageVersion",
+            )
+            .await?;
+        Ok(())
     }
 
     async fn delete_microvm_image_version(
@@ -1085,6 +1187,47 @@ mod tests {
             .await
             .expect_err("a failed later page must not return partial inventory");
         assert!(unavailable.hits_async().await > 0);
+    }
+
+    /// A role without `lambda:UpdateMicrovmImageVersion` gets a 403. Callers fall back on
+    /// `RemoteAccessDenied`, so the raw response has to arrive as that error.
+    #[tokio::test]
+    async fn an_access_denied_response_is_remote_access_denied() {
+        let server = MockServer::start_async().await;
+        let denied = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PATCH).path(format!(
+                    "/{API_VERSION}/microvm-images/test-image/versions/1.0"
+                ));
+                then.status(403)
+                    .header("x-amzn-ErrorType", "AccessDeniedException")
+                    .json_body(serde_json::json!({"message": "not authorized"}));
+            })
+            .await;
+        let client = LambdaMicrovmsClient::new(
+            Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "111122223333".to_string(),
+                region: "us-east-1".to_string(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: HashMap::from([("lambda".to_string(), server.base_url())]),
+                }),
+            }),
+        );
+        let error = client
+            .update_microvm_image_version("test-image", "1.0", MicrovmImageVersionStatus::Inactive)
+            .await
+            .expect_err("403 must fail");
+        assert!(
+            matches!(error.error, Some(ErrorData::RemoteAccessDenied { .. })),
+            "{error:?}"
+        );
+        assert!(denied.hits_async().await >= 1);
     }
 
     /// The refusal AWS returned live when teardown deleted an image that was still settling.
@@ -1554,6 +1697,26 @@ mod tests {
         assert_eq!(auth_token_body(vec![80], 600)["expirationInMinutes"], 60);
     }
 
+    /// Only the retire call maps a 403 to `RemoteAccessDenied`; other calls keep AWS's own text.
+    #[test]
+    fn a_403_keeps_its_message_outside_the_retire_call() {
+        let raw = AlienError::new(ErrorData::HttpResponseError {
+            message: "denied".to_string(),
+            url: "https://example.invalid".to_string(),
+            http_status: 403,
+            http_request_text: None,
+            http_response_text: Some("not authorized to perform: lambda:RunMicrovm".to_string()),
+        });
+        assert!(!matches!(
+            classify(&raw, "RunMicrovm"),
+            ErrorData::RemoteAccessDenied { .. }
+        ));
+        assert!(matches!(
+            classify(&raw, "UpdateMicrovmImageVersion"),
+            ErrorData::RemoteAccessDenied { .. }
+        ));
+    }
+
     /// Quota exhaustion must arrive as a typed, retryable error naming the
     /// quota. It is the one failure a caller should back off from rather than treat as a broken
     /// sandbox, and a generic error gives them nothing to branch on.
@@ -1572,6 +1735,43 @@ mod tests {
             error.to_string().contains("quota exhausted"),
             "the message must name the condition: {error}"
         );
+    }
+
+    fn quota_refusal(body: &str) -> AlienError<ErrorData> {
+        AlienError::new(ErrorData::HttpResponseError {
+            message: "HTTP 402 Payment Required".to_string(),
+            url: "https://lambda.test/".to_string(),
+            http_status: 402,
+            http_request_text: None,
+            http_response_text: Some(body.to_string()),
+        })
+    }
+
+    /// The cap on versions per image is not the memory quota: ending sessions does not clear it,
+    /// so it must not be retried, and it must say so in its own words.
+    #[test]
+    fn the_version_cap_is_its_own_non_retryable_error() {
+        for body in [
+            r#"{"message":"You have reached the maximum number of versions allowed for this image.","quotaCode":"L-ABC","resourceType":"MicrovmImage","resourceId":"img"}"#,
+            r#"{"message":"limit","quotaCode":"L-1","resourceType":"MicrovmImageVersion"}"#,
+            r#"{"message":"limit","quotaCode":"L-MAX-VERSIONS-PER-IMAGE","resourceType":"x"}"#,
+        ] {
+            let error = AlienError::new(classify(&quota_refusal(body), "UpdateMicrovmImage"));
+            assert_eq!(error.code, "VERSION_LIMIT_EXCEEDED", "{body}");
+            assert!(!error.retryable, "{body}");
+        }
+    }
+
+    #[test]
+    fn the_memory_quota_with_structured_fields_stays_retryable() {
+        let error = AlienError::new(classify(
+            &quota_refusal(
+                r#"{"message":"Memory limit exceeded","quotaCode":"L-MEM","resourceType":"Microvm"}"#,
+            ),
+            "RunMicrovm",
+        ));
+        assert_eq!(error.code, "QUOTA_EXCEEDED");
+        assert!(error.retryable);
     }
 
     #[test]
@@ -1837,6 +2037,140 @@ mod live_image_create {
         let text = response.text().await.unwrap_or_default();
         println!("STATUS: {status}");
         println!("BODY: {text}");
+    }
+
+    /// What `INACTIVE` does to a version's MicroVMs. Starts two billable MicroVMs on
+    /// `PROBE_VERSION_OLD` and ends them before returning.
+    ///
+    /// Prints, for a RUNNING and a SUSPENDED MicroVM on the version: whether each survives the
+    /// version going `INACTIVE`, whether a new MicroVM can still be started on it, and whether
+    /// the suspended one resumes. The version is set `ACTIVE` again at the end.
+    ///
+    /// Needs an image with two successful versions: `PROBE_IMAGE_ARN`, `PROBE_VERSION_OLD`
+    /// (the one deactivated) and `PROBE_VERSION_NEW`, and optionally `PROBE_EXEC_ROLE_ARN`.
+    #[tokio::test]
+    #[ignore]
+    async fn what_an_inactive_version_does_to_its_microvms() {
+        let image = std::env::var("PROBE_IMAGE_ARN").expect("PROBE_IMAGE_ARN");
+        let old = std::env::var("PROBE_VERSION_OLD").expect("PROBE_VERSION_OLD");
+        let role = std::env::var("PROBE_EXEC_ROLE_ARN")
+            .ok()
+            .filter(|arn| !arn.is_empty());
+        let client = client();
+
+        async fn state_of(client: &LambdaMicrovmsClient, id: &str) -> String {
+            match client.get_microvm(id).await {
+                Ok(vm) => vm.state.unwrap_or_default(),
+                Err(error) => format!("<{error}>"),
+            }
+        }
+        async fn wait_for(client: &LambdaMicrovmsClient, id: &str, want: &str) -> String {
+            let mut last = String::new();
+            for _ in 0..40 {
+                last = state_of(client, id).await;
+                if last == want {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+            last
+        }
+        async fn start(
+            client: &LambdaMicrovmsClient,
+            image: &str,
+            version: &str,
+            role: Option<String>,
+        ) -> std::result::Result<String, AlienError<ErrorData>> {
+            let token = uuid::Uuid::new_v4().simple().to_string();
+            let vm = client
+                .run_microvm(image, version, &token, role, vec![], None, None, None)
+                .await?;
+            Ok(vm.microvm_id.expect("a MicroVM id"))
+        }
+
+        let running = start(&client, &image, &old, role.clone())
+            .await
+            .expect("RunMicrovm on the active version");
+        let suspended = start(&client, &image, &old, role.clone())
+            .await
+            .expect("RunMicrovm on the active version");
+        println!(
+            "running VM {running}: {}",
+            wait_for(&client, &running, "RUNNING").await
+        );
+        println!(
+            "suspended VM {suspended}: {}",
+            wait_for(&client, &suspended, "RUNNING").await
+        );
+        client.suspend_microvm(&suspended).await.expect("suspend");
+        println!(
+            "suspended VM now: {}",
+            wait_for(&client, &suspended, "SUSPENDED").await
+        );
+
+        client
+            .update_microvm_image_version(&image, &old, MicrovmImageVersionStatus::Inactive)
+            .await
+            .expect("UpdateMicrovmImageVersion INACTIVE");
+        let version = client
+            .get_microvm_image_version(&image, &old)
+            .await
+            .expect("GetMicrovmImageVersion");
+        println!(
+            "version {old}: state={:?} status={:?}",
+            version.state, version.status
+        );
+
+        println!(
+            "(2) RUNNING VM after INACTIVE: {}",
+            state_of(&client, &running).await
+        );
+        match start(&client, &image, &old, role.clone()).await {
+            Ok(id) => {
+                println!("(2) RunMicrovm on the INACTIVE version was ACCEPTED: {id}");
+                let _ = client.terminate_microvm(&id).await;
+            }
+            Err(error) => println!("(2) RunMicrovm on the INACTIVE version refused: {error:?}"),
+        }
+
+        println!(
+            "(1) SUSPENDED VM after INACTIVE: {}",
+            state_of(&client, &suspended).await
+        );
+        match client.resume_microvm(&suspended).await {
+            Ok(()) => println!(
+                "(1) resume accepted; VM becomes: {}",
+                wait_for(&client, &suspended, "RUNNING").await
+            ),
+            Err(error) => println!("(1) resume refused: {error:?}"),
+        }
+        // The 2026-10 experiment saw a VM on a deleted version die only on a later resume, so
+        // one successful resume proves little.
+        for cycle in 1..=4 {
+            if client.suspend_microvm(&suspended).await.is_err() {
+                println!("(1) cycle {cycle}: suspend refused");
+                break;
+            }
+            let down = wait_for(&client, &suspended, "SUSPENDED").await;
+            let resumed = client.resume_microvm(&suspended).await;
+            let up = wait_for(&client, &suspended, "RUNNING").await;
+            println!("(1) cycle {cycle}: suspend -> {down}; resume {resumed:?} -> {up}");
+        }
+        println!("RUNNING VM still: {}", state_of(&client, &running).await);
+
+        let versions = client
+            .list_microvm_image_versions(&image)
+            .await
+            .expect("ListMicrovmImageVersions");
+        println!("(3) versions in the image: {}", versions.len());
+
+        for id in [&running, &suspended] {
+            let _ = client.terminate_microvm(id).await;
+        }
+        client
+            .update_microvm_image_version(&image, &old, MicrovmImageVersionStatus::Active)
+            .await
+            .expect("UpdateMicrovmImageVersion ACTIVE");
     }
 
     /// Terminates the MicroVMs a probe run started.

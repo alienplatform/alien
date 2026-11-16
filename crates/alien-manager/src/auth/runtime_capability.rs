@@ -559,3 +559,166 @@ mod controller_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod purpose_tests {
+    use super::*;
+    use alien_commands::server::command_registry::{
+        OPERATIONS_WORKER_COMMAND_TARGET_ID, OPERATOR_COMMAND_TARGET_ID,
+    };
+    use alien_core::CommandTargetType;
+
+    fn credentials() -> RuntimeCredentials {
+        RuntimeCredentials::new("manager-one".into(), [3; 32]).unwrap()
+    }
+
+    fn grant(purpose: RuntimePurpose) -> RuntimeGrant {
+        RuntimeGrant {
+            workspace_id: "ws_a".into(),
+            project_id: "prj_a".into(),
+            deployment_id: "dep_a".into(),
+            component_id: "component-1".into(),
+            purpose,
+        }
+    }
+
+    /// Sign claims the way the issuer does, but without the issuer's own
+    /// refusals, so the verifier's checks are exercised on their own.
+    fn sign_unchecked(credentials: &RuntimeCredentials, purpose: RuntimePurpose) -> String {
+        let now = Utc::now();
+        let claims = Claims {
+            audience: credentials.audience.clone(),
+            issued_at: now,
+            expires_at: now + Duration::minutes(5),
+            grant: grant(purpose),
+        };
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap());
+        let mut mac = credentials.mac().unwrap();
+        mac.update(PREFIX.as_bytes());
+        mac.update(payload.as_bytes());
+        format!(
+            "{PREFIX}{payload}.{}",
+            URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+        )
+    }
+
+    fn verified(credentials: &RuntimeCredentials, purpose: RuntimePurpose) -> Subject {
+        let issued = credentials
+            .issue(grant(purpose), Utc::now() + Duration::hours(1))
+            .unwrap();
+        credentials.verify(&issued.token).unwrap()
+    }
+
+    #[test]
+    fn every_purpose_verifies_to_its_own_subject() {
+        let credentials = credentials();
+        let stack = CommandTarget::new("app", CommandTargetType::Container);
+        let worker = CommandTarget::new("relay-worker", CommandTargetType::Worker);
+
+        for (purpose, role) in [
+            (RuntimePurpose::Telemetry, Role::DeploymentTelemetryWriter),
+            (RuntimePurpose::OperatorSync, Role::OperatorSync),
+            (RuntimePurpose::RegistryPull, Role::RegistryPull),
+        ] {
+            let subject = verified(&credentials, purpose);
+            assert_eq!(subject.role, role);
+            assert!(matches!(
+                subject.scope,
+                Scope::Deployment { ref deployment_id, .. } if deployment_id == "dep_a"
+            ));
+        }
+
+        let operator = verified(&credentials, RuntimePurpose::OperatorOperations);
+        assert_eq!(operator.role, Role::CommandCapability);
+        assert_eq!(operator.workspace_id, "ws_a");
+        assert!(matches!(
+            operator.scope,
+            Scope::Commands {
+                ref deployment_id,
+                capability: CommandCapability::Receive { ref target },
+                ..
+            } if deployment_id == "dep_a"
+                && *target == CommandTarget::new(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon)
+        ));
+
+        for purpose in [
+            RuntimePurpose::ReceiveCommands {
+                target: stack.clone(),
+            },
+            RuntimePurpose::OperationRelay { target: worker },
+        ] {
+            let subject = verified(&credentials, purpose);
+            assert_eq!(subject.role, Role::CommandCapability);
+            assert!(matches!(
+                subject.scope,
+                Scope::Commands {
+                    capability: CommandCapability::Receive { .. },
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn a_reserved_target_is_refused_for_receive_and_relay_of_every_resource_type() {
+        let credentials = credentials();
+        for id in [
+            OPERATOR_COMMAND_TARGET_ID,
+            OPERATIONS_WORKER_COMMAND_TARGET_ID,
+        ] {
+            for resource_type in [
+                CommandTargetType::Daemon,
+                CommandTargetType::Container,
+                CommandTargetType::Worker,
+            ] {
+                let target = CommandTarget::new(id, resource_type);
+                for purpose in [
+                    RuntimePurpose::ReceiveCommands {
+                        target: target.clone(),
+                    },
+                    RuntimePurpose::OperationRelay {
+                        target: target.clone(),
+                    },
+                ] {
+                    // Not issued.
+                    assert!(
+                        credentials
+                            .issue(grant(purpose.clone()), Utc::now() + Duration::hours(1))
+                            .is_err(),
+                        "{id} {resource_type:?} must not be issued"
+                    );
+                    // Not accepted either, even when correctly signed.
+                    let signed = sign_unchecked(&credentials, purpose);
+                    assert!(
+                        credentials.verify(&signed).is_err(),
+                        "{id} {resource_type:?} must not verify"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_the_operations_purpose_yields_the_operator_queue() {
+        let credentials = credentials();
+        let operator_queue =
+            CommandTarget::new(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon);
+        for purpose in [
+            RuntimePurpose::Telemetry,
+            RuntimePurpose::OperatorSync,
+            RuntimePurpose::RegistryPull,
+            RuntimePurpose::ReceiveCommands {
+                target: CommandTarget::new("app", CommandTargetType::Daemon),
+            },
+        ] {
+            let subject = verified(&credentials, purpose);
+            assert!(!matches!(
+                subject.scope,
+                Scope::Commands {
+                    capability: CommandCapability::Receive { ref target },
+                    ..
+                } if *target == operator_queue
+            ));
+        }
+    }
+}

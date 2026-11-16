@@ -88,8 +88,14 @@ fn release_adding_an_edge(subjects: Vec<Subject>) -> (Stack, StackState) {
 
 /// The provider has no expectations: a controller that asks for any cloud client fails the test.
 fn executor(stack: &Stack, authority: InitialSetupAuthority) -> StackExecutor {
+    executor_for(stack, authority, false)
+}
+
+fn executor_for(stack: &Stack, authority: InitialSetupAuthority, setup_run: bool) -> StackExecutor {
+    let mut config = default_deployment_config();
+    config.setup_run = setup_run;
     StackExecutor::builder(stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
-        .deployment_config(&default_deployment_config())
+        .deployment_config(&config)
         .initial_setup_authority(authority)
         .step_running_resources(false)
         .service_provider(Arc::new(MockPlatformServiceProvider::new()))
@@ -153,17 +159,37 @@ async fn template_setup_records_new_edges_of_setup_owned_resources_without_their
     assert!(replanned.updates.is_empty() && replanned.dependency_records.is_empty());
 }
 
-/// Setup itself reconciles what it owns, so under direct setup an edge-only change still updates.
+/// Setup itself reconciles what it owns, so a direct setup run still updates on an edge-only
+/// change. This models a real setup run (`setup_run` true, as the setup command sets it), not
+/// an ordinary release.
 #[test]
 fn direct_setup_still_updates_on_an_edge_only_change() {
     let (stack, state) = release_adding_an_edge(setup_owned_subjects());
-    let plan = executor(&stack, InitialSetupAuthority::DirectSetup)
+    let plan = executor_for(&stack, InitialSetupAuthority::DirectSetup, true)
         .plan(&state)
         .unwrap();
     assert!(plan.dependency_records.is_empty());
     let mut updated = plan.updates.keys().cloned().collect::<Vec<_>>();
     updated.sort();
     assert_eq!(updated, ["execution-sa", "objects"]);
+}
+
+/// An ordinary release under direct setup (not a setup run) records the edges and updates
+/// nothing, as an imported install does.
+#[test]
+fn an_ordinary_release_under_direct_setup_records_an_edge_only_change() {
+    let (stack, state) = release_adding_an_edge(setup_owned_subjects());
+    let ordinary = executor_for(&stack, InitialSetupAuthority::DirectSetup, false)
+        .plan(&state)
+        .unwrap();
+    let imported = executor(&stack, InitialSetupAuthority::ImportedHandoff)
+        .plan(&state)
+        .unwrap();
+    assert!(ordinary.updates.is_empty(), "{:?}", ordinary.updates.keys());
+    assert_eq!(
+        serde_json::to_value(&ordinary).unwrap(),
+        serde_json::to_value(&imported).unwrap()
+    );
 }
 
 fn registry_gaining_an_edge() -> (Stack, StackState) {
@@ -217,9 +243,10 @@ fn a_managed_frozen_resource_records_an_edge_to_an_unsettled_dependency() {
     assert!(plan.updates.is_empty());
 }
 
-/// A dependency that changes in the same plan is a reason to update, not just a new edge.
+/// A registry waits for a dependency that is updating; once it has rolled, only the new
+/// edges remain, and they are recorded.
 #[test]
-fn a_dependency_updated_in_the_same_plan_still_updates_a_managed_frozen_resource() {
+fn a_managed_frozen_resource_waits_for_a_dependency_update_and_then_records_its_edges() {
     let (mut stack, mut state) = registry_gaining_an_edge();
     // A Live bucket the registry already depends on gets a real config change.
     let uploads = Storage::new("uploads".to_string()).build();
@@ -252,12 +279,21 @@ fn a_dependency_updated_in_the_same_plan_still_updates_a_managed_frozen_resource
         "{:?}",
         plan.updates.keys()
     );
+    // The registry follows the bucket's update: it waits until the bucket has rolled.
     assert!(
-        plan.updates.contains_key("images"),
+        !plan.updates.contains_key("images"),
         "{:?}",
         plan.updates.keys()
     );
-    assert!(plan.dependency_records.is_empty());
+
+    state.resources.get_mut("uploads").unwrap().config = stack.resources["uploads"].config.clone();
+    let plan = executor(&stack, InitialSetupAuthority::ImportedHandoff)
+        .plan(&state)
+        .unwrap();
+    // Nothing but edges changed for the registry, and the bucket's rollout is no reason to
+    // rewrite it: the edges are recorded.
+    assert!(plan.updates.is_empty(), "{:?}", plan.updates.keys());
+    assert_eq!(plan.dependency_records, ["images"]);
 }
 
 /// A config change that comes with new edges is a real update, even for a setup-owned resource.

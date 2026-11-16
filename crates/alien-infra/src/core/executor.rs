@@ -63,6 +63,15 @@ pub struct PlanResult {
     /// grants. The new dependencies are recorded in state; their controllers do not run.
     #[serde(default)]
     pub dependency_records: Vec<String>,
+    /// Running resource IDs that owe an update only because a dependency is changing, and must
+    /// wait for it. The step marks them, so the update is planned once the dependency has
+    /// rolled, in a later plan or after a restart.
+    #[serde(default)]
+    pub dependency_update_pending: Vec<String>,
+    /// Resource IDs whose controller no longer asks for an update, though an earlier one ran
+    /// for the same request. The step clears their record of it.
+    #[serde(default)]
+    pub requested_update_settled: Vec<String>,
 }
 
 /// Represents the outcome of a single step in the stack execution process.
@@ -169,6 +178,8 @@ pub struct StackExecutor {
     service_provider: Arc<dyn PlatformServiceProvider>,
     deployment_config: alien_core::DeploymentConfig,
     initial_setup_authority: InitialSetupAuthority,
+    /// The rollout this executor works for (the release being applied); none when unknown.
+    rollout_id: Option<String>,
 }
 
 const MAX_RETRIES: u32 = 10;
@@ -186,6 +197,14 @@ pub const REPLACE_DELETE_DENIED_CODE: &str = "REPLACE_DELETE_DENIED";
 /// no-op, so this is safe universally.
 fn status_halts_stepping(status: ResourceStatus) -> bool {
     status.is_terminal() && status != ResourceStatus::RefreshFailed
+}
+
+/// Bookkeeping for one `dependency_rolled` walk: finished resources and the path being walked,
+/// so a dependency cycle is reported instead of recursing forever.
+#[derive(Default)]
+struct RolledWalk {
+    done: HashMap<String, bool>,
+    visiting: HashSet<String>,
 }
 
 fn status_allows_update_planning(status: ResourceStatus) -> bool {
@@ -498,6 +517,12 @@ pub struct StackExecutorConfig<'a> {
     /// secret is missing, so only the resources that read it wait.
     #[builder(default)]
     held_resources: HashSet<String>,
+
+    /// Identifies the rollout (the release being applied). A resource that keeps asking for
+    /// an update after the one it asked for ran in this rollout stops holding its dependents;
+    /// a later rollout is a new request. Unset when the release is unknown: nothing is then
+    /// recorded as run, and dependents wait for a dependency that keeps asking.
+    rollout_id: Option<String>,
 }
 
 /// Extension trait to add `build()` method to the builder that returns `Result<StackExecutor>`.
@@ -587,6 +612,7 @@ impl StackExecutor {
         let resume_unchanged_failed_resources = config.resume_unchanged_failed_resources;
         let initial_setup_authority = config.initial_setup_authority;
         let held_resources = config.held_resources;
+        let rollout_id = config.rollout_id;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
         crate::setup_scaffolding::validate_setup_support(stack, platform, initial_setup_authority)?;
@@ -730,6 +756,7 @@ impl StackExecutor {
             service_provider,
             deployment_config,
             initial_setup_authority,
+            rollout_id,
         })
     }
 
@@ -869,6 +896,17 @@ impl StackExecutor {
         )
     }
 
+    /// The management role waits for a network only to read its VPC and subnet IDs into its
+    /// policy at setup (a preflight edge, not part of its config). The role never uses the
+    /// network, so the edge must not keep the network from being deleted while the role stays.
+    fn management_reads_network(
+        resource: &StackResourceState,
+        dependency: &StackResourceState,
+    ) -> bool {
+        resource.config.resource_type().as_ref() == "remote-stack-management"
+            && dependency.config.resource_type().as_ref() == "network"
+    }
+
     /// Whether a dependency only orders permission grants after identity creation.
     /// Config dependencies, including an interrupted update's old config, still
     /// describe actual use and must preserve deletion order.
@@ -884,7 +922,7 @@ impl StackExecutor {
                 Self::grant_edge(
                     resource.config.resource_type().as_ref(),
                     dependency.config.resource_type().as_ref(),
-                )
+                ) || Self::management_reads_network(resource, dependency)
             })
             && !resource
                 .config
@@ -1076,6 +1114,15 @@ impl StackExecutor {
             || current_resource_state.outputs != outputs)
     }
 
+    /// Whether this executor is a setup run: direct setup authority and the run is a setup
+    /// run. An ordinary release on an install the manager set up has the same authority but
+    /// is not setup, so it only records an ordering-only edge change on a setup-created Frozen
+    /// resource, as it does on an imported install.
+    fn is_setup_run(&self) -> bool {
+        self.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            && self.deployment_config.setup_run
+    }
+
     /// Whether runtime must leave this resource to setup: a Frozen resource that setup owns
     /// outright, under a setup that is not this executor. Frozen resources with management
     /// operations are still reconciled by runtime.
@@ -1112,18 +1159,222 @@ impl StackExecutor {
             })
     }
 
-    /// Whether a dependent may update now against this dependency: the dependency is
-    /// settled, or it is still changing and both controllers opt in. The dependency allows
-    /// its dependents to update in its current state, and the dependent can update against
-    /// it while it is not Running. Either side alone keeps the dependent waiting.
+    /// Whether a settled dependency already carries this executor's desired release, so a
+    /// dependent's update may build on it.
+    ///
+    /// A dependency that is Running on its old config, or whose own update waits for one of
+    /// its dependencies (or will follow one that is changing), is Running yet not rolled. Letting
+    /// its dependents update meanwhile would split the stack across two releases when the
+    /// rollout then fails. A dependency this executor will not update (not in scope, held,
+    /// or a setup-owned resource only setup changes) counts as rolled, so nothing waits
+    /// for a change that never comes.
+    pub(super) fn dependency_rolled(
+        &self,
+        dependency_id: &str,
+        state: &StackState,
+    ) -> Result<bool> {
+        self.dependency_rolled_memo(dependency_id, state, &mut RolledWalk::default(), true)
+    }
+
+    /// Whether this executor leaves the resource to someone else: it is outside this
+    /// executor's lifecycle scope, held, or a setup-owned resource only setup changes. Such a
+    /// resource counts as rolled whatever its status, so nothing waits for a change that never
+    /// comes from here.
+    fn left_to_others(&self, resource_id: &str, state: &StackState) -> bool {
+        // One that does not exist yet is not rolled: it has to be created first.
+        if !state.resources.contains_key(resource_id) {
+            return false;
+        }
+        if self.held_resources.contains(resource_id) {
+            return true;
+        }
+        match self.resources.get(resource_id) {
+            Some(desired) => self.setup_owns_writes(desired),
+            None => self
+                .desired_stack
+                .resources()
+                .any(|(id, _)| id == resource_id),
+        }
+    }
+
+    /// `dependency_rolled` with each resource evaluated once per call, so a dense graph with
+    /// many paths to the same dependency stays linear in its edges. `direct` is true for the
+    /// dependency the dependent names and false further up the chain.
+    fn dependency_rolled_memo(
+        &self,
+        dependency_id: &str,
+        state: &StackState,
+        walk: &mut RolledWalk,
+        direct: bool,
+    ) -> Result<bool> {
+        if let Some(rolled) = walk.done.get(dependency_id) {
+            return Ok(*rolled);
+        }
+        if !walk.visiting.insert(dependency_id.to_string()) {
+            return Err(AlienError::new(ErrorData::CircularDependencyDetected {
+                resource_ids: walk.visiting.iter().cloned().collect(),
+            }));
+        }
+        let rolled = self.dependency_rolled_uncached(dependency_id, state, walk, direct);
+        walk.visiting.remove(dependency_id);
+        let rolled = rolled?;
+        walk.done.insert(dependency_id.to_string(), rolled);
+        Ok(rolled)
+    }
+
+    /// Whether the resource's controller asks for an update with its config unchanged, from
+    /// inputs that are not part of the config (such as a rotated secret).
+    fn controller_needs_update(
+        &self,
+        controller: &dyn crate::ResourceController,
+        desired: &ResourceConfig,
+        current: &StackResourceState,
+        state: &StackState,
+    ) -> Result<bool> {
+        let context = ResourceControllerContext {
+            desired_config: &desired.resource,
+            platform: controller_platform_for_state(self.client_config.platform(), current),
+            client_config: self.client_config.clone(),
+            state,
+            resource_prefix: &state.resource_prefix,
+            registry: &self.resource_registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &self.deployment_config,
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: HeartbeatCollector::default(),
+        };
+        controller.needs_update(&context)
+    }
+
+    /// Asks the controller whether it wants an update with its config unchanged, for a
+    /// dependent deciding whether to wait. A check that fails is logged and reads as no
+    /// request: the resource's own plan reports the failure, and its dependents must not wait
+    /// on a check that cannot run.
+    fn controller_update_requested(
+        &self,
+        resource_id: &str,
+        controller: &dyn crate::ResourceController,
+        desired: &ResourceConfig,
+        current: &StackResourceState,
+        state: &StackState,
+    ) -> bool {
+        match self.controller_needs_update(controller, desired, current, state) {
+            Ok(requested) => requested,
+            Err(error) => {
+                warn!(
+                    resource_id,
+                    %error,
+                    "The update check of a resource failed; treating it as not requesting an update"
+                );
+                false
+            }
+        }
+    }
+
+    /// Whether the dependency's controller asks for an update that its dependents must wait
+    /// for. A controller that cannot be asked does not hold them. One that keeps asking after
+    /// the update it asked for already ran does not either: that update did not settle the
+    /// check, and another would not. A controller state that cannot be read keeps the wait;
+    /// `plan` reports the failure.
+    fn needs_update_requested(
+        &self,
+        resource_id: &str,
+        desired: &ResourceConfig,
+        current: &StackResourceState,
+        state: &StackState,
+    ) -> bool {
+        if !status_allows_update_planning(current.status) {
+            return false;
+        }
+        match current.get_internal_controller() {
+            Ok(Some(controller)) => {
+                let requested = self.controller_update_requested(
+                    resource_id,
+                    controller.as_ref(),
+                    desired,
+                    current,
+                    state,
+                );
+                if requested
+                    && self.rollout_id.is_some()
+                    && current.requested_update_ran == self.rollout_id
+                {
+                    warn!(
+                        resource_id,
+                        "A resource keeps asking for an update after the one it asked for ran in this rollout; its dependents no longer wait for it"
+                    );
+                    return false;
+                }
+                requested
+            }
+            Ok(None) => false,
+            Err(_) => true,
+        }
+    }
+
+    fn dependency_rolled_uncached(
+        &self,
+        dependency_id: &str,
+        state: &StackState,
+        walk: &mut RolledWalk,
+        direct: bool,
+    ) -> Result<bool> {
+        if self.left_to_others(dependency_id, state) {
+            return Ok(true);
+        }
+        let (Some(desired), Some(current)) = (
+            self.resources.get(dependency_id),
+            state.resources.get(dependency_id),
+        ) else {
+            return Ok(self.dependency_settled(dependency_id, state));
+        };
+        // The dependency the dependent names must be Running. Further up the chain a failed
+        // resource that is not changing does not hold anything back: only a change that is
+        // still to come does.
+        let status_ok = if direct {
+            current.status == ResourceStatus::Running
+        } else {
+            status_allows_update_planning(current.status)
+        };
+        if !status_ok {
+            return Ok(false);
+        }
+        if current.dependency_update_pending
+            || desired.resource != current.config
+            || desired.dependencies != current.dependencies
+            // A drift that cannot be read is reported by `plan`; here it keeps the wait.
+            || self
+                .external_binding_drifted(dependency_id, current)
+                .unwrap_or(true)
+            || self.needs_update_requested(dependency_id, desired, current, state)
+        {
+            return Ok(false);
+        }
+        // Its update is also planned when one of its own dependencies changes.
+        for dependency in &desired.dependencies {
+            if !self.dependency_rolled_memo(dependency.id(), state, walk, false)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Whether a dependent may update now against this dependency: the dependency has rolled
+    /// to this release, or it is still changing and both controllers opt in. The dependency
+    /// allows its dependents to update in its current state, and the dependent can update
+    /// against it while it is not Running. Either side alone keeps the dependent waiting. A
+    /// Running dependency that has not rolled yet is waited for, with no opt-in.
     fn dependency_allows_update(
         &self,
         dependent: &StackResourceState,
         dependency: &ResourceRef,
         state: &StackState,
     ) -> Result<bool> {
-        if self.dependency_settled(dependency.id(), state) {
-            return Ok(true);
+        if self.left_to_others(dependency.id(), state)
+            || self.dependency_settled(dependency.id(), state)
+        {
+            return self.dependency_rolled(dependency.id(), state);
         }
         let Some(dependency_state) = state.resources.get(dependency.id()) else {
             return Ok(false);
@@ -1452,8 +1703,7 @@ impl StackExecutor {
                                     )?;
                                 if edges_only
                                     && status != ResourceStatus::UpdateFailed
-                                    && self.initial_setup_authority
-                                        != InitialSetupAuthority::DirectSetup
+                                    && !self.is_setup_run()
                                     && desired_config.lifecycle == ResourceLifecycle::Frozen
                                     && current_resource_state.lifecycle
                                         == Some(ResourceLifecycle::Frozen)
@@ -1508,10 +1758,13 @@ impl StackExecutor {
                                     .is_some_and(|mut controller| {
                                         controller.transition_to_update().is_ok()
                                     });
-                                let dependencies_ready =
-                                    desired_config.dependencies.iter().all(|dependency| {
-                                        self.dependency_settled(dependency.id(), state)
-                                    });
+                                let mut dependencies_ready = true;
+                                for dependency in &desired_config.dependencies {
+                                    if !self.dependency_rolled(dependency.id(), state)? {
+                                        dependencies_ready = false;
+                                        break;
+                                    }
+                                }
 
                                 if can_reconcile_in_place && dependencies_ready {
                                     current_resource_state
@@ -1708,24 +1961,12 @@ impl StackExecutor {
                         if let Some(resource_controller) =
                             current_resource_state.get_internal_controller()?
                         {
-                            let context = ResourceControllerContext {
-                                desired_config: &desired_config.resource,
-                                platform: controller_platform_for_state(
-                                    self.client_config.platform(),
-                                    current_resource_state,
-                                ),
-                                client_config: self.client_config.clone(),
+                            if self.controller_needs_update(
+                                resource_controller.as_ref(),
+                                desired_config,
+                                current_resource_state,
                                 state,
-                                resource_prefix: &state.resource_prefix,
-                                registry: &self.resource_registry,
-                                desired_stack: &self.desired_stack,
-                                service_provider: &self.service_provider,
-                                deployment_config: &self.deployment_config,
-                                initial_setup_authority: self.initial_setup_authority,
-                                heartbeat_collector: HeartbeatCollector::default(),
-                            };
-
-                            if resource_controller.needs_update(&context)? {
+                            )? {
                                 debug!(
                                     "Scheduling UPDATE transition for '{}' due to deployment config drift",
                                     resource_id
@@ -1733,6 +1974,10 @@ impl StackExecutor {
                                 plan_result
                                     .updates
                                     .insert(resource_id.clone(), desired_config.resource.clone());
+                            } else if current_resource_state.requested_update_ran.is_some() {
+                                plan_result
+                                    .requested_update_settled
+                                    .push(resource_id.clone());
                             }
                         }
                     } else if current_resource_state.status == ResourceStatus::DeleteFailed
@@ -1787,6 +2032,17 @@ impl StackExecutor {
             dependency_propagation_needed = false;
             let current_updates = plan_result.updates.keys().cloned().collect::<HashSet<_>>();
             let current_creates: HashSet<String> = plan_result.creates.iter().cloned().collect();
+            // Resources that owe an update but wait for a dependency: marked in an earlier plan
+            // or earlier in this one. Their dependents owe one too.
+            let owing: HashSet<String> = state
+                .resources
+                .iter()
+                .filter(|(id, resource)| {
+                    resource.dependency_update_pending && self.resources.contains_key(*id)
+                })
+                .map(|(id, _)| id.clone())
+                .chain(plan_result.dependency_update_pending.iter().cloned())
+                .collect();
 
             for (resource_id, desired_config) in &self.resources {
                 // Skip if this resource is already marked for update, creation, or deletion
@@ -1807,9 +2063,12 @@ impl StackExecutor {
                 }
 
                 // Check if this resource has any dependencies that are being updated or created
-                let has_dependency_change = desired_config.dependencies.iter().any(|dep_ref| {
-                    current_updates.contains(dep_ref.id()) || current_creates.contains(dep_ref.id())
-                });
+                let has_dependency_change = owing.contains(resource_id)
+                    || desired_config.dependencies.iter().any(|dep_ref| {
+                        current_updates.contains(dep_ref.id())
+                            || current_creates.contains(dep_ref.id())
+                            || owing.contains(dep_ref.id())
+                    });
 
                 if has_dependency_change {
                     // Check if the resource exists in current state and is in a status that allows updates
@@ -1849,6 +2108,15 @@ impl StackExecutor {
                                         "Deferring UPDATE for '{}' due to dependency changes - dependencies not ready yet",
                                         resource_id
                                     );
+                                    // Its own config may not change, so nothing else brings
+                                    // it back once the dependency has rolled: remember it.
+                                    if !plan_result.dependency_update_pending.contains(resource_id)
+                                    {
+                                        plan_result
+                                            .dependency_update_pending
+                                            .push(resource_id.clone());
+                                        dependency_propagation_needed = true;
+                                    }
                                 }
                             }
                             _ => {
@@ -2475,6 +2743,33 @@ impl StackExecutor {
             }
         }
 
+        // Remember the updates that wait for a dependency to roll.
+        for resource_id in &plan_result.dependency_update_pending {
+            if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
+                resource_state.dependency_update_pending = true;
+            }
+        }
+
+        for resource_id in &plan_result.requested_update_settled {
+            if let Some(resource_state) = next_state.resources.get_mut(resource_id) {
+                resource_state.requested_update_ran = None;
+            }
+        }
+
+        // A setup run that failed can leave the marker on a resource only setup may update.
+        // This executor will never run that update, so the marker would hold the deployment
+        // open for good.
+        for (resource_id, resource_state) in next_state.resources.iter_mut() {
+            if resource_state.dependency_update_pending
+                && self
+                    .resources
+                    .get(resource_id)
+                    .is_some_and(|desired| self.setup_owns_writes(desired))
+            {
+                resource_state.dependency_update_pending = false;
+            }
+        }
+
         // Handle Updates - create initial update transition states
         for (resource_id, new_config) in &plan_result.updates {
             if let Some(current_state) = state.resources.get(resource_id) {
@@ -2521,7 +2816,15 @@ impl StackExecutor {
                     Ok(Some(mut controller)) => {
                         match controller.transition_to_update() {
                             Ok(()) => {
+                                // An update the controller asked for with nothing else changed:
+                                // its dependents wait for it once, not for as long as it asks.
+                                let requested_only = !current_state.dependency_update_pending
+                                    && current_state.config == *new_config
+                                    && current_state.dependencies == desired_config.dependencies;
                                 let updated_state = update_state.with_updates(|state| {
+                                    state.dependency_update_pending = false;
+                                    state.requested_update_ran =
+                                        requested_only.then(|| self.rollout_id.clone()).flatten();
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config =
                                         previous_config_for_update(current_state);
@@ -2581,6 +2884,7 @@ impl StackExecutor {
                             let (remote_binding_params, binding_outputs) =
                                 self.external_binding_state(resource_id)?;
                             let updated_state = update_state.with_updates(|state| {
+                                state.dependency_update_pending = false;
                                 state.config = new_config.clone();
                                 state.previous_config = Some(current_state.config.clone());
                                 state.dependencies = desired_config.dependencies.clone();
@@ -3560,7 +3864,10 @@ impl StackExecutor {
                                 })
                         };
 
-                        is_running && config_matches && dependencies_match
+                        is_running
+                            && config_matches
+                            && dependencies_match
+                            && !current_view.dependency_update_pending
                     }
                     None => {
                         false // Desired resource not even in state yet -> not terminal

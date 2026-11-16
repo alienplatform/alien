@@ -30,6 +30,15 @@ Composite controllers such as networks, exposed containers, and compute
 clusters may batch child operations only when the phase is idempotent,
 progress-tracked in controller state, or best-effort cleanup.
 
+## Update order
+
+A resource updates only after every resource it links (or otherwise depends on) is Running
+on the release being applied. If one step of a release fails, everything that depends on it
+stays on the previous release; there is no cross-resource rollback. To order two resources,
+link one to the other (`container.link(other_container)` works as for any resource). A
+dependency this run does not update (another lifecycle, held, or owned by setup) never
+holds its dependents back.
+
 ## Structure
 
 - `core/` — `StackExecutor` (orchestrates all controllers), `ResourceController` trait, `SingleControllerExecutor` (testing), controller registry

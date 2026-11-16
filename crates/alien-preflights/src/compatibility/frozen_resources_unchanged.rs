@@ -3,8 +3,8 @@ use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::instance_catalog::{find_instance_type, is_same_architecture_machine};
 use alien_core::{
     permissions::PermissionSet, AzureStorageAccount, CapacityGroup, CapacityGroupScalePolicy,
-    ComputeCluster, ComputePoolSelection, Platform, Resource, ResourceLifecycle, Sandbox,
-    SandboxCode, ServiceAccount, Stack,
+    ComputeCluster, ComputePoolSelection, DeploymentConfig, InputAnswers, Platform, Resource,
+    ResourceEntry, ResourceLifecycle, Sandbox, SandboxCode, ServiceAccount, Stack,
 };
 use alien_error::Context;
 use std::borrow::Cow;
@@ -339,6 +339,132 @@ fn unchanged_legacy_service_account_grants(
     Ok(*on_platform(platform, &Resource::new(normalized)) == *on_platform(platform, new))
 }
 
+/// Whether a Frozen resource that is new in this release is not an addition because its gate is
+/// off: a gate declared with default false that resolves false. The identity of a profile
+/// (`<profile>-sa`) is excused when it has users and every one of them carries the same off
+/// gate. An answer that turns true, a gate that cannot be resolved, another declared default, a
+/// profile with an ungated user, and a resource the installed stack already has are not excused.
+fn frozen_addition_excused_while_gated_off(
+    new_stack: &Stack,
+    config: Option<&DeploymentConfig>,
+    platform: Platform,
+    id: &str,
+    entry: &ResourceEntry,
+) -> bool {
+    let gate_is_off = |gate: &str, resource_id: &str| {
+        config.is_some_and(|config| {
+            new_stack.inputs.iter().any(|input| {
+                input.id == gate
+                    && input.default == Some(alien_core::StackInputDefaultValue::Boolean(false))
+            }) && alien_core::gate_resolves_true(
+                &new_stack.inputs,
+                gate,
+                &config.input_values,
+                resource_id,
+                platform,
+            ) == Ok(false)
+        })
+    };
+    if let Some(gate) = entry.enabled_when.as_deref() {
+        return gate_is_off(gate, id);
+    }
+    let Some(profile) = id.strip_suffix("-sa") else {
+        return false;
+    };
+    if entry.config.downcast_ref::<ServiceAccount>().is_none() {
+        return false;
+    }
+    let mut users = new_stack
+        .resources()
+        .filter(|(_, user)| user.config.get_permissions() == Some(profile))
+        .map(|(_, user)| user.enabled_when.as_deref());
+    let Some(Some(gate)) = users.next() else {
+        return false;
+    };
+    // A retained resource may link the identity without running under its profile (a worker of
+    // another profile that links `app-sa`). It would start without the identity, so the
+    // identity is in use unless every linker carries the same off gate.
+    let linked_by_other = new_stack
+        .linkers(&alien_core::ResourceRef::new(
+            ServiceAccount::RESOURCE_TYPE,
+            id,
+        ))
+        .iter()
+        .any(|linker| {
+            new_stack
+                .resources
+                .get(linker.id())
+                .is_none_or(|user| user.enabled_when.as_deref() != Some(gate))
+        });
+    !linked_by_other && users.all(|other| other == Some(gate)) && gate_is_off(gate, id)
+}
+
+/// Frozen resources of `new_stack` that the installed stack lacks and that the update leaves
+/// out because their gate is off (see [`FrozenResourcesUnchangedCheck`]). Setup never created
+/// them and nothing uses them, so the update must not plan them: it would try to create them
+/// with runtime credentials, which fails. Identities setup already installed are not listed.
+pub fn unused_frozen_additions(
+    old_stack: &Stack,
+    new_stack: &Stack,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Vec<String> {
+    new_stack
+        .resources()
+        .filter(|(id, entry)| {
+            entry.lifecycle == ResourceLifecycle::Frozen
+                && !old_stack.resources.contains_key(id.as_str())
+                && frozen_addition_excused_while_gated_off(
+                    new_stack,
+                    Some(config),
+                    platform,
+                    id,
+                    entry,
+                )
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Writes into the frozen resources of an update target what setup installed for an input
+/// reference that resolves to no value: the reference is dropped. The update that accepted the
+/// reference (see [`FrozenResourcesUnchangedCheck`]) installed nothing for it, so the stack
+/// recorded afterwards must say so. Were the reference kept, a later answer that lists values
+/// would compare equal to the recorded reference, skip setup, and never be installed.
+///
+/// Only a reference the installed stack did not record is dropped. One setup recorded (it
+/// installed values for it) stays, so the baseline keeps what setup installed.
+pub fn resolve_empty_frozen_input_references(
+    installed: &Stack,
+    stack: &mut Stack,
+    config: &DeploymentConfig,
+) {
+    let resolved: Vec<_> = {
+        let answers = InputAnswers::new(&stack.inputs, &config.input_values);
+        stack
+            .resources()
+            .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+            .filter(|(id, _)| {
+                installed
+                    .resources
+                    .get(id.as_str())
+                    .is_some_and(|old| old.config.input_references().is_empty())
+            })
+            .filter_map(|(id, entry)| {
+                entry
+                    .config
+                    .with_empty_input_references_removed(&answers)
+                    .map(|resource| (id.clone(), resource))
+            })
+            .collect()
+    };
+    for (id, resource) in resolved {
+        if let Some(entry) = stack.resources.get_mut(&id) {
+            entry.config = resource;
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
     fn description(&self) -> &'static str {
@@ -346,6 +472,29 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
     }
 
     async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
+        self.compare(old_stack, new_stack, None)
+    }
+
+    async fn check_with_config(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        config: &DeploymentConfig,
+        _platform: Platform,
+    ) -> Result<CheckResult> {
+        self.compare(old_stack, new_stack, Some(config))
+    }
+}
+
+impl FrozenResourcesUnchangedCheck {
+    /// `config` carries the deployment's input answers; without it input references compare as
+    /// written.
+    fn compare(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        config: Option<&DeploymentConfig>,
+    ) -> Result<CheckResult> {
         let mut errors = Vec::new();
 
         // Collect frozen resources from old stack
@@ -374,9 +523,26 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
 
         // Check for added frozen resources
         let old_frozen_ids: HashSet<_> = old_frozen.keys().copied().collect();
+        // A resource that is new in this release and gated by an input declared with default
+        // false stays out of an installed stack until setup answers the gate, as the setup
+        // templates leave it out, so it is not an addition while the gate resolves false. So is
+        // the identity of a permission profile whose every user is such a resource: it carries
+        // nothing of its own and nothing would use it. An answer that turns true, a gate that
+        // cannot be resolved, another declared default, a profile with an ungated user, and a
+        // resource the installed stack already has are compared as before.
         let added_frozen: Vec<_> = new_frozen
-            .keys()
-            .filter(|id| !old_frozen_ids.contains(*id))
+            .iter()
+            .filter(|(id, _)| !old_frozen_ids.contains(*id))
+            .filter(|(id, entry)| {
+                !frozen_addition_excused_while_gated_off(
+                    new_stack,
+                    config,
+                    self.platform,
+                    id,
+                    entry,
+                )
+            })
+            .map(|(id, _)| id)
             .collect();
 
         if !added_frozen.is_empty() {
@@ -430,7 +596,19 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                 }
                 let old_config = on_platform(self.platform, &old_entry.config);
                 let new_config = on_platform(self.platform, &new_entry.config);
+                // A reference to an input nobody filled in is not a change to what setup
+                // recorded without the reference (a release that adds an optional input).
+                let answers =
+                    config.map(|config| InputAnswers::new(&new_stack.inputs, &config.input_values));
+                let no_value_reference = answers.is_some_and(|answers| {
+                    new_config
+                        .with_empty_input_references_removed(&answers)
+                        .is_some_and(|resolved| {
+                            *old_config == *on_platform(self.platform, &resolved)
+                        })
+                });
                 if old_config != new_config
+                    && !no_value_reference
                     && !runtime_managed_frozen_change(self.platform, &old_config, &new_config)
                     && !runtime_managed_sandbox_image(self.platform, &old_config, &new_config)
                     && !unchanged_legacy_service_account_grants(
@@ -446,6 +624,18 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                         &old_entry.config,
                         &new_entry.config,
                     );
+                    let mut details = details;
+                    details.extend(new_config.input_references().into_iter().filter_map(
+                        |(field, input)| {
+                            // Only a reference the recorded config lacks is the new part.
+                            (!old_config.input_references().iter().any(|old| old.0 == field))
+                                .then(|| {
+                                    format!(
+                                        "'{field}' reads deployment input '{input}', which lists values the installed setup does not have"
+                                    )
+                                })
+                        },
+                    ));
                     let details = if details.is_empty() {
                         String::new()
                     } else {
@@ -1829,5 +2019,298 @@ mod azure_storage_settings_tests {
             .unwrap()
             .success
         );
+    }
+
+    mod gated_additions {
+        use super::*;
+        use alien_core::{
+            AwsManagementConfig, EnvironmentVariablesSnapshot, ExternalBindings, ManagementConfig,
+            StackInputDefaultValue, StackInputDefinition, StackSettings,
+        };
+
+        fn base() -> Stack {
+            Stack::new("gated".to_string())
+                .add(
+                    Storage::new("kept".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        }
+
+        fn with_gated(gate: Option<&str>, inputs: Vec<StackInputDefinition>) -> Stack {
+            let mut builder = Stack::new("gated".to_string()).inputs(inputs).add(
+                Storage::new("kept".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+            let added = Storage::new("added".to_string()).build();
+            builder = match gate {
+                Some(gate) => builder.add_enabled_when(added, ResourceLifecycle::Frozen, gate),
+                None => builder.add(added, ResourceLifecycle::Frozen),
+            };
+            builder.build()
+        }
+
+        fn gate(default: Option<bool>) -> StackInputDefinition {
+            let mut input =
+                StackInputDefinition::deployer_boolean("feature", "Feature", "A feature.", default);
+            input.required = false;
+            input.default = default.map(StackInputDefaultValue::Boolean);
+            input
+        }
+
+        fn config(answer: Option<bool>) -> DeploymentConfig {
+            let mut config = DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .management_config(ManagementConfig::Aws(AwsManagementConfig {
+                    managing_role_arn: "arn:aws:iam::111122223333:role/management".to_string(),
+                }))
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: Vec::new(),
+                    hash: String::new(),
+                    created_at: "2024-01-01T00:00:00Z".to_string(),
+                })
+                .allow_frozen_changes(false)
+                .external_bindings(ExternalBindings::default())
+                .build();
+            if let Some(answer) = answer {
+                config
+                    .input_values
+                    .insert("feature".to_string(), serde_json::json!(answer));
+            }
+            config
+        }
+
+        async fn errors(new: Stack, config: &DeploymentConfig) -> Vec<String> {
+            FrozenResourcesUnchangedCheck {
+                platform: Platform::Aws,
+            }
+            .check_with_config(&base(), &new, config, Platform::Aws)
+            .await
+            .unwrap()
+            .errors
+        }
+
+        fn added(errors: &[String]) -> bool {
+            errors
+                .iter()
+                .any(|e| e.starts_with("Cannot add frozen resources during update: 'added'"))
+        }
+
+        #[tokio::test]
+        async fn a_new_frozen_resource_whose_gate_resolves_false_is_not_an_addition() {
+            let new = with_gated(Some("feature"), vec![gate(Some(false))]);
+            assert!(errors(new.clone(), &config(None)).await.is_empty());
+            // An explicit no behaves the same.
+            assert!(errors(new, &config(Some(false))).await.is_empty());
+        }
+
+        #[tokio::test]
+        async fn an_answer_that_turns_true_without_setup_is_an_addition_again() {
+            let new = with_gated(Some("feature"), vec![gate(Some(false))]);
+            assert!(added(&errors(new, &config(Some(true))).await));
+            // A later release whose declared default is true does the same.
+            let later = with_gated(Some("feature"), vec![gate(Some(true))]);
+            assert!(added(&errors(later, &config(None)).await));
+        }
+
+        #[tokio::test]
+        async fn an_ungated_new_frozen_resource_is_still_an_addition() {
+            let new = with_gated(None, vec![gate(Some(false))]);
+            assert!(added(&errors(new, &config(None)).await));
+        }
+
+        #[tokio::test]
+        async fn a_gate_that_cannot_be_resolved_is_still_an_addition() {
+            // Undeclared input.
+            let undeclared = with_gated(Some("feature"), vec![]);
+            assert!(added(&errors(undeclared, &config(None)).await));
+            // Declared with no default and no answer.
+            let unanswered = with_gated(Some("feature"), vec![gate(None)]);
+            assert!(added(&errors(unanswered, &config(None)).await));
+        }
+
+        #[tokio::test]
+        async fn a_gate_declared_with_another_default_is_not_excused() {
+            // Required (no default), and an explicit no: only a declared default of false
+            // marks an input a later release added for installed stacks to leave off.
+            let new = with_gated(Some("feature"), vec![gate(None)]);
+            assert!(added(&errors(new, &config(Some(false))).await));
+            let default_true = with_gated(Some("feature"), vec![gate(Some(true))]);
+            assert!(added(&errors(default_true, &config(Some(false))).await));
+        }
+
+        #[tokio::test]
+        async fn an_installed_frozen_resource_whose_gate_turns_off_keeps_its_behavior() {
+            // The installed stack has `added`; the new release gates it off. Excusing it would
+            // hide a removal, so the outcome must equal the ungated release's.
+            let installed = with_gated(None, vec![]);
+            let ungated = with_gated(None, vec![gate(Some(false))]);
+            let gated_off = with_gated(Some("feature"), vec![gate(Some(false))]);
+            let check = FrozenResourcesUnchangedCheck {
+                platform: Platform::Aws,
+            };
+            let config = config(Some(false));
+            let ungated_result = check
+                .check_with_config(&installed, &ungated, &config, Platform::Aws)
+                .await
+                .unwrap();
+            let gated_result = check
+                .check_with_config(&installed, &gated_off, &config, Platform::Aws)
+                .await
+                .unwrap();
+            assert_eq!(ungated_result.success, gated_result.success);
+            assert_eq!(ungated_result.errors, gated_result.errors);
+            // And the stack that lost the resource entirely is still a removal.
+            let removed = check
+                .check_with_config(&installed, &base(), &config, Platform::Aws)
+                .await
+                .unwrap();
+            assert!(!removed.success, "{:?}", removed.errors);
+        }
+
+        /// A stack whose profile `app` has the identity `app-sa` and one worker per entry of
+        /// `gates` running as it.
+        fn with_profile_users(gates: &[Option<&str>], inputs: Vec<StackInputDefinition>) -> Stack {
+            let mut builder = Stack::new("gated".to_string())
+                .inputs(inputs)
+                .add(
+                    Storage::new("kept".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    ServiceAccount::new("app-sa".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                );
+            for (index, gate) in gates.iter().enumerate() {
+                let worker = alien_core::Worker::new(format!("w{index}"))
+                    .permissions("app".to_string())
+                    .code(alien_core::WorkerCode::Image {
+                        image: "example.com/app:latest".to_string(),
+                    })
+                    .build();
+                builder = match gate {
+                    Some(gate) => builder.add_enabled_when(worker, ResourceLifecycle::Live, *gate),
+                    None => builder.add(worker, ResourceLifecycle::Live),
+                };
+            }
+            builder.build()
+        }
+
+        fn identity_added(errors: &[String]) -> bool {
+            errors
+                .iter()
+                .any(|e| e.starts_with("Cannot add frozen resources during update: 'app-sa'"))
+        }
+
+        #[tokio::test]
+        async fn the_identity_of_a_profile_whose_users_are_all_gated_off_is_not_an_addition() {
+            let new =
+                with_profile_users(&[Some("feature"), Some("feature")], vec![gate(Some(false))]);
+            assert!(errors(new, &config(None)).await.is_empty());
+        }
+
+        #[tokio::test]
+        async fn that_identity_is_an_addition_when_the_gate_turns_true_or_a_user_is_ungated() {
+            let on = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            assert!(identity_added(&errors(on, &config(Some(true))).await));
+            let mixed = with_profile_users(&[Some("feature"), None], vec![gate(Some(false))]);
+            assert!(identity_added(&errors(mixed, &config(None)).await));
+            let none = with_profile_users(&[], vec![gate(Some(false))]);
+            assert!(identity_added(&errors(none, &config(None)).await));
+            let mut other = gate(Some(false));
+            other.id = "other".to_string();
+            let different = with_profile_users(
+                &[Some("feature"), Some("other")],
+                vec![gate(Some(false)), other],
+            );
+            assert!(identity_added(&errors(different, &config(None)).await));
+            let default_true = with_profile_users(&[Some("feature")], vec![gate(Some(true))]);
+            assert!(identity_added(
+                &errors(default_true, &config(Some(false))).await
+            ));
+        }
+
+        #[tokio::test]
+        async fn an_identity_a_retained_worker_links_is_an_addition() {
+            // An ungated worker of another profile links `app-sa` while every `app` worker is
+            // gated off: dropping the identity would start it without the link.
+            let linking = alien_core::Worker::new("linker".to_string())
+                .permissions("base".to_string())
+                .link(&ServiceAccount::new("app-sa".to_string()).build())
+                .code(alien_core::WorkerCode::Image {
+                    image: "example.com/app:latest".to_string(),
+                })
+                .build();
+            let mut new = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            new.resources.insert(
+                "linker".to_string(),
+                alien_core::ResourceEntry {
+                    config: alien_core::Resource::new(linking),
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                    description: None,
+                    display_name: None,
+                },
+            );
+            assert!(identity_added(&errors(new.clone(), &config(None)).await));
+            assert!(
+                unused_frozen_additions(&base(), &new, &config(None), Platform::Aws).is_empty()
+            );
+        }
+
+        #[tokio::test]
+        async fn without_the_deployment_config_a_gated_addition_is_an_addition() {
+            let new = with_gated(Some("feature"), vec![gate(Some(false))]);
+            let result = FrozenResourcesUnchangedCheck {
+                platform: Platform::Aws,
+            }
+            .check(&base(), &new)
+            .await
+            .unwrap();
+            assert!(added(&result.errors));
+        }
+
+        #[test]
+        fn an_excused_identity_setup_never_installed_is_left_out_of_the_target() {
+            let installed = base();
+            let new = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            let unused = unused_frozen_additions(&installed, &new, &config(None), Platform::Aws);
+            assert_eq!(unused, vec!["app-sa".to_string()]);
+            // A gated resource that is itself frozen is left out the same way.
+            let gated = with_gated(Some("feature"), vec![gate(Some(false))]);
+            assert_eq!(
+                unused_frozen_additions(&installed, &gated, &config(None), Platform::Aws),
+                vec!["added".to_string()]
+            );
+        }
+
+        #[test]
+        fn an_identity_setup_installed_stays_in_the_target() {
+            // Setup already installed `app-sa`, so the update keeps it.
+            let new = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            let installed = with_profile_users(&[], vec![gate(Some(false))]);
+            assert!(
+                unused_frozen_additions(&installed, &new, &config(None), Platform::Aws).is_empty()
+            );
+        }
+
+        #[test]
+        fn an_identity_that_is_an_addition_is_not_left_out() {
+            // Not excused (the answer turned true, or a user is ungated): the check refuses it
+            // and nothing is dropped from the target.
+            let installed = base();
+            let on = with_profile_users(&[Some("feature")], vec![gate(Some(false))]);
+            assert!(
+                unused_frozen_additions(&installed, &on, &config(Some(true)), Platform::Aws)
+                    .is_empty()
+            );
+            let mixed = with_profile_users(&[Some("feature"), None], vec![gate(Some(false))]);
+            assert!(
+                unused_frozen_additions(&installed, &mixed, &config(None), Platform::Aws)
+                    .is_empty()
+            );
+        }
     }
 }

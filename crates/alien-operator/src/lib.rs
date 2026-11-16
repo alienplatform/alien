@@ -28,10 +28,12 @@ pub mod error;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
+mod owned_secret;
 pub mod pod_logs;
 pub mod protected;
 pub mod readiness_server;
 pub mod self_update;
+pub mod setup_credential;
 mod workload_observation;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
@@ -431,6 +433,14 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         pod_log_collection: runtime_options.pod_log_collection.is_some(),
         cancel: cancel.clone(),
     });
+
+    // The command a cluster admin runs inside this container to get a
+    // short-lived key for rerunning the installation. Only on Kubernetes: other
+    // hosts can share a temp directory, and their reruns use a saved token.
+    #[cfg(unix)]
+    if serves_setup_credential(config.platform) {
+        tokio::spawn(setup_credential::serve(db.clone(), cancel.clone()));
+    }
 
     // Start OTLP server (for local functions to send telemetry).
     // Telemetry alone is best-effort; a queue owner must fail if its listener fails.
@@ -935,6 +945,12 @@ fn loop_exit(cancel: &CancellationToken, name: &'static str) -> Option<&'static 
     }
 }
 
+/// Only a Kubernetes Operator answers `setup-credential`: its container has its
+/// own data volume and temp directory. Other hosts can share both.
+fn serves_setup_credential(platform: Platform) -> bool {
+    matches!(platform, Platform::Kubernetes)
+}
+
 fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
     !airgapped
         && matches!(
@@ -1021,6 +1037,19 @@ pub struct OperatorState {
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[test]
+    fn only_a_kubernetes_operator_serves_setup_credential() {
+        assert!(super::serves_setup_credential(Platform::Kubernetes));
+        for platform in [
+            Platform::Local,
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+        ] {
+            assert!(!super::serves_setup_credential(platform));
+        }
+    }
+
     use super::*;
     use std::{collections::HashMap, path::Path, sync::Mutex, time::Duration};
 
@@ -1728,3 +1757,55 @@ impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
 }
 
 mod daily_identity;
+
+/// Whether this Operator has finished enrolling and so holds a daily key.
+///
+/// An Operator installed with a one-use enrollment code is enrolled and has no
+/// stored sync token; an Operator installed with a token is not enrolled until
+/// it swaps that token for a key.
+pub async fn is_enrolled(db: &db::OperatorDb) -> error::Result<bool> {
+    daily_identity::has_runtime_identity(db).await
+}
+
+/// Save an enrolled identity, as a finished enrollment leaves it, so an
+/// embedder's test can run against an enrolled Operator without a manager that
+/// implements enrollment.
+#[cfg(any(test, feature = "test-support"))]
+pub async fn save_enrolled_identity_for_tests(
+    db: &db::OperatorDb,
+    manager_url: &str,
+    audience: &str,
+    deployment_id: &str,
+) -> error::Result<()> {
+    db.write_daily_identity(&daily_identity::DailyIdentityState {
+        manager_url: manager_url.to_owned(),
+        audience: audience.to_owned(),
+        deployment_id: deployment_id.to_owned(),
+        current: "ax_day_v1_test".to_owned(),
+        pending: None,
+        pending_started_at: None,
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+        enrolled_code_hash: None,
+        pending_enrollment: None,
+        previous: None,
+    })
+    .await
+}
+
+/// The credential source for this Operator's own operations queue.
+///
+/// `None` while the Operator is not enrolled: it then keeps using its sync
+/// token. Once enrolled, the returned credentials exchange the daily key for a
+/// short-lived `operatorOperations` credential, refresh it before it expires,
+/// and replace it after the manager rejects one. Credentials are cached per
+/// manager, audience and deployment, so calling this again is cheap.
+pub async fn operations_credentials(
+    db: &Arc<db::OperatorDb>,
+) -> error::Result<Option<Arc<alien_client_core::runtime_credentials::RuntimeCredentials>>> {
+    if !daily_identity::has_runtime_identity(db).await? {
+        return Ok(None);
+    }
+    daily_identity::request_operations_credentials(db)
+        .await
+        .map(Some)
+}

@@ -437,6 +437,18 @@ impl Kv for RefreshingKv {
             .scan_prefix(prefix, limit, cursor)
             .await
     }
+
+    async fn scan_prefix_consistent(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> Result<ScanResult> {
+        self.current()
+            .await?
+            .scan_prefix_consistent(prefix, limit, cursor)
+            .await
+    }
 }
 
 /// Queue handle that resolves a fresh-enough provider for every operation.

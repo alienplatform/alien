@@ -19,6 +19,8 @@ mod deletion_tests;
 mod dependency_tests;
 #[cfg(feature = "aws")]
 mod edge_only_tests;
+#[cfg(feature = "aws")]
+mod management_update_tests;
 mod lifecycle_tests;
 mod mid_flow_config_tests;
 mod parallel_tests;

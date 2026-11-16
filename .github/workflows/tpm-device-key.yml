@@ -1,38 +1,48 @@
 name: TPM device key
 
 # The TPM device-key backend shells out to tpm2-tools, so its test needs a TPM.
-# This runs it against the swtpm simulator. It runs only when the backend or this
-# workflow changes.
+# This runs it against the swtpm simulator. The merge queue runs it through ci-fast.yml when a
+# merge touches the backend or this workflow, so `All tests passed` covers it, not every pull
+# request push. A pull request that changes this workflow runs it, and so does a nightly run
+# (only when main changed) and a manual run.
 on:
   pull_request:
     paths:
-      - 'crates/alien-cli/src/signing/**'
-      - 'crates/alien-cli/src/commands/signing.rs'
-      - 'crates/alien-cli/tests/signing_flow.rs'
-      - 'crates/alien-manager/src/routes/signing.rs'
-      - 'crates/alien-signing/**'
       - '.github/workflows/tpm-device-key.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'crates/alien-cli/src/signing/**'
-      - 'crates/alien-cli/src/commands/signing.rs'
-      - 'crates/alien-cli/tests/signing_flow.rs'
-      - 'crates/alien-manager/src/routes/signing.rs'
-      - 'crates/alien-signing/**'
-      - '.github/workflows/tpm-device-key.yml'
+  workflow_call:
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tpm-device-key-${{ github.event.pull_request.number || github.ref }}
+  group: tpm-device-key-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Skips the scheduled run when main has not changed since this workflow last passed on it.
+  gate:
+    name: Main changed since the last green run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      changed: ${{ steps.gate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: gate
+        uses: ./.github/actions/changed-since-last-success
+
   tpm-device-key:
     name: TPM device key
+    needs: gate
+    if: needs.gate.outputs.changed == 'true'
     runs-on: depot-ubuntu-24.04-arm-8
     timeout-minutes: 45
     env:

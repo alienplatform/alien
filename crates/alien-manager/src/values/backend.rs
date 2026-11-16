@@ -122,7 +122,7 @@ impl ValueBackend for KvValueBackend {
         loop {
             let page = self
                 .kv
-                .scan_prefix(&prefix, Some(PAGE_SIZE), cursor)
+                .scan_prefix_consistent(&prefix, Some(PAGE_SIZE), cursor)
                 .await
                 .context(Self::kv_error("list values"))?;
             for entry in page.items {

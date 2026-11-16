@@ -54,6 +54,10 @@ ENV ALIEN_SANDBOX_ROOT=/sandbox \
 ENV RUST_LOG=info \
     ALIEN_SANDBOX_IMAGE_COMMAND=true
 
+# The edge consumes `Authorization` for its own credential, so a preview caller's bearer arrives in
+# this header and the agent hands it to the code inside as `Authorization`.
+ENV ALIEN_SANDBOX_CALLER_AUTHORIZATION_HEADER=x-alien-caller-authorization
+
 # These published agent images have no application startup command. Declare that explicitly so
 # inherited base CMD values cannot become agent arguments or a second shell process.
 RUN mkdir -p /opt/alien \

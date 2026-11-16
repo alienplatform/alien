@@ -7,10 +7,10 @@
 //! plus one exact target.
 
 use alien_commands::server::command_registry::{
-    is_operations_command_target, is_operations_target, CommandStatus,
+    is_operations_command_target, is_operations_target, CommandStatus, OPERATOR_COMMAND_TARGET_ID,
 };
 use alien_commands::server::CommandAccessContext;
-use alien_core::CommandTarget;
+use alien_core::{CommandTarget, CommandTargetType};
 
 use crate::auth::{CommandCapability, Role, Scope, Subject};
 use crate::traits::deployment_store::DeploymentRecord;
@@ -94,6 +94,28 @@ pub fn sender_request_decision(subject: &Subject, deployment_id: &str) -> Option
     )
 }
 
+/// Whether a receive capability for `capability_target` may act on
+/// `requested_target`.
+///
+/// The targets must be equal. A reserved operations target is refused unless it
+/// is exactly the Operator's own queue (the fixed id, as a daemon): that queue
+/// is received by the Operator itself with its operations credential, and no
+/// other reserved target (the operations worker, or the same id with another
+/// resource type) is ever received through a capability.
+fn receive_target_allowed(
+    capability_target: &CommandTarget,
+    requested_target: &CommandTarget,
+) -> bool {
+    capability_target == requested_target
+        && (!is_operations_command_target(&requested_target.resource_id)
+            || is_operator_queue(requested_target))
+}
+
+fn is_operator_queue(target: &CommandTarget) -> bool {
+    target.resource_id == OPERATOR_COMMAND_TARGET_ID
+        && target.resource_type == CommandTargetType::Daemon
+}
+
 /// Decide receiver access from the signed deployment and target before entity lookup.
 ///
 /// The short-lived capability is already bound to the manager that accepted it.
@@ -117,10 +139,10 @@ pub fn receiver_request_decision(
         subject.role == Role::CommandCapability
             && matches!(
                 capability,
-                CommandCapability::Receive { target } if target == requested_target
+                CommandCapability::Receive { target }
+                    if receive_target_allowed(target, requested_target)
             )
-            && scoped_deployment_id == deployment_id
-            && !is_operations_command_target(&requested_target.resource_id),
+            && scoped_deployment_id == deployment_id,
     )
 }
 
@@ -222,9 +244,9 @@ pub fn receiver_deployment_decision(
         subject.role == Role::CommandCapability
             && matches!(
                 capability,
-                CommandCapability::Receive { target } if target == requested_target
+                CommandCapability::Receive { target }
+                    if receive_target_allowed(target, requested_target)
             )
-            && !is_operations_command_target(&requested_target.resource_id)
             && subject.workspace_id == deployment.workspace_id
             && project_id == &deployment.project_id
             && deployment_id == &deployment.id,
@@ -273,11 +295,10 @@ pub fn receiver_context_allowed(subject: &Subject, command: &CommandAccessContex
             deployment_id,
             capability: CommandCapability::Receive { target },
         } if subject.role == Role::CommandCapability
-            && !is_operations_command_target(&command.target.resource_id)
+            && receive_target_allowed(target, &command.target)
             && subject.workspace_id == command.workspace_id
             && project_id == &command.project_id
             && deployment_id == &command.deployment_id
-            && target == &command.target
     )
 }
 
@@ -542,5 +563,167 @@ mod tests {
             &operations,
             &worker_command
         ));
+    }
+
+    fn receive_subject(target: CommandTarget) -> Subject {
+        Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "component-1".to_string(),
+            },
+            workspace_id: "workspace-1".to_string(),
+            scope: Scope::Commands {
+                project_id: "project-1".to_string(),
+                deployment_id: "deployment-1".to_string(),
+                capability: CommandCapability::Receive { target },
+            },
+            role: Role::CommandCapability,
+            bearer_token: "bearer".to_string(),
+        }
+    }
+
+    fn deployment_record() -> DeploymentRecord {
+        DeploymentRecord {
+            supplied_stacks: None,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            id: "deployment-1".to_string(),
+            workspace_id: "workspace-1".to_string(),
+            project_id: "project-1".to_string(),
+            name: "deployment-1".to_string(),
+            deployment_group_id: "group-1".to_string(),
+            platform: alien_core::Platform::Local,
+            base_platform: None,
+            status: "pending".to_string(),
+            stack_settings: Some(alien_core::StackSettings::default()),
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            configuration_revision: None,
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_token: None,
+            input_values: Default::default(),
+            deployment_config: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
+    fn access_context(target: CommandTarget) -> CommandAccessContext {
+        CommandAccessContext {
+            workspace_id: "workspace-1".to_string(),
+            project_id: "project-1".to_string(),
+            deployment_id: "deployment-1".to_string(),
+            target,
+        }
+    }
+
+    #[test]
+    fn a_receive_capability_uses_a_reserved_target_only_for_the_operator_queue() {
+        let operator = CommandTarget::new(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon);
+        let deployment = deployment_record();
+        let own = receive_subject(operator.clone());
+        assert_eq!(
+            receiver_request_decision(&own, "deployment-1", &operator),
+            Some(true)
+        );
+        assert_eq!(
+            receiver_deployment_decision(&own, &deployment, &operator),
+            Some(true)
+        );
+        assert!(receiver_context_allowed(
+            &own,
+            &access_context(operator.clone())
+        ));
+
+        // Every other reserved target, and the operator id as anything but a
+        // daemon, stays refused even when capability and request agree.
+        for reserved in [
+            CommandTarget::new(
+                OPERATIONS_WORKER_COMMAND_TARGET_ID,
+                CommandTargetType::Worker,
+            ),
+            CommandTarget::new(
+                OPERATIONS_WORKER_COMMAND_TARGET_ID,
+                CommandTargetType::Daemon,
+            ),
+            CommandTarget::new(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Worker),
+            CommandTarget::new(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Container),
+        ] {
+            let subject = receive_subject(reserved.clone());
+            assert_eq!(
+                receiver_request_decision(&subject, "deployment-1", &reserved),
+                Some(false),
+                "{reserved:?}"
+            );
+            assert_eq!(
+                receiver_deployment_decision(&subject, &deployment, &reserved),
+                Some(false),
+                "{reserved:?}"
+            );
+            assert!(
+                !receiver_context_allowed(&subject, &access_context(reserved.clone())),
+                "{reserved:?}"
+            );
+        }
+
+        // The capability's target must equal the request's and the command's.
+        let stack = CommandTarget::new("daemon-a", CommandTargetType::Daemon);
+        assert_eq!(
+            receiver_request_decision(&own, "deployment-1", &stack),
+            Some(false)
+        );
+        let stack_subject = receive_subject(stack.clone());
+        assert_eq!(
+            receiver_request_decision(&stack_subject, "deployment-1", &operator),
+            Some(false)
+        );
+        assert_eq!(
+            receiver_deployment_decision(&stack_subject, &deployment, &operator),
+            Some(false)
+        );
+        assert!(!receiver_context_allowed(
+            &stack_subject,
+            &access_context(operator.clone())
+        ));
+        assert!(!receiver_context_allowed(&own, &access_context(stack)));
+
+        // Ownership still has to match: deployment, workspace and project.
+        let mut other_project_deployment = deployment_record();
+        other_project_deployment.project_id = "project-2".to_string();
+        assert_eq!(
+            receiver_deployment_decision(&own, &other_project_deployment, &operator),
+            Some(false)
+        );
+        let mut other_workspace_deployment = deployment_record();
+        other_workspace_deployment.workspace_id = "workspace-2".to_string();
+        assert_eq!(
+            receiver_deployment_decision(&own, &other_workspace_deployment, &operator),
+            Some(false)
+        );
+        assert_eq!(
+            receiver_request_decision(&own, "deployment-2", &operator),
+            Some(false)
+        );
+        let mut other = access_context(operator);
+        other.deployment_id = "deployment-2".to_string();
+        assert!(!receiver_context_allowed(&own, &other));
+        other.deployment_id = "deployment-1".to_string();
+        other.workspace_id = "workspace-2".to_string();
+        assert!(!receiver_context_allowed(&own, &other));
+        other.workspace_id = "workspace-1".to_string();
+        other.project_id = "project-2".to_string();
+        assert!(!receiver_context_allowed(&own, &other));
     }
 }
