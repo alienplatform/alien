@@ -88,13 +88,17 @@ const JOB_POLL_GRACE: Duration = Duration::from_secs(15);
 /// that is older than a given one is therefore in the list, so the oldest sandbox in a list taken
 /// then is the oldest there will ever be, and it never yields to another.
 ///
-/// A creating caller decides this long after its own create request, so it is not delayed by more
-/// than a create takes anyway for most of it; a caller that arrives while the oldest sandbox for
-/// the key is younger than this waits out the rest of it before handing that sandbox out.
-#[cfg(not(test))]
+/// A creating caller decides this long after its own create call returned (so a key's first
+/// create costs the create plus this); a caller that arrives while the oldest sandbox for the key
+/// is younger than this waits out the rest of it, plus [`CLOCK_SKEW_ALLOWANCE`], before handing
+/// that sandbox out.
 const CONTENTION_WINDOW: Duration = Duration::from_secs(15);
-#[cfg(test)]
-const CONTENTION_WINDOW: Duration = Duration::from_millis(200);
+
+/// How far this host's clock may run ahead of Google's and still keep the arriving caller's wait
+/// long enough. That wait compares this host's clock with the sandbox's `createTime`, which is
+/// Google's; a host that is ahead would see the window as over early. Hosts are assumed to be
+/// NTP-synced; the creating caller's own wait is measured on one clock and needs no allowance.
+const CLOCK_SKEW_ALLOWANCE: Duration = Duration::from_secs(5);
 
 /// Tries of the list that decides a keyed create, and the pause between them.
 const RECHECK_ATTEMPTS: u32 = 4;
@@ -536,12 +540,18 @@ impl GcpAgentPlatformSandbox {
         let Some(age) = candidates.first().and_then(KeyedSandbox::age) else {
             return Ok(candidates);
         };
-        match CONTENTION_WINDOW.checked_sub(age) {
+        let settled = CONTENTION_WINDOW + CLOCK_SKEW_ALLOWANCE;
+        match settled.checked_sub(age) {
             Some(rest) if !rest.is_zero() => {
-                tokio::time::sleep(rest.min(CONTENTION_WINDOW)).await;
-                self.request_key_candidates(requested_id, operation).await
+                tokio::time::sleep(rest.min(settled)).await;
+                let candidates = self.request_key_candidates(requested_id, operation).await?;
+                warn_on_duplicates(requested_id, &candidates);
+                Ok(candidates)
             }
-            _ => Ok(candidates),
+            _ => {
+                warn_on_duplicates(requested_id, &candidates);
+                Ok(candidates)
+            }
         }
     }
 
@@ -554,6 +564,10 @@ impl GcpAgentPlatformSandbox {
                     warn!(%error, attempt, "could not list the sandboxes for a key after a create");
                     attempt += 1;
                     tokio::time::sleep(RECHECK_BACKOFF).await;
+                }
+                Ok(candidates) => {
+                    warn_on_duplicates(key, &candidates);
+                    return Ok(candidates);
                 }
                 outcome => return outcome,
             }
@@ -585,14 +599,24 @@ impl GcpAgentPlatformSandbox {
     /// Unlike an id the caller handed in, a key's sandbox is usually one a concurrent caller made
     /// a moment ago: listed and running while its agent has not started answering. Replacing it
     /// would make the second sandbox this lookup exists to prevent, so it is settled like any
-    /// other sandbox that is coming up. One that is paused, terminated or gone is skipped.
+    /// other sandbox that is coming up. One that is terminated or gone is skipped; a paused one is
+    /// returned as paused.
     async fn reach_candidate(&self, id: &str) -> Result<Option<SandboxInstance>> {
         let Some(sandbox) = self.read_sandbox(GET_OR_CREATE, id).await? else {
             return Ok(None);
         };
         match sandbox_state(GET_OR_CREATE, sandbox.state.as_deref())? {
             SandboxState::Running | SandboxState::Starting => {}
-            SandboxState::Paused | SandboxState::Terminated => return Ok(None),
+            // A paused sandbox is live and owns its key, as it does for `get`: it is handed out
+            // as it is, not woken and not replaced by a second one beside it.
+            SandboxState::Paused => {
+                return Ok(Some(SandboxInstance {
+                    sandbox_id: id.to_string(),
+                    state: SandboxState::Paused,
+                    generation: NO_GENERATION,
+                }));
+            }
+            SandboxState::Terminated => return Ok(None),
         }
         match self.settle(id).await {
             Ok(generation) => Ok(Some(SandboxInstance {
@@ -1153,31 +1177,43 @@ impl Sandbox for GcpAgentPlatformSandbox {
             return Ok(ResolvedSandbox::found(found));
         }
 
-        let requested_at = tokio::time::Instant::now();
         let created = self.create(request).await?;
+        let decide_at = tokio::time::Instant::now() + CONTENTION_WINDOW;
         let own = created.sandbox_id.clone();
 
         // Two callers can both have looked before either created. The oldest sandbox with the key
         // wins and every other caller deletes its own, so they converge on one.
         //
         // That is decided only once every older sandbox is listed (see [`CONTENTION_WINDOW`]),
-        // which is counted from the request, not from the create's end. One decision per caller,
+        // which is counted from the moment the create returned, the latest anchor and so the safe one.
+        // One decision per caller,
         // after the window: a caller that yielded to a sandbox on an earlier look could be handed
         // one that is deleted next.
-        tokio::time::sleep_until(requested_at + CONTENTION_WINDOW).await;
+        tokio::time::sleep_until(decide_at).await;
         let candidates = match self.recheck_candidates(&key).await {
             Ok(candidates) => candidates,
             // Not answered, so nothing says an older sandbox is absent, and `created` for a
             // possible duplicate would split the callers. The sandbox is kept: a caller that
             // looked meanwhile may have yielded to it, and a retry finds it by the key.
+            //
+            // `created` is false for nobody here: the call fails, and the sandbox is named in the
+            // error's context (`sandboxId`). A retry resolves the key to the oldest sandbox and
+            // answers `created: false` for it, so the caller that made it can see `false`.
             Err(error) => {
-                return Err(error.context(ErrorData::SandboxUnreachable {
+                let mut error = error.context(ErrorData::SandboxUnreachable {
                     operation: GET_OR_CREATE.to_string(),
                     reason: format!(
                         "sandbox '{own}' was created for this key but could not be checked \
                          against a concurrent create; retry, which finds it by the key"
                     ),
-                }));
+                });
+                let mut context = match error.context.take() {
+                    Some(serde_json::Value::Object(map)) => map,
+                    _ => serde_json::Map::new(),
+                };
+                context.insert("sandboxId".to_string(), own.clone().into());
+                error.context = Some(serde_json::Value::Object(context));
+                return Err(error);
             }
         };
         let outcome = self.reach_first(&candidates, Some(&own)).await;
@@ -2073,11 +2109,51 @@ impl KeyedSandbox {
     fn age(&self) -> Option<Duration> {
         let created = self.created?;
         Some(
-            (chrono::Utc::now() - created.with_timezone(&chrono::Utc))
+            (wall_now() - created.with_timezone(&chrono::Utc))
                 .to_std()
                 .unwrap_or(Duration::ZERO),
         )
     }
+}
+
+/// This host's wall clock. Under test it follows tokio's paused clock, so a test that advances
+/// virtual time moves the age of a sandbox too.
+#[cfg(not(test))]
+fn wall_now() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+}
+
+#[cfg(test)]
+pub(crate) fn wall_now() -> chrono::DateTime<chrono::Utc> {
+    // A paused tokio clock is the real one plus the time the test has advanced it.
+    let advanced = tokio::time::Instant::now()
+        .into_std()
+        .saturating_duration_since(std::time::Instant::now());
+    chrono::Utc::now() + chrono::Duration::from_std(advanced).unwrap_or_default()
+}
+
+/// A duplicate that is older than the window is not a race in progress: two callers each hold a
+/// sandbox for one key (a broken timing assumption, or a crash between a create and its check).
+/// Later callers converge on the oldest, but the younger is not deleted by anyone, so it is said.
+fn warn_on_duplicates(key: &str, candidates: &[KeyedSandbox]) {
+    let settled = duplicates_past_the_window(candidates);
+    if settled.len() > 1 {
+        warn!(
+            request_key = %request_key_display_name(key),
+            sandbox_ids = ?settled,
+            "more than one live sandbox holds this key; callers get the oldest, the others are \
+             not deleted: terminate them, or set a maximum lifetime"
+        );
+    }
+}
+
+/// The candidates old enough that no create for the key can still be racing them.
+fn duplicates_past_the_window(candidates: &[KeyedSandbox]) -> Vec<&str> {
+    candidates
+        .iter()
+        .filter(|sandbox| sandbox.age().is_some_and(|age| age > CONTENTION_WINDOW))
+        .map(|sandbox| sandbox.id.as_str())
+        .collect()
 }
 
 fn sandbox_segment(name: &str) -> Option<&str> {

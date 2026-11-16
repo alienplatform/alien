@@ -2396,6 +2396,9 @@ struct FakeEngine {
     lists_before_failures: AtomicUsize,
     /// The next this-many probes of one sandbox get no answer: its agent is still booting.
     silent_probes: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    /// How far Google's clock is behind this host's: sandboxes are stamped that much earlier than
+    /// the host's `now`, as when the host clock runs ahead.
+    google_behind: std::sync::Mutex<chrono::Duration>,
 }
 
 #[derive(Debug, Default)]
@@ -2473,7 +2476,7 @@ impl AgentPlatformApi for FakeEngine {
             id: id.clone(),
             display: request.display_name,
             state: "STATE_RUNNING".to_string(),
-            created: chrono::Utc::now(),
+            created: super::wall_now() - *self.google_behind.lock().unwrap(),
             listed_from: tokio::time::Instant::now() + lag,
         });
         Ok(done_op(serde_json::json!({ "name": sandbox_name(&id) })))
@@ -2600,7 +2603,7 @@ fn keyed(key: &str) -> CreateSandboxRequest {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_second_get_or_create_with_the_same_key_finds_the_first() {
     let engine = Arc::new(FakeEngine::default());
     let first = provider_from(engine.clone())
@@ -2617,7 +2620,7 @@ async fn a_second_get_or_create_with_the_same_key_finds_the_first() {
     assert_eq!(engine.live_ids().len(), 1, "one sandbox, not two");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn different_keys_get_different_sandboxes() {
     let engine = Arc::new(FakeEngine::default());
     let a = provider_from(engine.clone())
@@ -2634,7 +2637,7 @@ async fn different_keys_get_different_sandboxes() {
 
 /// The key goes to Google only as its hash, never raw: it is caller-supplied, and the display name
 /// is what a later list matches on.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn the_raw_key_never_reaches_google() {
     let engine = Arc::new(FakeEngine::default());
     let key = "engine-5f3a";
@@ -2649,7 +2652,7 @@ async fn the_raw_key_never_reaches_google() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn get_by_key_finds_it() {
     let engine = Arc::new(FakeEngine::default());
     let sut = provider_from(engine.clone());
@@ -2664,7 +2667,7 @@ async fn get_by_key_finds_it() {
     assert_eq!(by_id.sandbox_id, found.sandbox_id);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_unknown_key_or_numeric_id_is_none_not_an_error() {
     let engine = Arc::new(FakeEngine::default());
     let sut = provider_from(engine);
@@ -2672,7 +2675,7 @@ async fn an_unknown_key_or_numeric_id_is_none_not_an_error() {
     assert!(sut.get("123456789").await.unwrap().is_none());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn terminated_sandboxes_are_ignored() {
     let engine = Arc::new(FakeEngine::default());
     let sut = provider_from(engine.clone());
@@ -2690,7 +2693,7 @@ async fn terminated_sandboxes_are_ignored() {
     assert_ne!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn after_terminate_the_key_and_the_id_are_none() {
     let engine = Arc::new(FakeEngine::default());
     let sut = provider_from(engine.clone());
@@ -2705,7 +2708,7 @@ async fn after_terminate_the_key_and_the_id_are_none() {
 }
 
 /// A numeric id naming an existing sandbox keeps working as it did.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_numeric_id_that_names_a_sandbox_is_found_as_before() {
     let engine = Arc::new(FakeEngine::default());
     let sut = provider_from(engine.clone());
@@ -2718,7 +2721,7 @@ async fn a_numeric_id_that_names_a_sandbox_is_found_as_before() {
 /// Found live: a second caller looks while the first one's sandbox is listed and running but its
 /// agent has not started answering. That sandbox is waited for, not passed over for a second one,
 /// which is the duplicate the pair would then have to converge away from.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_sandbox_whose_agent_is_still_booting_is_waited_for_not_replaced() {
     let engine = Arc::new(FakeEngine::default());
     let first = provider_from(engine.clone())
@@ -2781,7 +2784,7 @@ fn assert_converged(engine: &FakeEngine, results: &[Result<ResolvedSandbox>]) {
 
 /// Two callers both looked before either created, so each made a sandbox. The newer one is
 /// terminated and both callers end with the oldest.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_race_of_two_converges_on_the_oldest_sandbox() {
     let engine = Arc::new(FakeEngine::default());
     engine.lag_creates(&[40, 40]);
@@ -2796,7 +2799,7 @@ async fn a_race_of_two_converges_on_the_oldest_sandbox() {
 /// The review's three-caller case. A is the oldest and is listed late; B and C are listed fast. C's
 /// first look at the key sees B, which is older than C and is itself about to yield to A. A caller
 /// that yields to B at once holds a sandbox that is then deleted.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn three_racers_with_an_older_sandbox_listed_late_all_end_with_one_live_sandbox() {
     let engine = Arc::new(FakeEngine::default());
     engine.lag_creates(&[120, 5, 5]);
@@ -2808,7 +2811,7 @@ async fn three_racers_with_an_older_sandbox_listed_late_all_end_with_one_live_sa
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn five_racers_with_uneven_listing_lag_converge() {
     let engine = Arc::new(FakeEngine::default());
     engine.lag_creates(&[90, 10, 70, 5, 30]);
@@ -2818,7 +2821,7 @@ async fn five_racers_with_uneven_listing_lag_converge() {
 
 /// A caller that arrives while the oldest sandbox for the key is still inside its contention window
 /// does not hand it out at once: an older one may still appear and make it yield.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_caller_waits_out_the_window_of_a_fresh_sandbox_before_returning_it() {
     let engine = Arc::new(FakeEngine::default());
     engine.lag_creates(&[100, 0]);
@@ -2836,7 +2839,7 @@ async fn a_caller_waits_out_the_window_of_a_fresh_sandbox_before_returning_it() 
     assert_eq!(engine.live_ids(), vec![older.sandbox.sandbox_id]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_race_converges_while_the_older_agent_is_still_booting() {
     let engine = Arc::new(FakeEngine::default());
     engine.lag_creates(&[0, 0]);
@@ -2859,7 +2862,7 @@ async fn a_race_converges_while_the_older_agent_is_still_booting() {
 }
 
 /// The re-check after a create is retried; a failure that clears does not change the answer.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_failed_recheck_is_retried() {
     let engine = Arc::new(FakeEngine::default());
     engine.lists_before_failures.store(1, Ordering::SeqCst);
@@ -2875,7 +2878,7 @@ async fn a_failed_recheck_is_retried() {
 /// When the re-check cannot be answered, nothing says an older sandbox is absent: the caller gets
 /// an error, never `created = true` for a sandbox that may be a duplicate. The sandbox is kept,
 /// because another caller may already have yielded to it, and a retry finds it by the key.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_unanswered_recheck_is_an_error_not_a_created_sandbox() {
     let engine = Arc::new(FakeEngine::default());
     engine.lists_before_failures.store(1, Ordering::SeqCst);
@@ -2898,7 +2901,7 @@ async fn an_unanswered_recheck_is_an_error_not_a_created_sandbox() {
 
 /// A sandbox whose agent stopped answering still holds the key. The key resolves to its id, so a
 /// caller that has only the key can terminate it; get_or_create names it and makes no second one.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_wedged_agent_does_not_lock_the_key() {
     let engine = Arc::new(FakeEngine::default());
     let sut = provider_from(engine.clone());
@@ -2934,4 +2937,100 @@ async fn a_wedged_agent_does_not_lock_the_key() {
     sut.terminate(&id).await.unwrap();
     assert!(sut.get("wedged").await.unwrap().is_none());
     assert!(sut.get_or_create(keyed("wedged")).await.unwrap().created);
+}
+
+/// A host clock a few seconds ahead of Google's makes a sandbox look older than it is. The caller
+/// that arrives mid-race would then see the window over early and hand the sandbox out while an
+/// older one is still unlisted. The allowance keeps its wait past the window.
+#[tokio::test(start_paused = true)]
+async fn a_host_clock_ahead_of_googles_does_not_shorten_the_wait() {
+    let engine = Arc::new(FakeEngine::default());
+    *engine.google_behind.lock().unwrap() = chrono::Duration::seconds(4);
+    let first = provider_from(engine.clone())
+        .create(keyed("skewed"))
+        .await
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    let found = provider_from(engine.clone())
+        .get_or_create(keyed("skewed"))
+        .await
+        .unwrap();
+    assert_eq!(found.sandbox.sandbox_id, first.sandbox_id);
+    assert!(
+        started.elapsed() >= CONTENTION_WINDOW,
+        "waited {:?}, less than the window itself",
+        started.elapsed()
+    );
+}
+
+/// The creating caller's decision is counted from the moment its create returned, not from the
+/// request: a slow create must not shorten the time older sandboxes have to be listed.
+#[tokio::test(start_paused = true)]
+async fn the_window_of_a_creator_starts_when_its_create_returns() {
+    let engine = Arc::new(FakeEngine::default());
+    let started = tokio::time::Instant::now();
+    provider_from(engine.clone())
+        .get_or_create(keyed("anchor"))
+        .await
+        .unwrap();
+    // The first look takes no time, so the decision comes one window after the create.
+    assert!(started.elapsed() >= CONTENTION_WINDOW);
+}
+
+/// A paused sandbox is live and owns its key in both calls: `get` and `get_or_create` agree, and
+/// no second sandbox is made beside it.
+#[tokio::test(start_paused = true)]
+async fn a_paused_sandbox_owns_its_key_in_get_and_get_or_create() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let first = sut.get_or_create(keyed("paused")).await.unwrap();
+    engine.set_state(&first.sandbox.sandbox_id, "STATE_PAUSED");
+
+    let got = sut.get("paused").await.unwrap().expect("found by key");
+    assert_eq!(got.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(got.state, SandboxState::Paused);
+
+    let resolved = sut.get_or_create(keyed("paused")).await.unwrap();
+    assert!(!resolved.created);
+    assert_eq!(resolved.sandbox.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(resolved.sandbox.state, SandboxState::Paused);
+    assert_eq!(engine.state.lock().unwrap().sandboxes.len(), 1);
+}
+
+/// A failed re-check names the sandbox in a structured field, not only in the text.
+#[tokio::test(start_paused = true)]
+async fn a_failed_recheck_names_the_sandbox_in_the_error_context() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lists_before_failures.store(1, Ordering::SeqCst);
+    engine.failing_lists.store(1_000, Ordering::SeqCst);
+    let error = provider_from(engine.clone())
+        .get_or_create(keyed("ctx"))
+        .await
+        .unwrap_err();
+    let kept = engine.live_ids();
+    assert_eq!(
+        error.context.as_ref().and_then(|c| c.get("sandboxId")),
+        Some(&serde_json::Value::String(kept[0].clone()))
+    );
+}
+
+/// More than one sandbox older than the window is a duplicate that nothing deletes, and is
+/// reported; sandboxes still inside the window are a race in progress and are not.
+#[tokio::test(start_paused = true)]
+async fn duplicates_older_than_the_window_are_reported() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    sut.create(keyed("dup")).await.unwrap();
+    sut.create(keyed("dup")).await.unwrap();
+    let both = sut
+        .request_key_candidates("dup", GET_OR_CREATE)
+        .await
+        .unwrap();
+    assert!(duplicates_past_the_window(&both).is_empty(), "both fresh");
+    tokio::time::sleep(CONTENTION_WINDOW + Duration::from_secs(1)).await;
+    let both = sut
+        .request_key_candidates("dup", GET_OR_CREATE)
+        .await
+        .unwrap();
+    assert_eq!(duplicates_past_the_window(&both).len(), 2);
 }
