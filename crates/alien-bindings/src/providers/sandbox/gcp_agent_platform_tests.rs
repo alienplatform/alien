@@ -2390,6 +2390,10 @@ struct FakeEngine {
     /// The first this-many `list` calls answer as if nothing existed yet: two callers that both
     /// looked before either created.
     blind_lists: AtomicUsize,
+    /// The next this-many `list` calls fail.
+    failing_lists: AtomicUsize,
+    /// The first this-many `list` calls answer before any failure starts.
+    lists_before_failures: AtomicUsize,
     /// The next this-many probes of one sandbox get no answer: its agent is still booting.
     silent_probes: std::sync::Mutex<std::collections::HashMap<String, usize>>,
 }
@@ -2397,8 +2401,20 @@ struct FakeEngine {
 #[derive(Debug, Default)]
 struct FakeEngineState {
     next: u64,
-    sandboxes: Vec<(String, Option<String>, String)>, // id, display name, state
+    sandboxes: Vec<FakeSandbox>,
     created_with: Vec<Option<String>>,
+    /// Listing lag of the next creates, in order: a sandbox is listed only once this long after its
+    /// create call (found live: a create shows in the list two to nine seconds after its request).
+    create_lags: std::collections::VecDeque<Duration>,
+}
+
+#[derive(Debug)]
+struct FakeSandbox {
+    id: String,
+    display: Option<String>,
+    state: String,
+    created: chrono::DateTime<chrono::Utc>,
+    listed_from: tokio::time::Instant,
 }
 
 impl FakeEngine {
@@ -2411,22 +2427,33 @@ impl FakeEngine {
             .unwrap()
             .sandboxes
             .iter()
-            .filter(|(_, _, state)| state == "STATE_RUNNING")
-            .map(|(id, _, _)| id.clone())
+            .filter(|sandbox| sandbox.state == "STATE_RUNNING")
+            .map(|sandbox| sandbox.id.clone())
             .collect()
     }
     fn set_state(&self, id: &str, new_state: &str) {
-        for (sid, _, state) in self.state.lock().unwrap().sandboxes.iter_mut() {
-            if sid == id {
-                *state = new_state.to_string();
+        for sandbox in self.state.lock().unwrap().sandboxes.iter_mut() {
+            if sandbox.id == id {
+                sandbox.state = new_state.to_string();
             }
         }
     }
-    fn record(id: &str, display: &Option<String>, state: &str, ordinal: u64) -> SandboxEnvironment {
-        let mut sandbox = sandbox_in_state(id, state);
-        sandbox.display_name = display.clone();
-        sandbox.create_time = Some(format!("2026-11-16T10:00:{:02}.123456Z", ordinal % 60));
-        sandbox
+    fn lag_creates(&self, lags: &[u64]) {
+        self.state
+            .lock()
+            .unwrap()
+            .create_lags
+            .extend(lags.iter().map(|ms| Duration::from_millis(*ms)));
+    }
+    fn record(sandbox: &FakeSandbox) -> SandboxEnvironment {
+        let mut record = sandbox_in_state(&sandbox.id, &sandbox.state);
+        record.display_name = sandbox.display.clone();
+        record.create_time = Some(
+            sandbox
+                .created
+                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        );
+        record
     }
 }
 
@@ -2441,11 +2468,14 @@ impl AgentPlatformApi for FakeEngine {
         state.next += 1;
         let id = (7_000_000_000_000_000_000u64 + state.next).to_string();
         state.created_with.push(request.display_name.clone());
-        state.sandboxes.push((
-            id.clone(),
-            request.display_name,
-            "STATE_RUNNING".to_string(),
-        ));
+        let lag = state.create_lags.pop_front().unwrap_or_default();
+        state.sandboxes.push(FakeSandbox {
+            id: id.clone(),
+            display: request.display_name,
+            state: "STATE_RUNNING".to_string(),
+            created: chrono::Utc::now(),
+            listed_from: tokio::time::Instant::now() + lag,
+        });
         Ok(done_op(serde_json::json!({ "name": sandbox_name(&id) })))
     }
     async fn get_sandbox(&self, _engine: &str, sandbox: &str) -> ClientResult<SandboxEnvironment> {
@@ -2457,9 +2487,8 @@ impl AgentPlatformApi for FakeEngine {
         state
             .sandboxes
             .iter()
-            .enumerate()
-            .find(|(_, (id, _, _))| id == sandbox)
-            .map(|(ordinal, (id, display, st))| Self::record(id, display, st, ordinal as u64))
+            .find(|candidate| candidate.id == sandbox)
+            .map(Self::record)
             .ok_or_else(not_found)
     }
     async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
@@ -2470,14 +2499,27 @@ impl AgentPlatformApi for FakeEngine {
         {
             return Ok(Vec::new());
         }
+        let spared = self
+            .lists_before_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if !spared
+            && self
+                .failing_lists
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+        {
+            return Err(execute_refused());
+        }
+        let now = tokio::time::Instant::now();
         let state = self.state.lock().unwrap();
         // Newest first, so a caller that trusts the listing order picks the wrong one.
         Ok(state
             .sandboxes
             .iter()
-            .enumerate()
             .rev()
-            .map(|(ordinal, (id, display, st))| Self::record(id, display, st, ordinal as u64))
+            .filter(|sandbox| sandbox.listed_from <= now)
+            .map(Self::record)
             .collect())
     }
     async fn list_sandboxes_by_display_name(
@@ -2497,7 +2539,7 @@ impl AgentPlatformApi for FakeEngine {
             .lock()
             .unwrap()
             .sandboxes
-            .retain(|(id, _, _)| id != sandbox);
+            .retain(|candidate| candidate.id != sandbox);
         Ok(())
     }
     async fn execute(&self, _engine: &str, sandbox: &str, _input: &[u8]) -> ClientResult<Vec<u8>> {
@@ -2607,34 +2649,6 @@ async fn the_raw_key_never_reaches_google() {
     }
 }
 
-/// Two callers both looked before either created, so each made a sandbox. The newer one is
-/// terminated and both callers end with the oldest.
-#[tokio::test]
-async fn a_race_converges_on_the_oldest_sandbox() {
-    let engine = Arc::new(FakeEngine::default());
-    engine.blind_lists.store(2, Ordering::SeqCst);
-    let first = provider_from(engine.clone())
-        .get_or_create(keyed("race"))
-        .await
-        .unwrap();
-    let second = provider_from(engine.clone())
-        .get_or_create(keyed("race"))
-        .await
-        .unwrap();
-    // The first caller's re-check saw only its own sandbox; the second one's saw the older.
-    assert!(first.created);
-    assert!(
-        !second.created,
-        "the later caller yields to the older sandbox"
-    );
-    assert_eq!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
-    assert_eq!(
-        engine.live_ids(),
-        vec![first.sandbox.sandbox_id],
-        "the loser was terminated"
-    );
-}
-
 #[tokio::test]
 async fn get_by_key_finds_it() {
     let engine = Arc::new(FakeEngine::default());
@@ -2728,45 +2742,196 @@ async fn a_sandbox_whose_agent_is_still_booting_is_waited_for_not_replaced() {
     assert_eq!(engine.live_ids().len(), 1);
 }
 
-/// The racing newer caller must still converge when the older sandbox's agent is not up yet.
+/// Runs one `get_or_create` per entry of `starts` (milliseconds after the first), each through its
+/// own provider, all at once.
+async fn race(engine: &Arc<FakeEngine>, key: &str, starts: &[u64]) -> Vec<Result<ResolvedSandbox>> {
+    let callers = starts.iter().map(|start| {
+        let engine = engine.clone();
+        let (key, start) = (key.to_string(), *start);
+        async move {
+            tokio::time::sleep(Duration::from_millis(start)).await;
+            provider_from(engine).get_or_create(keyed(&key)).await
+        }
+    });
+    futures::future::join_all(callers).await
+}
+
+/// What every racing caller must end with: one live sandbox, one `created`, and every caller holding
+/// that sandbox.
+fn assert_converged(engine: &FakeEngine, results: &[Result<ResolvedSandbox>]) {
+    let live = engine.live_ids();
+    assert_eq!(
+        live.len(),
+        1,
+        "exactly one live sandbox for the key: {live:?}"
+    );
+    let created = results
+        .iter()
+        .filter(|r| r.as_ref().unwrap().created)
+        .count();
+    assert_eq!(created, 1, "exactly one caller created it");
+    for result in results {
+        assert_eq!(
+            result.as_ref().unwrap().sandbox.sandbox_id,
+            live[0],
+            "every caller holds the sandbox that is still live"
+        );
+    }
+}
+
+/// Two callers both looked before either created, so each made a sandbox. The newer one is
+/// terminated and both callers end with the oldest.
+#[tokio::test]
+async fn a_race_of_two_converges_on_the_oldest_sandbox() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lag_creates(&[40, 40]);
+    let results = race(&engine, "race", &[0, 5]).await;
+    assert_converged(&engine, &results);
+    assert!(
+        results[0].as_ref().unwrap().created,
+        "the older one kept its own"
+    );
+}
+
+/// The review's three-caller case. A is the oldest and is listed late; B and C are listed fast. C's
+/// first look at the key sees B, which is older than C and is itself about to yield to A. A caller
+/// that yields to B at once holds a sandbox that is then deleted.
+#[tokio::test]
+async fn three_racers_with_an_older_sandbox_listed_late_all_end_with_one_live_sandbox() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lag_creates(&[120, 5, 5]);
+    let results = race(&engine, "three", &[0, 10, 20]).await;
+    assert_converged(&engine, &results);
+    assert!(
+        results[0].as_ref().unwrap().created,
+        "A, the oldest, kept its own"
+    );
+}
+
+#[tokio::test]
+async fn five_racers_with_uneven_listing_lag_converge() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lag_creates(&[90, 10, 70, 5, 30]);
+    let results = race(&engine, "five", &[0, 3, 6, 9, 12]).await;
+    assert_converged(&engine, &results);
+}
+
+/// A caller that arrives while the oldest sandbox for the key is still inside its contention window
+/// does not hand it out at once: an older one may still appear and make it yield.
+#[tokio::test]
+async fn a_caller_waits_out_the_window_of_a_fresh_sandbox_before_returning_it() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lag_creates(&[100, 0]);
+    let first = provider_from(engine.clone());
+    let older = tokio::spawn(async move { first.get_or_create(keyed("fresh")).await });
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    // The first caller's own sandbox is not listed yet (lag 100 ms) so this caller creates one
+    // too; the older one then shows and wins for both.
+    let newer = provider_from(engine.clone())
+        .get_or_create(keyed("fresh"))
+        .await
+        .unwrap();
+    let older = older.await.unwrap().unwrap();
+    assert_eq!(older.sandbox.sandbox_id, newer.sandbox.sandbox_id);
+    assert_eq!(engine.live_ids(), vec![older.sandbox.sandbox_id]);
+}
+
 #[tokio::test]
 async fn a_race_converges_while_the_older_agent_is_still_booting() {
     let engine = Arc::new(FakeEngine::default());
-    engine.blind_lists.store(1, Ordering::SeqCst);
+    engine.lag_creates(&[0, 0]);
     let older = provider_from(engine.clone())
-        .get_or_create(keyed("race-boot"))
+        .create(keyed("race-boot"))
         .await
         .unwrap();
     engine
         .silent_probes
         .lock()
         .unwrap()
-        .insert(older.sandbox.sandbox_id.clone(), 3);
+        .insert(older.sandbox_id.clone(), 3);
     let newer = provider_from(engine.clone())
         .get_or_create(keyed("race-boot"))
         .await
         .unwrap();
-    assert_eq!(newer.sandbox.sandbox_id, older.sandbox.sandbox_id);
-    assert_eq!(engine.live_ids(), vec![older.sandbox.sandbox_id]);
-}
-
-/// An older sandbox that was not listed yet when the newer caller finished its own create (found
-/// live: a create's visibility lags its start by two to nine seconds). The newer caller looks again
-/// before it answers and yields to it.
-#[tokio::test]
-async fn a_caller_looks_again_for_an_older_sandbox_that_was_not_listed_yet() {
-    let engine = Arc::new(FakeEngine::default());
-    let older = provider_from(engine.clone())
-        .create(keyed("late-listed"))
-        .await
-        .unwrap();
-    // The newer caller's first look and its first re-check both miss the older sandbox.
-    engine.blind_lists.store(2, Ordering::SeqCst);
-    let newer = provider_from(engine.clone())
-        .get_or_create(keyed("late-listed"))
-        .await
-        .unwrap();
-    assert!(!newer.created, "yielded to the older sandbox");
+    assert!(!newer.created);
     assert_eq!(newer.sandbox.sandbox_id, older.sandbox_id);
     assert_eq!(engine.live_ids(), vec![older.sandbox_id]);
+}
+
+/// The re-check after a create is retried; a failure that clears does not change the answer.
+#[tokio::test]
+async fn a_failed_recheck_is_retried() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lists_before_failures.store(1, Ordering::SeqCst);
+    engine.failing_lists.store(2, Ordering::SeqCst);
+    let resolved = provider_from(engine.clone())
+        .get_or_create(keyed("retry"))
+        .await
+        .unwrap();
+    assert!(resolved.created);
+    assert_eq!(engine.live_ids(), vec![resolved.sandbox.sandbox_id]);
+}
+
+/// When the re-check cannot be answered, nothing says an older sandbox is absent: the caller gets
+/// an error, never `created = true` for a sandbox that may be a duplicate. The sandbox is kept,
+/// because another caller may already have yielded to it, and a retry finds it by the key.
+#[tokio::test]
+async fn an_unanswered_recheck_is_an_error_not_a_created_sandbox() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lists_before_failures.store(1, Ordering::SeqCst);
+    engine.failing_lists.store(1_000, Ordering::SeqCst);
+    let sut = provider_from(engine.clone());
+    let error = sut.get_or_create(keyed("no-recheck")).await.unwrap_err();
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+    assert!(error.retryable, "the caller may retry");
+    let kept = engine.live_ids();
+    assert_eq!(kept.len(), 1, "the sandbox is not deleted: {kept:?}");
+
+    engine.failing_lists.store(0, Ordering::SeqCst);
+    let retry = sut.get_or_create(keyed("no-recheck")).await.unwrap();
+    assert!(
+        !retry.created,
+        "the retry finds the kept sandbox by the key"
+    );
+    assert_eq!(retry.sandbox.sandbox_id, kept[0]);
+}
+
+/// A sandbox whose agent stopped answering still holds the key. The key resolves to its id, so a
+/// caller that has only the key can terminate it; get_or_create names it and makes no second one.
+#[tokio::test]
+async fn a_wedged_agent_does_not_lock_the_key() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let created = sut.get_or_create(keyed("wedged")).await.unwrap();
+    let id = created.sandbox.sandbox_id.clone();
+    engine
+        .silent_probes
+        .lock()
+        .unwrap()
+        .insert(id.clone(), usize::MAX / 2);
+
+    let found = sut
+        .get("wedged")
+        .await
+        .unwrap()
+        .expect("the key still resolves");
+    assert_eq!(
+        found.sandbox_id, id,
+        "get(key) names the sandbox even though its agent is silent"
+    );
+
+    let error = sut.get_or_create(keyed("wedged")).await.unwrap_err();
+    assert!(
+        error.to_string().contains(&id) || format!("{error:?}").contains(&id),
+        "the error names the sandbox to terminate: {error:?}"
+    );
+    assert_eq!(
+        engine.live_ids(),
+        vec![id.clone()],
+        "no second sandbox was made"
+    );
+
+    sut.terminate(&id).await.unwrap();
+    assert!(sut.get("wedged").await.unwrap().is_none());
+    assert!(sut.get_or_create(keyed("wedged")).await.unwrap().created);
 }
