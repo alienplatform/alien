@@ -275,16 +275,46 @@ impl SecretBackend for AwsSecret {
             })
         })?;
 
+        if expected == NO_VERSION {
+            // A secret with no current version gives AWSCURRENT to the first
+            // version put into it, with whatever other label the call names
+            // (measured on a real account). Two first writers therefore have one
+            // winner already, and moving the label by hand is refused for both.
+            return match self
+                .client
+                .describe_secret(DescribeSecretRequest {
+                    secret_id: self.secret_id.clone(),
+                })
+                .await
+            {
+                Ok(described) => {
+                    let won = described.version_ids_to_stages.iter().flatten().any(
+                        |(version, stages)| {
+                            *version == new_version && stages.iter().any(|stage| stage == CURRENT)
+                        },
+                    );
+                    self.drop_label(&stage, &new_version).await;
+                    if won {
+                        Ok(PutOutcome::Stored(record(&new_version, values)))
+                    } else {
+                        Ok(PutOutcome::Conflict)
+                    }
+                }
+                Err(error) => {
+                    self.drop_label(&stage, &new_version).await;
+                    Err(error).context(ErrorData::ConfigurationError {
+                        message: "Cannot check the first version of the identity secret".into(),
+                    })
+                }
+            };
+        }
+
         match self
             .client
             .update_secret_version_stage(UpdateSecretVersionStageRequest {
                 secret_id: self.secret_id.clone(),
                 version_stage: CURRENT.to_string(),
-                // The first version of an empty secret has none to move the
-                // label from: Secrets Manager refuses to attach a label that is
-                // already on another version without one, so a second first
-                // writer is refused.
-                remove_from_version_id: (expected != NO_VERSION).then_some(expected),
+                remove_from_version_id: Some(expected),
                 move_to_version_id: Some(new_version.clone()),
             })
             .await
@@ -488,6 +518,11 @@ mod tests {
             state
                 .values
                 .insert(id.clone(), request.secret_string.unwrap());
+            // Like Secrets Manager: the first version of a secret that has no
+            // current version becomes current whatever label was asked for.
+            if !state.labels.contains_key(CURRENT) {
+                state.labels.insert(CURRENT.to_string(), id.clone());
+            }
             for stage in request.version_stages.unwrap_or_default() {
                 state.labels.insert(stage, id.clone());
             }
@@ -757,5 +792,215 @@ mod tests {
         // Not found: the store keeps a key in memory and reports why it cannot save.
         assert!(task.encryption_key().await.is_ok());
         assert!(task.rotation_blocked().is_some());
+    }
+
+    /// Runs the store against the real Secrets Manager of the account in the
+    /// environment's AWS credentials. Ignored by default.
+    /// `OPERATOR_AWS_PROOF_PREFIX=<unique-name-prefix> cargo test -p alien-operator --lib \
+    ///  real_account -- --ignored --nocapture`. It creates two secrets whose names
+    /// start with the prefix and deletes exactly those at the end.
+    async fn real_client() -> Arc<dyn SecretsManagerApi> {
+        use alien_aws_clients::{
+            secrets_manager::SecretsManagerClient, AwsClientConfigExt, AwsCredentialProvider,
+        };
+        let environment: HashMap<String, String> = std::env::vars().collect();
+        let config = alien_aws_clients::AwsClientConfig::from_env(&environment)
+            .await
+            .unwrap();
+        let credentials = AwsCredentialProvider::from_config(config).await.unwrap();
+        Arc::new(SecretsManagerClient::new(
+            reqwest::Client::new(),
+            credentials,
+        ))
+    }
+
+    async fn real_private_labels(client: &Arc<dyn SecretsManagerApi>, name: &str) -> usize {
+        client
+            .describe_secret(DescribeSecretRequest {
+                secret_id: name.into(),
+            })
+            .await
+            .unwrap()
+            .version_ids_to_stages
+            .unwrap_or_default()
+            .values()
+            .flatten()
+            .filter(|stage| stage.starts_with(PENDING_PREFIX))
+            .count()
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a real AWS account"]
+    async fn real_account_rotation_race_stale_writer_and_first_write() {
+        let prefix = std::env::var("OPERATOR_AWS_PROOF_PREFIX").expect("OPERATOR_AWS_PROOF_PREFIX");
+        let client = real_client().await;
+        let with_value = format!("{prefix}-store-value");
+        let without_value = format!("{prefix}-store-novalue");
+        for (name, value) in [(&with_value, Some("{}")), (&without_value, None)] {
+            if let Ok(path) = std::env::var("OPERATOR_AWS_PROOF_CREATED") {
+                use std::io::Write;
+                writeln!(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap(),
+                    "secretsmanager secret name={name}"
+                )
+                .unwrap();
+            }
+            client
+                .create_secret(alien_aws_clients::secrets_manager::CreateSecretRequest {
+                    name: name.clone(),
+                    description: None,
+                    secret_string: value.map(str::to_string),
+                    secret_binary: None,
+                    kms_key_id: None,
+                    tags: None,
+                    force_overwrite_replica_secret: None,
+                    replica_regions: None,
+                    client_request_token: None,
+                })
+                .await
+                .unwrap();
+        }
+        let body_client = client.clone();
+        let (with_value_body, without_value_body) = (with_value.clone(), without_value.clone());
+        let result = tokio::spawn(async move {
+            let (client, with_value, without_value) =
+                (body_client, with_value_body, without_value_body);
+            let real_store = |name: &str| {
+                SecretIdentityStore::new(Arc::new(AwsSecret::new(client.clone(), name)), name)
+            };
+            // Value `{}`: key and identity round trip; a replacement task sees them.
+            let first = real_store(&with_value);
+            assert!(first.read().await.unwrap().is_none());
+            let key = first.encryption_key().await.unwrap();
+            first
+                .persist_enrolled(&state("dep_1", "key-a"))
+                .await
+                .unwrap();
+            let replacement = real_store(&with_value);
+            assert_eq!(replacement.encryption_key().await.unwrap(), key);
+            assert_eq!(replacement.read().await.unwrap().unwrap().current, "key-a");
+            // A stale writer is refused with the identity conflict, not another error.
+            let (a, b) = (real_store(&with_value), real_store(&with_value));
+            a.read().await.unwrap();
+            b.read().await.unwrap();
+            a.write(&state("dep_1", "key-from-a")).await.unwrap();
+            let error = b.write(&state("dep_1", "key-from-b")).await.unwrap_err();
+            assert!(
+                matches!(error.error, Some(ErrorData::IdentityConflict)),
+                "{error:?}"
+            );
+            assert_eq!(b.read().await.unwrap().unwrap().current, "key-from-a");
+            // Two tasks racing a rotation at once: exactly one wins, five times.
+            for round in 0..5 {
+                let (a, b) = (real_store(&with_value), real_store(&with_value));
+                a.read().await.unwrap();
+                b.read().await.unwrap();
+                let (sa, sb) = (
+                    state("dep_1", &format!("round-{round}-a")),
+                    state("dep_1", &format!("round-{round}-b")),
+                );
+                let (ra, rb) = tokio::join!(a.write(&sa), b.write(&sb));
+                assert_eq!(ra.is_ok() as u8 + rb.is_ok() as u8, 1, "{ra:?} {rb:?}");
+                for loser in [&ra, &rb].into_iter().filter(|r| r.is_err()) {
+                    assert!(matches!(
+                        loser.as_ref().unwrap_err().error,
+                        Some(ErrorData::IdentityConflict)
+                    ));
+                }
+            }
+            assert_eq!(real_private_labels(&client, &with_value).await, 0);
+            // A secret created without a value takes its first identity; two first writers leave one.
+            let (a, b) = (real_store(&without_value), real_store(&without_value));
+            assert!(a.read().await.unwrap().is_none());
+            assert!(b.read().await.unwrap().is_none());
+            let (sa, sb) = (state("dep_1", "first-a"), state("dep_1", "first-b"));
+            let (ra, rb) = tokio::join!(a.write(&sa), b.write(&sb));
+            assert_eq!(ra.is_ok() as u8 + rb.is_ok() as u8, 1, "{ra:?} {rb:?}");
+            assert!(real_store(&without_value).read().await.unwrap().is_some());
+            assert_eq!(real_private_labels(&client, &without_value).await, 0);
+        });
+        let result = result.await;
+
+        for name in [&with_value, &without_value] {
+            client
+                .delete_secret(alien_aws_clients::secrets_manager::DeleteSecretRequest {
+                    secret_id: name.clone(),
+                    force_delete_without_recovery: Some(true),
+                    recovery_window_in_days: None,
+                })
+                .await
+                .unwrap();
+        }
+        if let Err(error) = result {
+            std::panic::resume_unwind(error.into_panic());
+        }
+    }
+
+    /// Two first writers racing on a secret created without a value, on fresh
+    /// secrets, several times: each round has exactly one winner.
+    #[tokio::test]
+    #[ignore = "needs a real AWS account"]
+    async fn real_account_first_writer_race_repeated() {
+        let prefix = std::env::var("OPERATOR_AWS_PROOF_PREFIX").expect("OPERATOR_AWS_PROOF_PREFIX");
+        let client = real_client().await;
+        for round in 0..6 {
+            let name = format!("{prefix}-first-{round}");
+            if let Ok(path) = std::env::var("OPERATOR_AWS_PROOF_CREATED") {
+                use std::io::Write;
+                writeln!(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap(),
+                    "secretsmanager secret name={name}"
+                )
+                .unwrap();
+            }
+            client
+                .create_secret(alien_aws_clients::secrets_manager::CreateSecretRequest {
+                    name: name.clone(),
+                    description: None,
+                    secret_string: None,
+                    secret_binary: None,
+                    kms_key_id: None,
+                    tags: None,
+                    force_overwrite_replica_secret: None,
+                    replica_regions: None,
+                    client_request_token: None,
+                })
+                .await
+                .unwrap();
+            let (c, n) = (client.clone(), name.clone());
+            let result = tokio::spawn(async move {
+                let real_store = |name: &str| {
+                    SecretIdentityStore::new(Arc::new(AwsSecret::new(c.clone(), name)), name)
+                };
+                let (a, b) = (real_store(&n), real_store(&n));
+                assert!(a.read().await.unwrap().is_none());
+                assert!(b.read().await.unwrap().is_none());
+                let (sa, sb) = (state("dep_1", "first-a"), state("dep_1", "first-b"));
+                let (ra, rb) = tokio::join!(a.write(&sa), b.write(&sb));
+                assert_eq!(ra.is_ok() as u8 + rb.is_ok() as u8, 1, "{ra:?} {rb:?}");
+                assert!(real_store(&n).read().await.unwrap().is_some());
+                assert_eq!(real_private_labels(&c, &n).await, 0);
+            })
+            .await;
+            client
+                .delete_secret(alien_aws_clients::secrets_manager::DeleteSecretRequest {
+                    secret_id: name.clone(),
+                    force_delete_without_recovery: Some(true),
+                    recovery_window_in_days: None,
+                })
+                .await
+                .unwrap();
+            if let Err(error) = result {
+                std::panic::resume_unwind(error.into_panic());
+            }
+        }
     }
 }
