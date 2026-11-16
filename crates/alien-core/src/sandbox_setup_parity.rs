@@ -47,3 +47,18 @@ pub const GCP_SANDBOX_ITEMS: &[(&str, DirectSetup)] = &[
         DirectSetup::Pending("signJwt on the signer for each execute owner"),
     ),
 ];
+
+/// Items the Azure sandbox emitter produces, keyed by what each one is for.
+pub const AZURE_SANDBOX_ITEMS: &[(&str, DirectSetup)] = &[
+    ("sandbox-group", DirectSetup::Creates),
+    (
+        "vnet-connection",
+        DirectSetup::PackageOnly(
+            "internet egress needs the package's dedicated sandbox subnets; a direct setup run \
+             refuses it and names the package",
+        ),
+    ),
+    ("role-assignment:access", DirectSetup::Creates),
+    ("role-assignment:images", DirectSetup::Creates),
+    ("role-assignment:workload", DirectSetup::Creates),
+];
