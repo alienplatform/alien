@@ -13,14 +13,16 @@
 //!    refuses the move when `AWSCURRENT` is no longer on that version, and the
 //!    writer then re-reads.
 //!
-//! A crash between the two leaves an unread version with the private label; the
-//! label is removed on the next successful or refused write of the same task.
+//! A crash between the two leaves an unread version with a private label that
+//! holds a copy of the key. Each start removes every private label it finds
+//! (`sweep_pending_labels`); a write in progress in another task at that moment
+//! fails its promotion and re-reads, which the store already handles.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use alien_aws_clients::secrets_manager::{
-    GetSecretValueRequest, PutSecretValueRequest, SecretsManagerApi,
+    DescribeSecretRequest, GetSecretValueRequest, PutSecretValueRequest, SecretsManagerApi,
     UpdateSecretVersionStageRequest,
 };
 use alien_client_core::ErrorData as ClientErrorData;
@@ -37,6 +39,7 @@ use crate::{
 };
 
 const CURRENT: &str = "AWSCURRENT";
+const PENDING_PREFIX: &str = "operator-pending-";
 
 pub(crate) struct AwsSecret {
     client: Arc<dyn SecretsManagerApi>,
@@ -68,17 +71,42 @@ impl AwsSecret {
                 message: "Cannot create the AWS credential provider for the identity secret".into(),
             },
         )?;
-        Ok(Self::new(
+        let store = Self::new(
             Arc::new(SecretsManagerClient::new(
                 reqwest::Client::new(),
                 credentials,
             )),
             secret_id,
-        ))
+        );
+        store.sweep_pending_labels().await;
+        Ok(store)
+    }
+
+    /// Remove the private labels a crashed writer left behind, so their versions
+    /// (and the key copy in them) are not kept. Best effort: a failure here
+    /// changes nothing that is read.
+    pub(crate) async fn sweep_pending_labels(&self) {
+        let Ok(described) = self
+            .client
+            .describe_secret(DescribeSecretRequest {
+                secret_id: self.secret_id.clone(),
+            })
+            .await
+        else {
+            return;
+        };
+        for (version, stages) in described.version_ids_to_stages.unwrap_or_default() {
+            for stage in stages
+                .iter()
+                .filter(|stage| stage.starts_with(PENDING_PREFIX))
+            {
+                self.drop_label(stage, &version).await;
+            }
+        }
     }
 
     fn private_stage() -> String {
-        format!("operator-pending-{}", Uuid::new_v4().simple())
+        format!("{PENDING_PREFIX}{}", Uuid::new_v4().simple())
     }
 
     /// Drop a private label so its version is no longer kept. Best effort.
@@ -345,7 +373,18 @@ mod tests {
             &self,
             _: DescribeSecretRequest,
         ) -> ClientResult<DescribeSecretResponse> {
-            unimplemented!()
+            let state = self.state.lock().unwrap();
+            let mut stages: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+            for (label, version) in &state.labels {
+                stages
+                    .entry(version.clone())
+                    .or_default()
+                    .push(label.clone());
+            }
+            Ok(
+                serde_json::from_value(serde_json::json!({ "VersionIdsToStages": stages }))
+                    .unwrap(),
+            )
         }
         async fn get_secret_value(
             &self,
@@ -522,6 +561,27 @@ mod tests {
         // And can rotate: the orphan version is never promoted.
         replacement.write(&state("dep_1", "key-b")).await.unwrap();
         assert_eq!(store(&fake).read().await.unwrap().unwrap().current, "key-b");
+    }
+
+    #[tokio::test]
+    async fn a_start_removes_the_private_labels_a_crashed_writer_left() {
+        let fake = FakeSecretsManager::with_value("{}");
+        let backend = AwsSecret::new(fake.clone(), "secret");
+        // The first call of a write succeeded; the process died before the second.
+        fake.put_secret_value(PutSecretValueRequest {
+            secret_id: "secret".into(),
+            secret_binary: None,
+            secret_string: Some("{\"key\":\"copy\"}".into()),
+            version_stages: Some(vec![format!("{PENDING_PREFIX}dead")]),
+            client_request_token: Some("0".repeat(32)),
+        })
+        .await
+        .unwrap();
+        assert_eq!(fake.private_labels().len(), 1);
+        backend.sweep_pending_labels().await;
+        assert!(fake.private_labels().is_empty());
+        // What is read is unchanged.
+        assert!(backend.get().await.unwrap().is_some());
     }
 
     #[tokio::test]

@@ -139,45 +139,70 @@ async fn clients() -> Result<Clients> {
 
 // -------------------------------------------------------------------- logs
 
-/// The saved position: last event time in milliseconds and the ids of the
-/// events already stored at exactly that time.
+/// How far behind the newest stored event a late event may still arrive and be
+/// stored. A group with several streams delivers events out of order.
+const LATE_EVENT_WINDOW_MS: i64 = 30_000;
+/// Ids kept for de-duplication inside the window. A group that writes more than
+/// this within the window re-reads its newest events only: a later event older
+/// than the oldest kept id is not collected.
+const MAX_SEEN_EVENTS: usize = 1000;
+
+/// The saved position: the newest event time in milliseconds, and the time and id
+/// of every stored event within the late-event window before it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct LogPosition {
     pub timestamp_ms: i64,
-    pub seen_ids: Vec<String>,
+    pub seen: Vec<(i64, String)>,
 }
 
 impl LogPosition {
     pub(crate) fn encode(&self) -> String {
-        format!("{}|{}", self.timestamp_ms, self.seen_ids.join(","))
+        let seen: Vec<String> = self
+            .seen
+            .iter()
+            .map(|(ts, id)| format!("{ts}:{id}"))
+            .collect();
+        format!("{}|{}", self.timestamp_ms, seen.join(","))
     }
 
     pub(crate) fn decode(text: &str) -> Option<Self> {
-        let (timestamp, ids) = text.split_once('|')?;
+        let (timestamp, seen) = text.split_once('|')?;
+        let mut parsed = Vec::new();
+        for entry in seen.split(',').filter(|entry| !entry.is_empty()) {
+            let (ts, id) = entry.split_once(':')?;
+            parsed.push((ts.parse().ok()?, id.to_string()));
+        }
         Some(Self {
             timestamp_ms: timestamp.parse().ok()?,
-            seen_ids: ids
-                .split(',')
-                .filter(|id| !id.is_empty())
-                .map(str::to_string)
-                .collect(),
+            seen: parsed,
         })
     }
 
-    /// Whether an event was stored before.
+    /// The `startTime` to ask for: the start of the window, or, when the id list
+    /// is full, the oldest id it still holds.
+    pub(crate) fn start_time(&self) -> i64 {
+        let window = self.timestamp_ms - LATE_EVENT_WINDOW_MS;
+        match self.seen.first() {
+            Some((oldest, _)) if self.seen.len() >= MAX_SEEN_EVENTS => window.max(*oldest),
+            _ => window,
+        }
+    }
+
+    /// Whether an event was stored before (or is older than anything kept).
     pub(crate) fn already_stored(&self, timestamp_ms: i64, event_id: &str) -> bool {
-        timestamp_ms < self.timestamp_ms
-            || (timestamp_ms == self.timestamp_ms && self.seen_ids.iter().any(|id| id == event_id))
+        timestamp_ms < self.start_time() || self.seen.iter().any(|(_, id)| id == event_id)
     }
 
     /// The position after storing an event.
     pub(crate) fn advance(&mut self, timestamp_ms: i64, event_id: &str) {
-        if timestamp_ms > self.timestamp_ms {
-            self.timestamp_ms = timestamp_ms;
-            self.seen_ids.clear();
-        }
-        if timestamp_ms == self.timestamp_ms && !self.seen_ids.iter().any(|id| id == event_id) {
-            self.seen_ids.push(event_id.to_string());
+        self.timestamp_ms = self.timestamp_ms.max(timestamp_ms);
+        self.seen.push((timestamp_ms, event_id.to_string()));
+        let floor = self.timestamp_ms - LATE_EVENT_WINDOW_MS;
+        self.seen.retain(|(ts, _)| *ts >= floor);
+        if self.seen.len() > MAX_SEEN_EVENTS {
+            self.seen.sort_by_key(|(ts, _)| *ts);
+            let excess = self.seen.len() - MAX_SEEN_EVENTS;
+            self.seen.drain(..excess);
         }
     }
 }
@@ -320,15 +345,15 @@ pub(crate) async fn poll_group(
         .await?
         .and_then(|offset| LogPosition::decode(&offset.timestamp))
         .unwrap_or(LogPosition {
-            timestamp_ms: started_ms,
-            seen_ids: Vec::new(),
+            timestamp_ms: started_ms + LATE_EVENT_WINDOW_MS,
+            seen: Vec::new(),
         });
     let mut total = 0;
     let mut token: Option<String> = None;
     for _ in 0..MAX_PAGES_PER_POLL {
         let mut request = json!({
             "logGroupName": group,
-            "startTime": position.timestamp_ms,
+            "startTime": position.start_time(),
             "limit": PAGE_LIMIT,
         });
         if let Some(token) = &token {
@@ -607,14 +632,14 @@ mod tests {
     fn position_round_trips() {
         let position = LogPosition {
             timestamp_ms: 1700,
-            seen_ids: vec!["a".into(), "b".into()],
+            seen: vec![(1690, "a".into()), (1700, "b".into())],
         };
         assert_eq!(LogPosition::decode(&position.encode()), Some(position));
         assert_eq!(
             LogPosition::decode("5|"),
             Some(LogPosition {
                 timestamp_ms: 5,
-                seen_ids: vec![]
+                seen: vec![]
             })
         );
         assert_eq!(LogPosition::decode("garbage"), None);
@@ -624,13 +649,13 @@ mod tests {
     fn resume_drops_stored_events_and_keeps_new_ones_at_the_same_millisecond() {
         let saved = LogPosition {
             timestamp_ms: 100,
-            seen_ids: vec!["a".into()],
+            seen: vec![(100, "a".into())],
         };
         let parsed = parse_events_page(
             "/ecs/web",
             &page(
                 &[
-                    (99, "z", "old"),
+                    (99, "z", "late but new"),
                     (100, "a", "stored"),
                     (100, "b", "same ms"),
                     (101, "c", "new"),
@@ -640,11 +665,58 @@ mod tests {
             &saved,
         );
         let bodies: Vec<_> = parsed.records.iter().map(|r| r.body.as_str()).collect();
-        assert_eq!(bodies, ["same ms", "new"]);
+        assert_eq!(bodies, ["late but new", "same ms", "new"]);
         assert_eq!(parsed.position.timestamp_ms, 101);
-        assert_eq!(parsed.position.seen_ids, ["c"]);
-        assert_eq!(parsed.records[0].timestamp_unix_nanos, 100_000_000);
+        assert_eq!(parsed.records[1].timestamp_unix_nanos, 100_000_000);
         assert_eq!(parsed.records[0].container, "/ecs/web");
+    }
+
+    #[test]
+    fn an_event_from_a_slower_stream_is_collected_inside_the_window_and_never_twice() {
+        // Stream one is read up to t=10_000; stream two's event from t=4_000 arrives later.
+        let first = parse_events_page(
+            "/ecs/web",
+            &page(&[(9_000, "a", "one"), (10_000, "b", "two")], None),
+            &LogPosition::default(),
+        );
+        assert_eq!(first.records.len(), 2);
+        let second = parse_events_page(
+            "/ecs/web",
+            &page(
+                &[
+                    (4_000, "late", "late"),
+                    (9_000, "a", "one"),
+                    (10_000, "b", "two"),
+                ],
+                None,
+            ),
+            &first.position,
+        );
+        let bodies: Vec<_> = second.records.iter().map(|r| r.body.as_str()).collect();
+        assert_eq!(bodies, ["late"]);
+        // Older than the window: not collected, and the query no longer asks for it.
+        assert_eq!(second.position.start_time(), 10_000 - LATE_EVENT_WINDOW_MS);
+        let too_late = parse_events_page(
+            "/ecs/web",
+            &page(&[(10_000 - LATE_EVENT_WINDOW_MS - 1, "x", "x")], None),
+            &second.position,
+        );
+        assert!(too_late.records.is_empty());
+    }
+
+    #[test]
+    fn the_id_list_is_pruned_to_the_window_and_capped() {
+        let mut position = LogPosition::default();
+        position.advance(1_000, "old");
+        position.advance(1_000 + LATE_EVENT_WINDOW_MS + 5, "new");
+        assert_eq!(position.seen.len(), 1);
+        let mut busy = LogPosition::default();
+        for i in 0..(MAX_SEEN_EVENTS as i64 + 50) {
+            busy.advance(1_000_000 + i, &format!("e{i}"));
+        }
+        assert_eq!(busy.seen.len(), MAX_SEEN_EVENTS);
+        // Full list: the query starts at the oldest id kept, so nothing is read twice.
+        assert_eq!(busy.start_time(), busy.seen[0].0);
     }
 
     #[test]
