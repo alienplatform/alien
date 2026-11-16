@@ -67,6 +67,9 @@ Accepted limitations of this version:
   setup re-run. The binding checks the gateway's protocol version through the admin
   API and refuses with "re-run setup to update the egress gateway" when it cannot
   serve it. The admin protocol stays backward compatible.
+  Re-running setup with a new gateway image interrupts sandbox internet access for
+  about 2-3 minutes. Access fails closed during that time (403, never open). Running
+  internet sandboxes must be recreated afterwards.
 - **Patching.** The VMs use platform-orchestrated patching (`AutomaticByPlatform`),
   so Azure patches the OS and they sit in an availability set so a reboot takes one
   gateway down at a time. A running sandbox keeps its egress while one VM is down:
