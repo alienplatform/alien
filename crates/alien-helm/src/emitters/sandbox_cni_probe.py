@@ -20,6 +20,67 @@ FIX_HINT = (
     "--network-policy azure|calico|cilium."
 )
 
+# How long a pod that must be denied may keep reaching the listener before enforcement is
+# declared absent. A CNI applies a policy to a new pod's interface shortly after the pod
+# starts, so the first requests can still get through; a policy that never takes effect
+# still fails once this window ends.
+ENFORCEMENT_WINDOW_SECONDS = 45
+
+
+def client_code(url, marker):
+    """Source of the client pods. `DENIED` and `RECOVER` are set by the caller before it."""
+    return (
+        "import errno,socket,sys,time,urllib.request,urllib.error\n"
+        "def require(condition,message):\n"
+        " if not condition: raise RuntimeError(message)\n"
+        "opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
+        "RECOVER=globals().get('RECOVER',False)\n"
+        "WINDOW=globals().get('WINDOW',%d)\n"
+        "LOG=globals().get('LOG','/dev/termination-log')\n"
+        "BLOCKED=(errno.ECONNREFUSED,errno.ENETUNREACH,errno.EHOSTUNREACH,errno.ETIMEDOUT)\n"
+        "def reach():\n"
+        " # True when the listener answered, False when the network refused or dropped it.\n"
+        " try:\n"
+        f"  body=opener.open({url!r},timeout=3).read()\n"
+        f"  require(body=={marker.encode()!r}, 'wrong positive control body')\n"
+        "  return True\n"
+        " except (urllib.error.URLError,TimeoutError,OSError) as error:\n"
+        "  reason=getattr(error,'reason',error)\n"
+        "  require(isinstance(reason,TimeoutError) or getattr(reason,'errno',None) in BLOCKED, repr(error))\n"
+        "  return False\n"
+        "def note(text):\n"
+        " print(text,flush=True)\n"
+        " try: open(LOG,'w').write(text)\n"
+        " except OSError: pass\n"
+        "start=time.monotonic()\n"
+        "if DENIED:\n"
+        " # The policy may need a moment to reach a new pod: wait, bounded, for the first\n"
+        " # refusal, then require it to hold. Reaching the listener after a refusal, or never\n"
+        " # being refused within the window, is a failure.\n"
+        " reachable=0\n"
+        " while reach():\n"
+        "  reachable+=1\n"
+        "  require(time.monotonic()-start<WINDOW, 'NetworkPolicy did not block traffic')\n"
+        "  time.sleep(1)\n"
+        " blocked_after=time.monotonic()-start\n"
+        " for _ in range(2):\n"
+        "  time.sleep(1)\n"
+        "  require(not reach(), 'NetworkPolicy did not block traffic: reachable again after a refusal')\n"
+        " note('blocked after %%.1fs (%%d reachable attempts first)'%%(blocked_after,reachable))\n"
+        "else:\n"
+        # A recovering control waits, within the pod deadline, for a CNI that removes a
+        # deleted policy slowly; it must still be reached once.
+        " reached=False\n"
+        " for attempt in range(30 if RECOVER else 3):\n"
+        "  if reach():\n"
+        "   reached=True\n"
+        "   if RECOVER: break\n"
+        "  else:\n"
+        "   require(RECOVER,'positive control was not reached')\n"
+        "  time.sleep(1)\n"
+        " require(reached,'traffic did not resume after removing the policy')\n"
+    ) % ENFORCEMENT_WINDOW_SECONDS
+
 
 def main():
     namespace = os.environ["PROBE_NAMESPACE"]
@@ -150,6 +211,10 @@ def main():
                 raise RuntimeError(f"{role} probe failed: NetworkPolicy enforcement is unproven; "
                                    + " ".join(details)[:1024] + " | " + FIX_HINT)
             if predicate(current):
+                notes = [status.get("state", {}).get("terminated", {}).get("message", "")
+                         for status in current.get("status", {}).get("containerStatuses", [])]
+                if any(notes):
+                    print(f"{role}: " + " ".join(notes)[:256], flush=True)
                 print(f"{role}: {phase}; node={current['spec'].get('nodeName')}; "
                       f"ip={current.get('status', {}).get('podIP')}", flush=True)
                 return current
@@ -201,30 +266,7 @@ def main():
         ip = listener["status"]["podIP"]
         authority = f"[{ip}]" if ":" in ip else ip
         url = f"http://{authority}:8080/"
-        probe = (
-            "import errno,socket,time,urllib.request,urllib.error\n"
-            "def require(condition,message):\n"
-            " if not condition: raise RuntimeError(message)\n"
-            "opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
-            # A recovering control waits, within the pod deadline, for a CNI that removes a
-            # deleted policy slowly; it must still be reached once.
-            "RECOVER=globals().get('RECOVER',False)\n"
-            "reached=False\n"
-            "for attempt in range(30 if RECOVER else 3):\n"
-            " try:\n"
-            f"  body=opener.open({url!r},timeout=3).read()\n"
-            f"  require(body=={marker.encode()!r}, 'wrong positive control body')\n"
-            "  require(not DENIED, 'NetworkPolicy did not block traffic')\n"
-            "  reached=True\n"
-            "  if RECOVER: break\n"
-            " except (urllib.error.URLError,TimeoutError,OSError) as error:\n"
-            "  reason=getattr(error,'reason',error)\n"
-            "  require((DENIED or RECOVER) and (isinstance(reason,TimeoutError) or "
-            "getattr(reason,'errno',None) in (errno.ECONNREFUSED,errno.ENETUNREACH,"
-            "errno.EHOSTUNREACH,errno.ETIMEDOUT)), repr(error))\n"
-            " time.sleep(1)\n"
-            "require(DENIED or reached, 'traffic did not resume after removing the policy')\n"
-        )
+        probe = client_code(url, marker)
         # A successful negative result is only meaningful bracketed by working controls.
         for role, denied in [("control", False), ("denied", True), ("control-after", False)]:
             create(pods, pod(role, f"DENIED={denied!r}\n" + probe))
