@@ -512,7 +512,7 @@ class SandboxPreview:
     ``0`` means it does not expire (the local backend).
 
     ``caller_authorization_header`` names the header that carries your own bearer token so it
-    reaches the workload unchanged: ``Authorization`` except where the platform's edge consumes
+    reaches the workload unchanged: ``Authorization`` except where the cloud's edge consumes
     that header. ``subprotocols`` is what a WebSocket client that cannot set headers must offer,
     in order and after its own protocols; it is empty where the headers alone are enough."""
 

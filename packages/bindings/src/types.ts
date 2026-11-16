@@ -475,7 +475,7 @@ export interface SandboxPreview {
   expiresInSeconds: number
   /**
    * Header that carries your own bearer token so it reaches the workload unchanged. It is
-   * `Authorization` except where the platform's edge consumes that header; set it to your token
+   * `Authorization` except where the cloud's edge consumes that header; set it to your token
    * under this name, and keep every header in `headers` as returned.
    */
   callerAuthorizationHeader: string
