@@ -1,23 +1,14 @@
 name: Kind lifecycle
 
-# The Kind compute-pool and Remote Operator lifecycle tests take ~35 min, so they
-# run after merge instead of on every PR push. Start this workflow manually on a
-# branch to run them before merging. A failure on main opens an issue. A PR that
-# changes this file runs it, so the workflow itself is tested before merge.
+# The Kind compute-pool and Remote Operator lifecycle tests take ~35 min, so they run nightly
+# (and only when main changed since the last green run) instead of on every PR push or merge.
+# Start this workflow manually on a branch to run them before merging. A failure on main opens
+# an issue. A PR that changes this file runs it, so the workflow itself is tested before merge.
 on:
+  schedule:
+    - cron: "23 1 * * *"
   pull_request:
     paths:
-      - '.github/workflows/kind-lifecycle.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'crates/alien-core/**'
-      - 'crates/alien-helm/**'
-      - 'crates/alien-infra/**'
-      - 'crates/alien-manager/**'
-      - 'crates/alien-operator/**'
-      - 'scripts/kind-restricted-pods.sh'
-      - 'crates/alien-terraform/**'
       - '.github/workflows/kind-lifecycle.yml'
   workflow_dispatch:
 
@@ -29,10 +20,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Skips the scheduled run when main has not changed since this workflow last passed on it.
+  gate:
+    name: Main changed since the last green run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      changed: ${{ steps.gate.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - id: gate
+        uses: ./.github/actions/changed-since-last-success
+
   kind-lifecycle:
     name: Kind lifecycle
-    runs-on: depot-ubuntu-24.04-arm-8
-    timeout-minutes: 90
+    needs: gate
+    if: needs.gate.outputs.changed == 'true'
+    # The tests wait on clusters and rollouts; the smaller runner doubles the compile time, not
+    # the price, and nobody waits on a nightly run.
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 150
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
