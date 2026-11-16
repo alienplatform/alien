@@ -386,3 +386,22 @@ spec:
         digest = PROBE_DIGEST,
     )
 }
+
+#[cfg(test)]
+mod probe_pod_tests {
+    /// A pod under a Kata runtime class never started with a 64Mi memory limit on AKS: the
+    /// runtime timed out creating the container ("create container timeout"), so the probe
+    /// failed and the install with it. 128Mi started on the same node and image.
+    #[test]
+    fn the_probe_pods_memory_limit_is_enough_for_a_kata_pod() {
+        let script = include_str!("sandbox_cni_probe.py");
+        let limit = script
+            .split("\"limits\": {")
+            .nth(1)
+            .and_then(|rest| rest.split("\"memory\": \"").nth(1))
+            .and_then(|rest| rest.split("Mi\"").next())
+            .and_then(|mebibytes| mebibytes.parse::<u32>().ok())
+            .expect("the probe pod spec states a memory limit in Mi");
+        assert!(limit >= 128, "memory limit is {limit}Mi");
+    }
+}
