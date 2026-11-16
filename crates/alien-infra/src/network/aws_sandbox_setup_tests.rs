@@ -1604,3 +1604,35 @@ async fn setup_stops_repairing_a_route_that_keeps_coming_back() {
         "the peering route is removed: {routes}"
     );
 }
+
+/// The deployment preflights read the installed network's `sandboxNetwork` and the installed
+/// management resource's `managementPermissionsRevision` from the saved controller state by
+/// these names. Renaming either field would silently turn that check off.
+#[test]
+fn saved_controller_state_keeps_the_names_the_preflights_read() {
+    use crate::core::ResourceController;
+    use crate::remote_stack_management::AwsRemoteStackManagementController;
+
+    let mut network = AwsNetworkController::mock_ready("vpc-1", 2);
+    network.sandbox_network = Some(alien_core::import::data::AwsSandboxNetwork {
+        sandbox_subnet_ids: vec![],
+        gateway_subnet_ids: vec!["subnet-gw-1".to_string()],
+        sandbox_cidrs: vec![],
+        gateway_cidrs: vec![],
+        workload_cidrs: vec![],
+        vpc_cidrs: vec![],
+    });
+    let saved = serde_json::to_value(&network).unwrap();
+    assert!(!saved["sandboxNetwork"].is_null(), "{saved}");
+    let unset = serde_json::to_value(AwsNetworkController::mock_ready("vpc-1", 2)).unwrap();
+    assert!(
+        unset.get("sandboxNetwork").map_or(true, |v| v.is_null()),
+        "{unset}"
+    );
+
+    let mut management = AwsRemoteStackManagementController::mock_ready("test-prefix-management");
+    management.management_permissions_revision = Some("revision-1".to_string());
+    let saved = serde_json::to_value(&management).unwrap();
+    assert_eq!(saved["managementPermissionsRevision"], "revision-1");
+    let _ = management.get_status();
+}

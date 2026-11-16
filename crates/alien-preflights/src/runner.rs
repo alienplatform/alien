@@ -841,6 +841,22 @@ impl PreflightRunner {
                         "this release changes the management permissions, which only setup applies"
                             .to_string(),
                 }));
+            } else if compile_checks_succeeded
+                && direct_setup
+                && !config.setup_run
+                && !imported_setup_authorized
+                && platform == Platform::Aws
+                && sandbox_gateway_subnets_missing(&mutated_stack, stack_state)
+            {
+                // The management policy is limited to the subnets setup wrote it for. A runtime
+                // update would create the gateway subnets, and the management role could not use
+                // them. Setup creates them and rewrites the policy in the same run.
+                return Err(AlienError::new(ErrorData::SetupRequired {
+                    message: "this release needs internet access for a sandbox, which needs new \
+                              network subnets and a management permissions update that only setup \
+                              applies. Run a setup update, then deploy this release again"
+                        .to_string(),
+                }));
             } else {
                 info!("Applying explicit authority for frozen resource changes");
             }
@@ -888,6 +904,32 @@ impl PreflightRunner {
 
         Ok((mutated_stack, summary, setup_update_authorized))
     }
+}
+
+/// Whether the target needs the sandbox gateway while the installed network has recorded no
+/// sandbox subnets, on an install whose management permissions carry a recorded revision (a
+/// policy written by a version that limits it to the network's subnets). Installs without a
+/// recorded revision have no such limit and are not asked.
+#[cfg(feature = "runtime-checks")]
+fn sandbox_gateway_subnets_missing(target: &Stack, installed: &StackState) -> bool {
+    if !alien_core::sandbox_egress::has_sandbox_gateway(target) {
+        return false;
+    }
+    let Ok(network) = alien_core::sandbox_egress::sandbox_egress_network(target) else {
+        return false;
+    };
+    let recorded = |id: &str, field: &str| {
+        installed
+            .resources
+            .get(id)
+            .and_then(|state| state.internal_state.as_ref())
+            .map(|state| state.get(field).is_some_and(|value| !value.is_null()))
+    };
+    recorded(network.id, "sandboxNetwork") == Some(false)
+        && installed.resources.iter().any(|(id, state)| {
+            state.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+                && recorded(id, "managementPermissionsRevision") == Some(true)
+        })
 }
 
 /// The target as the setup re-import hashed it: without the declined Live resources an update
@@ -2237,6 +2279,170 @@ mod setup_update_authorization_tests {
         .await
         .expect("a local update has no management grant to wait for");
         assert_eq!(prepared.permissions, widened.permissions);
+    }
+
+    /// A target that needs the sandbox gateway, and an install state for it.
+    #[cfg(feature = "runtime-checks")]
+    fn gateway_target_and_state(
+        platform: Platform,
+        sandbox_network: Option<serde_json::Value>,
+        management_revision: Option<&str>,
+    ) -> (Stack, StackState) {
+        let entry = |config: alien_core::Resource, lifecycle| alien_core::ResourceEntry {
+            config,
+            lifecycle,
+            dependencies: vec![],
+            display_name: None,
+            description: None,
+            remote_access: false,
+            enabled_when: None,
+        };
+        let network = alien_core::Network::new("net".to_string())
+            .settings(alien_core::NetworkSettings::Create {
+                cidr: Some("10.0.0.0/16".to_string()),
+                availability_zones: 2,
+            })
+            .build();
+        let gateway = alien_core::Container::new(
+            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+        )
+        .code(alien_core::ContainerCode::Image {
+            image: "example:latest".into(),
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "1".into(),
+            desired: "1".into(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "128Mi".into(),
+            desired: "128Mi".into(),
+        })
+        .permissions("app".into())
+        .build();
+        let mut target = empty_stack();
+        target.resources.insert(
+            "net".into(),
+            entry(
+                alien_core::Resource::new(network.clone()),
+                ResourceLifecycle::Frozen,
+            ),
+        );
+        target.resources.insert(
+            alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID.into(),
+            entry(alien_core::Resource::new(gateway), ResourceLifecycle::Live),
+        );
+
+        let mut state = StackState::new(platform);
+        let resource_state =
+            |resource_type: &str, config: alien_core::Resource, internal: serde_json::Value| {
+                let mut resource = alien_core::StackResourceState::new_pending(
+                    resource_type.to_string(),
+                    config,
+                    Some(ResourceLifecycle::Frozen),
+                    vec![],
+                );
+                resource.internal_state = Some(internal);
+                resource
+            };
+        state.resources.insert(
+            "net".into(),
+            resource_state(
+                "network",
+                alien_core::Resource::new(network),
+                match sandbox_network {
+                    Some(recorded) => serde_json::json!({ "sandboxNetwork": recorded }),
+                    None => serde_json::json!({ "sandboxNetwork": null }),
+                },
+            ),
+        );
+        state.resources.insert(
+            "management".into(),
+            resource_state(
+                "remote-stack-management",
+                alien_core::Resource::new(
+                    alien_core::RemoteStackManagement::new("management".to_string()).build(),
+                ),
+                serde_json::json!({ "managementPermissionsRevision": management_revision }),
+            ),
+        );
+        (target, state)
+    }
+
+    /// A direct setup's runtime cannot use gateway subnets the management policy was not
+    /// written for: it would create them and then be refused. The release waits for a setup
+    /// run, which creates them and rewrites the policy in the same run.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn direct_setup_runtime_requires_setup_for_new_sandbox_gateway_subnets() {
+        let runner = PreflightRunner::with_registry(PreflightRegistry::new());
+        let runtime = deployment_config();
+        let mut setup = deployment_config();
+        setup.setup_run = true;
+        let installed = empty_stack();
+        let recorded = || Some(serde_json::json!({ "gatewaySubnetIds": ["subnet-1"] }));
+
+        let (target, state) = gateway_target_and_state(Platform::Aws, None, Some("revision-1"));
+        let error = direct_setup_preflight(&runner, &target, Some(&installed), &state, &runtime)
+            .await
+            .expect_err("the gateway subnets need a setup run");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(
+            error.to_string().contains("Run a setup update"),
+            "the message says what to do: {error}"
+        );
+
+        // A setup run creates the subnets and rewrites the policy.
+        direct_setup_preflight(&runner, &target, Some(&installed), &state, &setup)
+            .await
+            .expect("a setup run is what resolves it");
+
+        // The sandbox network is already recorded.
+        let (target, state) =
+            gateway_target_and_state(Platform::Aws, recorded(), Some("revision-1"));
+        direct_setup_preflight(&runner, &target, Some(&installed), &state, &runtime)
+            .await
+            .expect("recorded subnets need no setup");
+
+        // No recorded revision: the policy was written before it was limited to subnets.
+        let (target, state) = gateway_target_and_state(Platform::Aws, None, None);
+        direct_setup_preflight(&runner, &target, Some(&installed), &state, &runtime)
+            .await
+            .expect("an install whose policy has no revision is not asked");
+
+        // Another platform.
+        let (target, state) = gateway_target_and_state(Platform::Gcp, None, Some("revision-1"));
+        direct_setup_preflight(&runner, &target, Some(&installed), &state, &runtime)
+            .await
+            .expect("only AWS limits the policy to the subnets");
+
+        // The release does not need the gateway.
+        let (_, state) = gateway_target_and_state(Platform::Aws, None, Some("revision-1"));
+        direct_setup_preflight(&runner, &empty_stack(), Some(&installed), &state, &runtime)
+            .await
+            .expect("no gateway, no subnets needed");
+
+        // An imported install has no direct setup authority.
+        let (target, state) = gateway_target_and_state(Platform::Aws, None, Some("revision-1"));
+        runner
+            .run_deployment_time_preflights(
+                target,
+                &state,
+                &runtime,
+                &ClientConfig::Local {
+                    state_directory: "/unused".to_string(),
+                },
+                Some(&installed),
+                None,
+                None,
+            )
+            .await
+            .map(|_| ())
+            .unwrap_or_else(|error| {
+                assert!(
+                    !error.to_string().contains("Run a setup update"),
+                    "an import is not asked by this check: {error}"
+                );
+            });
     }
 
     /// Automatic AWS setup installs provision grants for every resource type, so a release
