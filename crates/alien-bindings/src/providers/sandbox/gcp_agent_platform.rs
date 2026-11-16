@@ -79,6 +79,34 @@ const JOB_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// round trips to observe that.
 const JOB_POLL_GRACE: Duration = Duration::from_secs(15);
 
+/// How long after a keyed sandbox is requested another one for the same key can still appear in the
+/// list, and so how long a caller keeps a sandbox's fate open before it is decided.
+///
+/// A sandbox is listed only once its create has finished. Measured against a real engine: 20
+/// creates took 2.9 to 6.7 seconds (median 3.5) from the request to the sandbox first showing in
+/// the display-name list, and a cold one took 8.8. After this long from its request, every sandbox
+/// that is older than a given one is therefore in the list, so the oldest sandbox in a list taken
+/// then is the oldest there will ever be, and it never yields to another.
+///
+/// A creating caller decides this long after its own create call returned (so a key's first
+/// create costs the create plus this); a caller that arrives while the oldest sandbox for the key
+/// is younger than this waits out the rest of it, plus [`CLOCK_SKEW_ALLOWANCE`], before handing
+/// that sandbox out.
+const CONTENTION_WINDOW: Duration = Duration::from_secs(15);
+
+/// How far this host's clock may run ahead of Google's and still keep the arriving caller's wait
+/// long enough. That wait compares this host's clock with the sandbox's `createTime`, which is
+/// Google's; a host that is ahead would see the window as over early. Hosts are assumed to be
+/// NTP-synced; the creating caller's own wait is measured on one clock and needs no allowance.
+const CLOCK_SKEW_ALLOWANCE: Duration = Duration::from_secs(5);
+
+/// Tries of the list that decides a keyed create, and the pause between them.
+const RECHECK_ATTEMPTS: u32 = 4;
+#[cfg(not(test))]
+const RECHECK_BACKOFF: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const RECHECK_BACKOFF: Duration = Duration::from_millis(5);
+
 const CREATE: &str = "sandbox.create";
 const GET: &str = "sandbox.get";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
@@ -401,6 +429,222 @@ impl GcpAgentPlatformSandbox {
             alien_core::SandboxCapability::PauseResume.as_str(),
             "Agent Platform sandboxes cannot be paused and resumed with their state kept",
         )
+    }
+
+    /// Reads a sandbox by the id Google minted, and probes its agent.
+    async fn get_by_id(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
+        let Some(sandbox) = self.read_sandbox(GET, sandbox_id).await? else {
+            return Ok(None);
+        };
+
+        let state = sandbox_state(GET, sandbox.state.as_deref())?;
+        // Only a running sandbox carries a reachable agent, and a state read is not health: a
+        // running record whose agent does not answer is not reported as usable. A non-running
+        // sandbox has no live container to identify, so it carries no generation.
+        let generation = if state == SandboxState::Running {
+            self.probe_agent(GET, sandbox_id).await?
+        } else {
+            NO_GENERATION
+        };
+
+        Ok(Some(SandboxInstance {
+            sandbox_id: sandbox_id.to_string(),
+            state,
+            generation,
+        }))
+    }
+
+    /// A sandbox `get_or_create` can hand back for an id: running, or one that is coming up and is
+    /// waited for. `None` means a fresh sandbox should serve instead.
+    async fn reach(&self, id: &str) -> Result<Option<SandboxInstance>> {
+        // A running, reachable sandbox is handed back; anything else is served by a fresh
+        // sandbox rather than by destroying one this call did not create, which may be
+        // another revision's.
+        match self.get_by_id(id).await {
+            Ok(Some(sandbox)) if sandbox.state == SandboxState::Running => Ok(Some(sandbox)),
+            // Still coming up, or already being woken by someone else. Waited for rather than
+            // replaced: the sandbox keeps starting either way, so a second one beside it would
+            // run with nobody holding its id. A slow data plane is answered with the failure.
+            Ok(Some(sandbox)) if sandbox.state == SandboxState::Starting => {
+                let generation = self.settle(id).await?;
+                Ok(Some(SandboxInstance {
+                    sandbox_id: id.to_string(),
+                    state: SandboxState::Running,
+                    generation,
+                }))
+            }
+            Ok(_) => Ok(None),
+            Err(error) if error.code == "SANDBOX_UNREACHABLE" => Ok(None),
+            Err(error) => Err(error.context(ErrorData::SandboxCommandFailed {
+                failure: "getOrCreateFailed".to_string(),
+                reason: format!("{GET_OR_CREATE}: reaching sandbox '{id}' failed"),
+            })),
+        }
+    }
+
+    /// The live sandboxes stamped with a caller key's display name, oldest first.
+    async fn request_key_candidates(
+        &self,
+        requested_id: &str,
+        operation: &str,
+    ) -> Result<Vec<KeyedSandbox>> {
+        let display_name = request_key_display_name(requested_id);
+        let listed = self
+            .client
+            .list_sandboxes_by_display_name(&self.engine, &display_name)
+            .await
+            .context(ErrorData::SandboxUnreachable {
+                operation: operation.to_string(),
+                reason: "the Agent Platform API did not answer a sandbox list".to_string(),
+            })?;
+        // The service matched on the display name; it is checked again here because the sandboxes
+        // below are acted on (waited for, returned, a duplicate deleted for them).
+        let mut candidates: Vec<_> = listed
+            .into_iter()
+            .filter(|sandbox| {
+                sandbox.display_name.as_deref() == Some(display_name.as_str())
+                    && sandbox.state.as_deref().is_some_and(is_live_state)
+            })
+            .filter_map(|sandbox| {
+                let id = sandbox
+                    .name
+                    .as_deref()
+                    .and_then(sandbox_segment)?
+                    .to_string();
+                let created = sandbox
+                    .create_time
+                    .as_deref()
+                    .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+                Some(KeyedSandbox { id, created })
+            })
+            .collect();
+        // A sandbox whose age is unknown sorts last: it never outranks one that is dated.
+        candidates.sort_by(|a, b| {
+            (a.created.is_none(), a.created, &a.id).cmp(&(b.created.is_none(), b.created, &b.id))
+        });
+        Ok(candidates)
+    }
+
+    /// The candidates for a key, once the oldest of them is out of its contention window.
+    ///
+    /// A sandbox younger than [`CONTENTION_WINDOW`] may still be superseded by an older one that is
+    /// not listed yet, and would then be deleted by its own creator: handing it out now could give
+    /// the caller a sandbox that is gone a moment later. So the rest of the window is waited out
+    /// and the list is read again; whatever is oldest then is final.
+    async fn settled_candidates(
+        &self,
+        requested_id: &str,
+        operation: &str,
+    ) -> Result<Vec<KeyedSandbox>> {
+        let candidates = self.request_key_candidates(requested_id, operation).await?;
+        let Some(age) = candidates.first().and_then(KeyedSandbox::age) else {
+            return Ok(candidates);
+        };
+        let settled = CONTENTION_WINDOW + CLOCK_SKEW_ALLOWANCE;
+        match settled.checked_sub(age) {
+            Some(rest) if !rest.is_zero() => {
+                tokio::time::sleep(rest.min(settled)).await;
+                let candidates = self.request_key_candidates(requested_id, operation).await?;
+                warn_on_duplicates(requested_id, &candidates);
+                Ok(candidates)
+            }
+            _ => {
+                warn_on_duplicates(requested_id, &candidates);
+                Ok(candidates)
+            }
+        }
+    }
+
+    /// The list that decides a keyed create, tried again when it is not answered.
+    async fn recheck_candidates(&self, key: &str) -> Result<Vec<KeyedSandbox>> {
+        let mut attempt = 1;
+        loop {
+            match self.request_key_candidates(key, GET_OR_CREATE).await {
+                Err(error) if attempt < RECHECK_ATTEMPTS => {
+                    warn!(%error, attempt, "could not list the sandboxes for a key after a create");
+                    attempt += 1;
+                    tokio::time::sleep(RECHECK_BACKOFF).await;
+                }
+                Ok(candidates) => {
+                    warn_on_duplicates(key, &candidates);
+                    return Ok(candidates);
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    /// The first of `candidates` that can be reached, oldest first.
+    ///
+    /// `own` is a sandbox this call just made: it takes part in the ordering, so it can lose to an
+    /// older one, and when nothing older is usable it is the answer (`None` here).
+    async fn reach_first(
+        &self,
+        candidates: &[KeyedSandbox],
+        own: Option<&str>,
+    ) -> Result<Option<SandboxInstance>> {
+        for candidate in candidates {
+            if Some(candidate.id.as_str()) == own {
+                return Ok(None);
+            }
+            if let Some(found) = self.reach_candidate(&candidate.id).await? {
+                return Ok(Some(found));
+            }
+        }
+        Ok(None)
+    }
+
+    /// A sandbox stamped with the caller's key, waited for rather than passed over.
+    ///
+    /// Unlike an id the caller handed in, a key's sandbox is usually one a concurrent caller made
+    /// a moment ago: listed and running while its agent has not started answering. Replacing it
+    /// would make the second sandbox this lookup exists to prevent, so it is settled like any
+    /// other sandbox that is coming up. One that is terminated or gone is skipped; a paused one is
+    /// returned as paused.
+    async fn reach_candidate(&self, id: &str) -> Result<Option<SandboxInstance>> {
+        let Some(sandbox) = self.read_sandbox(GET_OR_CREATE, id).await? else {
+            return Ok(None);
+        };
+        match sandbox_state(GET_OR_CREATE, sandbox.state.as_deref())? {
+            SandboxState::Running | SandboxState::Starting => {}
+            // A paused sandbox is live and owns its key, as it does for `get`: it is handed out
+            // as it is, not woken and not replaced by a second one beside it.
+            SandboxState::Paused => {
+                return Ok(Some(SandboxInstance {
+                    sandbox_id: id.to_string(),
+                    state: SandboxState::Paused,
+                    generation: NO_GENERATION,
+                }));
+            }
+            SandboxState::Terminated => return Ok(None),
+        }
+        match self.settle(id).await {
+            Ok(generation) => Ok(Some(SandboxInstance {
+                sandbox_id: id.to_string(),
+                state: SandboxState::Running,
+                generation,
+            })),
+            // Taken down while it was waited for, most likely by the caller that lost a race.
+            Err(error)
+                if matches!(
+                    &error.error,
+                    Some(ErrorData::SandboxCommandFailed { failure, .. })
+                        if failure == "sandboxGone" || failure == "sandboxTerminated"
+                ) =>
+            {
+                Ok(None)
+            }
+            // A sandbox that holds the key but whose agent does not answer is not replaced by a
+            // second one: it is reported by id, so the caller can terminate it (`get` of the key
+            // returns the same id) or retry.
+            Err(error) => Err(error.context(ErrorData::SandboxUnreachable {
+                operation: GET_OR_CREATE.to_string(),
+                reason: format!(
+                    "sandbox '{id}' holds this key but is not answering; terminate it to free \
+                     the key, or retry"
+                ),
+            })),
+        }
     }
 
     /// A sandbox id that stays a single path segment.
@@ -822,7 +1066,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
             .create_sandbox(
                 &self.engine,
                 SandboxCreateRequest {
-                    display_name: request.sandbox_id.clone(),
+                    display_name: request.sandbox_id.as_deref().map(request_key_display_name),
                     sandbox_environment_template: Some(self.template.clone()),
                     sandbox_environment_snapshot: None,
                     ttl,
@@ -873,60 +1117,145 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         Self::checked_sandbox_id(GET, sandbox_id)?;
-        let Some(sandbox) = self.read_sandbox(GET, sandbox_id).await? else {
-            return Ok(None);
-        };
-
-        let state = sandbox_state(GET, sandbox.state.as_deref())?;
-        // Only a running sandbox carries a reachable agent, and a state read is not health: a
-        // running record whose agent does not answer is not reported as usable. A non-running
-        // sandbox has no live container to identify, so it carries no generation.
-        let generation = if state == SandboxState::Running {
-            self.probe_agent(GET, sandbox_id).await?
-        } else {
-            NO_GENERATION
-        };
-
-        Ok(Some(SandboxInstance {
-            sandbox_id: sandbox_id.to_string(),
-            state,
-            generation,
-        }))
+        if is_google_id(sandbox_id) {
+            return self.get_by_id(sandbox_id).await;
+        }
+        // A caller's own key is not an id Google knows. It names the sandboxes `get_or_create`
+        // stamped with it; the oldest live one answers.
+        for candidate in self.settled_candidates(sandbox_id, GET).await? {
+            let Some(sandbox) = self.read_sandbox(GET, &candidate.id).await? else {
+                continue;
+            };
+            let state = sandbox_state(GET, sandbox.state.as_deref())?;
+            // Stopped between the list and this read: it does not answer the key.
+            if state == SandboxState::Terminated {
+                continue;
+            }
+            // The key answers with the sandbox that holds it even when its agent does not, so a
+            // caller that has only the key can still learn the id and terminate it. Such a
+            // sandbox is reported with no generation, as any sandbox that is not usable is.
+            let generation = if state == SandboxState::Running {
+                match self.probe_agent(GET, &candidate.id).await {
+                    Ok(generation) => generation,
+                    Err(error) if error.code == "SANDBOX_UNREACHABLE" => {
+                        warn!(sandbox_id = %candidate.id, %error, "the sandbox holding a key does not answer");
+                        NO_GENERATION
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                NO_GENERATION
+            };
+            return Ok(Some(SandboxInstance {
+                sandbox_id: candidate.id,
+                state,
+                generation,
+            }));
+        }
+        Ok(None)
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
         super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
-        if let Some(id) = request.sandbox_id.as_deref() {
-            // A running, reachable sandbox is handed back; anything else is served by a fresh
-            // sandbox rather than by destroying one this call did not create, which may be
-            // another revision's.
-            match self.get(id).await {
-                Ok(Some(sandbox)) if sandbox.state == SandboxState::Running => {
-                    return Ok(ResolvedSandbox::found(sandbox))
-                }
-                // Still coming up, or already being woken by someone else. Waited for rather than
-                // replaced: the sandbox keeps starting either way, so a second one beside it would
-                // run with nobody holding its id. A slow data plane is answered with the failure.
-                Ok(Some(sandbox)) if sandbox.state == SandboxState::Starting => {
-                    let generation = self.settle(id).await?;
-                    return Ok(ResolvedSandbox::found(SandboxInstance {
-                        sandbox_id: id.to_string(),
-                        state: SandboxState::Running,
-                        generation,
-                    }));
-                }
-                Ok(_) => {}
-                Err(error) if error.code == "SANDBOX_UNREACHABLE" => {}
-                Err(error) => {
-                    return Err(error.context(ErrorData::SandboxCommandFailed {
-                        failure: "getOrCreateFailed".to_string(),
-                        reason: format!("{GET_OR_CREATE}: reaching sandbox '{id}' failed"),
-                    }))
-                }
+        let Some(key) = request.sandbox_id.clone() else {
+            return self.create(request).await.map(ResolvedSandbox::created);
+        };
+        Self::checked_sandbox_id(GET_OR_CREATE, &key)?;
+
+        if is_google_id(&key) {
+            if let Some(found) = self.reach(&key).await? {
+                return Ok(ResolvedSandbox::found(found));
             }
+            // A number is read as the id Google minted, which is what a caller that saved the id
+            // of a sandbox passes to get back to it or, when it is gone, to get a fresh one. That
+            // is why an all-digit key cannot be told from an id and is not deduplicated: two
+            // callers with the same number each create. Keys that mean to dedupe must contain a
+            // letter, '-' or '_'.
+            return self.create(request).await.map(ResolvedSandbox::created);
         }
 
-        self.create(request).await.map(ResolvedSandbox::created)
+        // Look before creating: Google names the sandbox itself, so a retry whose first answer
+        // was lost, or a second process asking for the same key, would otherwise make a second.
+        let candidates = self.settled_candidates(&key, GET_OR_CREATE).await?;
+        if let Some(found) = self.reach_first(&candidates, None).await? {
+            return Ok(ResolvedSandbox::found(found));
+        }
+
+        // A sandbox that lives shorter than the window cannot wait it out: it would end before the
+        // call returns. Its wait is capped at half its lifetime, and what that gives up (an older
+        // concurrent create the list shows late) is accepted for such short-lived sandboxes.
+        let wait = match self.lifetime_seconds(request.timeout_ms, GET_OR_CREATE)? {
+            Some(seconds) => CONTENTION_WINDOW.min(Duration::from_secs(u64::from(seconds)) / 2),
+            None => CONTENTION_WINDOW,
+        };
+        let created = self.create(request).await?;
+        let decide_at = tokio::time::Instant::now() + wait;
+        let own = created.sandbox_id.clone();
+
+        // Two callers can both have looked before either created. The oldest sandbox with the key
+        // wins and every other caller deletes its own, so they converge on one.
+        //
+        // That is decided only once every older sandbox is listed (see [`CONTENTION_WINDOW`]),
+        // which is counted from the moment the create returned, the latest anchor and so the safe one.
+        // One decision per caller,
+        // after the window: a caller that yielded to a sandbox on an earlier look could be handed
+        // one that is deleted next.
+        tokio::time::sleep_until(decide_at).await;
+        let candidates = match self.recheck_candidates(&key).await {
+            Ok(candidates) => candidates,
+            // Not answered, so nothing says an older sandbox is absent, and `created` for a
+            // possible duplicate would split the callers. The sandbox is kept: a caller that
+            // looked meanwhile may have yielded to it, and a retry finds it by the key.
+            //
+            // `created` is false for nobody here: the call fails, and the sandbox is named in the
+            // error's context (`sandboxId`). A retry resolves the key to the oldest sandbox and
+            // answers `created: false` for it, so the caller that made it can see `false`.
+            Err(error) => {
+                let mut error = error.context(ErrorData::SandboxUnreachable {
+                    operation: GET_OR_CREATE.to_string(),
+                    reason: format!(
+                        "sandbox '{own}' was created for this key but could not be checked \
+                         against a concurrent create; retry, which finds it by the key"
+                    ),
+                });
+                let mut context = match error.context.take() {
+                    Some(serde_json::Value::Object(map)) => map,
+                    _ => serde_json::Map::new(),
+                };
+                context.insert("sandboxId".to_string(), own.clone().into());
+                error.context = Some(serde_json::Value::Object(context));
+                return Err(error);
+            }
+        };
+        let outcome = self.reach_first(&candidates, Some(&own)).await;
+        if matches!(outcome, Ok(None)) {
+            // The wait took time: the sandbox may have reached its lifetime meanwhile, and a
+            // terminal one is gone, not created.
+            return match self.read_sandbox(GET_OR_CREATE, &own).await? {
+                Some(sandbox)
+                    if sandbox_state(GET_OR_CREATE, sandbox.state.as_deref())?
+                        != SandboxState::Terminated =>
+                {
+                    Ok(ResolvedSandbox::created(created))
+                }
+                _ => Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxTerminated".to_string(),
+                    reason: format!(
+                        "sandbox '{own}' reached its lifetime while the call checked for a \
+                         concurrent create; retry, or ask for a longer timeout"
+                    ),
+                })),
+            };
+        }
+        // An older sandbox holds the key, whether or not it can be reached now: this one is the
+        // duplicate either way and is deleted.
+        if let Err(error) = self.terminate(&own).await {
+            warn!(sandbox_id = %own, %error, "could not delete the losing duplicate create");
+        }
+        outcome.map(|winner| match winner {
+            Some(winner) => ResolvedSandbox::found(winner),
+            None => ResolvedSandbox::created(created),
+        })
     }
 
     async fn list(&self) -> Result<Vec<SandboxInstance>> {
@@ -1796,9 +2125,103 @@ fn confirm_empty_ok(operation: &str, body: &[u8]) -> Result<()> {
 }
 
 /// The last path segment, if it is a usable id. Used for both minted names and listed ones.
+/// A live sandbox stamped with a caller's key.
+struct KeyedSandbox {
+    id: String,
+    created: Option<chrono::DateTime<chrono::FixedOffset>>,
+}
+
+impl KeyedSandbox {
+    /// Time since Google created it, by this host's clock; zero when the stamp is ahead of it.
+    fn age(&self) -> Option<Duration> {
+        let created = self.created?;
+        Some(
+            (wall_now() - created.with_timezone(&chrono::Utc))
+                .to_std()
+                .unwrap_or(Duration::ZERO),
+        )
+    }
+}
+
+/// This host's wall clock. Under test it follows tokio's paused clock, so a test that advances
+/// virtual time moves the age of a sandbox too.
+#[cfg(not(test))]
+fn wall_now() -> chrono::DateTime<chrono::Utc> {
+    chrono::Utc::now()
+}
+
+#[cfg(test)]
+pub(crate) fn wall_now() -> chrono::DateTime<chrono::Utc> {
+    // A paused tokio clock is the real one plus the time the test has advanced it.
+    let advanced = tokio::time::Instant::now()
+        .into_std()
+        .saturating_duration_since(std::time::Instant::now());
+    chrono::Utc::now() + chrono::Duration::from_std(advanced).unwrap_or_default()
+}
+
+/// A duplicate that is older than the window is not a race in progress: two callers each hold a
+/// sandbox for one key (a broken timing assumption, or a crash between a create and its check).
+/// Later callers converge on the oldest, but the younger is not deleted by anyone, so it is said.
+fn warn_on_duplicates(key: &str, candidates: &[KeyedSandbox]) {
+    let settled = duplicates_past_the_window(candidates);
+    if settled.len() > 1 {
+        warn!(
+            request_key = %request_key_display_name(key),
+            sandbox_ids = ?settled,
+            "more than one live sandbox holds this key; callers get the oldest, the others are \
+             not deleted: terminate them, or set a maximum lifetime"
+        );
+    }
+}
+
+/// The candidates old enough that no create for the key can still be racing them.
+fn duplicates_past_the_window(candidates: &[KeyedSandbox]) -> Vec<&str> {
+    candidates
+        .iter()
+        .filter(|sandbox| sandbox.age().is_some_and(|age| age > CONTENTION_WINDOW))
+        .map(|sandbox| sandbox.id.as_str())
+        .collect()
+}
+
 fn sandbox_segment(name: &str) -> Option<&str> {
     let segment = name.rsplit('/').next()?;
     is_addressable_id(segment).then_some(segment)
+}
+
+/// The hash of a caller's key that is stamped on the sandbox made for it.
+fn request_key(requested_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(requested_id.as_bytes()))[..32].to_string()
+}
+
+/// The display name a sandbox made for a caller's key carries. Sandbox environments take no
+/// labels, so the display name is the one field that is both set at create and returned by list.
+fn request_key_display_name(requested_id: &str) -> String {
+    format!(
+        "{}-{}",
+        alien_core::SANDBOX_REQUEST_KEY_LABEL,
+        request_key(requested_id)
+    )
+}
+
+/// Google mints numeric ids and answers 400 for anything else, so anything else is a caller's own
+/// key, resolved through the display name rather than sent to Google as an id.
+fn is_google_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())
+}
+
+/// A sandbox that is stopping or gone does not answer a key, whatever the listing still shows.
+fn is_live_state(state: &str) -> bool {
+    !matches!(
+        state,
+        "STATE_STOPPED"
+            | "STATE_FAILED"
+            | "STATE_DELETING"
+            | "STATE_DELETED"
+            | "STATE_TERMINATED"
+            | "STATE_DEPROVISIONING"
+            | "STATE_STOPPING"
+    )
 }
 
 fn is_addressable_id(id: &str) -> bool {
@@ -1830,11 +2253,19 @@ fn generation_from_boot_id(boot_id: &str) -> u64 {
 fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
     match state {
         Some("STATE_RUNNING") => Ok(SandboxState::Running),
-        Some("STATE_CREATING" | "STATE_PENDING" | "STATE_RESUMING") => Ok(SandboxState::Starting),
-        Some("STATE_PAUSED" | "STATE_PAUSING" | "STATE_SUSPENDED") => Ok(SandboxState::Paused),
-        Some("STATE_STOPPED" | "STATE_FAILED" | "STATE_DELETING" | "STATE_DELETED") => {
-            Ok(SandboxState::Terminated)
+        Some("STATE_CREATING" | "STATE_PENDING" | "STATE_PROVISIONING" | "STATE_RESUMING") => {
+            Ok(SandboxState::Starting)
         }
+        Some("STATE_PAUSED" | "STATE_PAUSING" | "STATE_SUSPENDED") => Ok(SandboxState::Paused),
+        Some(
+            "STATE_STOPPED"
+            | "STATE_STOPPING"
+            | "STATE_FAILED"
+            | "STATE_TERMINATED"
+            | "STATE_DEPROVISIONING"
+            | "STATE_DELETING"
+            | "STATE_DELETED",
+        ) => Ok(SandboxState::Terminated),
         other => Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
             provider: "gcp-agent-platform".to_string(),
             binding_name: operation.to_string(),
