@@ -588,7 +588,12 @@ jobs:
             return 1
           }
 
-          for crate in \
+          # The crates we publish, in the order their workspace dependencies
+          # require. A crate can only be packaged once each workspace crate it
+          # depends on exists on crates.io at this version, so the order and the
+          # dependencies come from cargo metadata, not a hand-kept list.
+          publish_order=$(cargo metadata --no-deps --format-version 1 |
+            python3 scripts/crate-publish-order.py \
             alien-error-derive \
             alien-macros \
             alien-error \
@@ -614,7 +619,10 @@ jobs:
             alien-worker-protocol \
             alien-sdk \
             alien-commands \
-            alien-commands-client; do
+            alien-commands-client)
+          echo "Crate publish order:"
+          echo "$publish_order"
+          for crate in $publish_order; do
             if [ "${{ inputs.stable_action }}" = "qualification" ]; then
               echo "Recording package inputs for $crate..."
               depot cargo package -p "$crate" --list --allow-dirty |
