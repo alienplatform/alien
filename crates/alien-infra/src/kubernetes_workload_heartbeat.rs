@@ -446,4 +446,49 @@ mod tests {
         statefulset.status = None;
         assert!(!statefulset_has_ready_replicas(&statefulset));
     }
+
+    /// Reads Deployment objects captured from a real cluster (`kubectl get deploy -o json`).
+    ///
+    /// `ALIEN_ROLLOUT_SNAPSHOTS=<dir with rollout-*.json, settled.json, steady-failure.json>`
+    #[test]
+    #[ignore = "needs snapshots captured from a real cluster"]
+    fn real_cluster_snapshots_are_classified_as_rollout_or_drift() {
+        let dir = std::path::PathBuf::from(std::env::var("ALIEN_ROLLOUT_SNAPSHOTS").unwrap());
+        let read = |name: &str| -> Deployment {
+            serde_json::from_slice(&std::fs::read(dir.join(name)).unwrap()).unwrap()
+        };
+        let mut mid_rollout_partly_ready = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            if !name.starts_with("rollout-") {
+                continue;
+            }
+            let deployment = read(&name);
+            let status = deployment.status.as_ref().unwrap();
+            println!(
+                "{name}: replicas={:?} updated={:?} ready={:?} healthy={} rolling_out={}",
+                status.replicas,
+                status.updated_replicas,
+                status.ready_replicas,
+                deployment_has_ready_replicas(&deployment),
+                deployment_rollout_in_progress(&deployment)
+            );
+            // Nothing captured during the rollout is drift.
+            assert!(
+                deployment_has_ready_replicas(&deployment)
+                    || deployment_rollout_in_progress(&deployment),
+                "{name}"
+            );
+            if !deployment_has_ready_replicas(&deployment) || status.ready_replicas == Some(1) {
+                mid_rollout_partly_ready += 1;
+            }
+        }
+        assert!(mid_rollout_partly_ready > 0, "the capture caught a partly ready rollout");
+        let settled = read("settled.json");
+        assert!(deployment_has_ready_replicas(&settled));
+        assert!(!deployment_rollout_in_progress(&settled));
+        let failing = read("steady-failure.json");
+        assert!(!deployment_has_ready_replicas(&failing));
+        assert!(!deployment_rollout_in_progress(&failing), "a steady failure is drift");
+    }
 }
