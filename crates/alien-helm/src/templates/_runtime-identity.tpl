@@ -153,7 +153,7 @@ style). A newer semver tag and any non-semver tag are kept as set. */ -}}
 {{- $semver := "^[0-9]+\\.[0-9]+\\.[0-9]+$" -}}
 {{- $embeddedRepository := include "deployment.operatorImageRepository" . -}}
 {{- $embeddedTag := include "deployment.operatorImageTag" . -}}
-{{- if and $embeddedTag (contains "@" $tag) (ne $tag $embeddedTag) (eq (toString .Values.runtime.image.repository) $embeddedRepository) -}}
+{{- if and $embeddedTag (not (dig "pin" false .Values.runtime.image)) (contains "@" $tag) (ne $tag $embeddedTag) (eq (toString .Values.runtime.image.repository) $embeddedRepository) -}}
 {{- $embeddedTag -}}
 {{- else if and $version (not (contains "@" $tag)) (regexMatch $semver $bare) (regexMatch $semver $version) (semverCompare (printf "< %s" $version) $bare) -}}
 {{- if hasPrefix "v" $tag }}v{{ end }}{{ $version }}

@@ -4136,6 +4136,11 @@ runtime:
     # version tag is ignored, because an older Operator cannot run this chart.
     # A digest is used as given and must be an Operator at least as new as the chart.
     digest: ""
+    # Set true to run exactly the repository and tag (with its @sha256 digest) given here, for
+    # example a newer Operator or a hotfix build of the same repository. Left false, a package
+    # that carries its own Operator image runs that image instead of a different tag@digest
+    # on the same repository.
+    pin: false
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
     # the manager this chart connects to).
@@ -5045,6 +5050,7 @@ fn values_schema_with_inputs_json(stack: &Stack) -> Result<String> {
             "tag": { "type": "string", "minLength": 1 },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
             "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
+            "pin": { "type": "boolean" },
             "pullWithManagementToken": { "type": "boolean" },
             "selfUpdate": { "type": "boolean" }
           }
@@ -7386,7 +7392,7 @@ spec:
               value: /etc/deployment/secrets/enrollment-code
             - name: ALIEN_MANAGER_AUDIENCE
               value: {{ .Values.management.audience | quote }}
-            {{- else if .Values.management.token }}
+            {{- else if or .Values.management.token (dig "name" "" (default dict .Values.management.existingSecret)) }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
             {{- end }}
@@ -10393,6 +10399,22 @@ mod tests {
         assert_eq!(
             product_image("mirror.example.com/operator", "1.3.0@sha256:old"),
             "mirror.example.com/operator:1.3.0@sha256:old"
+        );
+        // `runtime.image.pin` runs exactly the repository and tag given, for a newer or hotfix
+        // build of the same repository.
+        let pinned_values = "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\nruntime:\n  image:\n    pin: true\n    repository: \"registry.example.com/deployment/operator\"\n    tag: \"1.4.1@sha256:hotfix\"\n";
+        let pinned = crate::test_utils::helm_template_for_release(
+            &product.files,
+            Some(pinned_values),
+            "app",
+        );
+        pinned.assert_ok("pinned operator image");
+        assert!(
+            pinned.stdout.contains(
+                "image: \"registry.example.com/deployment/operator:1.4.1@sha256:hotfix\""
+            ),
+            "{}",
+            pinned.stdout
         );
         // A build without an Operator release version applies no override.
         let dev = package("latest");
@@ -14380,14 +14402,50 @@ logCollector:
             migration_data(&rendered),
             Some(serde_json::json!({ "encryption-key": b64(OLD_KEY) }))
         );
-        // The credential still comes from the Secret the values name.
+        // The credential still comes from the Secret the values name, and the Operator is told
+        // where to read the token.
         assert!(rendered
             .stdout
             .contains("secretName: installer-credentials"));
+        assert!(rendered.stdout.contains("name: SYNC_TOKEN_FILE"));
         // Without the Secret nothing is carried, and nothing is made up.
         let missing = render_upgrade_with_installed_secrets(&chart, &values, serde_json::json!({}));
         missing.assert_ok("named Secret absent");
         assert!(migration_data(&missing).is_none());
+    }
+
+    #[test]
+    fn an_enrollment_code_secret_needs_persistent_runtime_storage() {
+        let chart = product_chart_for_stack(&database_stack(), false, None);
+        let values = "management:\n  url: https://manager.example.test\n  deploymentId: dep_test\n  audience: manager.example.test\n  enrollmentCodeSecret:\n    name: enrollment\n    key: code\nruntime:\n  data:\n    persistence:\n      enabled: false\n";
+        let refused =
+            crate::test_utils::helm_template_for_release(&chart.files, Some(values), "app");
+        assert!(!refused.is_ok(), "{}", refused.stdout);
+        assert!(
+            refused
+                .stderr
+                .contains("runtime.data.persistence.enabled=true"),
+            "{}",
+            refused.stderr
+        );
+    }
+
+    #[test]
+    fn the_database_checks_the_data_directory_version_before_starting() {
+        let chart = product_chart_for_stack(&database_stack(), false, None);
+        let rendered = crate::test_utils::helm_template_for_release(
+            &chart.files,
+            Some(MIGRATION_VALUES),
+            "app",
+        );
+        rendered.assert_ok("database render");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let init =
+            &docs_by_kind(&docs, "StatefulSet")[0]["spec"]["template"]["spec"]["initContainers"][0];
+        assert_eq!(init["name"], "check-data-version");
+        let script = init["args"][0].as_str().unwrap();
+        assert!(script.contains("PG_VERSION"));
+        assert!(script.contains("!= \"17\""), "{script}");
     }
 
     /// A release with the Remote Operator still has a runtime Operator and its databases, and the

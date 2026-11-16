@@ -59,6 +59,11 @@ runtime:
     # version tag is ignored, because an older Operator cannot run this chart.
     # A digest is used as given and must be an Operator at least as new as the chart.
     digest: ""
+    # Set true to run exactly the repository and tag (with its @sha256 digest) given here, for
+    # example a newer Operator or a hotfix build of the same repository. Left false, a package
+    # that carries its own Operator image runs that image instead of a different tag@digest
+    # on the same repository.
+    pin: false
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
     # the manager this chart connects to).
@@ -426,6 +431,7 @@ postgres: {}
             "tag": { "type": "string", "minLength": 1 },
             "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
             "digest": { "type": "string", "pattern": "^(sha256:[a-f0-9]{64})?$" },
+            "pin": { "type": "boolean" },
             "pullWithManagementToken": { "type": "boolean" },
             "selfUpdate": { "type": "boolean" }
           }
@@ -1392,7 +1398,7 @@ style). A newer semver tag and any non-semver tag are kept as set. */ -}}
 {{- $semver := "^[0-9]+\\.[0-9]+\\.[0-9]+$" -}}
 {{- $embeddedRepository := include "deployment.operatorImageRepository" . -}}
 {{- $embeddedTag := include "deployment.operatorImageTag" . -}}
-{{- if and $embeddedTag (contains "@" $tag) (ne $tag $embeddedTag) (eq (toString .Values.runtime.image.repository) $embeddedRepository) -}}
+{{- if and $embeddedTag (not (dig "pin" false .Values.runtime.image)) (contains "@" $tag) (ne $tag $embeddedTag) (eq (toString .Values.runtime.image.repository) $embeddedRepository) -}}
 {{- $embeddedTag -}}
 {{- else if and $version (not (contains "@" $tag)) (regexMatch $semver $bare) (regexMatch $semver $version) (semverCompare (printf "< %s" $version) $bare) -}}
 {{- if hasPrefix "v" $tag }}v{{ end }}{{ $version }}
@@ -1968,7 +1974,7 @@ spec:
               value: /etc/deployment/secrets/enrollment-code
             - name: ALIEN_MANAGER_AUDIENCE
               value: {{ .Values.management.audience | quote }}
-            {{- else if .Values.management.token }}
+            {{- else if or .Values.management.token (dig "name" "" (default dict .Values.management.existingSecret)) }}
             - name: SYNC_TOKEN_FILE
               value: /etc/deployment/secrets/sync-token
             {{- end }}
@@ -3702,6 +3708,31 @@ spec:
       {{- with $.Values.runtime.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if regexMatch "^pg[0-9]+" (toString $database.image.tag) }}
+      {{- $major := regexReplaceAll "^pg([0-9]+).*$" (toString $database.image.tag) "${1}" }}
+      initContainers:
+        # Stops with a plain message when the data directory belongs to another Postgres major
+        # version, before the server reads it. A fresh directory has no PG_VERSION and passes.
+        - name: check-data-version
+          image: {{ include "deployment.image" (dict "root" $ "repository" $database.image.repository "tag" $database.image.tag) | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: [sh, -c]
+          args:
+            - |
+              file=/var/lib/postgresql/data/pgdata/PG_VERSION
+              [ -f "$file" ] || exit 0
+              found=$(cat "$file")
+              if [ "$found" != {{ $major | quote }} ]; then
+                echo "The database files were made by Postgres $found, but this chart runs Postgres {{ $major }}. Keep the earlier Postgres image, or migrate the database before changing it." >&2
+                exit 1
+              fi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
       {{- end }}
       containers:
         - name: postgres

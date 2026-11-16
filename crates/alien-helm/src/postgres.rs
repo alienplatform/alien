@@ -178,6 +178,31 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if regexMatch "^pg[0-9]+" (toString $database.image.tag) }}
+      {{- $major := regexReplaceAll "^pg([0-9]+).*$" (toString $database.image.tag) "${1}" }}
+      initContainers:
+        # Stops with a plain message when the data directory belongs to another Postgres major
+        # version, before the server reads it. A fresh directory has no PG_VERSION and passes.
+        - name: check-data-version
+          image: {{ include "deployment.image" (dict "root" $ "repository" $database.image.repository "tag" $database.image.tag) | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          command: [sh, -c]
+          args:
+            - |
+              file=/var/lib/postgresql/data/pgdata/PG_VERSION
+              [ -f "$file" ] || exit 0
+              found=$(cat "$file")
+              if [ "$found" != {{ $major | quote }} ]; then
+                echo "The database files were made by Postgres $found, but this chart runs Postgres {{ $major }}. Keep the earlier Postgres image, or migrate the database before changing it." >&2
+                exit 1
+              fi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      {{- end }}
       containers:
         - name: postgres
           image: {{ include "deployment.image" (dict "root" $ "repository" $database.image.repository "tag" $database.image.tag) | quote }}
