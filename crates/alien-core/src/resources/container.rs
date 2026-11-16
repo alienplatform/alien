@@ -262,17 +262,17 @@ impl WorkloadPriority {
 
 /// Security profile shared by container runtimes.
 ///
-/// Every workload the Operator creates runs under the Kubernetes Pod Security
-/// `restricted` profile unless its stack sets `security.profile` to
-/// `unrestricted`. The opt-out is per workload; use it only for an image that
-/// must run as root or write outside its declared writable paths.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+/// A workload without a `security` setting runs as its image was built. Setting
+/// `security.profile` to `restricted` applies the Kubernetes Pod Security
+/// `restricted` profile; `unrestricted` states that no profile is applied. A
+/// `security` object without a `profile` is a parse error: there is no default
+/// profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum ContainerSecurityProfile {
     /// Non-root, seccomp RuntimeDefault, all capabilities dropped, no
     /// privilege escalation, read-only root filesystem.
-    #[default]
     Restricted,
     /// Opt-out: no security context is applied and the image runs as built.
     Unrestricted,
@@ -280,7 +280,9 @@ pub enum ContainerSecurityProfile {
 
 /// Container process identity and filesystem security.
 ///
-/// Absent means `restricted` with the image's own non-root user.
+/// Absent means no pod security settings are applied: the workload runs as
+/// its image was built. Setting `profile: restricted` applies the restricted
+/// profile (with the image's own non-root user unless `runAsUser` is set).
 ///
 /// On the wire every field a previous Operator requires is always written with
 /// a concrete value (`runAsUser`/`runAsGroup` as 65532 and `readOnlyRootFilesystem`
@@ -381,8 +383,9 @@ impl From<ContainerSecurityWire> for ContainerSecurity {
 
 impl ContainerSecurity {
     /// Whether a workload with this (possibly absent) setting runs restricted.
+    /// Absent is not restricted: only an explicit `restricted` profile is.
     pub fn is_restricted(security: Option<&ContainerSecurity>) -> bool {
-        security.is_none_or(|security| security.profile == ContainerSecurityProfile::Restricted)
+        security.is_some_and(|security| security.profile == ContainerSecurityProfile::Restricted)
     }
 }
 
@@ -576,7 +579,9 @@ pub struct Container {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kubernetes_readiness_probe: Option<KubernetesHttpProbe>,
 
-    /// Security settings shared by supported container runtimes.
+    /// Security settings shared by supported container runtimes. Absent means
+    /// the workload runs as its image was built; set `profile: restricted` for
+    /// the Kubernetes Pod Security `restricted` profile.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<ContainerSecurity>,
 
@@ -1177,6 +1182,16 @@ mod tests {
         assert_eq!(back, security);
     }
 
+    /// There is no default profile: a `security` object that omits it must
+    /// not parse as restricted (or as anything else).
+    #[test]
+    fn security_without_a_profile_fails_to_parse() {
+        assert!(
+            serde_json::from_str::<ContainerSecurity>(r#"{"writablePaths":["/cache"]}"#).is_err()
+        );
+        assert!(serde_json::from_str::<ContainerSecurity>("{}").is_err());
+    }
+
     #[test]
     fn security_reads_accept_the_plain_unrestricted_profile() {
         let security: ContainerSecurity =
@@ -1244,10 +1259,10 @@ mod tests {
             .unwrap()
             .get("egress")
             .is_none());
-        // Containers are restricted unless they opt out, so egress needs no
-        // explicit security setting.
+        // Egress needs the restricted profile written explicitly: an absent
+        // setting means the workload runs as built.
         container.egress = Some(ContainerEgress::Internet);
-        container.validate_update(&container).unwrap();
+        assert!(container.validate_update(&container).is_err());
         container.security = Some(ContainerSecurity {
             profile: ContainerSecurityProfile::Unrestricted,
             run_as_user: None,

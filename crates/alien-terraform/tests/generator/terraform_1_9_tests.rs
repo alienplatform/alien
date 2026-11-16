@@ -116,6 +116,7 @@ fn registered_eks_module(stack: &Stack) -> alien_terraform::ModuleFiles {
                 setup_target: "kubernetes".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
+                destroy_guard: false,
             }),
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),

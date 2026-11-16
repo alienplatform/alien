@@ -345,6 +345,41 @@ pub struct StackResourceState {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[builder(default)]
     pub external_binding: bool,
+
+    /// Whether this resource owes an update because a dependency is changing, though its own
+    /// config is not. The update waits until the dependency has rolled to the release being
+    /// applied, so the owed update must survive between plans and restarts. Cleared when the
+    /// update starts. State written before this field existed reads as not owing one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[builder(default)]
+    pub dependency_update_pending: bool,
+
+    /// The rollout in which an update ran because the controller asked for one while the
+    /// config was unchanged. While the controller keeps asking in that same rollout, its
+    /// dependents no longer wait for it, so a check that never settles cannot hold them back
+    /// for good. A later rollout is a new request and is waited for again. Cleared once the
+    /// controller stops asking. State written before this field existed (it was a flag then)
+    /// reads as none.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_requested_update_rollout"
+    )]
+    pub requested_update_ran: Option<String>,
+}
+
+/// Reads the rollout identity, treating anything else (the flag older state held) as none.
+fn deserialize_requested_update_rollout<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(rollout)) => Some(rollout),
+        _ => None,
+    })
 }
 
 impl StackResourceState {
@@ -373,6 +408,8 @@ impl StackResourceState {
             last_failed_state: None,
             remote_binding_params: None,
             external_binding: false,
+            dependency_update_pending: false,
+            requested_update_ran: None,
         }
     }
 
@@ -409,6 +446,67 @@ mod tests {
         ExposeProtocol, PublicEndpointOutput, ResourceType, Storage, StorageOutputs, Worker,
         WorkerCode, WorkerOutputs,
     };
+
+    /// State saved before `dependencyUpdatePending` existed reads as owing no update, and the
+    /// field stays out of the saved form while it is false.
+    #[test]
+    fn a_resource_state_saved_without_the_pending_marker_reads_as_not_owing_an_update() {
+        let saved = serde_json::json!({
+            "type": "storage",
+            "status": "running",
+            "config": { "type": "storage", "id": "data" },
+        });
+        let state: StackResourceState = serde_json::from_value(saved).unwrap();
+        assert!(!state.dependency_update_pending);
+        assert!(serde_json::to_value(&state)
+            .unwrap()
+            .get("dependencyUpdatePending")
+            .is_none());
+
+        let mut owing = state;
+        owing.dependency_update_pending = true;
+        let round_trip: StackResourceState =
+            serde_json::from_value(serde_json::to_value(&owing).unwrap()).unwrap();
+        assert!(round_trip.dependency_update_pending);
+    }
+
+    /// State saved before `requestedUpdateRan` existed, or while it was a flag, reads as no
+    /// rollout having run it, and the field stays out of the saved form while it is none.
+    #[test]
+    fn a_resource_state_saved_without_the_requested_update_record_reads_as_none_ran() {
+        let saved = serde_json::json!({
+            "type": "storage",
+            "status": "running",
+            "config": { "type": "storage", "id": "data" },
+        });
+        let state: StackResourceState = serde_json::from_value(saved).unwrap();
+        assert!(state.requested_update_ran.is_none());
+        assert!(serde_json::to_value(&state)
+            .unwrap()
+            .get("requestedUpdateRan")
+            .is_none());
+
+        for flag in [true, false] {
+            let saved_flag = serde_json::json!({
+                "type": "storage",
+                "status": "running",
+                "config": { "type": "storage", "id": "data" },
+                "requestedUpdateRan": flag,
+            });
+            let state: StackResourceState = serde_json::from_value(saved_flag).unwrap();
+            assert!(state.requested_update_ran.is_none());
+        }
+
+        let mut ran = state;
+        ran.requested_update_ran = Some("rel_a".to_string());
+        let saved_after = serde_json::to_value(&ran).unwrap();
+        assert_eq!(
+            saved_after["requestedUpdateRan"],
+            serde_json::json!("rel_a")
+        );
+        let round_trip: StackResourceState = serde_json::from_value(saved_after).unwrap();
+        assert_eq!(round_trip.requested_update_ran.as_deref(), Some("rel_a"));
+    }
 
     #[test]
     fn resource_prefix_validation_accepts_canonical_prefixes() {
@@ -670,6 +768,8 @@ mod tests {
             remote_binding_params: None,
             controller_platform: None,
             external_binding: false,
+            dependency_update_pending: false,
+            requested_update_ran: None,
         };
 
         stack_state

@@ -80,7 +80,13 @@ fn gcp_implicit_management_sets_do_not_grant_sensitive_content() {
 ///
 /// `execute` serves a workload in the customer's own cloud; `remote-execute` serves a hosted
 /// caller across the Remote Bindings boundary, and is engine-scoped for that reason.
-const SESSION_REACHING_SANDBOX_SETS: &[&str] = &["sandbox/execute", "sandbox/remote-execute"];
+/// `preview-edge` is held only by the per-deployment identity that signs the preview edge
+/// credential, never by a workload, and carries nothing but the execute verb on the engine.
+const SESSION_REACHING_SANDBOX_SETS: &[&str] = &[
+    "sandbox/execute",
+    "sandbox/preview-edge",
+    "sandbox/remote-execute",
+];
 
 /// The execute verb reaches session content, so it must appear in those two sets and nowhere
 /// else. Positive and negative in one: the collected set is asserted to equal exactly that list.

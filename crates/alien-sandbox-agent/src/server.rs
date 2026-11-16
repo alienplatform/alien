@@ -573,10 +573,24 @@ async fn run_command(
 /// Streams frames as NDJSON until the sender is done. Dropping the body drops the receiver, which
 /// is how a departed caller reaches the command.
 fn ndjson_response(receiver: mpsc::Receiver<Frame>) -> std::result::Result<Response, ApiError> {
+    ndjson_stream(receiver, false)
+}
+
+/// Streams frames as NDJSON. With `flush_headers`, the body opens with an empty line, which every
+/// reader of the stream skips, so a proxy that holds a response's headers until its first body
+/// byte answers at once even when the command has printed nothing yet.
+fn ndjson_stream(
+    receiver: mpsc::Receiver<Frame>,
+    flush_headers: bool,
+) -> std::result::Result<Response, ApiError> {
     let frames = futures::stream::unfold(receiver, |mut receiver| async move {
         let frame = receiver.recv().await?;
         Some((encode_frame(&frame), receiver))
     });
+    let preamble = futures::stream::iter(
+        flush_headers.then(|| Ok::<Bytes, std::io::Error>(Bytes::from_static(b"\n"))),
+    );
+    let frames = futures::StreamExt::chain(preamble, frames);
 
     Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/x-ndjson")
@@ -733,7 +747,9 @@ async fn interactive_start(
         }
     }
 
-    ndjson_response(receiver)
+    // The caller writes its input only after this answers, and a program waiting for that input
+    // prints nothing first.
+    ndjson_stream(receiver, true)
 }
 
 async fn interactive_stdin(
@@ -1188,13 +1204,10 @@ fn preview_by_header(
         // The header names the port the capability is for; it must be the port in the path.
         let named: Option<u16> = header(alien_core::sandbox_image::PREVIEW_PORT_HEADER)
             .and_then(|value| value.parse().ok());
-        if named != Some(port)
-            || !crate::preview::port_is_declared(
-                port,
-                &crate::preview::declared_ports(),
-                &state.preview.own_ports(),
-            )
-        {
+        // A capability exists only for a port a grant admitted, and its MAC covers the port, so
+        // verification below is what proves the port was declared. Here the port only has to be
+        // the one the header names and not one of the agent's own.
+        if named != Some(port) || state.preview.own_ports().contains(&port) {
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
                 message: "this capability does not admit that port".to_string(),
@@ -1239,6 +1252,12 @@ struct PreviewGrantRequest {
     port: u16,
     /// Unix time the session ends at; the grant never outlives it.
     deadline: Option<i64>,
+    /// Ports the sandbox's declaration names, from a backend whose template cannot carry the
+    /// environment variable (`ALIEN_SANDBOX_PREVIEW_PORTS`). The caller already holds the execute
+    /// verb, so naming ports here grants it nothing it could not do by running a command; the
+    /// capability it gets back is what a less trusted holder is limited by.
+    #[serde(default)]
+    declared_ports: Vec<u16>,
 }
 
 #[derive(Serialize)]
@@ -1266,10 +1285,12 @@ async fn preview_grant(
         });
     }
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let mut declared = crate::preview::declared_ports();
+    declared.extend(&request.declared_ports);
     let outcome = state.preview.grant(
         &request.sandbox,
         request.port,
-        &crate::preview::declared_ports(),
+        &declared,
         request.deadline,
         chrono::Utc::now().timestamp(),
     );
@@ -1421,10 +1442,12 @@ async fn update_egress(
     Json(update): Json<EgressUpdate>,
 ) -> std::result::Result<StatusCode, ApiError> {
     authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
-    let egress = state
-        .gateway_egress
-        .as_ref()
-        .ok_or_else(|| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    let egress = state.gateway_egress.as_ref().ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::egress_unverified(
+            "egress-update",
+            "this sandbox has no gateway egress configured",
+        )))
+    })?;
     if let Some(certificate) = update.ca_certificate {
         egress.install_ca(&certificate)?;
     }
@@ -1472,14 +1495,19 @@ async fn run_egress_hook(
         gateway: String,
         audience: String,
     }
-    let hook: RunHook = serde_json::from_slice(&body)
-        .map_err(|_| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+    let refused = |cause: &str| {
+        ApiError::from(AlienError::new(ErrorData::egress_unverified(
+            "run-hook", cause,
+        )))
+    };
+    let hook: RunHook =
+        serde_json::from_slice(&body).map_err(|_| refused("the run hook body is not readable"))?;
     let bootstrap: Bootstrap = serde_json::from_str(&hook.run_hook_payload)
-        .map_err(|_| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+        .map_err(|_| refused("the run hook payload is not readable"))?;
     let egress = state
         .gateway_egress
         .as_ref()
-        .ok_or_else(|| ApiError::from(AlienError::new(ErrorData::EgressPathUnexpected)))?;
+        .ok_or_else(|| refused("this sandbox has no gateway egress configured"))?;
     egress
         .set_gateway(&bootstrap.gateway, &bootstrap.audience, &hook.microvm_id)
         .await?;

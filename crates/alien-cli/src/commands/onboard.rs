@@ -194,9 +194,8 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
         args.allowed = prompt_allowed()?;
     }
 
-    let setup_environment_variables = platform_setup_environment_variables(
-        &crate::parse_env_and_secret_vars(&args.env_vars, &args.secret_vars)?,
-    )?;
+    let cli_variables = crate::parse_env_and_secret_vars(&args.env_vars, &args.secret_vars)?;
+    let setup_environment_variables = platform_setup_environment_variables(&cli_variables)?;
 
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
     let workspace = ctx.resolve_platform_workspace_context(!args.json).await?;
@@ -281,8 +280,8 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
         create_setup_link = create_setup_link.workspace(&workspace_param);
     }
 
-    let response = create_setup_link
-        .body(alien_platform_api::types::CreateSetupLinkRequest {
+    let held_plan = held_values_plan(&cli_variables, &developer_inputs, &stack_input_values)?;
+    let setup_link_body = alien_platform_api::types::CreateSetupLinkRequest {
             deployment_setup_config: Some(platform_onboard_deployment_setup_config(
                 setup_environment_variables,
                 &selected_platforms,
@@ -337,14 +336,34 @@ async fn onboard_platform(mut args: OnboardArgs, ctx: ExecutionMode, name: Strin
                     .collect::<Vec<_>>()
                     .into(),
             ),
-        })
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to create customer setup link".to_string(),
-            url: None,
-        })?;
+    };
+
+    let held_response = match held_plan {
+        Some(plan) => {
+            create_setup_link_with_held_values(
+                &client,
+                &workspace.name,
+                &setup_link_body,
+                &plan,
+                &selected_platforms,
+            )
+            .await?
+        }
+        None => None,
+    };
+    let response = match held_response {
+        Some(response) => response,
+        None => create_setup_link
+            .body(setup_link_body)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to create customer setup link".to_string(),
+                url: None,
+            })?
+            .into_inner(),
+    };
 
     let deployment_group_id = response.deployment_group.id.clone();
 
@@ -1257,6 +1276,189 @@ fn print_required_developer_inputs(inputs: &[StackInputDefinition]) {
         println!("  {}  required  {}", input.label, kind);
     }
     println!();
+}
+
+/// The answers of a setup link that go to the manager that will deploy it, not
+/// to the platform: every environment variable and every secret input.
+#[cfg(feature = "platform")]
+struct HeldValuesPlan {
+    writes: Vec<super::value_access::ValueWrite>,
+    /// Targets of environment variables; the manager stores the value, not where it goes.
+    targets: HashMap<String, Vec<String>>,
+    /// Secret input ids, which leave the request's `inputValues`.
+    secret_input_ids: Vec<String>,
+}
+
+/// What a link holds in its manager, or `None` when it carries no secret (plain
+/// variables and plain inputs stay with the platform, as before).
+#[cfg(feature = "platform")]
+fn held_values_plan(
+    variables: &[super::CliEnvVar],
+    developer_inputs: &[StackInputDefinition],
+    stack_input_values: &alien_platform_api::types::StackInputValuesRequest,
+) -> Result<Option<HeldValuesPlan>> {
+    use alien_manager_api::types::ValueKind;
+
+    let secret_input_ids: Vec<String> = developer_inputs
+        .iter()
+        .filter(|input| matches!(input.kind, StackInputKind::Secret))
+        .filter(|input| stack_input_values.0.contains_key(&input.id))
+        .map(|input| input.id.clone())
+        .collect();
+    if !variables.iter().any(|variable| variable.is_secret) && secret_input_ids.is_empty() {
+        return Ok(None);
+    }
+    let mut plan = HeldValuesPlan {
+        writes: Vec::new(),
+        targets: HashMap::new(),
+        secret_input_ids,
+    };
+    for variable in variables {
+        let slot = format!("env:{}", variable.name);
+        if let Some(targets) = &variable.target_resources {
+            plan.targets.insert(slot.clone(), targets.clone());
+        }
+        plan.writes.push(super::value_access::ValueWrite {
+            slot,
+            kind: if variable.is_secret {
+                ValueKind::Secret
+            } else {
+                ValueKind::Plain
+            },
+            value: variable.value.clone(),
+        });
+    }
+    for id in &plan.secret_input_ids {
+        let value = serde_json::to_string(&stack_input_values.0[id])
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "serialize".to_string(),
+                reason: "stack input value".to_string(),
+            })?;
+        plan.writes.push(super::value_access::ValueWrite {
+            slot: format!("input:{id}"),
+            kind: ValueKind::Secret,
+            value,
+        });
+    }
+    Ok(Some(plan))
+}
+
+/// Creates the link in the order the platform asks for when the manager holds
+/// its values: reserve the group, reserve the link and write the answers to the
+/// manager, then activate the link with what the manager reported. The platform
+/// never receives a value. `None` means the platform or its manager does not
+/// store setup values, and the caller creates the link the older way.
+#[cfg(feature = "platform")]
+async fn create_setup_link_with_held_values(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    request: &alien_platform_api::types::CreateSetupLinkRequest,
+    plan: &HeldValuesPlan,
+    platforms: &[Platform],
+) -> Result<Option<alien_platform_api::types::CreateSetupLinkResponse>> {
+    use super::value_access::platform_json;
+    use serde_json::{json, Value};
+
+    let mut body =
+        serde_json::to_value(request)
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "serialize".to_string(),
+                reason: "setup link request".to_string(),
+            })?;
+    let object = body.as_object_mut().ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "request".to_string(),
+            message: "the setup link request is not an object".to_string(),
+        })
+    })?;
+    let group_request = json!({
+        "externalId": object.get("externalId"),
+        "name": object.get("name"),
+        "project": object.get("project"),
+        "maxDeployments": object.get("maxDeployments"),
+    });
+    // The group is reserved before the link: a link belongs to one. A retry finds the same group.
+    let group = platform_json(
+        client,
+        reqwest::Method::PUT,
+        "/v1/deployment-groups/by-external-id",
+        workspace,
+        Some(&group_request),
+        "Failed to prepare the customer environment",
+    )
+    .await?;
+    let group_id = group
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: "the customer environment answer has no id".to_string(),
+                url: None,
+            })
+        })?
+        .to_string();
+
+    let platform_names: Vec<String> = platforms
+        .iter()
+        .map(|platform| platform.as_str().to_string())
+        .collect();
+    let Some(pending) = super::value_access::store_setup_link_values(
+        client,
+        workspace,
+        &group_id,
+        &plan.writes,
+        &plan.targets,
+        &platform_names,
+        None,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    for key in [
+        "externalId",
+        "name",
+        "project",
+        "maxDeployments",
+        "recoveryDeploymentGroupId",
+    ] {
+        object.remove(key);
+    }
+    // Plain answers stay with the platform (it reads them); secrets are only in the manager.
+    if let Some(Value::Object(inputs)) = object.get_mut("inputValues") {
+        for id in &plan.secret_input_ids {
+            inputs.remove(id);
+        }
+    }
+    // Environment variables are in the manager too; the activation refuses them in the body.
+    if let Some(Value::Object(config)) = object.get_mut("deploymentSetupConfig") {
+        config.insert("environmentVariables".to_string(), json!([]));
+    }
+    object.insert("valueSlots".to_string(), Value::Array(pending.value_slots));
+    let activated = platform_json(
+        client,
+        reqwest::Method::POST,
+        &format!(
+            "/v1/deployment-groups/{group_id}/tokens/{}/activate",
+            pending.link_id
+        ),
+        workspace,
+        Some(&body),
+        "Failed to activate the customer setup link",
+    )
+    .await?;
+    let mut answer = activated;
+    answer["deploymentGroup"] = group;
+    serde_json::from_value(answer)
+        .map(Some)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse".to_string(),
+            reason: "the activated setup link".to_string(),
+        })
 }
 
 #[cfg(feature = "platform")]
@@ -2734,5 +2936,291 @@ mod tests {
         assert!(err.to_string().contains("not available for platform 'aws'"));
         assert!(err.to_string().contains("separate deployment link"));
         assert!(err.to_string().contains("--platforms local"));
+    }
+
+    #[cfg(feature = "platform")]
+    mod held_setup_values {
+        use super::*;
+        use axum::extract::State;
+        use axum::http::{Method, StatusCode, Uri};
+        use axum::response::IntoResponse;
+        use serde_json::Value;
+        use std::sync::{Arc, Mutex};
+
+        const CANARY: &str = "canary-8c41-not-a-real-secret";
+
+        fn variable(name: &str, value: &str, is_secret: bool) -> crate::commands::CliEnvVar {
+            crate::commands::CliEnvVar {
+                name: name.to_string(),
+                value: value.to_string(),
+                is_secret,
+                target_resources: is_secret.then(|| vec!["worker".to_string()]),
+            }
+        }
+
+        fn secret_input(id: &str) -> StackInputDefinition {
+            input(id, StackInputKind::Secret, false)
+        }
+
+        fn values(pairs: &[(&str, &str)]) -> alien_platform_api::types::StackInputValuesRequest {
+            serde_json::from_value(json!(pairs
+                .iter()
+                .map(|(id, value)| (id.to_string(), json!(value)))
+                .collect::<HashMap<_, _>>()))
+            .expect("input values")
+        }
+
+        #[test]
+        fn a_link_without_a_secret_keeps_everything_with_the_platform() {
+            let plan = held_values_plan(&[variable("PLAIN", "x", false)], &[], &values(&[]))
+                .expect("a plan");
+            assert!(plan.is_none());
+        }
+
+        #[test]
+        fn a_secret_moves_every_variable_and_secret_input_to_the_manager() {
+            let plan = held_values_plan(
+                &[
+                    variable("PLAIN", "x", false),
+                    variable("TOKEN", CANARY, true),
+                ],
+                &[secret_input("api_key")],
+                &values(&[("api_key", CANARY)]),
+            )
+            .expect("a plan")
+            .expect("held");
+            let slots: Vec<_> = plan.writes.iter().map(|w| w.slot.as_str()).collect();
+            assert_eq!(slots, ["env:PLAIN", "env:TOKEN", "input:api_key"]);
+            assert_eq!(plan.secret_input_ids, ["api_key"]);
+            assert_eq!(plan.targets["env:TOKEN"], ["worker"]);
+            assert!(!plan.targets.contains_key("env:PLAIN"));
+            assert!(!format!("{plan_writes:?}", plan_writes = plan.writes).contains(CANARY));
+        }
+
+        #[derive(Clone, Default)]
+        struct Recorded {
+            requests: Arc<Mutex<Vec<(String, String, String)>>>,
+            pending_status: Arc<Mutex<Option<(u16, String)>>>,
+            base: Arc<Mutex<String>>,
+        }
+
+        async fn handler(
+            State(state): State<Recorded>,
+            method: Method,
+            uri: Uri,
+            body: String,
+        ) -> axum::response::Response {
+            let path = uri.path().to_string();
+            state
+                .requests
+                .lock()
+                .unwrap()
+                .push((method.to_string(), path.clone(), body.clone()));
+            let group = json!({
+                "id": "dg_r27ict8c7vcgsumpj90ackf7bnwt", "name": "acme", "externalId": "acme",
+                "accessApprover": "customer", "maxDeployments": 100,
+                "projectId": "prj_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+                "workspaceId": "ws_It13CUaGEhLLAB87simX07Xb", "createdAt": "2026-01-01T00:00:00Z",
+            });
+            if path.ends_with("/by-external-id") {
+                return axum::Json(group).into_response();
+            }
+            if path.ends_with("/pending-tokens") {
+                if let Some((status, text)) = state.pending_status.lock().unwrap().clone() {
+                    return (StatusCode::from_u16(status).unwrap(), text).into_response();
+                }
+                return axum::Json(json!({
+                    "managerUrl": state.base.lock().unwrap().clone(),
+                    "token": "value-token", "scope": "link:slk_1",
+                    "expiresAt": "2099-01-01T00:00:00Z", "linkId": "slk_1",
+                    "pendingExpiresAt": "2099-01-01T00:00:00Z",
+                }))
+                .into_response();
+            }
+            if path.starts_with("/v1/values/") && method == Method::PUT {
+                let request: Value = serde_json::from_str(&body).unwrap();
+                let slots: Vec<Value> = request["values"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| json!({"slot": v["slot"], "kind": v["kind"], "digest": "d1g3st", "updatedAt": "2026-01-01T00:00:00Z"}))
+                    .collect();
+                return axum::Json(json!({ "slots": slots })).into_response();
+            }
+            if path.ends_with("/activate") {
+                return axum::Json(json!({
+                    "token": "ax_dgt_x", "deploymentLink": "https://link.example/x",
+                    "expiresAt": "2099-01-01T00:00:00Z",
+                }))
+                .into_response();
+            }
+            (StatusCode::NOT_FOUND, "404 Not Found").into_response()
+        }
+
+        async fn start(state: Recorded) -> alien_platform_api::Client {
+            let app = axum::Router::new()
+                .fallback(axum::routing::any(handler))
+                .with_state(state.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            *state.base.lock().unwrap() = url.clone();
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            alien_platform_api::Client::new(&url)
+        }
+
+        fn request_for_test() -> alien_platform_api::types::CreateSetupLinkRequest {
+            serde_json::from_value(json!({
+                "project": "prj_0c29fq4a2yjb7kx3smwdgxlcxd7f",
+                "externalId": "acme", "name": "acme", "maxDeployments": 100,
+                "allowed": ["jane@acme.com"],
+                "deploymentSetupConfig": {
+                    "environmentVariables": [
+                        {"name": "TOKEN", "value": CANARY, "type": "secret"}
+                    ]
+                },
+                "inputValues": {
+                    "api_key": CANARY,
+                    "region": "eu"
+                },
+            }))
+            .expect("a setup link request")
+        }
+
+        fn plan() -> HeldValuesPlan {
+            held_values_plan(
+                &[variable("TOKEN", CANARY, true)],
+                &[secret_input("api_key")],
+                &values(&[("api_key", CANARY), ("region", "eu")]),
+            )
+            .unwrap()
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn the_platform_never_receives_a_secret_and_the_manager_holds_it_under_the_link() {
+            let state = Recorded::default();
+            let client = start(state.clone()).await;
+            let response = create_setup_link_with_held_values(
+                &client,
+                "acme",
+                &request_for_test(),
+                &plan(),
+                &[Platform::Aws],
+            )
+            .await
+            .expect("created")
+            .expect("held");
+            assert_eq!(response.deployment_link, "https://link.example/x");
+
+            let requests = state.requests.lock().unwrap().clone();
+            for (method, path, body) in &requests {
+                if path.starts_with("/v1/values/") {
+                    continue;
+                }
+                assert!(
+                    !body.contains(CANARY),
+                    "{method} {path} carried the secret: {body}"
+                );
+            }
+            let put = requests
+                .iter()
+                .find(|(m, p, _)| m == "PUT" && p.starts_with("/v1/values/"))
+                .expect("the values went to the manager");
+            assert_eq!(put.1, "/v1/values/link:slk_1");
+            assert!(put.2.contains(CANARY));
+
+            let pending: Value = serde_json::from_str(
+                &requests
+                    .iter()
+                    .find(|(_, p, _)| p.ends_with("/pending-tokens"))
+                    .unwrap()
+                    .2,
+            )
+            .unwrap();
+            assert_eq!(pending["slots"], json!(["env:TOKEN", "input:api_key"]));
+            assert_eq!(pending["platforms"], json!(["aws"]));
+
+            let activate: Value = serde_json::from_str(
+                &requests
+                    .iter()
+                    .find(|(_, p, _)| p.ends_with("/activate"))
+                    .unwrap()
+                    .2,
+            )
+            .unwrap();
+            assert_eq!(
+                activate["deploymentSetupConfig"]["environmentVariables"],
+                json!([])
+            );
+            assert!(activate["inputValues"].get("api_key").is_none());
+            assert_eq!(activate["inputValues"]["region"], "eu");
+            assert!(activate.get("name").is_none() && activate.get("externalId").is_none());
+            let slots = activate["valueSlots"].as_array().unwrap();
+            assert_eq!(slots.len(), 2);
+            assert_eq!(slots[0]["slot"], "env:TOKEN");
+            assert_eq!(slots[0]["targetResources"], json!(["worker"]));
+            assert_eq!(slots[1]["digest"], "d1g3st");
+        }
+
+        #[tokio::test]
+        async fn a_platform_without_the_pending_route_selects_the_older_path() {
+            let state = Recorded::default();
+            *state.pending_status.lock().unwrap() = Some((404, "404 Not Found".to_string()));
+            let client = start(state.clone()).await;
+            let response = create_setup_link_with_held_values(
+                &client,
+                "acme",
+                &request_for_test(),
+                &plan(),
+                &[Platform::Aws],
+            )
+            .await
+            .expect("no error");
+            assert!(response.is_none());
+            let requests = state.requests.lock().unwrap().clone();
+            assert!(!requests.iter().any(|(_, p, _)| p.ends_with("/activate")));
+            assert!(!requests
+                .iter()
+                .any(|(_, p, _)| p.starts_with("/v1/values/")));
+        }
+
+        #[tokio::test]
+        async fn a_manager_without_setup_values_selects_the_older_path() {
+            let state = Recorded::default();
+            *state.pending_status.lock().unwrap() = Some((
+                409,
+                json!({"code": "SETUP_VALUES_NOT_SERVED_BY_MANAGER", "message": "no"}).to_string(),
+            ));
+            let client = start(state.clone()).await;
+            let response = create_setup_link_with_held_values(
+                &client,
+                "acme",
+                &request_for_test(),
+                &plan(),
+                &[Platform::Aws],
+            )
+            .await
+            .expect("no error");
+            assert!(response.is_none());
+        }
+
+        #[tokio::test]
+        async fn any_other_refusal_never_falls_back_to_sending_the_secret_to_the_platform() {
+            let state = Recorded::default();
+            *state.pending_status.lock().unwrap() = Some((
+                503,
+                json!({"code": "VALUES_MANAGER_UNAVAILABLE", "message": "down"}).to_string(),
+            ));
+            let client = start(state.clone()).await;
+            let result = create_setup_link_with_held_values(
+                &client,
+                "acme",
+                &request_for_test(),
+                &plan(),
+                &[Platform::Aws],
+            )
+            .await;
+            assert!(result.is_err());
+        }
     }
 }

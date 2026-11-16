@@ -10,7 +10,7 @@ use alien_infra::setup_scaffolding::{
     self, ScaffoldingProgress, SeedContext, SetupScaffoldingContext,
 };
 use alien_infra::{ImporterRegistry, RunningResourcePolicy, StackExecutor, StackStateExt};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
 ///
@@ -35,7 +35,7 @@ pub async fn handle_initial_setup(
     let current_cloned = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.ok_or_else(|| {
+    let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for initial setup".to_string(),
         })
@@ -48,6 +48,48 @@ pub async fn handle_initial_setup(
             message: "Runtime metadata with prepared stack required for initial setup".to_string(),
         })
     })?;
+
+    // An imported install's stack was prepared at registration without cloud credentials, so
+    // its pools hold the catalog default machine. Pick from the subscription's free quota
+    // before the cluster's controller has started. Selection is a step of its own: the pick
+    // and the cleared marker are saved at once, before any resource work, so a failure later
+    // cannot persist the marker again and re-pick against quota that half-created machines use.
+    if take_first_setup_selection(&mut runtime_metadata, current.platform) {
+        let release_stack = current
+            .target_release
+            .as_ref()
+            .map(|release| &release.stack);
+        if let (Some(prepared), Some(release_stack)) =
+            (runtime_metadata.prepared_stack.as_ref(), release_stack)
+        {
+            let (selected, results) = alien_preflights::runner::PreflightRunner::new()
+                .select_first_setup_machines(
+                    release_stack,
+                    prepared,
+                    &stack_state,
+                    &config,
+                    &client_config,
+                )
+                .await
+                .context(ErrorData::PreflightChecksFailed)?;
+            for result in &results {
+                for warning in &result.warnings {
+                    warn!(%warning, "First-setup machine selection");
+                }
+            }
+            if let Some(selected) = selected {
+                carry_selection_into_imported_state(&mut stack_state, &selected);
+                runtime_metadata.prepared_stack = Some(selected);
+            }
+        } else {
+            warn!("First-setup machine selection skipped: the deployment has no prepared stack or target release");
+        }
+        return Ok(first_setup_selection_result(
+            current_cloned,
+            stack_state,
+            runtime_metadata,
+        ));
+    }
 
     let target_stack =
         crate::helpers::injected_target_stack(&runtime_metadata, &config, current.platform)?;
@@ -83,6 +125,12 @@ pub async fn handle_initial_setup(
     let client_config_for_scaffolding = client_config.clone();
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
+        .maybe_rollout_id(
+            current
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone()),
+        )
         .service_provider(service_provider.clone())
         .initial_setup_authority(runtime_metadata.initial_setup_authority)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
@@ -336,6 +384,69 @@ pub async fn handle_initial_setup(
 }
 
 const SCAFFOLDING_POLL_DELAY_MS: u64 = 5_000;
+
+/// True exactly once per imported Azure install: the marker set at registration is cleared
+/// here, and the caller saves the cleared marker with the step result.
+fn take_first_setup_selection(
+    metadata: &mut alien_core::RuntimeMetadata,
+    platform: alien_core::Platform,
+) -> bool {
+    let marked = std::mem::take(&mut metadata.first_setup_machines_unselected);
+    marked
+        && platform == alien_core::Platform::Azure
+        && metadata.initial_setup_authority == InitialSetupAuthority::ImportedHandoff
+}
+
+/// The imported state registers each cluster with the machines the stack was prepared with, and
+/// the next step refuses state that differs from the stack it plans from. A pick therefore also
+/// goes into the registered cluster, for the groups that have no machines yet.
+fn carry_selection_into_imported_state(stack_state: &mut StackState, selected: &Stack) {
+    use alien_core::ComputeCluster;
+    for (id, entry) in &selected.resources {
+        let Some(chosen) = entry.config.downcast_ref::<ComputeCluster>() else {
+            continue;
+        };
+        let Some(registered) = stack_state.resources.get_mut(id) else {
+            continue;
+        };
+        if !matches!(
+            registered.status,
+            ResourceStatus::Pending | ResourceStatus::Provisioning
+        ) {
+            continue;
+        }
+        let Some(cluster) = registered.config.downcast_mut::<ComputeCluster>() else {
+            continue;
+        };
+        for group in cluster.capacity_groups.iter_mut() {
+            if let Some(pick) = chosen
+                .capacity_groups
+                .iter()
+                .find(|pick| pick.group_id == group.group_id)
+            {
+                group.instance_type = pick.instance_type.clone();
+            }
+        }
+    }
+}
+
+/// The result of the selecting step: the pick and the cleared marker are saved with the state
+/// as it was, and nothing is planned or created. The next step plans from the saved pick.
+fn first_setup_selection_result(
+    mut state: DeploymentState,
+    stack_state: StackState,
+    runtime_metadata: alien_core::RuntimeMetadata,
+) -> DeploymentStepResult {
+    state.stack_state = Some(stack_state);
+    state.runtime_metadata = Some(runtime_metadata);
+    DeploymentStepResult {
+        state,
+        suggested_delay_ms: None,
+        update_heartbeat: false,
+        heartbeats: vec![],
+        observed_inventory_batches: vec![],
+    }
+}
 
 /// Setup scaffolding records each object in `runtime_metadata` as it is created, and the runner's
 /// failure path would persist the state from before the step, dropping those records. So once
@@ -716,6 +827,72 @@ mod tests {
         atomic::{AtomicBool, Ordering},
         Arc,
     };
+
+    #[test]
+    fn a_registered_import_is_marked_for_selection_and_a_stored_one_is_not() {
+        // Existing deployments were stored without the marker: they never select.
+        let stored: RuntimeMetadata = serde_json::from_str("{}").unwrap();
+        assert!(!stored.first_setup_machines_unselected);
+        let marked = RuntimeMetadata {
+            first_setup_machines_unselected: true,
+            ..RuntimeMetadata::default()
+        };
+        let back: RuntimeMetadata =
+            serde_json::from_value(serde_json::to_value(&marked).unwrap()).unwrap();
+        assert!(back.first_setup_machines_unselected);
+
+        // Selection runs once: the first step takes the marker, a later step never selects.
+        let mut metadata = marked.clone();
+        assert!(take_first_setup_selection(&mut metadata, Platform::Azure));
+        assert!(!metadata.first_setup_machines_unselected);
+        assert!(!take_first_setup_selection(&mut metadata, Platform::Azure));
+        let mut stored = stored;
+        assert!(!take_first_setup_selection(&mut stored, Platform::Azure));
+        let mut other = marked.clone();
+        assert!(!take_first_setup_selection(&mut other, Platform::Aws));
+        let mut direct = marked;
+        direct.initial_setup_authority = InitialSetupAuthority::DirectSetup;
+        assert!(!take_first_setup_selection(&mut direct, Platform::Azure));
+    }
+
+    #[test]
+    fn the_next_step_plans_from_the_saved_pick() {
+        use alien_core::{CapacityGroup, ComputeCluster};
+        let group = |machine: &str| CapacityGroup {
+            group_id: "general".to_string(),
+            instance_type: Some(machine.to_string()),
+            profile: None,
+            min_size: 1,
+            max_size: 1,
+            scale_policy: None,
+            nested_virtualization: None,
+            data_disk_gib_range: None,
+        };
+        let stack_with = |machine: &str| {
+            Stack::new("azure".to_string())
+                .add(
+                    ComputeCluster::new("compute".to_string())
+                        .capacity_group(group(machine))
+                        .build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
+        // What this step saves with its result is what the next step reads back.
+        let mut saved = RuntimeMetadata::default();
+        saved.prepared_stack = Some(stack_with("Standard_D8s_v6"));
+        let next = crate::helpers::injected_target_stack(&saved, &config(), Platform::Azure)
+            .expect("target stack");
+        let machine = next
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<ComputeCluster>())
+            .flat_map(|cluster| cluster.capacity_groups.iter())
+            .map(|g| g.instance_type.clone())
+            .next()
+            .flatten();
+        assert_eq!(machine.as_deref(), Some("Standard_D8s_v6"));
+    }
 
     fn config() -> DeploymentConfig {
         DeploymentConfig::builder()
@@ -2478,6 +2655,79 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_pick_goes_into_the_registered_cluster_so_the_next_step_accepts_the_state() {
+        use alien_core::{CapacityGroup, ComputeCluster};
+        let cluster = |machine: &str| {
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: Some(machine.to_string()),
+                    profile: None,
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                })
+                .build()
+        };
+        let mut registered = alien_core::StackResourceState::new_pending(
+            "compute-cluster".to_string(),
+            alien_core::Resource::new(cluster("Standard_D8s_v5")),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        registered.status = ResourceStatus::Provisioning;
+        let mut stack_state = StackState::new(Platform::Azure);
+        stack_state
+            .resources
+            .insert("compute".to_string(), registered);
+        let selected = Stack::new("azure".to_string())
+            .add(cluster("Standard_D8s_v6"), ResourceLifecycle::Frozen)
+            .build();
+
+        carry_selection_into_imported_state(&mut stack_state, &selected);
+
+        // What continue_imported compares: the registered config equals the picked one.
+        assert_eq!(
+            stack_state.resources["compute"].config,
+            alien_core::Resource::new(cluster("Standard_D8s_v6"))
+        );
+    }
+
+    #[test]
+    fn the_selecting_step_saves_the_pick_and_creates_nothing() {
+        let untouched = StackState::new(Platform::Azure);
+        let mut state =
+            resumed_test_setup(untouched.clone(), Stack::new("azure".to_string()).build());
+        state.platform = Platform::Azure;
+        let mut metadata = state.runtime_metadata.clone().unwrap();
+        metadata.initial_setup_authority = InitialSetupAuthority::ImportedHandoff;
+        metadata.first_setup_machines_unselected = true;
+        assert!(take_first_setup_selection(&mut metadata, Platform::Azure));
+
+        let result = first_setup_selection_result(state, untouched.clone(), metadata);
+
+        // Nothing was planned or created, the status stays, and the marker is saved cleared.
+        assert_eq!(result.state.status, DeploymentStatus::InitialSetup);
+        assert_eq!(
+            result.state.stack_state.as_ref().unwrap().resources.len(),
+            untouched.resources.len()
+        );
+        assert!(result
+            .state
+            .stack_state
+            .as_ref()
+            .unwrap()
+            .resources
+            .is_empty());
+        let saved = result.state.runtime_metadata.unwrap();
+        assert!(!saved.first_setup_machines_unselected);
+        assert!(saved.prepared_stack.is_some());
+        assert!(result.suggested_delay_ms.is_none());
+    }
+
     #[tokio::test]
     async fn setup_waits_for_a_running_resource_update_after_its_new_dependency_is_ready() {
         for change_config in [false, true] {
@@ -2537,12 +2787,111 @@ mod tests {
                     break;
                 }
             }
+            // With a changed config the update waits for the new dependency, as before. With
+            // an unchanged one the only change is an ordering edge on a setup-created Frozen
+            // resource: an ordinary release records it and there is no update to defer.
             assert!(
-                observed_deferred_update,
+                observed_deferred_update || !change_config,
                 "test must exercise the delayed update"
             );
             assert_eq!(state.status, DeploymentStatus::Provisioning);
         }
+    }
+
+    /// An automatic-setup install made before management depended on the network, taking an
+    /// ordinary release (direct authority, not a setup run): the new edge is recorded and
+    /// management is not updated. The provider has no expectations, so any cloud call fails;
+    /// setup must hand off with management running, and what setup recorded must be left as
+    /// it was.
+    #[tokio::test]
+    async fn an_ordinary_release_records_managements_edge_of_an_old_install_without_a_cloud_call() {
+        use alien_core::{Network, NetworkSettings, RemoteStackManagement, ResourceRef};
+        let network = Network::new("default-network".to_string())
+            .settings(NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            })
+            .build();
+        let management = RemoteStackManagement::new("management".to_string()).build();
+        let network_edge = vec![ResourceRef::new(Network::RESOURCE_TYPE, "default-network")];
+        let mut target = Stack::new("test".to_string())
+            .add(network.clone(), ResourceLifecycle::Frozen)
+            .add(management.clone(), ResourceLifecycle::Frozen)
+            .build();
+        target.resources.get_mut("management").unwrap().dependencies = network_edge.clone();
+        let running = |resource: alien_core::Resource,
+                       controller: Box<dyn alien_infra::ResourceController>| {
+            let mut saved = alien_core::StackResourceState::new_pending(
+                resource.resource_type().to_string(),
+                resource,
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            );
+            saved.status = ResourceStatus::Running;
+            saved.set_internal_controller(Some(controller)).unwrap();
+            saved
+        };
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resource_prefix = "mgmt-test".to_string();
+        stack_state.resources.insert(
+            "default-network".to_string(),
+            running(
+                alien_core::Resource::new(network),
+                Box::new(alien_infra::AwsNetworkController::mock_ready("vpc-1", 2)),
+            ),
+        );
+        stack_state.resources.insert(
+            "management".to_string(),
+            running(
+                alien_core::Resource::new(management),
+                Box::new(alien_infra::AwsRemoteStackManagementController::mock_ready(
+                    "mgmt-test-management",
+                )),
+            ),
+        );
+        let before = stack_state.resources["management"].internal_state.clone();
+        let mut state = DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(target),
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                automatic_setup: true,
+                ..Default::default()
+            }),
+        };
+        let provider = Arc::new(MockPlatformServiceProvider::new());
+        for _ in 0..10 {
+            state = handle_initial_setup(state, config(), aws_client_config(), provider.clone())
+                .await
+                .expect("setup step")
+                .state;
+            if state.status == DeploymentStatus::Provisioning {
+                break;
+            }
+        }
+        assert_eq!(
+            state.status,
+            DeploymentStatus::Provisioning,
+            "{:?}",
+            state.error
+        );
+        let management = &state.stack_state.as_ref().unwrap().resources["management"];
+        assert_eq!(
+            management.status,
+            ResourceStatus::Running,
+            "{:?}",
+            management.error
+        );
+        assert_eq!(management.dependencies, network_edge);
+        assert_eq!(management.internal_state, before);
     }
 
     #[tokio::test]

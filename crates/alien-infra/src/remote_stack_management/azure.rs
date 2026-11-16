@@ -2093,6 +2093,69 @@ mod tests {
         }
     }
 
+    /// First setup of an imported install runs the ComputeCluster controller with the management
+    /// role, so the role must hold every write the controller makes in the deployment resource
+    /// group: the node identity and its role assignments, the cluster's network
+    /// security group, and the scale sets with their instances and links.
+    #[test]
+    fn management_role_holds_every_write_the_compute_cluster_first_setup_makes() {
+        let resource_group_scope = "/subscriptions/sub-123/resourceGroups/rg-123";
+        let profile = PermissionProfile::new().global([
+            PermissionSetReference::from_name("compute-cluster/management"),
+            PermissionSetReference::from_name("container/provision"),
+            PermissionSetReference::from_name("network/heartbeat"),
+        ]);
+        let grant_plan = generate_stack_management_grant_plan(
+            &profile,
+            std::iter::empty(),
+            &permission_context(),
+            &Default::default(),
+        )
+        .unwrap();
+        let granted: std::collections::BTreeSet<&str> = grant_plan
+            .custom_roles
+            .iter()
+            .filter(|role| {
+                role.role_definition
+                    .assignable_scopes
+                    .iter()
+                    .any(|scope| scope == resource_group_scope)
+            })
+            .flat_map(|role| role.role_definition.actions.iter().map(String::as_str))
+            .collect();
+
+        let missing: Vec<&str> = [
+            // The cluster's network security group: created, read back, deleted, joined.
+            "Microsoft.Network/networkSecurityGroups/write",
+            "Microsoft.Network/networkSecurityGroups/read",
+            "Microsoft.Network/networkSecurityGroups/delete",
+            "Microsoft.Network/networkSecurityGroups/join/action",
+            // The node identity.
+            "Microsoft.ManagedIdentity/userAssignedIdentities/read",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/write",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/delete",
+            "Microsoft.ManagedIdentity/userAssignedIdentities/assign/action",
+            // The node role and its assignment to the identity.
+            "Microsoft.Authorization/roleAssignments/write",
+            "Microsoft.Authorization/roleAssignments/delete",
+            // The scale sets, their instances and the subnet they join.
+            "Microsoft.Compute/virtualMachineScaleSets/write",
+            "Microsoft.Compute/virtualMachineScaleSets/read",
+            "Microsoft.Compute/virtualMachineScaleSets/delete",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/read",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/write",
+            "Microsoft.Compute/virtualMachineScaleSets/virtualMachines/delete",
+            "Microsoft.Network/virtualNetworks/subnets/join/action",
+        ]
+        .into_iter()
+        .filter(|action| !granted.contains(action))
+        .collect();
+        assert!(
+            missing.is_empty(),
+            "the management role lacks writes the compute cluster controller makes at {resource_group_scope}: {missing:?}"
+        );
+    }
+
     #[test]
     fn stack_management_grant_plan_includes_worker_dispatch_command_once() {
         let profile = PermissionProfile::new()

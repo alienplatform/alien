@@ -2116,6 +2116,8 @@ impl BindingsProviderApi for BindingsProvider {
                     })
                 })?;
 
+                let preview_ports = gcp_binding.preview_ports.clone();
+                let preview_service_account = gcp_binding.preview_service_account.clone();
                 let engine = gcp_binding
                     .engine
                     .into_value(binding_name, "engine")
@@ -2143,15 +2145,25 @@ impl BindingsProviderApi for BindingsProvider {
                 let mut config = gcp_config.clone();
                 config.region = region;
 
+                let iam_client = alien_gcp_clients::iam::IamClient::new(
+                    reqwest::Client::new(),
+                    gcp_config.clone(),
+                );
                 let client = AgentPlatformClient::new(reqwest::Client::new(), config);
+                let provider = GcpAgentPlatformSandbox::new(
+                    Arc::new(client),
+                    engine,
+                    template,
+                    gcp_binding.max_lifetime_seconds,
+                );
+                let provider = provider.with_preview_from_binding(
+                    preview_ports,
+                    preview_service_account,
+                    binding_name,
+                    Arc::new(iam_client),
+                )?;
                 let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(
-                    GcpAgentPlatformSandbox::new(
-                        Arc::new(client),
-                        engine,
-                        template,
-                        gcp_binding.max_lifetime_seconds,
-                    )
-                    .with_egress(
+                    provider.with_egress(
                         gcp_binding
                             .egress
                             .as_ref()

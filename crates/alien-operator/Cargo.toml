@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "alien-operator"
 path = "src/main.rs"
 
+[features]
+# Helpers for embedders' tests. Never enabled in a release build.
+test-support = []
+
 [dependencies]
 lognorm = { workspace = true }
 # Alien crates

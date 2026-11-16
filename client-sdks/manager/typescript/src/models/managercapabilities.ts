@@ -13,7 +13,10 @@ export type ManagerCapabilities = {
    */
   charts: boolean;
   /**
-   * Requests into deployments through `/v1/deployments/{id}/tunnels/...`.
+   * Always false: container tunnels were removed. Still served because
+   *
+   * @remarks
+   * CLIs released before the removal require the field.
    */
   tunnels: boolean;
   /**

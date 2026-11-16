@@ -89,6 +89,12 @@ pub async fn handle_running(
 
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
+        .maybe_rollout_id(
+            current
+                .current_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone()),
+        )
         .service_provider(service_provider.clone())
         .build()
         .context(ErrorData::StackExecutionFailed {

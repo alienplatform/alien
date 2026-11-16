@@ -5,6 +5,7 @@
 import { identityEnrollRuntimeIdentity } from "../funcs/identityEnrollRuntimeIdentity.js";
 import { identityExchangeRuntimeIdentity } from "../funcs/identityExchangeRuntimeIdentity.js";
 import { identityIssueEnrollmentCode } from "../funcs/identityIssueEnrollmentCode.js";
+import { identityIssueSetupCredential } from "../funcs/identityIssueSetupCredential.js";
 import { identityRotateRuntimeIdentity } from "../funcs/identityRotateRuntimeIdentity.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -20,6 +21,25 @@ export class Identity extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.IssuedEnrollmentCode> {
     return unwrapAsync(identityIssueEnrollmentCode(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Issue a short-lived key for rerunning an installation, to its own Operator.
+   *
+   * @remarks
+   * The caller proves itself with the Operator's live key as the bearer token.
+   * It is not a session: the key is checked against this deployment only, so
+   * every other caller gets the same refusal.
+   */
+  async issueSetupCredential(
+    request: operations.IssueSetupCredentialRequest,
+    options?: RequestOptions,
+  ): Promise<models.IssuedSetupCredential> {
+    return unwrapAsync(identityIssueSetupCredential(
       this,
       request,
       options,

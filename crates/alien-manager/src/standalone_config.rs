@@ -69,6 +69,12 @@ pub struct OperatorSection {
     /// without TLS).
     #[serde(default)]
     pub insecure_registry: bool,
+    /// Tell Operators older than this manager's chart to swap to the chart's
+    /// Operator image on their next sync (when they have self-update on).
+    /// Default false. The swap is one-way: test it on the installed chart
+    /// version first.
+    #[serde(default)]
+    pub update_older_operators: bool,
 }
 
 // ── Section configs ─────────────────────────────────────────────────────────

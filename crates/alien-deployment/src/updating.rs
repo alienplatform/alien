@@ -178,6 +178,8 @@ fn stack_has_converged(
                 .is_some_and(|deployed| {
                     deployed.config == desired.config
                         && deployed.dependencies == desired.combined_dependencies()
+                        // An update still owed to a dependency that rolled is outstanding work.
+                        && !deployed.dependency_update_pending
                 })
         })
 }
@@ -328,6 +330,16 @@ pub async fn handle_update_pending(
             input_values: &config.input_values,
         })?;
     persisted_gate_answers.extend(new_declines);
+    persisted_gate_answers.extend(crate::pending::default_frozen_gate_declines(
+        crate::pending::FrozenGateFixityCheck {
+            persisted: &persisted_gate_answers,
+            stack: &target_stack,
+            still_frozen_gating: &frozen_gating,
+            existing_resource_ids: &existing_resource_ids,
+            input_values: &config.input_values,
+        },
+        current.platform,
+    ));
 
     // Drop gated setup resources the deployer declined, BEFORE the
     // preflights: the frozen-compatibility check compares against the
@@ -363,8 +375,8 @@ pub async fn handle_update_pending(
         .and_then(|metadata| metadata.setup_update_authorization.as_ref());
     info!(
         authorization_present = setup_update_authorization.is_some(),
-        authorization_release_id = setup_update_authorization
-            .map(|authorization| authorization.release_id.as_str()),
+        authorization_release_id =
+            setup_update_authorization.map(|authorization| authorization.release_id.as_str()),
         target_release_id,
         "setup update authorization recorded for the update"
     );
@@ -402,13 +414,41 @@ pub async fn handle_update_pending(
         target_release_id,
         current.platform,
     );
-    let mutated_stack = crate::pending::strip_declined_live_resources(
+    // A frozen identity that is new in this release and unused while its gate is off passed the
+    // frozen-compatibility check as not an addition. It is not installed, and setup owns it, so
+    // the executor must not plan to create it with runtime credentials. One setup already
+    // installed stays in the target. This is where the executor's target is pruned: the stack
+    // stored below as `pending_prepared_stack` is what `handle_updating` plans from. The list is
+    // taken before the strip, because the strip removes the gated users the excuse is judged by.
+    let nothing_installed = Stack::new(mutated_stack.id.clone()).build();
+    let unused_identities = alien_preflights::compatibility::unused_frozen_additions(
+        old_stack_for_comparison
+            .as_deref()
+            .unwrap_or(&nothing_installed),
+        &mutated_stack,
+        &config,
+        current.platform,
+    )
+    .into_iter()
+    .filter(|id| !existing_resource_ids.contains(id))
+    .collect::<Vec<_>>();
+    let mut mutated_stack = crate::pending::strip_declined_live_resources(
         mutated_stack,
         &config.input_values,
         &persisted_gate_answers,
         &frozen_gating,
         current.platform,
     )?;
+    alien_core::remove_declined_live_resources(&mut mutated_stack, &unused_identities);
+    // The update installs nothing for a frozen input reference that resolves to no value; the
+    // recorded target must not keep it (a later answer listing values would compare equal).
+    alien_preflights::compatibility::resolve_empty_frozen_input_references(
+        old_stack_for_comparison
+            .as_deref()
+            .unwrap_or(&nothing_installed),
+        &mut mutated_stack,
+        &config,
+    );
 
     if current.runtime_metadata.as_ref().is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
@@ -730,6 +770,12 @@ pub async fn handle_updating(
 
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
+        .maybe_rollout_id(
+            current
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone()),
+        )
         .resume_unchanged_failed_resources(true)
         .running_resource_policy(RunningResourcePolicy::OptIn)
         .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
@@ -1794,6 +1840,48 @@ mod tests {
             .get_mut("objects")
             .expect("objects is deployed")
             .dependencies = target_stack.resources["objects"].combined_dependencies();
+        assert_eq!(status(&stack_state), StackStatus::Running);
+    }
+
+    /// A dependent that owes an update to a dependency that just rolled reads Running with
+    /// its config already equal to the release, so only the recorded marker shows the work.
+    #[test]
+    fn an_update_is_not_complete_while_a_dependent_still_owes_its_update() {
+        let cache = Kv::new("cache".to_string()).build();
+        let objects = Storage::new("objects".to_string()).build();
+        let mut target_stack = Stack::new("s".to_string())
+            .add(cache.clone(), ResourceLifecycle::Frozen)
+            .add(objects.clone(), ResourceLifecycle::Frozen)
+            .build();
+        target_stack
+            .resources
+            .get_mut("objects")
+            .expect("objects is in the stack")
+            .dependencies = vec![ResourceRef::new(Kv::RESOURCE_TYPE, "cache")];
+
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resources.insert(
+            "cache".to_string(),
+            state_entry(Resource::new(cache), ResourceStatus::Running),
+        );
+        let mut objects_state = state_entry(Resource::new(objects), ResourceStatus::Running);
+        objects_state.dependencies = target_stack.resources["objects"].combined_dependencies();
+        objects_state.dependency_update_pending = true;
+        stack_state
+            .resources
+            .insert("objects".to_string(), objects_state);
+        let reconciled = HashSet::from(["cache", "objects"]);
+        let status = |state: &StackState| {
+            compute_update_status(state, &target_stack, &reconciled, &[], &HashSet::new())
+                .expect("status should compute")
+        };
+
+        assert_eq!(status(&stack_state), StackStatus::InProgress);
+        stack_state
+            .resources
+            .get_mut("objects")
+            .expect("objects is deployed")
+            .dependency_update_pending = false;
         assert_eq!(status(&stack_state), StackStatus::Running);
     }
 
