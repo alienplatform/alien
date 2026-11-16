@@ -1,5 +1,15 @@
 {{- define "deployment.validateRuntimeIdentity" -}}
 {{- $storage := .Values.runtime.data.persistence -}}
+{{- /* This chart installs the Operator version in .Chart.AppVersion. A tag pinned in values
+that is older (for example the old chart's default, carried by helm upgrade --reuse-values)
+would run an Operator that does not read the Secret this chart now provides. A digest pin
+is the user's choice and is not checked. */ -}}
+{{- $imageTag := (split "@" (toString .Values.runtime.image.tag))._0 | trimPrefix "v" -}}
+{{- $appVersion := .Chart.AppVersion | trimPrefix "v" -}}
+{{- $semver := "^[0-9]+\\.[0-9]+\\.[0-9]+$" -}}
+{{- if and (not (dig "digest" "" .Values.runtime.image)) (regexMatch $semver $imageTag) (regexMatch $semver $appVersion) (semverCompare (printf "< %s" $appVersion) $imageTag) -}}
+  {{- fail (printf "runtime.image.tag %s is older than the Operator this chart installs (%s). The Operator image must be at least %s. When upgrading, use --reset-then-reuse-values instead of --reuse-values, or remove the runtime.image.tag pin." .Values.runtime.image.tag $appVersion $appVersion) -}}
+{{- end -}}
 {{- $credentialConfigured := or .Values.management.token (include "deployment.credentialSecretName" .) -}}
 {{- if and $credentialConfigured (not .Values.management.deploymentId) (not $storage.enabled) -}}
   {{- fail "A bootstrap installation requires persistent runtime storage. Set runtime.data.persistence.enabled=true; ephemeral storage requires an existing deployment ID and its deployment credential." -}}

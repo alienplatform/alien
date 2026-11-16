@@ -4131,6 +4131,8 @@ runtime:
     repository: registry.example.com/deployment/operator
     tag: latest
     # Set to run the Operator by digest (sha256:...); it wins over the tag.
+    # A digest must be an Operator at least as new as this chart's appVersion:
+    # the chart does not check it. A tag older than appVersion is refused.
     digest: ""
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
@@ -10259,6 +10261,50 @@ mod tests {
         assert!(docs_by_kind(&docs, "Secret")
             .iter()
             .all(|s| s["data"]["password"].is_null()));
+    }
+
+    #[test]
+    fn a_pinned_operator_tag_older_than_the_chart_is_refused() {
+        let stack = Stack::new("database-stack".into())
+            .add(
+                alien_core::Postgres::new("database".into()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = HelmRegistry::built_in();
+        let mut chart = generate_helm_chart(
+            &stack,
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "database-stack".into(),
+            },
+        )
+        .unwrap();
+        let metadata = chart.files.get_mut("Chart.yaml").unwrap();
+        let mut value: serde_yaml::Value = serde_yaml::from_str(metadata).unwrap();
+        value["appVersion"] = "3.3.66".into();
+        *metadata = serde_yaml::to_string(&value).unwrap();
+        let render = |tag: &str, digest: &str| {
+            let values = format!(
+                "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\nruntime:\n  image:\n    tag: \"{tag}\"\n    digest: \"{digest}\"\n"
+            );
+            crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "app")
+        };
+        // What `helm upgrade --reuse-values` carries over from the earlier chart.
+        let stale = render("v3.3.65", "");
+        assert!(!stale.is_ok(), "an older Operator tag must be refused");
+        assert!(stale.stderr.contains("must be at least 3.3.66"));
+        assert!(stale.stderr.contains("--reset-then-reuse-values"));
+        render("v3.3.66", "").assert_ok("the chart's own tag");
+        render("3.3.66", "").assert_ok("the chart's own tag without the v");
+        render("v3.4.0", "").assert_ok("a newer tag");
+        render("latest", "").assert_ok("a non-version tag");
+        render(
+            "v3.3.65",
+            &format!("sha256:{}", "a".repeat(64)),
+        )
+        .assert_ok("a digest pin is the user's choice");
     }
 
     #[test]
