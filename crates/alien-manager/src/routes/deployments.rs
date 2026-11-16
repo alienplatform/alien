@@ -1409,6 +1409,7 @@ async fn request_operator_action(
         kind: body.kind,
         requested_by: body.requested_by,
         requested_at: chrono::Utc::now(),
+        outcome: None,
     };
     let conflict = |reason: String| {
         alien_error::AlienError::new(ErrorData::OperatorRequestConflict { reason })

@@ -4190,6 +4190,7 @@ fn replace_request(id: &str) -> alien_core::OperatorRequest {
         },
         requested_by: "user-1".to_string(),
         requested_at: chrono::Utc::now(),
+        outcome: None,
     }
 }
 
@@ -4335,6 +4336,48 @@ async fn operator_request_is_claimed_in_failed_status_and_cleared_by_its_id() {
     // The runner reports it ended: cleared, and the status was not changed.
     let ended = test_reconcile_data(&dep.id, "s1", DeploymentStatus::UpdateFailed, None);
     store.reconcile(&subject, ended).await.unwrap();
+    let fetched = store.get_deployment(&subject, &dep.id).await.unwrap().unwrap();
+    assert!(fetched.operator_request.is_none());
+    assert_eq!(fetched.status, "update-failed");
+}
+
+/// The runner reports the request with its outcome: that request is dropped, by its id only.
+#[tokio::test]
+async fn operator_request_with_an_outcome_is_dropped_by_its_id() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let subject = test_subject();
+    let dep = create_test_deployment(&store, &group_id, "failed", Platform::Aws).await;
+    set_status(&db, &dep.id, "update-failed").await;
+    store
+        .set_operator_request(&subject, &dep.id, &replace_request("r1"))
+        .await
+        .unwrap();
+    store
+        .acquire(&subject, "s1", &DeploymentFilter::default(), 5)
+        .await
+        .unwrap();
+
+    let ended = |id: &str| {
+        let mut request = replace_request(id);
+        request.outcome = Some(alien_core::OperatorRequestOutcome {
+            status: alien_core::OperatorRequestEnd::Refused,
+            message: "another machine is draining".to_string(),
+        });
+        request
+    };
+
+    // An outcome for another request leaves this one.
+    let mut other = test_reconcile_data(&dep.id, "s1", DeploymentStatus::UpdateFailed, None);
+    other.state.operator_request = Some(ended("r-other"));
+    store.reconcile(&subject, other).await.unwrap();
+    let fetched = store.get_deployment(&subject, &dep.id).await.unwrap().unwrap();
+    assert_eq!(fetched.operator_request.unwrap().id, "r1");
+
+    let mut own = test_reconcile_data(&dep.id, "s1", DeploymentStatus::UpdateFailed, None);
+    own.state.operator_request = Some(ended("r1"));
+    store.reconcile(&subject, own).await.unwrap();
     let fetched = store.get_deployment(&subject, &dep.id).await.unwrap().unwrap();
     assert!(fetched.operator_request.is_none());
     assert_eq!(fetched.status, "update-failed");

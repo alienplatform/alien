@@ -2270,19 +2270,24 @@ impl DeploymentStore for SqliteDeploymentStore {
 
             // The runner ended the request it was given: clear that request, and only that one.
             // A request recorded after the runner loaded the row has another id and stays.
-            if state.operator_request.is_none() {
-                if let Some(ended) = deployment
+            // A report that carries the request with its outcome names the one that ended; a
+            // report without a request ends the one stored.
+            let ended_id = match state.operator_request.as_ref() {
+                Some(request) if request.outcome.is_some() => Some(request.id.clone()),
+                Some(_) => None,
+                None => deployment
                     .as_ref()
                     .and_then(|d| d.operator_request.as_ref())
-                {
-                    query.value(
-                        Deployments::OperatorRequest,
-                        Expr::cust_with_values(
-                            "CASE WHEN json_extract(operator_request, '$.id') = ? THEN NULL ELSE operator_request END",
-                            [ended.id.clone()],
-                        ),
-                    );
-                }
+                    .map(|request| request.id.clone()),
+            };
+            if let Some(ended_id) = ended_id {
+                query.value(
+                    Deployments::OperatorRequest,
+                    Expr::cust_with_values(
+                        "CASE WHEN json_extract(operator_request, '$.id') = ? THEN NULL ELSE operator_request END",
+                        [ended_id],
+                    ),
+                );
             }
 
             // Nullable fields: set value or explicit NULL to clear stale data

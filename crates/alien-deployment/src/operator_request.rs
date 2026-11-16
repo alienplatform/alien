@@ -5,7 +5,9 @@
 //! is cleared from the state only when the controller reports it done or refused.
 
 use crate::{DeploymentConfig, DeploymentState, DeploymentStepResult, ErrorData, Result};
-use alien_core::OperatorRequestProgress;
+use alien_core::{
+    OperatorRequest, OperatorRequestEnd, OperatorRequestOutcome, OperatorRequestProgress,
+};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::{info, warn};
@@ -18,7 +20,10 @@ use tracing::{info, warn};
 /// already requested goes first, so a request never overtakes it.
 pub(crate) fn is_pending(state: &DeploymentState) -> bool {
     use alien_core::DeploymentStatus::{RefreshFailed, Running, UpdateFailed, UpdatePending};
-    state.operator_request.is_some()
+    state
+        .operator_request
+        .as_ref()
+        .is_some_and(|request| request.outcome.is_none())
         && !state.retry_requested
         && matches!(
             state.status,
@@ -92,12 +97,24 @@ pub(crate) async fn step_pending(
         }
         OperatorRequestProgress::Done { summary } => {
             info!(request_id = %request.id, kind = request.kind_name(), %summary, "Operator request done");
-            next.operator_request = None;
+            next.operator_request = Some(OperatorRequest {
+                outcome: Some(OperatorRequestOutcome {
+                    status: OperatorRequestEnd::Done,
+                    message: summary,
+                }),
+                ..request
+            });
             Some(0)
         }
         OperatorRequestProgress::Refused { reason } => {
             warn!(request_id = %request.id, kind = request.kind_name(), %reason, "Operator request refused");
-            next.operator_request = None;
+            next.operator_request = Some(OperatorRequest {
+                outcome: Some(OperatorRequestOutcome {
+                    status: OperatorRequestEnd::Refused,
+                    message: reason,
+                }),
+                ..request
+            });
             Some(0)
         }
     };

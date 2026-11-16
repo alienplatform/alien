@@ -36,6 +36,31 @@ pub struct OperatorRequest {
     pub requested_by: String,
     /// When it was recorded.
     pub requested_at: DateTime<Utc>,
+    /// How it ended. Set by the runner when the controller reports it done or refused; the
+    /// request is then no longer stepped and the store drops it when the state is reconciled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<OperatorRequestOutcome>,
+}
+
+/// Whether a request ended done or refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum OperatorRequestEnd {
+    /// The controller carried the request out.
+    Done,
+    /// The controller refused it; nothing was changed.
+    Refused,
+}
+
+/// How an operator request ended, with the controller's own words.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRequestOutcome {
+    pub status: OperatorRequestEnd,
+    /// What was done, or why it was refused.
+    pub message: String,
 }
 
 impl OperatorRequest {
