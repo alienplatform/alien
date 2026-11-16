@@ -87,6 +87,21 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                         sandbox.id()
                     ));
                 }
+                // The edge credential is the caller's execute right, so a preview nobody holds
+                // execute for would have no one to sign it, and one that someone else could hold
+                // would be command access handed out as if it were port access.
+                if platform == Platform::Gcp
+                    && !sandbox.preview_ports.is_empty()
+                    && !stack_grants_execute(stack, sandbox.id())
+                {
+                    return Some(format!(
+                        "Sandbox '{}': {} Grant `sandbox/execute` on the sandbox to the \
+                         permission profile that previews it, or remove its preview ports; for a \
+                         preview that can be shared per port, use another cloud",
+                        sandbox.id(),
+                        alien_core::GCP_PREVIEW_IS_COMMAND_ACCESS
+                    ));
+                }
                 sandbox
                     .validate_for_platform(platform)
                     .err()
@@ -121,6 +136,19 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
             Ok(CheckResult::success())
         }
     }
+}
+
+/// Whether some permission profile of the stack holds `sandbox/execute` on the sandbox, by name or
+/// through the wildcard. The one right that opens a GCP sandbox's edge and its `:execute`.
+fn stack_grants_execute(stack: &Stack, sandbox_id: &str) -> bool {
+    stack.permission_profiles().values().any(|profile| {
+        [sandbox_id, "*"].iter().any(|key| {
+            profile
+                .0
+                .get(*key)
+                .is_some_and(|refs| refs.iter().any(|reference| reference.id() == "sandbox/execute"))
+        })
+    })
 }
 
 #[cfg(test)]
@@ -222,11 +250,70 @@ mod tests {
             "{rendered}"
         );
 
+        let mut owned = stack_with(with_ports());
+        owned.permissions.profiles.insert(
+            "worker".to_string(),
+            alien_core::permissions::PermissionProfile::new()
+                .resource("agent", ["sandbox/execute"]),
+        );
         let frozen = SandboxPlatformSupportCheck
-            .check(&stack_with(with_ports()), Platform::Gcp)
+            .check(&owned, Platform::Gcp)
             .await
             .expect("check runs");
         assert!(frozen.success, "{:?}", frozen.errors);
+    }
+
+    /// A GCP preview is the caller's execute right, so preview ports that no profile holds execute
+    /// for are refused at plan time with the plain rule, whatever else the stack grants.
+    #[tokio::test]
+    async fn a_gcp_preview_nobody_may_execute_is_refused_with_the_command_access_rule() {
+        let sandbox = Sandbox::new("agent".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu".to_string(),
+                bundled_from: None,
+            })
+            .egress(SandboxEgress::None)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .preview_ports(vec![8080])
+            .build();
+        let mut stack = stack_with(sandbox);
+        // Reaching the sandbox without running anything in it: not a preview right on GCP.
+        stack.permissions.profiles.insert(
+            "viewer".to_string(),
+            alien_core::permissions::PermissionProfile::new()
+                .resource("agent", ["sandbox/heartbeat"]),
+        );
+        let refused = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Gcp)
+            .await
+            .expect("check runs");
+        assert!(!refused.success, "preview without execute must be refused");
+        let rendered = refused.errors.join(" ");
+        assert!(
+            rendered.contains(
+                "On Google Cloud, preview access equals command access; port-scoped preview \
+                 sharing is not available."
+            ),
+            "{rendered}"
+        );
+        assert!(rendered.contains("agent"), "names the sandbox: {rendered}");
+
+        // The same stack, once a profile holds execute, is accepted; and so is the wildcard.
+        for key in ["agent", "*"] {
+            let mut owned = stack.clone();
+            owned.permissions.profiles.insert(
+                "worker".to_string(),
+                alien_core::permissions::PermissionProfile::new().resource(key, ["sandbox/execute"]),
+            );
+            let accepted = SandboxPlatformSupportCheck
+                .check(&owned, Platform::Gcp)
+                .await
+                .expect("check runs");
+            assert!(accepted.success, "{key}: {:?}", accepted.errors);
+        }
     }
 
     /// A ceiling outside the platform's own sizing rule is refused at plan time: Azure sizes cpu
