@@ -826,6 +826,87 @@ mod tests {
             );
         }
 
+        /// Preview on GCP is command access, so the right to sign as the edge signer goes to the
+        /// profiles that hold `sandbox/execute` on the sandbox, by name or wildcard, and to no
+        /// other profile in the stack, whatever else it holds.
+        #[test]
+        fn the_edge_signer_is_grantable_only_to_the_execute_owners() {
+            use alien_core::permissions::PermissionProfile;
+            let sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .preview_ports(vec![8080])
+                .build();
+            let stack = Stack::new("acme".to_string())
+                .add(
+                    GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Frozen)
+                .permission(
+                    "named",
+                    PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+                )
+                .permission(
+                    "wildcard",
+                    PermissionProfile::new().resource("*", ["sandbox/execute"]),
+                )
+                .permission(
+                    "other-sandbox",
+                    PermissionProfile::new().resource("elsewhere", ["sandbox/execute"]),
+                )
+                .permission(
+                    "heartbeat-only",
+                    PermissionProfile::new().resource("agents", ["sandbox/heartbeat"]),
+                )
+                .permission("empty", PermissionProfile::new())
+                .build();
+            let mut names = names();
+            for profile in ["named", "wildcard", "other-sandbox", "heartbeat-only", "empty"] {
+                names.insert(
+                    format!("{profile}-sa"),
+                    format!("{}_sa", profile.replace('-', "_")),
+                );
+            }
+            let resource = stack.resources.get("agents").expect("sandbox");
+            let settings = StackSettings::default();
+            let ctx = EmitContext {
+                stack: &stack,
+                resource,
+                resource_id: "agents",
+                platform: alien_core::Platform::Gcp,
+                targets_kubernetes: false,
+                stack_settings: &settings,
+                names: &names,
+                pins: &alien_core::SetupPins::default(),
+            };
+            let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+            let mut members: Vec<String> = fragment
+                .resource_blocks
+                .iter()
+                .filter(|b| {
+                    b.labels.first().map(|l| l.as_str()) == Some("google_service_account_iam_member")
+                })
+                .map(|b| attribute(b, "member"))
+                .collect();
+            members.sort();
+            assert_eq!(
+                members,
+                vec![
+                    "\"serviceAccount:${google_service_account.named_sa.email}\"".to_string(),
+                    "\"serviceAccount:${google_service_account.wildcard_sa.email}\"".to_string(),
+                ],
+                "only the two profiles that hold execute on this sandbox may sign as the edge signer"
+            );
+        }
+
         /// GCP refuses an IAM binding whose engine does not exist yet, and a Live engine is created
         /// by its controller after apply. Emitting the member anyway would reference a block this
         /// template never renders.
