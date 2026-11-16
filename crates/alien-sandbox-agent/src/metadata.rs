@@ -20,6 +20,10 @@ const METADATA_ADDRESS: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)), 80);
 /// Per request. Nothing answering costs one connect timeout, so the whole check stays near 1 s.
 const TIMEOUT: Duration = Duration::from_millis(500);
+/// The top-level listing, and the only entries allowed in it. Auto Mode's metadata service serves
+/// just these two to a pod; every identifying entry is a 404.
+const AWS_LISTING: &str = "/latest/meta-data/";
+const AWS_LISTING_ALLOWED: [&str; 2] = ["placement/", "services/"];
 const AWS_CREDENTIALS: &str = "/latest/meta-data/iam/security-credentials/";
 const AWS_INSTANCE_ID: &str = "/latest/meta-data/instance-id";
 /// Everything else the AWS metadata service serves that identifies the instance or carries
@@ -162,8 +166,8 @@ pub fn credentials_obtainable() -> Result<(), Exposure> {
 enum Reply {
     /// The connection could not be made: nothing to return (a dropped connection is a policy).
     Unreachable,
-    /// A complete status line, and whatever body arrived.
-    Status(u16, String),
+    /// A complete status line, whatever body arrived, and the raw head (status line and headers).
+    Status(u16, String, String),
     /// The connection opened but no usable reply came back (timeout, reset, garbage).
     Broken(String),
 }
@@ -178,13 +182,35 @@ enum Verdict {
 fn judge(reply: &Reply) -> Verdict {
     match reply {
         Reply::Unreachable => Verdict::Refused,
-        Reply::Status(401 | 403 | 404, _) => Verdict::Refused,
-        Reply::Status(code, body) if (200..300).contains(code) && !body.trim().is_empty() => {
+        Reply::Status(401 | 403 | 404, ..) => Verdict::Refused,
+        Reply::Status(code, body, _) if (200..300).contains(code) && !body.trim().is_empty() => {
             Verdict::Data
         }
-        Reply::Status(code, _) => Verdict::Unexpected(format!("HTTP {code}")),
+        Reply::Status(code, ..) => Verdict::Unexpected(format!("HTTP {code}")),
         Reply::Broken(why) => Verdict::Unexpected(why.clone()),
     }
+}
+
+/// The AWS-shaped requests reach other clouds' metadata services on their clusters, and those
+/// answer them with a plain error: the GKE metadata server marks every reply with
+/// `Metadata-Flavor: Google` (a 405 for the token PUT), and Azure's service answers a request
+/// without a `Metadata: true` header with a 400 "Required metadata header not specified". That
+/// recognition changes how only a 400 or 405 is read (a status that carries no data): the request
+/// is not an AWS request there, so it is not "neither data nor a refusal". It never forgives data:
+/// a 2xx with a body, a redirect or a server error is judged as it would be anywhere else, whatever
+/// the headers claim, and every later probe is judged on its own reply.
+fn judge_aws(reply: &Reply) -> Verdict {
+    if let Reply::Status(400 | 405, body, head) = reply {
+        let head = head.to_ascii_lowercase();
+        if head.contains("\r\nmetadata-flavor: google")
+            || body
+                .to_ascii_lowercase()
+                .contains("required metadata header not specified")
+        {
+            return Verdict::Refused;
+        }
+    }
+    judge(reply)
 }
 
 fn outcome(
@@ -223,16 +249,23 @@ const SERVICE_ACCOUNT_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/service
 /// token or token file named in the environment, the default Pod Identity token file, and a
 /// mounted service account token.
 fn pod_identity_tokens() -> Vec<String> {
+    read_tokens(
+        std::env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN").ok(),
+        std::env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE").ok(),
+        &[POD_IDENTITY_TOKEN_PATH, SERVICE_ACCOUNT_TOKEN_PATH],
+    )
+}
+
+fn read_tokens(
+    token: Option<String>,
+    token_file: Option<String>,
+    defaults: &[&str],
+) -> Vec<String> {
     let mut tokens = Vec::new();
-    if let Ok(token) = std::env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN") {
-        tokens.push(token);
-    }
+    tokens.extend(token);
     let mut files = Vec::new();
-    if let Ok(path) = std::env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE") {
-        files.push(path);
-    }
-    files.push(POD_IDENTITY_TOKEN_PATH.to_string());
-    files.push(SERVICE_ACCOUNT_TOKEN_PATH.to_string());
+    files.extend(token_file);
+    files.extend(defaults.iter().map(|path| path.to_string()));
     for path in files {
         if let Ok(contents) = std::fs::read_to_string(path) {
             tokens.push(contents);
@@ -255,7 +288,7 @@ fn check_pod_identity(endpoint: &Endpoint, tokens: &[String]) -> Result<(), Expo
             endpoint.headers,
         );
         return match reply {
-            Reply::Status(400, _) => Ok(()),
+            Reply::Status(400, ..) => Ok(()),
             other => outcome(endpoint.cloud, endpoint.path, endpoint.fix, judge(&other)),
         };
     }
@@ -293,12 +326,12 @@ fn check(address: SocketAddr) -> Result<(), Exposure> {
         return Ok(());
     }
     let token = match &token_reply {
-        Reply::Status(code, body) if (200..300).contains(code) && !body.trim().is_empty() => {
+        Reply::Status(code, body, _) if (200..300).contains(code) && !body.trim().is_empty() => {
             Some(body.trim().to_string())
         }
         // A refusal means no token; anything else is not a refusal.
         other => {
-            outcome("AWS", "/latest/api/token", AWS_FIX, judge(other))?;
+            outcome("AWS", "/latest/api/token", AWS_FIX, judge_aws(other))?;
             None
         }
     };
@@ -310,8 +343,29 @@ fn check(address: SocketAddr) -> Result<(), Exposure> {
             cloud,
             path,
             AWS_FIX,
-            judge(&exchange(address, "GET", path, &headers)),
+            judge_aws(&exchange(address, "GET", path, &headers)),
         )
+    };
+    // The listing is read as a list: only the entries a node with no instance data serves
+    // (`placement/`, `services/`) are allowed, so an entry added later (`tags/`, `hostname`, ...)
+    // fails the check without a path being added here first.
+    let listing = |token: Option<&str>, cloud: &'static str| {
+        let headers: Vec<(&str, &str)> = token
+            .map(|token| vec![("X-aws-ec2-metadata-token", token)])
+            .unwrap_or_default();
+        match exchange(address, "GET", AWS_LISTING, &headers) {
+            Reply::Status(code, body, _)
+                if (200..300).contains(&code)
+                    && body
+                        .lines()
+                        .map(str::trim)
+                        .all(|entry| entry.is_empty() || AWS_LISTING_ALLOWED.contains(&entry))
+                    && !body.trim().is_empty() =>
+            {
+                Ok(())
+            }
+            other => outcome(cloud, AWS_LISTING, AWS_FIX, judge_aws(&other)),
+        }
     };
     let aws_paths = || {
         [AWS_CREDENTIALS, AWS_INSTANCE_ID]
@@ -319,10 +373,12 @@ fn check(address: SocketAddr) -> Result<(), Exposure> {
             .chain(AWS_OTHER_PATHS)
     };
     if let Some(token) = token.as_deref() {
+        listing(Some(token), "AWS")?;
         for path in aws_paths() {
             aws(path, Some(token), "AWS")?;
         }
     }
+    listing(None, "AWS (IMDSv1, no session token)")?;
     for path in aws_paths() {
         aws(path, None, "AWS (IMDSv1, no session token)")?;
     }
@@ -354,12 +410,14 @@ fn check(address: SocketAddr) -> Result<(), Exposure> {
     let azure_reply = exchange(address, "GET", azure, &[("Metadata", "true")]);
     let verdict = match &azure_reply {
         // "Identity not found": the node has no identity to hand out.
-        Reply::Status(400, body) if body.to_ascii_lowercase().contains("identity not found") => {
+        Reply::Status(400, body, _) if body.to_ascii_lowercase().contains("identity not found") => {
             Verdict::Refused
         }
         // Any other 400 that talks about identities means the node has several user-assigned
         // identities and wants a `client_id`: a command that knows one can still get a token.
-        Reply::Status(400, body) if body.to_ascii_lowercase().contains("identit") => Verdict::Data,
+        Reply::Status(400, body, _) if body.to_ascii_lowercase().contains("identit") => {
+            Verdict::Data
+        }
         other => judge(other),
     };
     outcome(
@@ -370,10 +428,27 @@ fn check(address: SocketAddr) -> Result<(), Exposure> {
     )
 }
 
+/// Nothing could be reached: the connection was refused, timed out, or had no route. Anything
+/// else (descriptor exhaustion, a missing address family, a permission error) is a failure to
+/// ask, not an answer.
+fn is_unreachable(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(
+        error.kind(),
+        ConnectionRefused | TimedOut | NetworkUnreachable | HostUnreachable
+    )
+}
+
 /// One HTTP/1.1 exchange (`Connection: close`; Azure's service requires 1.1).
 fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &str)]) -> Reply {
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, TIMEOUT) else {
-        return Reply::Unreachable;
+    let mut stream = match TcpStream::connect_timeout(&address, TIMEOUT) {
+        Ok(stream) => stream,
+        Err(error) if is_unreachable(&error) => return Reply::Unreachable,
+        // Out of file descriptors, an unsupported address family, a permission error: the check
+        // could not ask, which is not the same as nothing answering.
+        Err(error) => {
+            return Reply::Broken(format!("the connection could not be attempted ({error})"))
+        }
     };
     let broken = |why: &str| Reply::Broken(why.to_string());
     if stream.set_read_timeout(Some(TIMEOUT)).is_err()
@@ -410,12 +485,16 @@ fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &st
             _ => broken("an incomplete or unparseable reply"),
         };
     };
-    match head
+    let status_line = head.lines().next().unwrap_or("");
+    if !status_line.starts_with("HTTP/") {
+        return broken("an unparseable status line");
+    }
+    match status_line
         .split_whitespace()
         .nth(1)
         .and_then(|code| code.parse::<u16>().ok())
     {
-        Some(code) => Reply::Status(code, body.to_string()),
+        Some(code) => Reply::Status(code, body.to_string(), head.to_string()),
         None => broken("an unparseable status line"),
     }
 }
@@ -427,6 +506,14 @@ mod tests {
     /// A fake metadata service. A route is `(method, path prefix, needs token, status, body)`;
     /// a request no route matches gets a 404.
     fn serve(routes: Vec<(&'static str, &'static str, bool, u16, &'static str)>) -> SocketAddr {
+        serve_with_head(routes, "")
+    }
+
+    /// Like `serve`, with extra header lines (each ending in CRLF) on every reply.
+    fn serve_with_head(
+        routes: Vec<(&'static str, &'static str, bool, u16, &'static str)>,
+        extra_head: &'static str,
+    ) -> SocketAddr {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         std::thread::spawn(move || {
@@ -442,12 +529,18 @@ mod tests {
                 let (status, body) = routes
                     .iter()
                     .find(|(m, p, needs_token, ..)| {
-                        *m == method && path.starts_with(p) && (!*needs_token || has_token)
+                        *m == method
+                            && (if p.ends_with('/') {
+                                path == *p
+                            } else {
+                                path.starts_with(p)
+                            })
+                            && (!*needs_token || has_token)
                     })
                     .map_or((404, ""), |(_, _, _, status, body)| (*status, *body));
                 let _ = write!(
                     stream,
-                    "HTTP/1.0 {status} X\r\nContent-Length: {}\r\n\r\n{body}",
+                    "HTTP/1.0 {status} X\r\n{extra_head}Content-Length: {}\r\n\r\n{body}",
                     body.len()
                 );
             }
@@ -895,5 +988,200 @@ mod tests {
             Ok(())
         );
         assert!(seen.join().unwrap().contains("Authorization: tok-123\r\n"));
+    }
+
+    // The listing is an allow list.
+    const LISTING: &str = "/latest/meta-data/";
+
+    /// The measured Auto Mode listing: only `placement/` and `services/`.
+    #[test]
+    fn the_measured_auto_mode_listing_passes() {
+        let address = serve(vec![
+            TOKEN,
+            ("GET", LISTING, true, 200, "placement/\nservices/"),
+            (
+                "GET",
+                "/latest/meta-data/placement/region",
+                true,
+                200,
+                "us-east-2",
+            ),
+        ]);
+        assert_eq!(check(address), Ok(()));
+    }
+
+    #[test]
+    fn a_listing_with_an_added_entry_fails_the_check() {
+        for entry in ["tags/", "hostname", "iam/", "instance-id"] {
+            let body: &'static str =
+                Box::leak(format!("placement/\nservices/\n{entry}").into_boxed_str());
+            let address = serve(vec![TOKEN, ("GET", LISTING, true, 200, body)]);
+            let found = check(address).unwrap_err();
+            assert_eq!((found.path, found.unexpected), (LISTING, None), "{entry}");
+        }
+    }
+
+    #[test]
+    fn an_unauthenticated_listing_with_an_added_entry_fails_the_check() {
+        let address = serve(vec![("GET", LISTING, false, 200, "placement/\ntags/")]);
+        assert!(check(address)
+            .unwrap_err()
+            .cloud
+            .contains("no session token"));
+    }
+
+    // Replies that carry nothing, or too much.
+    #[test]
+    fn a_2xx_with_an_empty_body_fails_closed() {
+        let address = serve(vec![("PUT", "/latest/api/token", false, 200, "")]);
+        assert_eq!(
+            check(address).unwrap_err().unexpected.as_deref(),
+            Some("HTTP 200")
+        );
+        let address = serve(vec![TOKEN, ("GET", AWS_CREDENTIALS, true, 204, "")]);
+        assert_eq!(
+            check(address).unwrap_err().unexpected.as_deref(),
+            Some("HTTP 204")
+        );
+    }
+
+    #[test]
+    fn an_oversized_body_is_data() {
+        let big: &'static str = Box::leak("x".repeat(200_000).into_boxed_str());
+        let address = serve(vec![TOKEN, ("GET", AWS_CREDENTIALS, true, 200, big)]);
+        assert_eq!(check(address).unwrap_err().path, AWS_CREDENTIALS);
+    }
+
+    #[test]
+    fn a_reply_that_does_not_start_with_http_fails_closed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut buffer = [0; 1024];
+                let _ = stream.read(&mut buffer);
+                let _ = stream.write_all(b"SIP/2.0 404 Not Found\r\n\r\n");
+            }
+        });
+        assert!(check(address)
+            .unwrap_err()
+            .unexpected
+            .unwrap()
+            .contains("status line"));
+    }
+
+    // Local connect errors are not "unreachable".
+    #[test]
+    fn only_refused_timeout_and_no_route_count_as_unreachable() {
+        use std::io::{Error, ErrorKind};
+        for kind in [
+            ErrorKind::ConnectionRefused,
+            ErrorKind::TimedOut,
+            ErrorKind::NetworkUnreachable,
+            ErrorKind::HostUnreachable,
+        ] {
+            assert!(is_unreachable(&Error::from(kind)), "{kind:?}");
+        }
+        for error in [
+            Error::from_raw_os_error(24), // EMFILE: too many open files
+            Error::from_raw_os_error(97), // EAFNOSUPPORT: address family not supported
+            Error::from_raw_os_error(99), // EADDRNOTAVAIL
+            Error::from(ErrorKind::PermissionDenied),
+            Error::from(ErrorKind::Other),
+        ] {
+            assert!(!is_unreachable(&error), "{error}");
+        }
+    }
+
+    // Other clouds' services answer the AWS-shaped requests with their own errors.
+    const GOOGLE: &str = "Metadata-Flavor: Google\r\n";
+
+    /// Recorded shape (GCE/GKE metadata server documentation): every reply carries
+    /// `Metadata-Flavor: Google`; a request it does not serve is an error, here a 405 for the PUT.
+    #[test]
+    fn a_gke_metadata_server_answering_the_aws_requests_with_errors_passes() {
+        let address = serve_with_head(
+            vec![("PUT", "/latest/api/token", false, 405, "Method Not Allowed")],
+            GOOGLE,
+        );
+        assert_eq!(check(address), Ok(()));
+    }
+
+    /// Recorded shape (Azure Instance Metadata Service documentation): a request without the
+    /// `Metadata: true` header gets a 400 "Required metadata header not specified".
+    #[test]
+    fn an_azure_service_answering_the_aws_requests_with_a_400_passes() {
+        const MISSING: &str = "{\"error\":\"Bad request. Required metadata header not specified\"}";
+        let address = serve(vec![
+            ("PUT", "/latest", false, 400, MISSING),
+            ("GET", "/latest", false, 400, MISSING),
+        ]);
+        assert_eq!(check(address), Ok(()));
+    }
+
+    /// A 400 with no recognizable cloud behind it is still not a refusal.
+    #[test]
+    fn an_unexplained_400_on_the_token_request_fails_closed() {
+        let address = serve(vec![("PUT", "/latest/api/token", false, 400, "bad")]);
+        assert_eq!(
+            check(address).unwrap_err().unexpected.as_deref(),
+            Some("HTTP 400")
+        );
+    }
+
+    /// The header never forgives data: a reply that claims to be Google's but serves a token and
+    /// then credentials, or instance data, or a redirect or server error, fails.
+    #[test]
+    fn a_google_header_does_not_excuse_data_or_other_statuses() {
+        let address = serve_with_head(
+            vec![TOKEN, ("GET", AWS_CREDENTIALS, true, 200, "role")],
+            GOOGLE,
+        );
+        assert_eq!(check(address).unwrap_err().path, AWS_CREDENTIALS);
+        let address = serve_with_head(
+            vec![
+                TOKEN,
+                ("GET", LISTING, true, 200, "placement/\nservices/\ntags/"),
+            ],
+            GOOGLE,
+        );
+        assert_eq!(check(address).unwrap_err().path, LISTING);
+        let address = serve_with_head(
+            vec![("GET", "/latest/user-data", false, 200, "secret")],
+            GOOGLE,
+        );
+        assert_eq!(check(address).unwrap_err().path, "/latest/user-data");
+        for status in [302, 500, 503] {
+            let address = serve_with_head(
+                vec![("PUT", "/latest/api/token", false, status, "x")],
+                GOOGLE,
+            );
+            assert!(check(address).unwrap_err().unexpected.is_some(), "{status}");
+        }
+    }
+
+    // Pod Identity token sources.
+    fn temp_file(name: &str, contents: &str) -> String {
+        let path =
+            std::env::temp_dir().join(format!("alien-metadata-test-{}-{name}", std::process::id()));
+        std::fs::write(&path, contents).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn pod_identity_tokens_come_from_the_environment_and_the_files() {
+        let named = temp_file("named", "  from-named-file \n");
+        let default = temp_file("default", "from-default-file");
+        let empty = temp_file("empty", " \n");
+        let tokens = read_tokens(
+            Some(" from-env ".to_string()),
+            Some(named.clone()),
+            &[default.as_str(), empty.as_str(), "/nonexistent/token"],
+        );
+        assert_eq!(tokens, ["from-env", "from-named-file", "from-default-file"]);
+        assert!(read_tokens(None, None, &["/nonexistent/token"]).is_empty());
+        for path in [named, default, empty] {
+            let _ = std::fs::remove_file(path);
+        }
     }
 }

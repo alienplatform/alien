@@ -573,7 +573,9 @@ What is asked for:
 - `169.254.169.254`, AWS: an IMDSv2 token, then with and without it `iam/security-credentials/`,
   `instance-id`, `user-data`, `iam/info`, the instance's own credentials under
   `identity-credentials/ec2/`, and the signed identity document, `pkcs7` and `signature`.
-  A token with no data behind it is fine.
+  A token with no data behind it is fine. The top-level `meta-data/` listing is read as a list:
+  only `placement/` and `services/` (what the EKS Auto Mode service serves to a pod) may appear;
+  any other entry fails the check.
 - `169.254.169.254`, GCP and Azure: the default service account token, the Azure instance
   document and the Azure managed identity token. An Azure 400 "Identity not found" means the
   node has no identity and passes; a 400 asking for a `client_id` means several identities exist
@@ -588,6 +590,18 @@ What is asked for:
   `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`, the default Pod Identity token file, or a mounted
   service account token is readable, the check presents it, and credentials coming back fail the
   check.
+
+The AWS-shaped requests also reach the metadata services of other clouds. A 400 or 405 reply
+that carries `Metadata-Flavor: Google`, or an Azure 400 "Required metadata header not specified",
+is read as "this is not an AWS service" for those requests only. It never excuses data: a 2xx
+with a body, a redirect or a server error fails whatever the headers say, and every probe is
+judged on its own reply. A request that could not be made for a local reason (out of file
+descriptors, an unsupported address family) fails the check; only a refused connection, a
+timeout and a missing route count as nothing answering. A reply has to start with `HTTP/`.
+
+This check has been exercised on EKS. GKE and AKS with gateway egress have not been run on a
+real cluster yet; their handling is covered by tests that use reply shapes from the providers'
+documentation.
 
 The sandbox NetworkPolicy allows and denies by IPv4 range and carries no IPv6 rule, so IPv6
 egress is denied by omission; the chart's tests pin that.
