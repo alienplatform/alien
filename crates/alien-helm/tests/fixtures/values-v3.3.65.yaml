@@ -1,0 +1,315 @@
+management:
+  token: ""
+  existingSecret:
+    name: ""
+    tokenKey: sync-token
+  # One-hour, one-use code that enrolls the Operator for a registered
+  # deployment, instead of token. The Operator then keeps its own key, which
+  # it replaces every day. Requires deploymentId, audience and persistence.
+  enrollmentCode: ""
+  # The manager audience returned with the enrollment code.
+  audience: ""
+  name: ""
+  # Resolved management endpoint captured when this package was built.
+  defaultUrl: ""
+  # Override the captured or installed endpoint when routing changes. The Operator sends its
+  # deployment token to this URL: use https. An http URL still works; the Operator and
+  # NOTES.txt warn about it.
+  url: ""
+  # Leave unset to create a deployment from the bootstrap token.
+  deploymentId: null
+  setupItem: deployment
+  updates: auto
+  telemetry: auto
+  healthChecks: "on"
+
+inputValues: {}
+
+global:
+  # Pull every image from this registry (host[/path]) instead of the public
+  # ones: the Operator, its hooks and probes, the log collector and the
+  # application's workloads. Copy the images there first, keeping each one's digest.
+  imageRegistry: ""
+
+runtime:
+  image:
+    repository: registry.example.com/deployment/operator
+    tag: latest
+    # Set to run the Operator by digest (sha256:...); it wins over the tag.
+    digest: ""
+    pullPolicy: IfNotPresent
+    # Pull the Operator image with management.token (for an image served by
+    # the manager this chart connects to).
+    pullWithManagementToken: false
+    # Follow the Operator image the manager targets, so upgrades need no helm
+    # upgrade. The Deployment is Recreate: the running pod stops before the
+    # new one starts. Set false when you deliver upgrades yourself (Argo CD,
+    # Flux, Renovate): the Operator then changes only with the chart version.
+    # Ignored when `digest` is set: a pinned Operator stays on that digest.
+    selfUpdate: true
+  # Pull secrets for the Operator and for the application's workloads (added
+  # to their ServiceAccounts), for images in a registry that needs credentials.
+  imagePullSecrets: []
+  podLabels: {}
+  podAnnotations: {}
+  automountServiceAccountToken: true
+  encryption:
+    # Empty generates a key on first install and retains it across upgrades.
+    # Alternatively provide a stable 64-character hex key or an existing Secret.
+    key: ""
+    existingSecret:
+      name: ""
+      key: encryption-key
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  api:
+    enabled: false
+    bindHost: 0.0.0.0
+    port: 8080
+    service:
+      type: ClusterIP
+  probes:
+    liveness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+    readiness:
+      enabled: true
+      path: /health
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 2
+      failureThreshold: 3
+  security:
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 10001
+      runAsGroup: 10001
+      fsGroup: 10001
+      seccompProfile:
+        type: RuntimeDefault
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+          - ALL
+  tmp:
+    enabled: true
+    sizeLimit: 256Mi
+  data:
+    mountPath: /var/lib/deployment-operator
+    persistence:
+      # Required for bootstrap identity and durable local runtime state.
+      enabled: true
+      existingClaim: ""
+      storageClassName: ""
+      accessModes:
+        - ReadWriteOnce
+      size: 1Gi
+  scheduling:
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+    topologySpreadConstraints: []
+    priorityClassName: ""
+    runtimeClassName: ""
+  # Scheduling priority of the workloads the Operator creates. The stack declares a level per
+  # container or daemon (critical, high, normal, low); each level maps to a PriorityClass here.
+  # An empty entry leaves workloads at that level without a PriorityClass. Nothing changes for
+  # existing installs until an entry is set.
+  workloadPriority:
+    # Create one PriorityClass per level named <release>-<hash>-<level> (the hash is derived from namespace and release), for clusters without their
+    # own. Needs cluster-scoped write rights from whoever runs helm, never the Operator.
+    create: false
+    classes:
+      critical: ""
+      high: ""
+      normal: ""
+      low: ""
+  pdb:
+    enabled: false
+    minAvailable: 1
+  # Off by default. When enabled, `mode: open` (the default) keeps the Operator Pod
+  # reachable and unrestricted; `mode: restricted` limits it. Restricted ingress allows Pods in the release
+  # namespace to reach the Operator API port (log collectors, linked workloads). Egress
+  # allows DNS, the TCP ports in egress.ports and the port of management.url when it names
+  # one. The defaults are HTTPS (443: the manager, the registry, cloud APIs) and 6443 (the
+  # Kubernetes API server on clusters that expose it there). Add the ports of your bindings
+  # (a database 5432, a cache 6379) to egress.ports, or other rules to extraRules.
+  networkPolicy:
+    enabled: false
+    mode: open
+    # The cluster's DNS. Set clusterIPs to the DNS Service address (`kubectl -n kube-system
+    # get svc kube-dns`), and the node-local DNS address if the cluster has one: on EKS Auto
+    # Mode and with node-local DNS the resolver is not a Pod you can select.
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      clusterIPs: []
+    ingress:
+      enabled: true
+      extraRules: []
+    egress:
+      enabled: true
+      ports: [443, 6443]
+      extraRules: []
+  cleanup:
+    onUninstall:
+      enabled: true
+      deletePersistentVolumeClaims: false
+      helmHistoryBackend: secret
+      image:
+        repository: alpine/k8s
+        tag: "1.32.0"
+        pullPolicy: IfNotPresent
+
+logCollector:
+  enabled: false
+  # podApi: the Operator reads selected Pod logs through the namespaced API.
+  # nodeAgent: a Fluent Bit DaemonSet reads selected Pod logs on each node.
+  mode: nodeAgent
+  maxStreams: 32
+  # nodeAgent only. Generated on first install and retained on upgrade.
+  token: ""
+  # nodeAgent only. Pull secrets for the collector image; defaults to runtime.imagePullSecrets.
+  imagePullSecrets: []
+  image:
+    repository: fluent/fluent-bit
+    tag: "3.2@sha256:d6dec000c4929a439562525728c708f6e99800d7ddc82efd6aa4f45f3a20b562"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  scope:
+    deploymentLabelKey: "alien.dev/deployment"
+    legacyDeploymentLabelKey: ""
+    deploymentLabelValue: ""
+    # For an observed workload that lacks the deployment label, set both fields.
+    podLabelKey: ""
+    podLabelValue: ""
+
+heartbeat:
+  collection:
+    nodes:
+      enabled: true
+
+airgapped:
+  # No connection to the manager: targets arrive in bundles installed with
+  # the deploy CLI's `sync` command, which also carries state and telemetry back. Needs
+  # management.deploymentId from the bundle.
+  enabled: false
+  # Public key (ed25519:...) bundles must be signed with. Set by the first
+  # `sync --trusted-key` of the deploy CLI, and checked on every later one.
+  bundleSigningKey: ""
+
+clusterBootstrap:
+  metricsServer:
+    enabled: false
+    image: registry.k8s.io/metrics-server/metrics-server:v0.8.1
+  storageClass:
+    default:
+      enabled: false
+      name: ""
+      provisioner: ""
+      parameters: {}
+  ingress:
+    eksAutoMode:
+      enabled: false
+      name: alb
+      controller: eks.amazonaws.com/alb
+      scheme: internet-facing
+      subnetIds: []
+    azureApplicationGatewayForContainers:
+      enabled: false
+      applicationLoadBalancer:
+        name: ""
+        namespace: ""
+        associationSubnetId: ""
+  compute:
+    eksAutoMode:
+      arm64NodePool:
+        enabled: false
+        name: general-purpose-arm64
+        nodeClassName: default
+        capacityType: on-demand
+        instanceCategories:
+          - c
+          - m
+          - r
+        minInstanceGeneration: "5"
+        limits:
+          cpu: "1000"
+          memory: 1000Gi
+
+serviceAccounts:
+  runtime:
+    annotations: {}
+    labels: {}
+
+stackSettings: null
+
+infrastructure: null
+infrastructureExistingSecret: ""
+
+# Set true when Flux, Argo CD or another tool renders this chart without access to
+# the cluster (`helm template`). The render then fails unless existing Secrets supply
+# every credential the chart would otherwise generate: a generated value would change
+# on every render. Requires management.existingSecret.name,
+# runtime.encryption.existingSecret.name, and either logCollector.mode=podApi or
+# logCollector.token.
+gitops:
+  enabled: false
+
+# The Operator Role can manage Ingresses, Gateways, HTTPRoutes and load balancer health
+# checks for the stack's public endpoints. Set false when stackSettings.kubernetes.exposure
+# is disabled, so the Role doesn't carry them.
+rbac:
+  routing:
+    enabled: true
+
+basePlatform: null
+basePlatformConfig:
+  gcp:
+    projectId: ""
+    region: ""
+  aws:
+    region: ""
+  azure:
+    location: ""
+    subscriptionId: ""
+    tenantId: ""
+serviceAccountPrefix: ""
+managerServiceAccount:
+  annotations: {}
+  labels: {}
+
+services:
+  api:
+    type: clusterIp
+    port: 80
+    targetPort: 8080
+    component: 'worker'
+
+publicEndpoints: {}
+
+persistentStorage:
+  storageClassName: ""
+
+ephemeralStorage:
+  nodeSelector: {}
+
+# Frozen databases. An infrastructure binding overrides the corresponding database.
+postgres: {}
