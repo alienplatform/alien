@@ -1296,7 +1296,10 @@ async fn an_access_request_credential_is_refused_on_every_route() {
         ("GET", "/v2/alien-operator/manifests/v1".into()),
         ("GET", format!("/v1/deployments/{deployment}")),
         ("GET", format!("/v1/deployments/{deployment}/info")),
-        ("POST", format!("/v1/deployments/{deployment}/status-report")),
+        (
+            "POST",
+            format!("/v1/deployments/{deployment}/status-report"),
+        ),
         ("POST", format!("/v1/deployments/{deployment}/delete")),
         ("GET", "/v1/releases".into()),
         ("POST", "/v1/releases".into()),
