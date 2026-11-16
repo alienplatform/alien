@@ -514,10 +514,8 @@ to preview and `sandbox/management` to create sandboxes.
 
 Limits the plan refuses with a message, rather than discovering them at the first session:
 - a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
-- `internet` egress: there is no enforcement point outside the guest without PSC-I or VPC Service
-  Controls, so a `host:port` policy could not be enforced. Declare `none`. It can be lifted when
-  Google ships an egress allowlist for Agent Platform, or when a deployment accepts VPC Service
-  Controls;
+- a per-sandbox outbound policy: `defaultPolicy`, a runtime policy at create and `update_egress`
+  are refused with "Google Cloud sandboxes have no outbound allowlist" (see "Egress on GCP");
 - a preview port equal to the agent's own (8971);
 - an idle pause policy. `pause_resume` is off: on the default network placement every
   `:pause`/`:resume` cycle measured returned a fresh container (new boot id, process gone, uptime
@@ -526,6 +524,35 @@ Limits the plan refuses with a message, rather than discovering them at the firs
 Images must be linux/amd64 and their container must keep running in the foreground: a template
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
 Alien stops the create at the FAILED state and names this as the likely cause.
+
+## Egress on GCP
+
+The template carries one switch, `internetAccess`, and nothing of Alien's sits on Google's
+outbound path. The declarations map onto it directly:
+
+| Declaration | `internetAccess` | What the sandbox reaches |
+|---|---|---|
+| `internet` (and the deprecated `allow`) | `true` | Any host and port, DNS included, through Google's shared addresses |
+| `none` | `false` | Nothing: TCP to public addresses, the metadata server and DNS all fail |
+
+What `internet` does **not** give on Google Cloud, unlike AWS and Kubernetes:
+- **No allowlist.** A `defaultPolicy`, a runtime policy at create and `update_egress` are refused
+  with "Google Cloud sandboxes have no outbound allowlist". Use another cloud for per-sandbox
+  host rules.
+- **No fixed egress IP.** Outbound traffic leaves through Google-owned addresses shared with other
+  projects, so a customer who allowlists callers by IP cannot allowlist these sandboxes. The mail
+  ports are not blocked either.
+- **No path through the customer's VPC.** The sandbox runs in Google's tenant, so VPC firewalls
+  and flow logs never see its traffic, and a host in the VPC is unreachable from it.
+
+Measured on a default-placement project (`internetAccess: true`): DNS resolves, https and http to
+a public host return 200, TCP to 1.1.1.1:443 and 8.8.8.8:53 connects, the metadata server and a
+host in the project's VPC time out. With `false` every one of these fails, DNS after about 20
+seconds. `reach_matrix_for_both_egress_switches` in `alien-test` repeats it.
+
+Placement: the project's first sandbox pins its network placement. `internet` and `none` need the
+default placement; a project whose placement already uses a private network attachment is outside
+what this backend supports.
 
 ## Preview on GCP
 

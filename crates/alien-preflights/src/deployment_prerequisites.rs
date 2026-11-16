@@ -200,7 +200,9 @@ impl DeploymentPrerequisiteCheck for SandboxEgressGatewayCheck {
     }
 
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        // Google Cloud `internet` is Google's own open outbound path and needs no gateway.
         is_cloud_platform(state.platform)
+            && state.platform != Platform::Gcp
             && stack.resources().any(|(_, entry)| {
                 entry
                     .config
@@ -1637,7 +1639,7 @@ mod tests {
             .build();
         let mut config = deployment_config();
         let check = SandboxEgressGatewayCheck;
-        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        for platform in [Platform::Aws, Platform::Azure] {
             let state = stack_state(platform);
             assert!(check.should_run(&stack, &state, &config));
             let result = check.check(&stack, &state, &config).await.unwrap();
@@ -1646,6 +1648,8 @@ mod tests {
             assert!(result.warnings.is_empty());
             assert_eq!(result.errors.len(), 1);
         }
+        // Google Cloud's `internet` is native open outbound and needs no gateway.
+        assert!(!check.should_run(&stack, &stack_state(Platform::Gcp), &config));
         assert!(!check.should_run(&stack, &stack_state(Platform::Kubernetes), &config));
         assert!(!check.should_run(&stack, &stack_state(Platform::Local), &config));
         config.compute_backend = Some(horizon_backend());

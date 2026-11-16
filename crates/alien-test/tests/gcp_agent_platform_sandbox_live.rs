@@ -716,6 +716,151 @@ async fn egress_deny_blocks_the_network_including_dns() {
         .expect("terminate confirms gone");
 }
 
+// ---- Reach matrix for both egress switches ---------------------------------------------------
+
+/// One probe run inside the sandbox with python3 (the agent image has no curl or wget). Every
+/// line is `name=ok` or `name=fail:<reason>`, so a missing interpreter reads as a failure of the
+/// run and never as a closed network.
+const REACH_PROBE: &str = r#"
+import socket, ssl, urllib.request
+socket.setdefaulttimeout(5)
+def dns(name):
+    try:
+        socket.getaddrinfo(name, 443); return "ok"
+    except Exception as e:
+        return "fail:" + type(e).__name__
+def tcp(host, port):
+    try:
+        socket.create_connection((host, port), timeout=5).close(); return "ok"
+    except Exception as e:
+        return "fail:" + type(e).__name__
+def http(url):
+    try:
+        return "ok:%d" % urllib.request.urlopen(url, timeout=8).status
+    except urllib.error.HTTPError as e:
+        return "ok:%d" % e.code
+    except Exception as e:
+        return "fail:" + type(e).__name__
+import os
+rows = [
+    ("dns_example_com", dns("example.com")),
+    ("dns_storage_googleapis_com", dns("storage.googleapis.com")),
+    ("dns_metadata_google_internal", dns("metadata.google.internal")),
+    ("https_example_com", http("https://example.com")),
+    ("http_example_com", http("http://example.com")),
+    ("tcp_1_1_1_1_443", tcp("1.1.1.1", 443)),
+    ("tcp_8_8_8_8_53", tcp("8.8.8.8", 53)),
+    ("tcp_metadata_ip_80", tcp("169.254.169.254", 80)),
+    ("https_storage_googleapis_com", http("https://storage.googleapis.com")),
+]
+listener = os.environ.get("ALIEN_PROBE_LISTENER")
+if listener:
+    host, port = listener.rsplit(":", 1)
+    rows.append(("tcp_listener_in_customer_vpc", tcp(host, int(port))))
+for name, value in rows:
+    print(name + "=" + value)
+"#;
+
+/// Runs [`REACH_PROBE`] in a fresh sandbox cut from a template with `internet_access`, and
+/// returns the rows.
+async fn reach_rows(
+    client: &Arc<AgentPlatformClient>,
+    engine: &str,
+    internet_access: bool,
+) -> BTreeMap<String, String> {
+    let template = provision_template(client, engine, &agent_image(), internet_access).await;
+    let provider = provider(client, engine, &template);
+    let session = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds");
+    let sid = session.sandbox_id.clone();
+    let mut env = BTreeMap::new();
+    if let Ok(listener) = std::env::var("ALIEN_TEST_GCP_PROBE_LISTENER") {
+        env.insert("ALIEN_PROBE_LISTENER".to_string(), listener);
+    }
+    let result = run(
+        &provider,
+        &sid,
+        &["python3", "-c", REACH_PROBE],
+        env,
+        Duration::from_secs(120),
+    )
+    .await;
+    let stdout = String::from_utf8_lossy(&result.stdout).to_string();
+    assert_eq!(
+        result.exit_code,
+        0,
+        "the probe must run to the end: {stdout}\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let rows = stdout
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    provider
+        .terminate(&sid)
+        .await
+        .expect("terminate confirms gone");
+    println!("internetAccess={internet_access}");
+    for (name, value) in &rows {
+        println!("  {name:<32} {value}");
+    }
+    rows
+}
+
+/// What a Google Cloud sandbox reaches under each switch. `internetAccess: true` is what the
+/// `internet` egress declaration maps to: any host, any port, DNS included, through Google's
+/// shared addresses; the sandbox is outside the customer's VPC, so a listener there sees nothing.
+/// `false` is `none`: even DNS fails. Set `ALIEN_TEST_GCP_PROBE_LISTENER=host:port` to a listener
+/// in the project's VPC to add the row that proves it is not reachable in either mode.
+#[tokio::test]
+#[ignore = "requires a real GCP project on default placement; see module docs"]
+async fn reach_matrix_for_both_egress_switches() {
+    let config = LiveConfig::from_env();
+    let client = config.client();
+    let engine = provision_engine(&client).await;
+    record_engine(&engine);
+    let _guard = EngineGuard {
+        client: client.clone(),
+        engine: engine.clone(),
+    };
+
+    let open = reach_rows(&client, &engine, true).await;
+    for row in [
+        "dns_example_com",
+        "dns_storage_googleapis_com",
+        "https_example_com",
+        "http_example_com",
+        "tcp_1_1_1_1_443",
+        "tcp_8_8_8_8_53",
+        "https_storage_googleapis_com",
+    ] {
+        assert!(
+            open[row].starts_with("ok"),
+            "internetAccess=true must reach {row}: {open:?}"
+        );
+    }
+    for row in ["dns_metadata_google_internal", "tcp_metadata_ip_80"] {
+        assert!(
+            open[row].starts_with("fail"),
+            "the metadata server stays unreachable ({row}): {open:?}"
+        );
+    }
+
+    let closed = reach_rows(&client, &engine, false).await;
+    for (row, value) in &closed {
+        assert!(
+            value.starts_with("fail"),
+            "internetAccess=false must reach nothing, but {row}={value}: {closed:?}"
+        );
+    }
+    if std::env::var("ALIEN_TEST_GCP_PROBE_LISTENER").is_ok() {
+        assert!(open["tcp_listener_in_customer_vpc"].starts_with("fail"));
+    }
+}
+
 // ---- Orphan sweep -----------------------------------------------------------------------------
 
 fn sweep_log() -> PathBuf {
