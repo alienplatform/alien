@@ -557,12 +557,24 @@ async fn destroy_tracked_deployment(
     }
 
     // Run the deletion step loop
-    let client_config =
-        ClientConfig::from_std_env(platform)
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: format!("Failed to build client config for platform {:?}", platform),
-            })?;
+    let stored_environment_info: Option<alien_core::EnvironmentInfo> = pre_delete_deployment
+        .environment_info
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize environment_info".to_string(),
+        })?;
+    let client_env = client_env_with_stored_region(
+        std::env::vars().collect(),
+        stored_environment_info.as_ref(),
+    );
+    let client_config = ClientConfig::from_env(platform, &client_env)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to build client config for platform {:?}", platform),
+        })?;
 
     // Prepare from the record read before requesting deletion. The runtime can
     // remove it immediately after that request.
@@ -951,6 +963,21 @@ pub(crate) fn print_kept_deployer_secrets(reports: &[DeployerSecretReport]) {
     for line in kept_deployer_secret_lines(reports) {
         println!("  {line}");
     }
+}
+
+/// The deployment already recorded its GCP region, so a laptop without
+/// `GCP_REGION` set does not ask the metadata server (which only exists on Google
+/// compute). An explicit `GCP_REGION` still wins.
+fn client_env_with_stored_region(
+    mut env: std::collections::HashMap<String, String>,
+    stored: Option<&alien_core::EnvironmentInfo>,
+) -> std::collections::HashMap<String, String> {
+    if let Some(alien_core::EnvironmentInfo::Gcp(gcp)) = stored {
+        if !env.contains_key("GCP_REGION") {
+            env.insert("GCP_REGION".to_string(), gcp.region.clone());
+        }
+    }
+    env
 }
 
 #[cfg(test)]
@@ -1995,5 +2022,25 @@ mod tests {
             "destroy must retry setup teardown, got: {error:?}"
         );
         assert_eq!(state.lock().unwrap().release_count, 1);
+    }
+
+    #[test]
+    fn stored_gcp_region_fills_missing_gcp_region_only() {
+        let stored = alien_core::EnvironmentInfo::Gcp(alien_core::GcpEnvironmentInfo {
+            project_number: "1".to_string(),
+            project_id: "p".to_string(),
+            region: "europe-west4".to_string(),
+        });
+        let env = client_env_with_stored_region(Default::default(), Some(&stored));
+        assert_eq!(env.get("GCP_REGION").map(String::as_str), Some("europe-west4"));
+
+        let explicit = [("GCP_REGION".to_string(), "us-east1".to_string())]
+            .into_iter()
+            .collect();
+        let env = client_env_with_stored_region(explicit, Some(&stored));
+        assert_eq!(env.get("GCP_REGION").map(String::as_str), Some("us-east1"));
+
+        let env = client_env_with_stored_region(Default::default(), None);
+        assert!(!env.contains_key("GCP_REGION"));
     }
 }
