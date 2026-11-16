@@ -69,7 +69,7 @@ const METRICS_SERVER_IMAGE_VALUES: &str =
 /// Image references the generator renders inside a quoted string, by template. A value with
 /// `"` or `#` could end that string and drop what follows, so a protected chart renders
 /// `repository@<digest>` through `quote`, with the digest written into the template.
-const OPERATOR_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" .Values.runtime.image.tag "digest" (dig "digest" "" .Values.runtime.image)) | quote }}"#;
+const OPERATOR_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" (include "deployment.operatorTag" $) "digest" (dig "digest" "" .Values.runtime.image)) | quote }}"#;
 const LOG_COLLECTOR_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" .Values.logCollector.image.repository "tag" .Values.logCollector.image.tag "digest" (dig "digest" "" .Values.logCollector.image)) | quote }}"#;
 const CLEANUP_IMAGE_TEMPLATE: &str = r#"image: {{ include "deployment.image" (dict "root" $ "repository" (dig "image" "repository" "alpine/k8s" $cleanup) "tag" (dig "image" "tag" "1.32.0" $cleanup) "digest" (dig "image" "digest" "" $cleanup)) | quote }}"#;
 

@@ -4131,8 +4131,10 @@ runtime:
     repository: registry.example.com/deployment/operator
     tag: latest
     # Set to run the Operator by digest (sha256:...); it wins over the tag.
-    # A digest must be an Operator at least as new as this chart's appVersion:
-    # the chart does not check it. A tag older than appVersion is refused.
+    # The chart runs its own Operator version. A tag set here is used only if it
+    # is a newer version or not a version at all (a custom build); an older
+    # version tag is ignored, because an older Operator cannot run this chart.
+    # A digest is used as given and must be an Operator at least as new as the chart.
     digest: ""
     pullPolicy: IfNotPresent
     # Pull the Operator image with management.token (for an image served by
@@ -7280,7 +7282,7 @@ spec:
       {{- end }}
       containers:
         - name: operator
-          image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" .Values.runtime.image.tag "digest" (dig "digest" "" .Values.runtime.image)) | quote }}
+          image: {{ include "deployment.image" (dict "root" $ "repository" .Values.runtime.image.repository "tag" (include "deployment.operatorTag" $) "digest" (dig "digest" "" .Values.runtime.image)) | quote }}
           imagePullPolicy: {{ .Values.runtime.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.runtime.security.containerSecurityContext | nindent 12 }}
@@ -10264,7 +10266,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_operator_tag_older_than_the_chart_is_refused() {
+    fn an_operator_tag_older_than_the_chart_is_ignored() {
         let stack = Stack::new("database-stack".into())
             .add(
                 alien_core::Postgres::new("database".into()).build(),
@@ -10291,20 +10293,45 @@ mod tests {
             );
             crate::test_utils::helm_template_for_release(&chart.files, Some(&values), "app")
         };
+        let operator_image = |tag: &str, digest: &str| {
+            let rendered = render(tag, digest);
+            rendered.assert_ok("operator tag");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let deployment = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .find(|d| {
+                    d["spec"]["template"]["spec"]["containers"][0]["image"]
+                        .as_str()
+                        .is_some_and(|i| i.contains("deployment/operator"))
+                })
+                .expect("operator deployment");
+            deployment["spec"]["template"]["spec"]["containers"][0]["image"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        let repository = "registry.example.com/deployment/operator";
         // What `helm upgrade --reuse-values` carries over from the earlier chart.
-        let stale = render("v3.3.65", "");
-        assert!(!stale.is_ok(), "an older Operator tag must be refused");
-        assert!(stale.stderr.contains("must be at least 3.3.66"));
-        assert!(stale.stderr.contains("--reset-then-reuse-values"));
-        render("v3.3.66", "").assert_ok("the chart's own tag");
-        render("3.3.66", "").assert_ok("the chart's own tag without the v");
-        render("v3.4.0", "").assert_ok("a newer tag");
-        render("latest", "").assert_ok("a non-version tag");
-        render(
-            "v3.3.65",
-            &format!("sha256:{}", "a".repeat(64)),
-        )
-        .assert_ok("a digest pin is the user's choice");
+        assert_eq!(
+            operator_image("v3.3.65", ""),
+            format!("{repository}:v3.3.66")
+        );
+        assert_eq!(operator_image("3.3.65", ""), format!("{repository}:3.3.66"));
+        assert_eq!(
+            operator_image("v3.3.66", ""),
+            format!("{repository}:v3.3.66")
+        );
+        assert_eq!(operator_image("v3.4.0", ""), format!("{repository}:v3.4.0"));
+        assert_eq!(operator_image("latest", ""), format!("{repository}:latest"));
+        assert_eq!(
+            operator_image("my-build-7", ""),
+            format!("{repository}:my-build-7")
+        );
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert_eq!(
+            operator_image("v3.3.65", &digest),
+            format!("{repository}@{digest}")
+        );
     }
 
     #[test]
@@ -13972,7 +13999,8 @@ logCollector:
                 && secret["data"]["collector-token"].is_null()));
         // An earlier install's collector token is accepted so an upgrade can carry it; a new
         // install renders it nowhere.
-        let with_token = values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: earlier-token");
+        let with_token =
+            values.replace("mode: nodeAgent", "mode: nodeAgent\n  token: earlier-token");
         let accepted = crate::test_utils::helm_template(&chart.files, Some(&with_token));
         accepted.assert_ok("earlier collector token");
         assert!(!accepted.stdout.contains("earlier-token"));
@@ -14282,7 +14310,9 @@ logCollector:
             Some(serde_json::json!({ "encryption-key": b64(OLD_KEY) }))
         );
         // The credential still comes from the Secret the values name.
-        assert!(rendered.stdout.contains("secretName: installer-credentials"));
+        assert!(rendered
+            .stdout
+            .contains("secretName: installer-credentials"));
         // Without the Secret nothing is carried, and nothing is made up.
         let missing = render_upgrade_with_installed_secrets(&chart, &values, serde_json::json!({}));
         missing.assert_ok("named Secret absent");
