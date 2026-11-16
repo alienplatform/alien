@@ -1792,6 +1792,47 @@ fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
     }));
 }
 
+/// An install made before the Role carried NetworkPolicy verbs gets them on `helm upgrade`: the
+/// Role is an ordinary template (no hook, no install-only guard), so the upgrade render of an
+/// install with a separate sandbox namespace contains the verbs the Operator needs there.
+#[test]
+fn an_upgrade_of_a_separate_sandbox_namespace_install_renders_the_policy_verbs() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_as_upgrade(
+        &chart.files,
+        Some("management:\n  name: acme-install\nlogCollector:\n  scope:\n    deploymentLabelValue: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: acme-sandboxes\n"),
+    );
+    rendered.assert_ok("sandbox namespace upgrade render");
+    let documents = rendered_documents(&rendered);
+    let role = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "Role" && document["metadata"]["namespace"] == "acme-sandboxes"
+        })
+        .expect("the upgrade render has the Role in the sandbox namespace");
+    let policy_rule = role["rules"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|rule| {
+            rule["resources"]
+                .as_sequence()
+                .is_some_and(|resources| resources.iter().any(|x| x == "networkpolicies"))
+        })
+        .expect("the Role allows NetworkPolicies in the sandbox namespace");
+    assert_eq!(
+        policy_rule["verbs"],
+        serde_yaml::from_str::<serde_yaml::Value>("[get, create, update, delete]").unwrap()
+    );
+    assert!(
+        role["metadata"]
+            .get("annotations")
+            .and_then(|annotations| annotations.get("helm.sh/hook"))
+            .is_none(),
+        "{role:?}"
+    );
+}
+
 fn root_boot_check_documents(image_user: Option<u32>, values: &str) -> Vec<serde_yaml::Value> {
     let chart = render(
         &sandbox_with_linked_app_as(image_user),

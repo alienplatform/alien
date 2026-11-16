@@ -1399,6 +1399,26 @@ mod tests {
             .await;
         let mut plain = sandbox.clone();
         plain.egress = SandboxEgress::None;
+        // The sandbox used to be an internet sandbox: the gateway Service policy it left in its
+        // own namespace is removed by the same pass that refills its pool, so a restarted
+        // Operator (which remembers nothing) cleans it up too.
+        let leftover = gateway_service_policy(&ctx, "subject", "sandboxes", "10.96.0.7".parse().unwrap());
+        let leftover_path =
+            "/apis/networking.k8s.io/v1/namespaces/sandboxes/networkpolicies/alien-sbx-subject-gateway-service";
+        elsewhere
+            .mock_async(|when, then| {
+                when.method(GET).path(leftover_path);
+                then.status(200)
+                    .json_body(serde_json::to_value(&leftover).unwrap());
+            })
+            .await;
+        let removed = elsewhere
+            .mock_async(|when, then| {
+                when.method(DELETE).path(leftover_path);
+                then.status(200)
+                    .json_body(json!({"kind":"Status","apiVersion":"v1","status":"Success"}));
+            })
+            .await;
         // Later requests are unmocked and fail; only where the Service is read matters here.
         let _ = crate::sandbox::kubernetes::replenish_warm_pool(
             &ctx,
@@ -1410,6 +1430,7 @@ mod tests {
         )
         .await;
         service.assert_hits_async(1).await;
+        removed.assert_hits_async(1).await;
         unsafe { std::env::remove_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) };
         kubernetes_spec::forget_operator_address();
     }
