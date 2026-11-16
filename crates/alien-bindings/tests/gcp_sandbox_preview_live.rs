@@ -153,16 +153,32 @@ async fn assert_http(preview: &PreviewCapability, port: u16, token: &str) {
     eprintln!("PASS http port {port}: 200, bearer unchanged, wrong bearer 401");
 }
 
-/// WebSocket to one declared port: the credentials travel as subprotocols after the app's own,
-/// and the caller's bearer in its own header; the daemon echoes a message.
-async fn assert_websocket(preview: &PreviewCapability, port: u16, token: &str) {
+/// Opens a WebSocket through a preview: the credentials ride the subprotocol list after the
+/// app's own protocols, and the caller's bearer travels in its own header.
+async fn open_socket(
+    preview: &PreviewCapability,
+    path: &str,
+    own_protocols: &[&str],
+    bearer: &str,
+) -> Result<
+    (
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        tokio_tungstenite::tungstenite::http::Response<Option<Vec<u8>>>,
+    ),
+    tokio_tungstenite::tungstenite::Error,
+> {
     let socket_url = preview
         .endpoint
         .replacen("https://", "wss://", 1)
         .trim_end_matches('/')
         .to_string()
-        + "/ws";
-    let mut request = socket_url.as_str().into_client_request().expect("a request");
+        + path;
+    let mut request = socket_url
+        .as_str()
+        .into_client_request()
+        .expect("a request");
     for (name, value) in &preview.headers {
         // Header credentials are refused on an upgrade; they ride the subprotocol list instead.
         if name.eq_ignore_ascii_case("authorization") {
@@ -179,17 +195,32 @@ async fn assert_websocket(preview: &PreviewCapability, port: u16, token: &str) {
             preview.caller_authorization_header.as_bytes(),
         )
         .expect("a header name"),
-        HeaderValue::from_str(&format!("Bearer {token}")).expect("a header value"),
+        HeaderValue::from_str(bearer).expect("a header value"),
     );
-    let protocols = preview.subprotocols.join(", ");
     assert!(!preview.subprotocols.is_empty(), "GCP needs subprotocols");
+    let protocols = own_protocols
+        .iter()
+        .copied()
+        .chain(preview.subprotocols.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(", ");
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
         HeaderValue::from_str(&protocols).expect("a protocol list"),
     );
-    let (mut socket, response) = tokio_tungstenite::connect_async(request)
-        .await
-        .unwrap_or_else(|error| panic!("port {port}: the upgrade failed: {error}"));
+    tokio_tungstenite::connect_async(request).await
+}
+
+/// WebSocket to one declared port of the fixture, whose daemon picks the first protocol offered.
+async fn assert_websocket(preview: &PreviewCapability, port: u16, token: &str) {
+    let (mut socket, response) = open_socket(
+        preview,
+        "/ws",
+        &["alien.fixture.v1"],
+        &format!("Bearer {token}"),
+    )
+    .await
+    .unwrap_or_else(|error| panic!("port {port}: the upgrade failed: {error}"));
     let payload = vec![port as u8; 4096];
     socket
         .send(Message::Binary(payload.clone().into()))
@@ -219,9 +250,138 @@ fn refused(status: u16) -> bool {
     [401, 403].contains(&status)
 }
 
+/// A template, a sandbox cut from it, and the identities that reach it.
+struct Live {
+    engine: String,
+    signer_account: String,
+    region: String,
+    admin: AgentPlatformClient,
+    admin_provider: GcpAgentPlatformSandbox,
+    owner: GcpAgentPlatformSandbox,
+    template: String,
+    template_id: String,
+    sandbox_id: String,
+}
+
+impl Live {
+    /// The admin provisions; the owner is the identity under test.
+    async fn start(image: &str, ports: &[u16]) -> Self {
+        let engine = env("GCP_ENGINE");
+        let signer_account = env("GCP_PREVIEW_SA");
+        let region = env("GCP_REGION");
+
+        // The template declares the agent's port first, then the preview ports, as the controller's
+        // does.
+        let admin = client(env("GCP_ADMIN_TOKEN"));
+        let budget = PollBudget {
+            interval: Duration::from_secs(2),
+            max_attempts: 150,
+        };
+        let operation = admin
+            .create_template(
+                &engine,
+                SandboxEnvironmentTemplate {
+                    name: None,
+                    display_name: Some("a2657p-preview".to_string()),
+                    custom_container_environment: Some(CustomContainerEnvironment {
+                        custom_container_spec: Some(CustomContainerSpec {
+                            image_uri: image.to_string(),
+                            extra: Default::default(),
+                        }),
+                        resources: Some(ContainerResources {
+                            requests: None,
+                            limits: Some(
+                                [("cpu", "2"), ("memory", "4Gi")]
+                                    .into_iter()
+                                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                                    .collect(),
+                            ),
+                        }),
+                        ports: std::iter::once(AGENT_PORT)
+                            .chain(ports.iter().copied())
+                            .map(|port| ContainerPort {
+                                port: i32::from(port),
+                                protocol: Some("TCP".to_string()),
+                            })
+                            .collect(),
+                        extra: Default::default(),
+                    }),
+                    egress_control_config: Some(EgressControlConfig {
+                        internet_access: Some(false),
+                        extra: Default::default(),
+                    }),
+                    state: None,
+                    extra: Default::default(),
+                },
+            )
+            .await
+            .expect("template create accepted");
+        let created: SandboxEnvironmentTemplate = admin
+            .await_operation(&operation, budget.clone())
+            .await
+            .expect("template create resolves");
+        let template = created.name.expect("a template name");
+        let template_id = template.rsplit('/').next().unwrap().to_string();
+        admin
+            .await_template_active(&engine, &template_id, budget)
+            .await
+            .expect("the template reaches ACTIVE");
+        eprintln!("template {template_id} active");
+
+        // The admin creates the sandbox; the owner previews and runs commands in it.
+        let admin_provider = provider(
+            env("GCP_ADMIN_TOKEN"),
+            &engine,
+            &template,
+            &signer_account,
+            ports,
+        );
+        let owner = provider(
+            env("GCP_OWNER_TOKEN"),
+            &engine,
+            &template,
+            &signer_account,
+            ports,
+        );
+        let sandbox = admin_provider
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect("the sandbox starts");
+        let sandbox_id = sandbox.sandbox_id.clone();
+        eprintln!("sandbox {sandbox_id}");
+
+        Self {
+            engine,
+            signer_account,
+            region,
+            admin,
+            admin_provider,
+            owner,
+            template,
+            template_id,
+            sandbox_id,
+        }
+    }
+
+    async fn stop(&self) {
+        if let Err(error) = self.admin_provider.terminate(&self.sandbox_id).await {
+            eprintln!("terminate {}: {error}", self.sandbox_id);
+        }
+        if let Err(error) = self
+            .admin
+            .delete_template(&self.engine, &self.template_id)
+            .await
+        {
+            eprintln!("delete template {}: {error}", self.template_id);
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs a live GCP project, an engine, an image and four identities"]
 async fn live_preview_is_owner_access() {
+    // The WebSocket client needs a process-wide TLS provider.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let ports: Vec<u16> = std::env::var("GCP_PREVIEW_PORTS")
         .unwrap_or_else(|_| "8080,8081,8090".to_string())
         .split(',')
@@ -229,89 +389,16 @@ async fn live_preview_is_owner_access() {
         .collect();
     let daemon_token = std::env::var("GCP_DAEMON_TOKEN")
         .unwrap_or_else(|_| "conformance-bearer-token".to_string());
-    let engine = env("GCP_ENGINE");
-    let signer_account = env("GCP_PREVIEW_SA");
-    let region = env("GCP_REGION");
-
-    // The template declares the agent's port first, then the preview ports, as the controller's
-    // does.
-    let admin = client(env("GCP_ADMIN_TOKEN"));
-    let budget = PollBudget {
-        interval: Duration::from_secs(2),
-        max_attempts: 150,
-    };
-    let operation = admin
-        .create_template(
-            &engine,
-            SandboxEnvironmentTemplate {
-                name: None,
-                display_name: Some("a2657p-preview".to_string()),
-                custom_container_environment: Some(CustomContainerEnvironment {
-                    custom_container_spec: Some(CustomContainerSpec {
-                        image_uri: env("GCP_IMAGE"),
-                        extra: Default::default(),
-                    }),
-                    resources: Some(ContainerResources {
-                        requests: None,
-                        limits: Some(
-                            [("cpu", "2"), ("memory", "4Gi")]
-                                .into_iter()
-                                .map(|(k, v)| (k.to_string(), v.to_string()))
-                                .collect(),
-                        ),
-                    }),
-                    ports: std::iter::once(AGENT_PORT)
-                        .chain(ports.iter().copied())
-                        .map(|port| ContainerPort {
-                            port: i32::from(port),
-                            protocol: Some("TCP".to_string()),
-                        })
-                        .collect(),
-                    extra: Default::default(),
-                }),
-                egress_control_config: Some(EgressControlConfig {
-                    internet_access: Some(false),
-                    extra: Default::default(),
-                }),
-                state: None,
-                extra: Default::default(),
-            },
-        )
-        .await
-        .expect("template create accepted");
-    let created: SandboxEnvironmentTemplate = admin
-        .await_operation(&operation, budget.clone())
-        .await
-        .expect("template create resolves");
-    let template = created.name.expect("a template name");
-    let template_id = template.rsplit('/').next().unwrap().to_string();
-    admin
-        .await_template_active(&engine, &template_id, budget)
-        .await
-        .expect("the template reaches ACTIVE");
-    eprintln!("template {template_id} active");
-
-    // The admin creates the sandbox; the owner previews and runs commands in it.
-    let admin_provider = provider(
-        env("GCP_ADMIN_TOKEN"),
-        &engine,
-        &template,
-        &signer_account,
-        &ports,
-    );
-    let owner = provider(
-        env("GCP_OWNER_TOKEN"),
-        &engine,
-        &template,
-        &signer_account,
-        &ports,
-    );
-    let sandbox = admin_provider
-        .create(CreateSandboxRequest::default())
-        .await
-        .expect("the sandbox starts");
-    let sandbox_id = sandbox.sandbox_id.clone();
-    eprintln!("sandbox {sandbox_id}");
+    let live = Live::start(&env("GCP_IMAGE"), &ports).await;
+    let Live {
+        engine,
+        signer_account,
+        region,
+        owner,
+        template,
+        sandbox_id,
+        ..
+    } = &live;
 
     let outcome = std::panic::AssertUnwindSafe(async {
         // The owner reaches every declared port over HTTP and WebSocket.
@@ -334,18 +421,26 @@ async fn live_preview_is_owner_access() {
         }
         let issued = std::time::Instant::now();
 
-        // Owner access is command access, and the proof says so plainly: the same credentials run
-        // a command on the agent's own port, and Google's `:execute` accepts the same JWT.
-        let (status, body) = request(
-            &first[0],
-            reqwest::Method::POST,
-            "/v1/exec",
-            None,
-            Some(serde_json::json!({"command": ["id"], "timeoutMs": 5000})),
-        )
-        .await;
-        eprintln!("owner POST /v1/exec through the preview headers: {status}");
-        let _ = body;
+        // Owner access is command access, and the proof says so plainly: the same credentials
+        // run a command on the agent's own port.
+        let host = first[0]
+            .endpoint
+            .trim_start_matches("https://")
+            .split('/')
+            .next()
+            .unwrap()
+            .to_string();
+        let mut exec = reqwest::Client::new()
+            .post(format!("https://{host}/v1/exec"))
+            .json(&serde_json::json!({"command": ["id"], "timeoutMs": 5000}));
+        for (name, value) in &first[0].headers {
+            exec = exec.header(name, value);
+        }
+        let exec = exec.send().await.expect("the edge answers");
+        eprintln!(
+            "NOTE owner POST /v1/exec with the preview credentials: {} (preview is command access)",
+            exec.status()
+        );
 
         // An identity without execute gets nothing from the bindings: the refusal names the rule
         // and no header is returned.
@@ -380,13 +475,6 @@ async fn live_preview_is_owner_access() {
         .await
         .expect("the admin can sign for the identity without execute")
         .jwt;
-        let host = first[0]
-            .endpoint
-            .trim_start_matches("https://")
-            .split('/')
-            .next()
-            .unwrap()
-            .to_string();
         let routing = first[0].headers["X-Sandbox-Routing-Token"].clone();
         for (label, port) in [("preview port", ports[0]), ("agent port", AGENT_PORT)] {
             let denied = reqwest::Client::new()
@@ -465,12 +553,93 @@ async fn live_preview_is_owner_access() {
     .catch_unwind()
     .await;
 
-    if let Err(error) = admin_provider.terminate(&sandbox_id).await {
-        eprintln!("terminate {sandbox_id}: {error}");
+    live.stop().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
     }
-    if let Err(error) = admin.delete_template(&engine, &template_id).await {
-        eprintln!("delete template {template_id}: {error}");
-    }
+}
+
+/// The workload's own daemon, which authenticates in its own way: the caller's bearer over HTTP,
+/// and a credential carried in a subprotocol of its own over WebSocket, which it answers with a
+/// protocol of its choosing. The names come from the environment so the test knows no daemon:
+/// `GCP_IMAGE`, `GCP_APP_BEARER`, `GCP_APP_HTTP_PATH` (POSTed), `GCP_APP_WS_PATH`,
+/// `GCP_APP_SUBPROTOCOLS` (comma separated, offered first) and `GCP_APP_PICKS` (the one the daemon
+/// answers with). The daemon listens on 8080.
+#[tokio::test]
+#[ignore = "needs a live GCP project, an engine, an image that carries the daemon and four identities"]
+async fn live_preview_reaches_a_daemon_with_its_own_protocol() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let live = Live::start(&env("GCP_IMAGE"), &[8080]).await;
+    let outcome = std::panic::AssertUnwindSafe(async {
+        let preview = live
+            .owner
+            .preview(&live.sandbox_id, 8080)
+            .await
+            .expect("owner preview");
+        let bearer = format!("Bearer {}", env("GCP_APP_BEARER"));
+        let path = env("GCP_APP_HTTP_PATH");
+        let post = |bearer: String| {
+            let (preview, path) = (&preview, &path);
+            async move {
+                request(
+                    preview,
+                    reqwest::Method::POST,
+                    path,
+                    Some(&bearer),
+                    Some(serde_json::json!({})),
+                )
+                .await
+            }
+        };
+        // The daemon starts after the agent; the agent answers 502 until it listens.
+        let mut answer = (0, String::new());
+        for _ in 0..60 {
+            answer = post(bearer.clone()).await;
+            if answer.0 != 502 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+        assert!(
+            !refused(answer.0) && answer.0 != 502,
+            "the daemon must accept the caller's own bearer: {}",
+            answer.0
+        );
+        let (wrong, _) = post("Bearer wrong".to_string()).await;
+        assert!(
+            refused(wrong),
+            "the daemon, not the broker, checks the bearer: {wrong}"
+        );
+        eprintln!(
+            "PASS own daemon http: accepted bearer {}, wrong bearer {wrong}",
+            answer.0
+        );
+
+        let own = env("GCP_APP_SUBPROTOCOLS");
+        let own: Vec<&str> = own.split(',').map(str::trim).collect();
+        let (mut socket, response) = open_socket(&preview, &env("GCP_APP_WS_PATH"), &own, "")
+            .await
+            .expect("the daemon's own WebSocket upgrade through the preview");
+        let picked = response
+            .headers()
+            .get("sec-websocket-protocol")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(
+            picked,
+            env("GCP_APP_PICKS"),
+            "the daemon's own protocol is the one answered"
+        );
+        socket.close(None).await.ok();
+        eprintln!(
+            "PASS own daemon websocket: {} and the daemon answered its own protocol",
+            response.status()
+        );
+    })
+    .catch_unwind()
+    .await;
+    live.stop().await;
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
     }
