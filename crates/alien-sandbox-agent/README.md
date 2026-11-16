@@ -362,6 +362,14 @@ at plan time ("schedule sandboxes on amd64 nodes"); arm64 sandboxes on Kubernete
 supported yet. There is no pause: an idle session keeps its pod's CPU and memory on the node until
 it is terminated or reaches its deadline.
 
+## Kubernetes node consolidation
+
+A claimed sandbox pod carries `karpenter.sh/do-not-disrupt: "true"` and
+`cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so node consolidation and scale-down do
+not evict a live session; idle pool pods carry neither and stay evictable. A claimed pod therefore
+holds its node until its session ends: with no `maxLifetimeSeconds` declared and no `timeoutMs` on
+the create, a session has no deadline and keeps its node until it is terminated.
+
 ## Bootstrap file protection
 
 Before any image code starts, the agent creates a private mount namespace and

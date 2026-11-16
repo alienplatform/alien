@@ -74,6 +74,11 @@ pub const ANNOTATION_MAX_LIFETIME: &str = "alien.dev/max-lifetime-seconds";
 /// after it.
 pub const ANNOTATION_SESSION_DEADLINE: &str = "alien.dev/session-deadline";
 
+/// Karpenter and EKS Auto Mode skip a pod carrying this when they consolidate or replace a node.
+pub const ANNOTATION_DO_NOT_DISRUPT: &str = "karpenter.sh/do-not-disrupt";
+/// The cluster autoscaler (GKE, AKS) does not drain a node while a pod carries this as `false`.
+pub const ANNOTATION_SAFE_TO_EVICT: &str = "cluster-autoscaler.kubernetes.io/safe-to-evict";
+
 /// A session asked to live longer than the sandbox allows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LifetimeTooLong {
@@ -141,6 +146,11 @@ pub fn annotate_claim(
         now_unix.to_string(),
     );
     annotations.insert(ANNOTATION_SESSION_GENERATION.to_string(), "1".to_string());
+    // A claimed pod holds a live session that node consolidation would end. Idle pool pods do not
+    // carry these, so they stay evictable and the pool refills. The session's deadline (and the
+    // kubelet backstop above) bounds how long this keeps a node.
+    annotations.insert(ANNOTATION_DO_NOT_DISRUPT.to_string(), "true".to_string());
+    annotations.insert(ANNOTATION_SAFE_TO_EVICT.to_string(), "false".to_string());
     if let Some(tenant) = tenant_key {
         annotations.insert(ANNOTATION_SESSION_TENANT.to_string(), tenant.to_string());
     }
@@ -217,6 +227,30 @@ mod tests {
 
     /// Second-line defence only. The real guarantee is the API server rejecting a stale
     /// resourceVersion, but a claimed pod must not be re-claimable even in memory.
+    /// Node consolidation and cluster upgrades evict pods that do not opt out. A claimed pod holds
+    /// a live session, so it opts out; an idle pod stays evictable because the pool refills.
+    #[test]
+    fn a_claimed_pod_opts_out_of_node_consolidation_and_an_idle_pod_does_not() {
+        let idle = pod_with(idle_pod_labels("agent"));
+        let annotations = idle.metadata.annotations.clone().unwrap_or_default();
+        assert!(!annotations.contains_key("karpenter.sh/do-not-disrupt"));
+        assert!(!annotations.contains_key("cluster-autoscaler.kubernetes.io/safe-to-evict"));
+
+        let mut pod = idle;
+        assert!(claim_idle_pod(&mut pod, "s1"));
+        annotate_claim(&mut pod, 1_000, None, Some(60)).unwrap();
+
+        let annotations = pod.metadata.annotations.expect("annotations");
+        assert_eq!(
+            annotations.get("karpenter.sh/do-not-disrupt"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            annotations.get("cluster-autoscaler.kubernetes.io/safe-to-evict"),
+            Some(&"false".to_string())
+        );
+    }
+
     #[test]
     fn an_already_claimed_pod_cannot_be_claimed_again() {
         let mut pod = pod_with(idle_pod_labels("agent"));
