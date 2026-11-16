@@ -726,6 +726,7 @@ pub(super) mod tests {
 
     pub(in crate::routes) fn deployment(prepared: Stack) -> DeploymentRecord {
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id: "dep_1".to_string(),
             workspace_id: "workspace".to_string(),

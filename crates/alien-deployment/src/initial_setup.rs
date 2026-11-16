@@ -951,6 +951,7 @@ mod tests {
                 .insert("live".to_string(), stack.resources["live"].clone());
         }
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Test,
             current_release: None,
@@ -1049,6 +1050,7 @@ mod tests {
             .returning(move |_| Ok(kms.clone()));
         let provider = Arc::new(provider);
         let mut state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Aws,
             current_release: None,
@@ -1142,6 +1144,7 @@ mod tests {
             .add(sandbox, lifecycle)
             .build();
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Aws,
             current_release: None,
@@ -1763,6 +1766,7 @@ mod tests {
             .resources
             .insert("agents".to_string(), registered);
         let mut state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Azure,
             current_release: None,
@@ -2638,6 +2642,7 @@ mod tests {
 
     fn resumed_test_setup(stack_state: StackState, target: Stack) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Test,
             current_release: None,
@@ -2851,6 +2856,7 @@ mod tests {
         );
         let before = stack_state.resources["management"].internal_state.clone();
         let mut state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Aws,
             current_release: None,

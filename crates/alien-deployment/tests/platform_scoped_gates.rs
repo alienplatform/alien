@@ -75,6 +75,7 @@ async fn machines_create_and_upgrade_decline_aws_only_storage() {
             }
             let empty = Stack::new("scoped-gate".into()).build();
             let mut initial = DeploymentState {
+                operator_request: None,
                 status: DeploymentStatus::Pending,
                 platform: Platform::Machines,
                 current_release: None,
@@ -182,6 +183,7 @@ async fn setup_update_refuses_scope_narrowing_for_installed_storage() {
                     "{error:?}"
                 );
                 let current = DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::UpdatePending,
                     platform: Platform::Aws,
                     current_release: Some(release(old.clone(), "1.0.0")),
@@ -320,6 +322,7 @@ async fn legacy_update_does_not_treat_a_declined_release_resource_as_installed()
     for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
         let old = stack_with_bucket(lifecycle);
         let initial = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Pending,
             platform: Platform::Machines,
             current_release: None,

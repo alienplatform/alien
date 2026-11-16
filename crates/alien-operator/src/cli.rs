@@ -1135,6 +1135,7 @@ fn observe_only_initial_state(
     base_platform: Option<Platform>,
 ) -> DeploymentState {
     DeploymentState {
+        operator_request: None,
         platform,
         status: DeploymentStatus::Running,
         current_release: None,

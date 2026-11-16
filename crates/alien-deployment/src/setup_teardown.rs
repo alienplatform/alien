@@ -937,6 +937,7 @@ mod tests {
 
     fn teardown_required(authority: InitialSetupAuthority) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::TeardownRequired,
             platform: Platform::Aws,
             current_release: None,
@@ -2274,6 +2275,7 @@ mod tests {
         let stack_state: StackState =
             serde_json::from_value(serde_json::to_value(&installed).unwrap()).unwrap();
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::TeardownRequired,
             platform: Platform::Test,
             current_release: None,
@@ -2336,6 +2338,7 @@ mod tests {
                 .into_result()
                 .unwrap();
             let mut state = DeploymentState {
+                operator_request: None,
                 status: DeploymentStatus::TeardownRequired,
                 platform: Platform::Test,
                 current_release: None,

@@ -1224,6 +1224,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         let current = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::UpdatePending,
             platform: Platform::Local,
             current_release: Some(release(installed, "rel_installed")),
@@ -1406,6 +1407,7 @@ mod tests {
             save_prepared: bool,
         ) -> Result<DeploymentStepResult> {
             let state = DeploymentState {
+                operator_request: None,
                 status: DeploymentStatus::UpdatePending,
                 platform: Platform::Aws,
                 current_release: Some(release(installed.clone(), "rel_installed")),
@@ -1580,6 +1582,7 @@ mod tests {
         async fn an_update_with_no_installed_stack_waits_for_setup() {
             let target = sandbox(SandboxEgress::Allow, BUNDLE, None);
             let state = DeploymentState {
+                operator_request: None,
                 status: DeploymentStatus::UpdatePending,
                 platform: Platform::Aws,
                 current_release: None,
@@ -1670,6 +1673,7 @@ mod tests {
                 .0;
             let update_from = |authority, prepared_stack: Option<Stack>, target: Stack| {
                 let state = DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::UpdatePending,
                     platform: Platform::Gcp,
                     current_release: None,
@@ -2222,6 +2226,7 @@ mod aws_handoff_tests {
             let before = saved.resources["execution-sa"].clone();
             let result = handle_updating(
                 DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Updating,
                     platform: Platform::Aws,
                     current_release: None,

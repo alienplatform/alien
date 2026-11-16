@@ -52,6 +52,7 @@ fn metadata() -> RuntimeMetadata {
 async fn new_frozen_machines_storage_requires_setup_even_before_binding_is_supplied() {
     let installed = installed_stack();
     let state = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::UpdatePending,
         platform: Platform::Machines,
         current_release: Some(ReleaseInfo {
@@ -150,6 +151,7 @@ async fn external_machines_storage_setup_and_repeat_never_create_a_storage_contr
     .await
     .expect("valid external storage setup should prepare");
     let mut deployment = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::InitialSetup,
         platform: Platform::Machines,
         current_release: Some(ReleaseInfo {

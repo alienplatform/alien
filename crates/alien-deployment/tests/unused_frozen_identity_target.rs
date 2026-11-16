@@ -117,6 +117,7 @@ async fn deployment_between(setup: Stack, next: Stack) -> DeploymentState {
         installed.resources.insert(id.clone(), resource);
     }
     DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::UpdatePending,
         platform: Platform::Aws,
         current_release: Some(release(setup, "1")),

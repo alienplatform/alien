@@ -110,6 +110,7 @@ fn test_deployment_state(
     stack_state: Option<StackState>,
 ) -> DeploymentState {
     DeploymentState {
+        operator_request: None,
         status,
         platform: Platform::Aws,
         current_release: None,
@@ -704,6 +705,7 @@ async fn corrective_release_reaches_only_installed_automatic_setup_failures() {
                     session: "setup".to_string(),
                     execution_claim: None,
                     state: DeploymentState {
+                        operator_request: None,
                         status: DeploymentStatus::InitialSetupFailed,
                         platform: Platform::Aws,
                         current_release: None,
@@ -1524,6 +1526,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
 
     // Session B (e.g. `"agent-sync"`) reconciles new state without acquiring.
     let state = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::Running,
         platform: Platform::Aws,
         current_release: None,
@@ -1867,6 +1870,7 @@ async fn reconcile_refreshes_owned_lock_lease() {
     db.conn().lock().await.execute(&lock_sql, ()).await.unwrap();
 
     let state = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::InitialSetup,
         platform: Platform::Aws,
         current_release: None,
@@ -4137,6 +4141,7 @@ async fn newer_release_reaches_a_deployment_waiting_for_secrets_without_changing
                 session: "step".to_string(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::WaitingForSecrets,
                     platform: Platform::Aws,
                     current_release: None,
@@ -4170,4 +4175,195 @@ async fn newer_release_reaches_a_deployment_waiting_for_secrets_without_changing
         .unwrap();
     assert_eq!(dep.status, "waiting-for-secrets");
     assert_eq!(dep.desired_release_id.as_deref(), Some("newer-release"));
+}
+
+// ---------------------------------------------------------------------------
+// Operator requests
+// ---------------------------------------------------------------------------
+
+fn replace_request(id: &str) -> alien_core::OperatorRequest {
+    alien_core::OperatorRequest {
+        id: id.to_string(),
+        kind: alien_core::OperatorRequestKind::ReplaceMachine {
+            resource_id: "compute".to_string(),
+            machine_id: "i-0abc".to_string(),
+        },
+        requested_by: "user-1".to_string(),
+        requested_at: chrono::Utc::now(),
+    }
+}
+
+async fn set_status(db: &SqliteDatabase, id: &str, status: &str) {
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            &format!("UPDATE deployments SET status = '{status}' WHERE id = '{id}'"),
+            (),
+        )
+        .await
+        .unwrap();
+}
+
+/// A request is recorded only on a settled deployment, one at a time, and a retry or
+/// redeploy never overtakes it (and the other way round).
+#[tokio::test]
+async fn operator_request_and_retry_exclude_each_other_in_both_orders() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let subject = test_subject();
+
+    // Order 1: the request first. A retry and a redeploy are then refused.
+    let first = create_test_deployment(&store, &group_id, "first", Platform::Aws).await;
+    set_status(&db, &first.id, "update-failed").await;
+    assert_eq!(
+        store
+            .set_operator_request(&subject, &first.id, &replace_request("r1"))
+            .await
+            .unwrap(),
+        OperatorRequestOutcome::Recorded
+    );
+    assert_eq!(
+        store
+            .set_operator_request(&subject, &first.id, &replace_request("r2"))
+            .await
+            .unwrap(),
+        OperatorRequestOutcome::RequestPending
+    );
+    store
+        .set_retry_requested(&subject, &first.id)
+        .await
+        .unwrap();
+    assert!(
+        store.set_redeploy(&subject, &first.id).await.is_err(),
+        "a redeploy must be refused while the request is pending"
+    );
+    let fetched = store
+        .get_deployment(&subject, &first.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!fetched.retry_requested, "a retry must not overtake the request");
+    assert_eq!(fetched.status, "update-failed", "a redeploy must not overtake the request");
+    assert_eq!(fetched.operator_request.unwrap().id, "r1");
+
+    // Order 2: the retry first. The request is refused as busy.
+    let second = create_test_deployment(&store, &group_id, "second", Platform::Aws).await;
+    set_status(&db, &second.id, "update-failed").await;
+    store
+        .set_retry_requested(&subject, &second.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .set_operator_request(&subject, &second.id, &replace_request("r3"))
+            .await
+            .unwrap(),
+        OperatorRequestOutcome::DeploymentBusy
+    );
+    // An update in progress or queued is refused the same way; deletion is not accepted.
+    for status in ["updating", "update-pending", "provisioning"] {
+        let dep = create_test_deployment(&store, &group_id, status, Platform::Aws).await;
+        set_status(&db, &dep.id, status).await;
+        assert_eq!(
+            store
+                .set_operator_request(&subject, &dep.id, &replace_request("r4"))
+                .await
+                .unwrap(),
+            OperatorRequestOutcome::DeploymentBusy,
+            "{status}"
+        );
+    }
+    let deleting = create_test_deployment(&store, &group_id, "deleting", Platform::Aws).await;
+    set_status(&db, &deleting.id, "deleting").await;
+    assert_eq!(
+        store
+            .set_operator_request(&subject, &deleting.id, &replace_request("r5"))
+            .await
+            .unwrap(),
+        OperatorRequestOutcome::DeploymentBusy,
+    );
+    let retained = create_test_deployment(&store, &group_id, "retained", Platform::Aws).await;
+    set_status(&db, &retained.id, "retained").await;
+    assert_eq!(
+        store
+            .set_operator_request(&subject, &retained.id, &replace_request("r6"))
+            .await
+            .unwrap(),
+        OperatorRequestOutcome::StatusNotAccepted
+    );
+}
+
+/// A failed deployment with a pending request is claimed without a retry; the runner's
+/// report clears exactly that request, and a request recorded since is kept.
+#[tokio::test]
+async fn operator_request_is_claimed_in_failed_status_and_cleared_by_its_id() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let subject = test_subject();
+    let dep = create_test_deployment(&store, &group_id, "failed", Platform::Aws).await;
+    set_status(&db, &dep.id, "update-failed").await;
+
+    // Without a request the failed deployment is not claimed.
+    assert!(store
+        .acquire(&subject, "s0", &DeploymentFilter::default(), 5)
+        .await
+        .unwrap()
+        .is_empty());
+
+    store
+        .set_operator_request(&subject, &dep.id, &replace_request("r1"))
+        .await
+        .unwrap();
+    let acquired = store
+        .acquire(&subject, "s1", &DeploymentFilter::default(), 5)
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+    assert!(!acquired[0].deployment.retry_requested);
+    assert_eq!(acquired[0].deployment.operator_request.as_ref().unwrap().id, "r1");
+
+    // The runner reports the request still pending: it stays.
+    let mut pending = test_reconcile_data(&dep.id, "s1", DeploymentStatus::UpdateFailed, None);
+    pending.state.operator_request = Some(replace_request("r1"));
+    store.reconcile(&subject, pending).await.unwrap();
+    let fetched = store.get_deployment(&subject, &dep.id).await.unwrap().unwrap();
+    assert_eq!(fetched.operator_request.unwrap().id, "r1");
+
+    // The runner reports it ended: cleared, and the status was not changed.
+    let ended = test_reconcile_data(&dep.id, "s1", DeploymentStatus::UpdateFailed, None);
+    store.reconcile(&subject, ended).await.unwrap();
+    let fetched = store.get_deployment(&subject, &dep.id).await.unwrap().unwrap();
+    assert!(fetched.operator_request.is_none());
+    assert_eq!(fetched.status, "update-failed");
+}
+
+/// A running deployment with a pending request is work for the loop.
+#[tokio::test]
+async fn operator_request_makes_a_running_deployment_claimable() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let subject = test_subject();
+    let dep = create_test_deployment(&store, &group_id, "running", Platform::Aws).await;
+    set_status(&db, &dep.id, "running").await;
+    assert!(store
+        .acquire(&subject, "s0", &DeploymentFilter::default(), 5)
+        .await
+        .unwrap()
+        .is_empty());
+    store
+        .set_operator_request(&subject, &dep.id, &replace_request("r1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .acquire(&subject, "s1", &DeploymentFilter::default(), 5)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }

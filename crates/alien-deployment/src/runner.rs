@@ -1721,6 +1721,7 @@ mod tests {
 
     fn test_state() -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Pending,
             platform: Platform::Test,
             current_release: None,
@@ -2128,6 +2129,7 @@ mod tests {
             .build();
 
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Pending,
             platform: Platform::Test,
             current_release: None,

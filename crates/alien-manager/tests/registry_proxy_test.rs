@@ -354,6 +354,7 @@ async fn setup_with_repository(repository: &str, configure_routing: bool) -> Tes
     // We need to reconcile to set current_release_id so the proxy can find the release.
     {
         let state = alien_core::DeploymentState {
+            operator_request: None,
             status: alien_core::DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(alien_core::ReleaseInfo {
@@ -873,6 +874,7 @@ async fn test_proxy_push_then_pull() {
     // Point the deployment at the new release via reconcile (sets current_release_id)
     {
         let state = alien_core::DeploymentState {
+            operator_request: None,
             status: alien_core::DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(alien_core::ReleaseInfo {

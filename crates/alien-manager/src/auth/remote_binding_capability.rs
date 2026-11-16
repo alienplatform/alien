@@ -115,6 +115,7 @@ mod tests {
 
     fn deployment() -> DeploymentRecord {
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             id: "d1".to_string(),

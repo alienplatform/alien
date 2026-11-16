@@ -231,6 +231,7 @@ mod tests {
 
     fn state() -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::Running,
             current_release: None,
@@ -266,6 +267,7 @@ mod tests {
 
     fn record() -> DeploymentRecord {
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id: "dep_1".to_string(),
             workspace_id: "default".to_string(),

@@ -32,6 +32,20 @@ pub struct SuppliedStacks {
     pub desired: Option<Stack>,
 }
 
+/// Whether [`DeploymentStore::set_operator_request`] recorded the request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperatorRequestOutcome {
+    /// Recorded.
+    Recorded,
+    /// Another operator request is already pending or running.
+    RequestPending,
+    /// A retry is requested or an update is queued or running.
+    DeploymentBusy,
+    /// The deployment's status takes no operator requests (it is not running or failed
+    /// after running, or it is being deleted).
+    StatusNotAccepted,
+}
+
 /// A deployment record as stored in the database.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +118,10 @@ pub struct DeploymentRecord {
     #[serde(default)]
     pub input_values: HashMap<String, serde_json::Value>,
     pub retry_requested: bool,
+    /// A pending operator request, executed by the owning controller in any running or failed
+    /// status. At most one; cleared when the controller reports it done or refused.
+    #[serde(default, skip_serializing)]
+    pub operator_request: Option<alien_core::OperatorRequest>,
     pub locked_by: Option<String>,
     pub locked_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -842,6 +860,18 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         id: &str,
     ) -> Result<(), AlienError>;
+
+    /// Records an operator request on a deployment that is running or failed after running.
+    ///
+    /// One conditional write: it succeeds only when no request is pending, no retry is
+    /// requested and no lease holder is in the middle of an update, so the concurrency rule
+    /// is decided by the store. Returns the reason it was not recorded.
+    async fn set_operator_request(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        request: &alien_core::OperatorRequest,
+    ) -> Result<OperatorRequestOutcome, AlienError>;
 
     async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)
         -> Result<(), AlienError>;

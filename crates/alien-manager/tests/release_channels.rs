@@ -153,6 +153,7 @@ impl Fixture {
     /// when provisioning finishes.
     async fn report_running(&self, id: &str, release: &str) {
         let state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Running,
             platform: Platform::Kubernetes,
             current_release: Some(ReleaseInfo {

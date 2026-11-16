@@ -118,6 +118,7 @@ async fn repeated_updates(initial_enabled: bool, saved_stack: bool) {
         metadata.prepared_stack = None;
     }
     let mut current = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::UpdatePending,
         platform: Platform::Aws,
         current_release: Some(release(old_release)),

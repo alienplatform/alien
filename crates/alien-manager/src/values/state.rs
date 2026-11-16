@@ -410,6 +410,7 @@ mod tests {
             .build();
         config.value_slots = planned;
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: Some(crate::traits::deployment_store::SuppliedStacks {
                 current: Some(stack.clone()),
                 desired: Some(stack),

@@ -576,6 +576,7 @@ async fn destroy_tracked_deployment(
             })?;
 
     let mut current = DeploymentState {
+        operator_request: None,
         status,
         platform,
         current_release: None,
@@ -1024,6 +1025,7 @@ mod tests {
         use alien_core::DeployerSecretStatus::{Invalid, Missing, Present};
 
         let state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::DeletePending,
             platform: Platform::Aws,
             current_release: None,

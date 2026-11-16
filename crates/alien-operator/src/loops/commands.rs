@@ -1094,6 +1094,7 @@ mod tests {
         }));
         stack_state.resources.insert("agent".into(), agent);
         db.set_deployment_state(&alien_core::DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: alien_core::DeploymentStatus::Running,
             current_release: None,

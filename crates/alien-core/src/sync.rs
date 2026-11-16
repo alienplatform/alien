@@ -735,6 +735,7 @@ mod tests {
     #[test]
     fn test_sync_response_observe_only_state_roundtrip() {
         let state = DeploymentState {
+            operator_request: None,
             status: crate::DeploymentStatus::Running,
             platform: crate::Platform::Kubernetes,
             current_release: None,

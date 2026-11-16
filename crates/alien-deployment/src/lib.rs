@@ -14,6 +14,7 @@ pub use initial_setup::{retry_failed_setup_resources, setup_run_has_pending_upda
 pub mod loop_contract;
 pub mod manager_api_transport;
 mod observe;
+mod operator_request;
 mod pending;
 pub mod persisted_digest_key;
 pub use pending::{
@@ -253,6 +254,12 @@ pub async fn step(
             })
         })
     };
+
+    // A pending operator request runs instead of the status handler, in a failed status too.
+    if operator_request::is_pending(&current) {
+        return operator_request::step_pending(current, config, client_config, service_provider)
+            .await;
+    }
 
     let update = match current.status {
         DeploymentStatus::Pending => {

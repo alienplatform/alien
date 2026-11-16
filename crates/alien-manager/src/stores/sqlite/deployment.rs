@@ -213,6 +213,7 @@ impl SqliteDeploymentStore {
         self.db.execute(&sql).await?;
 
         Ok(DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id,
             workspace_id: "default".to_string(),
@@ -373,7 +374,9 @@ impl SqliteDeploymentStore {
     /// whose failure asks for setup: only setup can apply what it stopped for, and the
     /// runtime would stop again on a retry.
     fn failed_claimable_condition(mode: Option<DeploymentAcquireMode>) -> sea_query::Condition {
-        let condition = Cond::any().add(Expr::col(Deployments::RetryRequested).eq(1));
+        let condition = Cond::any()
+            .add(Expr::col(Deployments::RetryRequested).eq(1))
+            .add(Expr::col(Deployments::OperatorRequest).is_not_null());
         if mode == Some(DeploymentAcquireMode::SetupRun) {
             condition.add(Expr::cust(ERROR_WAITS_FOR_SETUP))
         } else {
@@ -433,6 +436,12 @@ impl SqliteDeploymentStore {
             Cond::any()
                 .add(Expr::col(Deployments::Status).is_in(Self::WORK_STATUSES))
                 .add(retryable_failed)
+                // A pending operator request is work for a running deployment too.
+                .add(
+                    Cond::all()
+                        .add(Expr::col(Deployments::Status).eq(Self::RUNNING_STATUS))
+                        .add(Expr::col(Deployments::OperatorRequest).is_not_null()),
+                )
         }
     }
 
@@ -483,7 +492,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 29] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 30] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -513,6 +522,7 @@ impl SqliteDeploymentStore {
         Deployments::WorkspaceId,
         Deployments::ProjectId,
         Deployments::InputValues,
+        Deployments::OperatorRequest,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -586,6 +596,7 @@ impl SqliteDeploymentStore {
                 .optional_string(27, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
             input_values: p.optional_json(28, "input_values")?.unwrap_or_default(),
+            operator_request: p.optional_json(29, "operator_request")?,
         })
     }
 
@@ -676,6 +687,7 @@ mod tests {
 
     fn deployment_state(status: DeploymentStatus, retry_requested: bool) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status,
             current_release: None,
@@ -692,6 +704,7 @@ mod tests {
     fn deployment_record(status: &str) -> DeploymentRecord {
         let now = Utc::now();
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id: "dep_test".to_string(),
             input_values: Default::default(),
@@ -937,6 +950,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await?;
 
         Ok(DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id,
             workspace_id: "default".to_string(),
@@ -1488,8 +1502,61 @@ impl DeploymentStore for SqliteDeploymentStore {
             .value(Deployments::RetryRequested, 1i64)
             .value(Deployments::NextStepAfter, Option::<String>::None)
             .and_where(Expr::col(Deployments::Id).eq(id))
+            // A retry never overtakes a pending operator request.
+            .and_where(Expr::col(Deployments::OperatorRequest).is_null())
             .to_string(SqliteQueryBuilder);
         self.db.execute(&sql).await
+    }
+
+    async fn set_operator_request(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+        request: &alien_core::OperatorRequest,
+    ) -> Result<OperatorRequestOutcome, AlienError> {
+        let json = serde_json::to_string(request)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize operator request".to_string(),
+            })?;
+        // One conditional write decides the concurrency rule: the request is recorded only
+        // when the deployment is settled (running or failed after running, nothing queued)
+        // and neither another request nor a retry is pending.
+        let sql = Query::update()
+            .table(Deployments::Table)
+            .value(Deployments::OperatorRequest, json)
+            .value(Deployments::NextStepAfter, Option::<String>::None)
+            .value(Deployments::UpdatedAt, Utc::now().to_rfc3339())
+            .and_where(Expr::col(Deployments::Id).eq(id))
+            .and_where(Expr::col(Deployments::OperatorRequest).is_null())
+            .and_where(Expr::col(Deployments::RetryRequested).eq(0))
+            .and_where(Expr::col(Deployments::DesiredReleaseId).is_null())
+            .and_where(Expr::col(Deployments::Status).is_in([
+                Self::RUNNING_STATUS,
+                "refresh-failed",
+                "update-failed",
+            ]))
+            .to_string(SqliteQueryBuilder);
+        if self.db.execute_returning_rows_affected(&sql).await? == 1 {
+            return Ok(OperatorRequestOutcome::Recorded);
+        }
+        let Some(deployment) = self.get_deployment(_caller, id).await? else {
+            return Err(db_error("Deployment not found"));
+        };
+        Ok(if deployment.operator_request.is_some() {
+            OperatorRequestOutcome::RequestPending
+        } else if deployment.retry_requested
+            || deployment.desired_release_id.is_some()
+            || Self::WORK_STATUSES.contains(&deployment.status.as_str())
+            || matches!(
+                deployment.status.as_str(),
+                "preflights-failed" | "initial-setup-failed" | "provisioning-failed"
+            )
+        {
+            OperatorRequestOutcome::DeploymentBusy
+        } else {
+            OperatorRequestOutcome::StatusNotAccepted
+        })
     }
 
     async fn set_redeploy(
@@ -1506,6 +1573,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             .table(Deployments::Table)
             .value(Deployments::Status, "update-pending")
             .value(Deployments::NextStepAfter, Option::<String>::None)
+            .and_where(Expr::col(Deployments::OperatorRequest).is_null())
             .and_where(Expr::col(Deployments::Id).eq(id))
             .and_where(
                 Expr::col(Deployments::Status).is_not_in([
@@ -1871,6 +1939,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                         Deployments::Platform,
                         Deployments::StackSettings,
                         Deployments::Error,
+                        Deployments::OperatorRequest,
                     ])
                     .from(Deployments::Table)
                     .and_where(Expr::col(Deployments::Id).is_in(id_strs))
@@ -1900,6 +1969,9 @@ impl DeploymentStore for SqliteDeploymentStore {
                 }
 
                 let status = parser.string(1, "status")?;
+                let has_operator_request = parser
+                    .optional_string(9, "operator_request")?
+                    .is_some();
                 let retry_requested = parser
                     .optional_i64(2, "retry_requested")?
                     .unwrap_or_default()
@@ -1914,6 +1986,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 let stack_settings =
                     parser.json::<alien_core::StackSettings>(7, "stack_settings")?;
                 let failed_claimable = retry_requested
+                    || has_operator_request
                     || (filter.acquire_mode == Some(DeploymentAcquireMode::SetupRun)
                         && Self::error_waits_for_setup(
                             parser
@@ -2194,6 +2267,23 @@ impl DeploymentStore for SqliteDeploymentStore {
                     next_step_after.map(|value| value.to_rfc3339()),
                 )
                 .value(Deployments::UpdatedAt, now.to_rfc3339());
+
+            // The runner ended the request it was given: clear that request, and only that one.
+            // A request recorded after the runner loaded the row has another id and stays.
+            if state.operator_request.is_none() {
+                if let Some(ended) = deployment
+                    .as_ref()
+                    .and_then(|d| d.operator_request.as_ref())
+                {
+                    query.value(
+                        Deployments::OperatorRequest,
+                        Expr::cust_with_values(
+                            "CASE WHEN json_extract(operator_request, '$.id') = ? THEN NULL ELSE operator_request END",
+                            [ended.id.clone()],
+                        ),
+                    );
+                }
+            }
 
             // Nullable fields: set value or explicit NULL to clear stale data
             match &stack_state_json {

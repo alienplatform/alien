@@ -443,6 +443,7 @@ impl CloudProxyTest {
 
         // Reconcile to set current_release_id
         let state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(ReleaseInfo {

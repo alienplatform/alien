@@ -47,6 +47,8 @@ pub(crate) enum Deployments {
     /// Deployer-provided stack input values as a JSON object. NULL on rows
     /// written before gated resources existed; readers treat NULL as empty.
     InputValues,
+    /// A pending operator request as JSON (`OperatorRequest`). NULL when none.
+    OperatorRequest,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -194,6 +196,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
                     .default("default"),
             )
             .col(ColumnDef::new(Deployments::InputValues).text())
+            .col(ColumnDef::new(Deployments::OperatorRequest).text())
             .build(SqliteQueryBuilder),
         // releases
         Table::create()
@@ -365,6 +368,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE commands ADD COLUMN target_resource_type TEXT",
         "ALTER TABLE deployments ADD COLUMN input_values TEXT",
         "ALTER TABLE deployments ADD COLUMN next_step_after TEXT",
+        "ALTER TABLE deployments ADD COLUMN operator_request TEXT",
         "ALTER TABLE deployment_groups ADD COLUMN setup TEXT",
         "ALTER TABLE tokens ADD COLUMN expires_at TEXT",
     ];

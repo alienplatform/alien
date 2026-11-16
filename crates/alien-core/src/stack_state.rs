@@ -1300,6 +1300,7 @@ mod tests {
 
             // Build DeploymentState (what final_reconcile serializes)
             let deployment_state = DeploymentState {
+                operator_request: None,
                 status: DeploymentStatus::Provisioning,
                 platform: Platform::Azure,
                 current_release: None,

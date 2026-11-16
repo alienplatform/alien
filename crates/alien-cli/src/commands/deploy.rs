@@ -2617,6 +2617,7 @@ async fn deploy_task_with_environment(
 
     // Build deployment state
     let mut current = DeploymentState {
+        operator_request: None,
         status,
         platform,
         current_release: None,
@@ -6106,6 +6107,7 @@ max = 1
                 });
             }).await;
             let current = DeploymentState {
+                operator_request: None,
                 status: DeploymentStatus::UpdatePending,
                 platform: Platform::Aws,
                 current_release: Some(alien_core::ReleaseInfo {

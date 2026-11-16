@@ -271,6 +271,7 @@ async fn sync_with_manager(
             .get_deployment_state()
             .await?
             .unwrap_or_else(|| alien_core::DeploymentState {
+                operator_request: None,
                 platform: state.config.platform,
                 status: alien_core::DeploymentStatus::Pending,
                 current_release: None,
@@ -792,6 +793,7 @@ pub(crate) async fn seed_local_deployment_state(state: &OperatorState) -> crate:
     state
         .db
         .set_deployment_state(&alien_core::DeploymentState {
+            operator_request: None,
             platform: state.config.platform,
             status: alien_core::DeploymentStatus::Pending,
             current_release: None,
@@ -993,6 +995,7 @@ pub(crate) async fn accept_target(
             .get_deployment_state()
             .await?
             .unwrap_or_else(|| alien_core::DeploymentState {
+                operator_request: None,
                 platform: state.config.platform,
                 status: alien_core::DeploymentStatus::Pending,
                 current_release: None,
@@ -2001,6 +2004,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Running,
             current_release: Some(release.clone()),
@@ -2041,6 +2045,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::ProvisioningFailed,
             current_release: None,
@@ -2087,6 +2092,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         let mut state = DeploymentState {
+            operator_request: None,
             platform: Platform::Test,
             status: DeploymentStatus::ProvisioningFailed,
             current_release: None,
@@ -2156,6 +2162,7 @@ mod tests {
             let mut metadata = alien_core::RuntimeMetadata::default();
             metadata.pending_prepared_stack = Some(Stack::new("failed-target".to_string()).build());
             let mut state = DeploymentState {
+                operator_request: None,
                 platform: Platform::Kubernetes,
                 status,
                 current_release: None,
@@ -2265,6 +2272,7 @@ mod tests {
             .resources
             .insert("deployer-secrets".into(), vault);
         let running = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes, status: DeploymentStatus::Running,
             current_release: None, target_release: None, stack_state: Some(stack_state),
             environment_info: Some(alien_core::EnvironmentInfo::Aws(alien_core::AwsEnvironmentInfo {
@@ -2368,6 +2376,7 @@ mod tests {
             ),
         );
         let running = DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::Running,
             current_release: None,
@@ -2503,6 +2512,7 @@ mod tests {
             .expect("open operator db");
         db.set_deployment_id("dep_remote").await.unwrap();
         db.set_deployment_state(&DeploymentState {
+            operator_request: None,
             platform: fixture.config.platform,
             status: fixture.status,
             current_release: None,
@@ -2796,6 +2806,7 @@ mod tests {
             state
                 .db
                 .set_deployment_state(&DeploymentState {
+                    operator_request: None,
                     platform: Platform::Kubernetes,
                     status,
                     current_release: Some(release("rel_installed", "example.test/agent:1")),
@@ -2828,6 +2839,7 @@ mod tests {
         controller["state"] = json!("waitingForUpdate");
         controller["_controllerStateVersion"] = json!(1);
         let stuck = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Updating,
             current_release: Some(release("rel_installed", "example.test/agent:1")),
@@ -4188,6 +4200,7 @@ mod tests {
             Json(exchange.0.clone())
         }
         let local = DeploymentState {
+            operator_request: None,
             platform: Platform::Test,
             status: DeploymentStatus::RetentionRequired,
             current_release: None,
@@ -4326,6 +4339,7 @@ mod tests {
         );
         db.set_deployment_id("dep_protocol").await.unwrap();
         let mut checkpoint = DeploymentState {
+            operator_request: None,
             platform: Platform::Test,
             status: DeploymentStatus::Provisioning,
             current_release: None,
@@ -4467,6 +4481,7 @@ mod tests {
     #[test]
     fn recognizes_empty_pending_state_as_uninitialized() {
         let state = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Pending,
             current_release: None,
@@ -4485,6 +4500,7 @@ mod tests {
     #[test]
     fn recognizes_non_pending_state_as_initialized() {
         let state = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Provisioning,
             current_release: None,
@@ -4503,6 +4519,7 @@ mod tests {
     #[test]
     fn applies_manager_retry_request_to_failed_local_state() {
         let mut local_state = DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::ProvisioningFailed,
             current_release: None,
@@ -4546,6 +4563,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         let local = |current: &str| DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::UpdateFailed,
             current_release: Some(release(current)),
@@ -4592,6 +4610,7 @@ mod tests {
             ..Default::default()
         };
         let mut local_state = DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::Running,
             current_release: None,
@@ -4628,6 +4647,7 @@ mod tests {
     #[test]
     fn a_protected_install_deletes_on_the_managers_say_but_keeps_its_retain_policy() {
         let mut local_state = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Running,
             current_release: None,
@@ -4662,6 +4682,7 @@ mod tests {
     #[test]
     fn a_protected_install_takes_no_setup_update_authorization_from_the_manager() {
         let local_state = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::UpdateFailed,
             current_release: None,
@@ -4712,6 +4733,7 @@ mod tests {
     #[test]
     fn ignores_manager_retry_request_for_active_local_state() {
         let mut local_state = DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::Provisioning,
             current_release: None,
@@ -4739,6 +4761,7 @@ mod tests {
     #[test]
     fn applies_manager_delete_request_to_running_local_state() {
         let mut local_state = DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::Running,
             current_release: None,
@@ -4766,6 +4789,7 @@ mod tests {
     #[test]
     fn does_not_rewind_local_delete_progress_from_manager_state() {
         let mut local_state = DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::Deleting,
             current_release: None,
@@ -4808,6 +4832,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         let running = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Running,
             current_release: Some(installed.clone()),
@@ -5158,6 +5183,7 @@ mod tests {
             };
             let applying = status == DeploymentStatus::UpdatePending;
             DeploymentState {
+                operator_request: None,
                 platform: Platform::Kubernetes,
                 status,
                 current_release: Some(release.clone()),

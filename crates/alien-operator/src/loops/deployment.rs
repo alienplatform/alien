@@ -1207,6 +1207,7 @@ mod tests {
 
     fn state_with_authorization(fingerprint: &str) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             platform: Platform::Test,
             status: DeploymentStatus::UpdatePending,
             current_release: None,
@@ -1289,6 +1290,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         let state = |status, target: &str| DeploymentState {
+            operator_request: None,
             platform: Platform::Test,
             status,
             current_release: Some(release("rel_installed")),
@@ -1414,6 +1416,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         let current = DeploymentState {
+            operator_request: None,
             platform: Platform::Local,
             status: DeploymentStatus::WaitingForSecrets,
             current_release: None,
@@ -2191,6 +2194,7 @@ mod tests {
                 signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::UpdatePending,
             platform: Platform::Kubernetes,
             current_release: Some(release("rel_old", false)),
@@ -2394,6 +2398,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Pending,
             platform: Platform::Test,
             current_release: None,
@@ -2567,6 +2572,7 @@ mod tests {
             .profiles
             .insert("default".into(), alien_core::PermissionProfile::new());
         db.set_deployment_state(&DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Pending,
             platform: Platform::Test,
             current_release: None,

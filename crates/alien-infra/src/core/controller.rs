@@ -723,6 +723,25 @@ pub trait ResourceController: Send + Sync + Debug {
         context: &ResourceControllerContext,
     ) -> Result<ResourceControllerStepResult>;
 
+    /// Carries out one step of an operator request addressed to this resource.
+    ///
+    /// Runs in any resource status, failed ones included, and never plans or changes the
+    /// resource's status: the controller keeps the request's progress in its own state and
+    /// reports `Done` or `Refused` when it ends. The default refuses, so a controller that
+    /// does not implement a request kind says so instead of ignoring it.
+    async fn step_operator_request(
+        &mut self,
+        _context: &ResourceControllerContext<'_>,
+        request: &alien_core::OperatorRequest,
+    ) -> Result<alien_core::OperatorRequestProgress> {
+        Ok(alien_core::OperatorRequestProgress::Refused {
+            reason: format!(
+                "this resource does not support the '{}' request",
+                request.kind_name()
+            ),
+        })
+    }
+
     /// Transitions the resource to its specific terminal failure state for the current operation context.
     /// This method should be called on the state *before* the step that failed.
     /// Returns the new failure state as a trait object.

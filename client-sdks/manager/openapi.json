@@ -1291,6 +1291,62 @@
         ]
       }
     },
+    "/v1/deployments/{id}/operator-request": {
+      "post": {
+        "tags": [
+          "deployments"
+        ],
+        "operationId": "request_operator_action",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OperatorRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Request recorded; the resource's controller carries it out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorRequestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The deployment's status takes no operator requests"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Another request, a retry or an update is pending"
+          }
+        }
+      }
+    },
     "/v1/deployments/{id}/pin": {
       "put": {
         "tags": [
@@ -17311,6 +17367,70 @@
           "package",
           "configured"
         ]
+      },
+      "OperatorRequestBody": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OperatorRequestKind",
+            "description": "What is requested."
+          },
+          {
+            "type": "object",
+            "required": [
+              "requestedBy"
+            ],
+            "properties": {
+              "requestedBy": {
+                "type": "string",
+                "description": "Who asked, for the audit trail."
+              }
+            }
+          }
+        ],
+        "description": "Body of `POST /v1/deployments/{id}/operator-request`."
+      },
+      "OperatorRequestKind": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Replace one machine of a cloud compute cluster: drain it, terminate it through its\nscaling group without lowering the group's desired capacity, then admit its replacement.",
+            "required": [
+              "resourceId",
+              "machineId",
+              "type"
+            ],
+            "properties": {
+              "machineId": {
+                "type": "string",
+                "description": "The machine (instance) to replace."
+              },
+              "resourceId": {
+                "type": "string",
+                "description": "The compute cluster resource that owns the machine."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "replace-machine"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What an operator request asks for."
+      },
+      "OperatorRequestResponse": {
+        "type": "object",
+        "description": "Response of a recorded operator request.",
+        "required": [
+          "requestId"
+        ],
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "description": "Identifies the request in events and in the resource's state."
+          }
+        }
       },
       "ParameterStoreVaultBinding": {
         "type": "object",

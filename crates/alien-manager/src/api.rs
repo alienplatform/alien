@@ -80,6 +80,7 @@ impl Modify for BearerSecurity {
         crate::routes::deployments::get_deployment_info,
         crate::routes::deployments::delete_deployment,
         crate::routes::deployments::retry_deployment,
+        crate::routes::deployments::request_operator_action,
         crate::routes::deployments::set_quota_warning_overrides,
         crate::routes::deployments::redeploy,
         // Releases
@@ -111,6 +112,8 @@ impl Modify for BearerSecurity {
         crate::routes::vault::delete_secret,
     ),
     components(schemas(
+        crate::routes::deployments::OperatorRequestBody,
+        crate::routes::deployments::OperatorRequestResponse,
         // Signing
         crate::routes::signing::SignerListsResponse,
         crate::routes::signing::ProjectSigningResponse,

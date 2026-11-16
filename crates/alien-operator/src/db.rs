@@ -2641,6 +2641,7 @@ mod tests {
             signer_lists: Vec::new(),
         };
         alien_core::DeploymentState {
+            operator_request: None,
             platform: alien_core::Platform::Test,
             status: alien_core::DeploymentStatus::Running,
             current_release: Some(release("rel_installed")),
