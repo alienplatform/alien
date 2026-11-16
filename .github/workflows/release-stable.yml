@@ -17,6 +17,8 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  # The called release workflow records build provenance (actions/attest-build-provenance).
+  attestations: write
 
 jobs:
   resolve:

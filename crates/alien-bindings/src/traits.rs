@@ -1572,8 +1572,9 @@ pub struct PreviewCapability {
     /// consumes `Authorization` names another header and the agent re-emits it.
     #[serde(default = "default_caller_authorization_header")]
     pub caller_authorization_header: String,
-    /// WebSocket subprotocols a client must offer, in order, when it cannot set headers
-    /// on the upgrade. Empty when headers are enough.
+    /// WebSocket subprotocols a client must offer, in order and after its own, in addition to
+    /// every header, where the backend's edge reads credentials from the subprotocol list. On GCP
+    /// a WebSocket needs both the headers and these. Empty where the headers are enough.
     #[serde(default)]
     pub subprotocols: Vec<String>,
 }

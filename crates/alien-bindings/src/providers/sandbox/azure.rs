@@ -608,28 +608,26 @@ impl Sandbox for AzureSandbox {
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         Self::checked_sandbox_id("sandbox.get", sandbox_id)?;
+        // A caller's own key is not an id Azure knows: it names sandboxes through the label
+        // `get_or_create` stamped on them. They are tried in the order `get_or_create` tries
+        // them, and one built for another declaration is skipped, untouched, as it is there.
         if !can_name_a_sandbox(sandbox_id) {
+            for candidate in self
+                .request_key_candidates(sandbox_id, "sandbox.get")
+                .await?
+            {
+                match self.get_as_declared(&candidate.id).await {
+                    Err(error) if error.code == "SANDBOX_NOT_AS_DECLARED" => {}
+                    found => {
+                        if let Some(instance) = found? {
+                            return Ok(Some(instance));
+                        }
+                    }
+                }
+            }
             return Ok(None);
         }
-        // A 404 is "gone", which is a valid answer. Anything else is a real failure and must not
-        // be flattened into None, or a throttle would read as an expired sandbox.
-        let Some(sandbox) = self.read_sandbox("sandbox.get", sandbox_id).await? else {
-            return Ok(None);
-        };
-
-        let state = sandbox_state("sandbox.get", sandbox.state.as_deref())?;
-
-        // This is the path a reconnect takes: a sandbox outlives the declaration it was created
-        // under, so a caller holding its id would otherwise be handed whatever containment it was
-        // built with. Only the two ends of the lifecycle carry no policy, and that is not a
-        // mismatch.
-        self.judge_if_judgeable(&sandbox)?;
-
-        Ok(Some(SandboxInstance {
-            sandbox_id: sandbox.id,
-            state,
-            generation: 1,
-        }))
+        self.get_as_declared(sandbox_id).await
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
@@ -1115,6 +1113,52 @@ impl Sandbox for AzureSandbox {
 }
 
 impl AzureSandbox {
+    /// Reads one sandbox by id and judges it against the declaration, without waking it.
+    async fn get_as_declared(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
+        // A 404 is "gone", which is a valid answer. Anything else is a real failure and must not
+        // be flattened into None, or a throttle would read as an expired sandbox.
+        let Some(sandbox) = self.read_sandbox("sandbox.get", sandbox_id).await? else {
+            return Ok(None);
+        };
+
+        let state = sandbox_state("sandbox.get", sandbox.state.as_deref())?;
+
+        // This is the path a reconnect takes: a sandbox outlives the declaration it was created
+        // under, so a caller holding its id would otherwise be handed whatever containment it was
+        // built with. Only the two ends of the lifecycle carry no policy, and that is not a
+        // mismatch.
+        self.judge_if_judgeable(&sandbox)?;
+
+        Ok(Some(SandboxInstance {
+            sandbox_id: sandbox.id,
+            state,
+            generation: 1,
+        }))
+    }
+
+    /// The live sandboxes carrying a caller key's request-key label, oldest first.
+    async fn request_key_candidates(
+        &self,
+        requested_id: &str,
+        operation: &str,
+    ) -> Result<Vec<alien_azure_clients::azure::sandbox_data_plane::ListedSandbox>> {
+        let key = request_key(requested_id);
+        let mut candidates: Vec<_> = self
+            .client
+            .list_sandboxes(&self.sandbox_group)
+            .await
+            .map_err(|error| Self::failed(operation, error))?
+            .into_iter()
+            .filter(|listed| {
+                listed.labels.get(REQUEST_KEY_LABEL) == Some(&key)
+                    && !listed.state.eq_ignore_ascii_case("Deleting")
+                    && !listed.state.eq_ignore_ascii_case("Failed")
+            })
+            .collect();
+        candidates.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(candidates)
+    }
+
     /// Brings a sandbox the caller named back into service, or says why it cannot be.
     ///
     /// The one path that replaces rather than only refusing: `get_or_create` asked for a usable
@@ -1130,20 +1174,9 @@ impl AzureSandbox {
         requested_id: &str,
         own: Option<&str>,
     ) -> Result<Option<SandboxInstance>> {
-        let key = request_key(requested_id);
-        let mut candidates: Vec<_> = self
-            .client
-            .list_sandboxes(&self.sandbox_group)
-            .await
-            .map_err(|error| Self::failed(GET_OR_CREATE, error))?
-            .into_iter()
-            .filter(|listed| {
-                listed.labels.get(REQUEST_KEY_LABEL) == Some(&key)
-                    && !listed.state.eq_ignore_ascii_case("Deleting")
-                    && !listed.state.eq_ignore_ascii_case("Failed")
-            })
-            .collect();
-        candidates.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        let candidates = self
+            .request_key_candidates(requested_id, GET_OR_CREATE)
+            .await?;
         for candidate in candidates {
             if Some(candidate.id.as_str()) == own {
                 // Nothing older was usable, so the sandbox this call made is the answer.
@@ -3721,8 +3754,8 @@ mod tests {
         assert!(!resolved.created, "found, not created");
     }
 
-    /// A caller's own key is not a sandbox id, so neither verb reads it from the data plane: `get`
-    /// answers none and `get_or_create` goes straight to the request-key lookup.
+    /// A caller's own key is not a sandbox id, so neither verb reads it from the data plane: both
+    /// find the sandbox by the key's request-key label, and `get` answers none when there is none.
     #[tokio::test]
     async fn a_key_that_is_not_a_guid_is_never_read_as_a_sandbox_id() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -3736,10 +3769,75 @@ mod tests {
             .returning(|_| Ok(vec![listed("azure-7", "ask-1", 30)]));
         client.expect_create_sandbox().never();
         let sandbox = sandbox_with(client);
-        assert!(sandbox.get("ask-1").await.unwrap().is_none());
+        let got = sandbox
+            .get("ask-1")
+            .await
+            .unwrap()
+            .expect("the key finds its sandbox");
+        assert_eq!(got.sandbox_id, "azure-7");
+        assert!(
+            sandbox.get("ask-2").await.unwrap().is_none(),
+            "an unused key finds nothing"
+        );
         let resolved = sandbox.get_or_create(asks_for("ask-1")).await.unwrap();
         assert_eq!(resolved.sandbox.sandbox_id, "azure-7");
         assert!(!resolved.created);
+    }
+
+    /// After a declaration changes, the oldest sandbox with a key may be built for the old one.
+    /// `get` answers with the newest-matching one in the same order `get_or_create` tries them,
+    /// and leaves the mismatched one untouched: it may be another revision's.
+    #[tokio::test]
+    async fn get_by_key_skips_an_older_sandbox_built_for_another_declaration() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_list_sandboxes()
+            .returning(|_| Ok(vec![listed("old", "ask-1", 60), listed("new", "ask-1", 5)]));
+        client.expect_get_sandbox().returning(|_, id| {
+            if id == "old" {
+                return Ok(running(id, None));
+            }
+            Ok(running(
+                id,
+                Some(EgressPolicy {
+                    default_action: "Deny".to_string(),
+                    host_rules: vec![EgressHostRule {
+                        pattern: "*".to_string(),
+                        action: "Deny".to_string(),
+                    }],
+                    rules: Vec::new(),
+                    unmodelled: Default::default(),
+                    traffic_inspection: Some("Full".to_string()),
+                }),
+            ))
+        });
+        client.expect_delete_sandbox().never();
+        client.expect_resume_sandbox().never();
+        client.expect_create_sandbox().never();
+
+        let sandbox = sandbox_denying(client, SandboxEgress::None);
+        let got = sandbox
+            .get("ask-1")
+            .await
+            .unwrap()
+            .expect("the matching sandbox is found");
+        assert_eq!(got.sandbox_id, "new");
+    }
+
+    /// When every sandbox with the key mismatches, `get` answers none rather than an error.
+    #[tokio::test]
+    async fn get_by_key_is_none_when_no_sandbox_with_the_key_matches() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_list_sandboxes()
+            .returning(|_| Ok(vec![listed("old", "ask-1", 60)]));
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running(id, None)));
+        client.expect_delete_sandbox().never();
+        client.expect_resume_sandbox().never();
+        let sandbox = sandbox_denying(client, SandboxEgress::None);
+        assert!(sandbox.get("ask-1").await.unwrap().is_none());
     }
 
     /// A GUID the data plane rejects with a 400 is a real failure, not "no such sandbox".

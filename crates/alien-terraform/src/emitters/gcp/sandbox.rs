@@ -11,7 +11,8 @@ use crate::{
         agent_platform_engine::ENGINE_RESOURCE,
         helpers::{
             binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
-            required_label, role_expression_for_binding, service_account_member_for_label,
+            required_label, role_expression_for_binding, service_account_id_template,
+            service_account_member_for_label,
         },
     },
     expr,
@@ -117,6 +118,18 @@ fn agent_platform_fields(
             Expression::Number(hcl::Number::from(seconds as i64)),
         ));
     }
+    if !sandbox.preview_ports.is_empty() {
+        fields.push((
+            "previewPorts",
+            Expression::Array(
+                sandbox
+                    .preview_ports
+                    .iter()
+                    .map(|port| Expression::Number(hcl::Number::from(i64::from(*port))))
+                    .collect(),
+            ),
+        ));
+    }
     Ok(fields)
 }
 
@@ -132,6 +145,7 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
         let mut fragment = TfFragment::default();
         emit_remote_access(ctx, &mut fragment)?;
         emit_template_management(ctx, &mut fragment)?;
+        emit_preview_signer(ctx, &mut fragment)?;
         Ok(fragment)
     }
 
@@ -139,7 +153,20 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         refuse_domain_egress(sandbox)?;
         // The engine id is not here: it is server-assigned, and the engine registers its own.
-        Ok(expr::object([("region", expr::raw("var.gcp_region"))]))
+        let mut fields = vec![("region", expr::raw("var.gcp_region"))];
+        // The template controller builds the binding a workload reads, so the signing identity
+        // setup created reaches it through the import data.
+        if has_preview_signer(ctx, sandbox) {
+            let label = required_label(ctx)?;
+            fields.push((
+                "previewServiceAccount",
+                expr::template(format!(
+                    "${{google_service_account.{}.email}}",
+                    preview_label(label)
+                )),
+            ));
+        }
+        Ok(expr::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
@@ -147,6 +174,15 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         refuse_domain_egress(sandbox)?;
         let mut fields = agent_platform_fields(ctx, sandbox, label)?;
+        if has_preview_signer(ctx, sandbox) {
+            fields.push((
+                "previewServiceAccount",
+                expr::template(format!(
+                    "${{google_service_account.{}.email}}",
+                    preview_label(label)
+                )),
+            ));
+        }
         fields.push((
             "service",
             Expression::String(AGENT_PLATFORM_SERVICE.to_string()),
@@ -280,6 +316,151 @@ fn emit_engine_grant(
     Ok(())
 }
 
+/// Terraform label of the identity that signs this sandbox's preview edge credential.
+fn preview_label(label: &str) -> String {
+    format!("{label}_preview")
+}
+
+/// The one permission the workload needs on the signing identity. `signJwt` and nothing else: the
+/// sibling verbs (`getAccessToken`, `signBlob`, `implicitDelegation`) would let the workload mint
+/// a token for the identity or sign arbitrary blobs as it. Not a registry permission set: it
+/// binds a service account, which the generator can only express for the executing identity.
+const SIGN_JWT_PERMISSION: &str = "iam.serviceAccounts.signJwt";
+
+/// Terraform label of the custom role that carries [`SIGN_JWT_PERMISSION`]. Not derived from the
+/// sandbox: the role is project-wide and its id is fixed.
+const PREVIEW_SIGN_ROLE_LABEL: &str = "gcp_role_sandbox_preview_sign";
+
+/// Whether setup creates the edge-signing identity: only where the deployment declares preview
+/// ports and owns the engine, so a sandbox without preview adds nothing to an existing plan.
+fn has_preview_signer(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> bool {
+    !sandbox.preview_ports.is_empty() && ctx.resource.lifecycle == ResourceLifecycle::Frozen
+}
+
+/// Creates the per-deployment identity the GCP edge accepts a signed JWT from, and lets the
+/// workload identities that reach this sandbox sign as it.
+///
+/// The edge refuses a JWT whose principal lacks the execute verb on the session. Giving that verb
+/// to a dedicated identity, on the engine only, keeps it away from the workload: the workload asks
+/// IAM Credentials for a short-lived JWT as this one identity, and can sign as no other.
+fn emit_preview_signer(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+    let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+    if !has_preview_signer(ctx, sandbox) {
+        return Ok(());
+    }
+    let label = required_label(ctx)?;
+    let signer_label = preview_label(label);
+    fragment.resource_blocks.push(resource_block(
+        "google_service_account",
+        &signer_label,
+        [
+            attr("project", expr::raw("var.gcp_project")),
+            attr("account_id", service_account_id_template(&signer_label)),
+            attr(
+                "display_name",
+                expr::template(format!(
+                    "${{local.deployment_name}}: Preview edge signer ({})",
+                    ctx.resource_id
+                )),
+            ),
+            attr(
+                "description",
+                expr::template(
+                    "Signs the short-lived credential the Agent Platform edge checks for preview. \
+                     Holds the execute verb on this deployment's engine and nothing else."
+                        .to_string(),
+                ),
+            ),
+        ],
+    ));
+    emit_engine_grant(
+        ctx,
+        fragment,
+        "sandbox/preview-edge",
+        &signer_label,
+        "preview",
+    )?;
+
+    let owners = execute_owner_labels(ctx);
+    if owners.is_empty() {
+        return Ok(());
+    }
+    // One role for the whole stack: its id is fixed, so a second sandbox emitting its own address
+    // would create the same role twice and fail at apply. Every sandbox emits this identical
+    // block, which the generator keeps once, and every signer binding points to it.
+    let role_label = PREVIEW_SIGN_ROLE_LABEL;
+    fragment.push_shared_resource(resource_block(
+        "google_project_iam_custom_role",
+        &role_label,
+        [
+            attr("count", expr::raw("var.gcp_manage_custom_roles ? 1 : 0")),
+            attr("project", expr::raw("var.gcp_project")),
+            attr(
+                "role_id",
+                expr::raw("format(\"role_%s_sandbox_preview_sign\", local.gcp_custom_role_prefix)"),
+            ),
+            attr(
+                "title",
+                expr::template("Sign the preview edge credential".to_string()),
+            ),
+            attr(
+                "description",
+                expr::template(
+                    "Sign a JWT as the preview edge signer. Granted on that one service account."
+                        .to_string(),
+                ),
+            ),
+            attr("stage", Expression::String("GA".to_string())),
+            attr(
+                "permissions",
+                Expression::Array(vec![Expression::String(SIGN_JWT_PERMISSION.to_string())]),
+            ),
+        ],
+    ));
+    for owner in owners {
+        fragment.resource_blocks.push(resource_block(
+            "google_service_account_iam_member",
+            &format!("{signer_label}_sign_{owner}"),
+            [
+                attr(
+                    "service_account_id",
+                    expr::traversal(["google_service_account", signer_label.as_str(), "name"]),
+                ),
+                attr(
+                    "role",
+                    expr::raw(format!(
+                        "var.gcp_manage_custom_roles ? google_project_iam_custom_role.{role_label}[0].name : format(\"projects/%s/roles/role_%s_sandbox_preview_sign\", var.gcp_project, local.gcp_custom_role_prefix)"
+                    )),
+                ),
+                attr("member", service_account_member_for_label(&owner)),
+            ],
+        ));
+    }
+    Ok(())
+}
+
+/// Terraform labels of the workload identities whose profile grants `sandbox/execute` on this
+/// sandbox, by name or through the wildcard.
+fn execute_owner_labels(ctx: &EmitContext<'_>) -> Vec<String> {
+    const EXECUTE: &str = "sandbox/execute";
+    let mut owners = Vec::new();
+    for (profile_name, profile) in ctx.stack.permission_profiles() {
+        let granted = [ctx.resource_id, "*"].iter().any(|key| {
+            profile
+                .0
+                .get(*key)
+                .is_some_and(|refs| refs.iter().any(|reference| reference.id() == EXECUTE))
+        });
+        if !granted {
+            continue;
+        }
+        if let Some(label) = ctx.name_for(&format!("{profile_name}-sa")) {
+            owners.push(label.to_string());
+        }
+    }
+    owners
+}
+
 fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
     ctx.stack.resources().find_map(|(id, entry)| {
         (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
@@ -383,16 +564,17 @@ mod tests {
             }
         }
 
+        fn attribute_opt(block: &hcl::structure::Block, key: &str) -> Option<String> {
+            block.body.iter().find_map(|structure| match structure {
+                Structure::Attribute(attribute) if attribute.key.as_str() == key => {
+                    Some(attribute.expr.to_string())
+                }
+                _ => None,
+            })
+        }
+
         fn attribute(block: &hcl::structure::Block, key: &str) -> String {
-            block
-                .body
-                .iter()
-                .find_map(|structure| match structure {
-                    Structure::Attribute(attribute) if attribute.key.as_str() == key => {
-                        Some(attribute.expr.to_string())
-                    }
-                    _ => None,
-                })
+            attribute_opt(block, key)
                 .unwrap_or_else(|| panic!("the block carries no '{key}': {block:?}"))
         }
 
@@ -506,6 +688,225 @@ mod tests {
             assert!(granted(false).resource_blocks.is_empty());
         }
 
+        /// A sandbox that declares preview ports gets its own edge-signing identity: it holds the
+        /// execute verb on the engine and nothing else, and the workload identity may sign as it
+        /// (and as nothing else) through a role carrying only `signJwt`. A sandbox without
+        /// preview ports renders none of it, which is what keeps an existing stack's plan empty.
+        #[test]
+        fn preview_ports_render_a_dedicated_signing_identity() {
+            let render = |ports: Vec<u16>, granted: bool| {
+                let sandbox = Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(SandboxEgress::Internet)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .preview_ports(ports)
+                    .build();
+                let mut builder = Stack::new("acme".to_string())
+                    .add(
+                        GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                    .add(sandbox, ResourceLifecycle::Frozen);
+                if granted {
+                    builder = builder.permission(
+                        "worker",
+                        alien_core::permissions::PermissionProfile::new()
+                            .resource("agents", ["sandbox/execute"]),
+                    );
+                }
+                let stack = builder.build();
+                let mut names = names();
+                names.insert("worker-sa".to_string(), "worker_sa".to_string());
+                let resource = stack.resources.get("agents").expect("sandbox");
+                let settings = StackSettings::default();
+                let ctx = EmitContext {
+                    stack: &stack,
+                    resource,
+                    resource_id: "agents",
+                    platform: alien_core::Platform::Gcp,
+                    targets_kubernetes: false,
+                    stack_settings: &settings,
+                    names: &names,
+                    pins: &alien_core::SetupPins::default(),
+                };
+                let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+                let binding = GcpAgentPlatformSandboxEmitter
+                    .emit_binding_ref(&ctx)
+                    .expect("renders")
+                    .expect("binding");
+                let import_ref = GcpAgentPlatformSandboxEmitter
+                    .emit_import_ref(&ctx)
+                    .expect("renders");
+                (fragment, binding, import_ref)
+            };
+            let kinds = |fragment: &TfFragment| -> Vec<String> {
+                fragment
+                    .resource_blocks
+                    .iter()
+                    .filter_map(|block| block.labels.first().map(|l| l.as_str().to_string()))
+                    .collect()
+            };
+
+            let (none, binding, none_import) = render(vec![], true);
+            assert!(
+                kinds(&none).is_empty(),
+                "no preview ports, no identity: {none:?}"
+            );
+            assert!(!object_keys(&binding).contains("previewServiceAccount"));
+            assert!(!object_keys(&none_import).contains("previewServiceAccount"));
+
+            let (fragment, binding, import_ref) = render(vec![8080, 8081], true);
+            let all = kinds(&fragment);
+            let count = |kind: &str| all.iter().filter(|k| k.as_str() == kind).count();
+            assert_eq!(count("google_service_account"), 1, "{all:?}");
+            // Execute on the engine for the signing identity, and only for it.
+            let engine_members: Vec<_> = fragment
+                .resource_blocks
+                .iter()
+                .filter(|b| {
+                    b.labels.first().map(|l| l.as_str())
+                        == Some("google_vertex_ai_reasoning_engine_iam_member")
+                })
+                .collect();
+            assert_eq!(engine_members.len(), 1, "{fragment:?}");
+            assert_eq!(
+                attribute(engine_members[0], "member"),
+                "\"serviceAccount:${google_service_account.agents_preview.email}\""
+            );
+            // The workload may sign as the signing identity: a binding on that service account.
+            let signers: Vec<_> = fragment
+                .resource_blocks
+                .iter()
+                .filter(|b| {
+                    b.labels.first().map(|l| l.as_str())
+                        == Some("google_service_account_iam_member")
+                })
+                .collect();
+            assert_eq!(signers.len(), 1, "{fragment:?}");
+            assert_eq!(
+                attribute(signers[0], "service_account_id"),
+                "google_service_account.agents_preview.name"
+            );
+            assert_eq!(
+                attribute(signers[0], "member"),
+                "\"serviceAccount:${google_service_account.worker_sa.email}\""
+            );
+            let role = fragment
+                .resource_blocks
+                .iter()
+                .find(|b| {
+                    attribute_opt(b, "permissions")
+                        .is_some_and(|p| p.contains("iam.serviceAccounts.signJwt"))
+                })
+                .expect("a custom role carries signJwt");
+            let permissions = attribute(role, "permissions");
+            assert!(
+                !permissions.contains("getAccessToken") && !permissions.contains("signBlob"),
+                "only signJwt: {permissions}"
+            );
+            assert!(object_keys(&binding).contains("previewServiceAccount"));
+            // The deployment's controller builds the binding a workload reads, from the import
+            // data: the identity must travel there too, or a deployed sandbox cannot sign.
+            assert!(
+                object_keys(&import_ref).contains("previewServiceAccount"),
+                "import data names the signer: {import_ref:?}"
+            );
+
+            // Nothing holds the signing verb unless a profile gives the workload this sandbox.
+            let (ungranted, _, _) = render(vec![8080], false);
+            assert!(
+                !kinds(&ungranted).contains(&"google_service_account_iam_member".to_string()),
+                "{ungranted:?}"
+            );
+        }
+
+        /// Preview on GCP is command access, so the right to sign as the edge signer goes to the
+        /// profiles that hold `sandbox/execute` on the sandbox, by name or wildcard, and to no
+        /// other profile in the stack, whatever else it holds.
+        #[test]
+        fn the_edge_signer_is_grantable_only_to_the_execute_owners() {
+            use alien_core::permissions::PermissionProfile;
+            let sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Internet)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .preview_ports(vec![8080])
+                .build();
+            let stack = Stack::new("acme".to_string())
+                .add(
+                    GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(sandbox, ResourceLifecycle::Frozen)
+                .permission(
+                    "named",
+                    PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+                )
+                .permission(
+                    "wildcard",
+                    PermissionProfile::new().resource("*", ["sandbox/execute"]),
+                )
+                .permission(
+                    "other-sandbox",
+                    PermissionProfile::new().resource("elsewhere", ["sandbox/execute"]),
+                )
+                .permission(
+                    "heartbeat-only",
+                    PermissionProfile::new().resource("agents", ["sandbox/heartbeat"]),
+                )
+                .permission("empty", PermissionProfile::new())
+                .build();
+            let mut names = names();
+            for profile in ["named", "wildcard", "other-sandbox", "heartbeat-only", "empty"] {
+                names.insert(
+                    format!("{profile}-sa"),
+                    format!("{}_sa", profile.replace('-', "_")),
+                );
+            }
+            let resource = stack.resources.get("agents").expect("sandbox");
+            let settings = StackSettings::default();
+            let ctx = EmitContext {
+                stack: &stack,
+                resource,
+                resource_id: "agents",
+                platform: alien_core::Platform::Gcp,
+                targets_kubernetes: false,
+                stack_settings: &settings,
+                names: &names,
+                pins: &alien_core::SetupPins::default(),
+            };
+            let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+            let mut members: Vec<String> = fragment
+                .resource_blocks
+                .iter()
+                .filter(|b| {
+                    b.labels.first().map(|l| l.as_str()) == Some("google_service_account_iam_member")
+                })
+                .map(|b| attribute(b, "member"))
+                .collect();
+            members.sort();
+            assert_eq!(
+                members,
+                vec![
+                    "\"serviceAccount:${google_service_account.named_sa.email}\"".to_string(),
+                    "\"serviceAccount:${google_service_account.wildcard_sa.email}\"".to_string(),
+                ],
+                "only the two profiles that hold execute on this sandbox may sign as the edge signer"
+            );
+        }
+
         /// GCP refuses an IAM binding whose engine does not exist yet, and a Live engine is created
         /// by its controller after apply. Emitting the member anyway would reference a block this
         /// template never renders.
@@ -606,6 +1007,8 @@ mod tests {
                 region: alien_core::BindingValue::Value("us-central1".to_string()),
                 max_lifetime_seconds: Some(1800),
                 allow_egress: false,
+                preview_service_account: None,
+                preview_ports: Vec::new(),
             })
             .expect("the binding type serializes");
             assert_eq!(

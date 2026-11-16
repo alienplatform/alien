@@ -125,6 +125,12 @@ pub async fn handle_initial_setup(
     let client_config_for_scaffolding = client_config.clone();
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
+        .maybe_rollout_id(
+            current
+                .target_release
+                .as_ref()
+                .and_then(|release| release.release_id.clone()),
+        )
         .service_provider(service_provider.clone())
         .initial_setup_authority(runtime_metadata.initial_setup_authority)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
@@ -2781,12 +2787,111 @@ mod tests {
                     break;
                 }
             }
+            // With a changed config the update waits for the new dependency, as before. With
+            // an unchanged one the only change is an ordering edge on a setup-created Frozen
+            // resource: an ordinary release records it and there is no update to defer.
             assert!(
-                observed_deferred_update,
+                observed_deferred_update || !change_config,
                 "test must exercise the delayed update"
             );
             assert_eq!(state.status, DeploymentStatus::Provisioning);
         }
+    }
+
+    /// An automatic-setup install made before management depended on the network, taking an
+    /// ordinary release (direct authority, not a setup run): the new edge is recorded and
+    /// management is not updated. The provider has no expectations, so any cloud call fails;
+    /// setup must hand off with management running, and what setup recorded must be left as
+    /// it was.
+    #[tokio::test]
+    async fn an_ordinary_release_records_managements_edge_of_an_old_install_without_a_cloud_call() {
+        use alien_core::{Network, NetworkSettings, RemoteStackManagement, ResourceRef};
+        let network = Network::new("default-network".to_string())
+            .settings(NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            })
+            .build();
+        let management = RemoteStackManagement::new("management".to_string()).build();
+        let network_edge = vec![ResourceRef::new(Network::RESOURCE_TYPE, "default-network")];
+        let mut target = Stack::new("test".to_string())
+            .add(network.clone(), ResourceLifecycle::Frozen)
+            .add(management.clone(), ResourceLifecycle::Frozen)
+            .build();
+        target.resources.get_mut("management").unwrap().dependencies = network_edge.clone();
+        let running = |resource: alien_core::Resource,
+                       controller: Box<dyn alien_infra::ResourceController>| {
+            let mut saved = alien_core::StackResourceState::new_pending(
+                resource.resource_type().to_string(),
+                resource,
+                Some(ResourceLifecycle::Frozen),
+                vec![],
+            );
+            saved.status = ResourceStatus::Running;
+            saved.set_internal_controller(Some(controller)).unwrap();
+            saved
+        };
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resource_prefix = "mgmt-test".to_string();
+        stack_state.resources.insert(
+            "default-network".to_string(),
+            running(
+                alien_core::Resource::new(network),
+                Box::new(alien_infra::AwsNetworkController::mock_ready("vpc-1", 2)),
+            ),
+        );
+        stack_state.resources.insert(
+            "management".to_string(),
+            running(
+                alien_core::Resource::new(management),
+                Box::new(alien_infra::AwsRemoteStackManagementController::mock_ready(
+                    "mgmt-test-management",
+                )),
+            ),
+        );
+        let before = stack_state.resources["management"].internal_state.clone();
+        let mut state = DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(target),
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                automatic_setup: true,
+                ..Default::default()
+            }),
+        };
+        let provider = Arc::new(MockPlatformServiceProvider::new());
+        for _ in 0..10 {
+            state = handle_initial_setup(state, config(), aws_client_config(), provider.clone())
+                .await
+                .expect("setup step")
+                .state;
+            if state.status == DeploymentStatus::Provisioning {
+                break;
+            }
+        }
+        assert_eq!(
+            state.status,
+            DeploymentStatus::Provisioning,
+            "{:?}",
+            state.error
+        );
+        let management = &state.stack_state.as_ref().unwrap().resources["management"];
+        assert_eq!(
+            management.status,
+            ResourceStatus::Running,
+            "{:?}",
+            management.error
+        );
+        assert_eq!(management.dependencies, network_edge);
+        assert_eq!(management.internal_state, before);
     }
 
     #[tokio::test]

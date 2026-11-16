@@ -223,7 +223,7 @@ mod tests {
                 "cpu":{"min":"1","desired":"1"}, "memory":{"min":"512Mi","desired":"512Mi"}, "egress":"internet"}}
         }})).unwrap();
         let check = ContainerNetworkSettingsCheck;
-        // Containers are restricted by default; egress refuses the explicit opt-out.
+        // Egress needs the restricted profile written explicitly: an absent setting and the opt-out are both refused.
         stack
             .resources
             .get_mut("api")

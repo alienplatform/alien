@@ -110,7 +110,7 @@ enum ToolchainType {
 
 impl DedupeKey {
     /// The key a container builds under: containers whose images get different users (restricted
-    /// default, explicit `runAsUser`, opt-out) never share an image.
+    /// profile, explicit `runAsUser`, opt-out) never share an image.
     fn for_container(
         src: &str,
         toolchain: &ToolchainConfig,
@@ -2237,18 +2237,33 @@ struct SandboxAgentLayering {
     /// Whether the image itself turns on supervised startup of the base command. On AWS the
     /// controller turns it on at build time instead, together with the capability grant it needs.
     image_command_env: bool,
+    /// Whether the image names the header the agent reads a preview caller's bearer from. Only
+    /// GCP does: its edge consumes `Authorization`, and every other cloud's callers still send
+    /// theirs there, so naming another header would make the agent drop it.
+    caller_authorization_header: bool,
 }
 
 impl SandboxAgentLayering {
+    fn for_build(self) -> gcp_sandbox_image::AgentLayering {
+        gcp_sandbox_image::AgentLayering {
+            arch: self.target.to_dockdash_arch(),
+            contract: self.contract,
+            image_command_env: self.image_command_env,
+            caller_authorization_header: self.caller_authorization_header,
+        }
+    }
+
     const AZURE: Self = Self {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::AZURE_SANDBOX,
         image_command_env: true,
+        caller_authorization_header: false,
     };
     const GCP: Self = Self {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::GCP_AGENT_PLATFORM,
         image_command_env: true,
+        caller_authorization_header: true,
     };
     /// The image ends as the base's own user. Supervised startup of the base command
     /// (`ALIEN_SANDBOX_IMAGE_COMMAND`) is deliberately not baked in: the pod sets it, together
@@ -2259,11 +2274,13 @@ impl SandboxAgentLayering {
         target: BinaryTarget::LinuxX64,
         contract: alien_core::sandbox_image::KUBERNETES_SANDBOX,
         image_command_env: false,
+        caller_authorization_header: false,
     };
     const AWS: Self = Self {
         target: BinaryTarget::LinuxArm64,
         contract: alien_core::sandbox_image::AWS_MICROVM,
         image_command_env: false,
+        caller_authorization_header: false,
     };
 }
 
@@ -2350,11 +2367,7 @@ async fn push_sandbox_agent_image(
         push_options.auth.clone(),
         // The default cache, which every other dockdash build here uses by not naming one.
         dockdash::BlobCache::new().map_dockdash_err()?,
-        gcp_sandbox_image::AgentLayering {
-            arch: layering.target.to_dockdash_arch(),
-            contract: layering.contract,
-            image_command_env: layering.image_command_env,
-        },
+        layering.for_build(),
     )
     .await?
     .image;
@@ -3543,13 +3556,13 @@ fn source_layer_compression(
     }
 }
 
-/// The unprivileged user and group source-built images run as on Kubernetes, where pods are
-/// restricted by default and the kubelet refuses an image that runs as root.
+/// The unprivileged user and group source-built images run as on Kubernetes when their workload
+/// sets the restricted profile, where the kubelet refuses an image that runs as root.
 pub const KUBERNETES_IMAGE_USER: &str = "65532:65532";
 
 /// The `USER` a source-built image gets: [`KUBERNETES_IMAGE_USER`] for a Kubernetes target whose
-/// workload runs restricted, nothing for any other target and for a workload that opted out of
-/// the restricted profile (it keeps the image's own user).
+/// workload sets the restricted profile, nothing for any other target and for a workload without
+/// a security setting or with the opt-out (it keeps the image's own user).
 fn kubernetes_image_user(
     settings: &BuildSettings,
     security: Option<&alien_core::ContainerSecurity>,
@@ -5976,13 +5989,19 @@ mod tests {
             run_as_user: Some(1000),
             ..opted_out.clone()
         };
+        let plain_restricted = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            ..opted_out.clone()
+        };
         let key = |security| DedupeKey::for_container("src", &toolchain, &kubernetes, security);
-        let restricted = key(None);
-        assert_eq!(restricted, key(None));
+        let restricted = key(Some(&plain_restricted));
+        assert_eq!(restricted, key(Some(&plain_restricted)));
         assert_ne!(restricted, key(Some(&opted_out)));
-        // An explicit runAsUser keeps the image's user, like an opt-out, and unlike the default.
+        // An explicit runAsUser keeps the image's user, like an opt-out and like no setting at all,
+        // and unlike the restricted profile without a user.
         assert_ne!(restricted, key(Some(&explicit)));
         assert_eq!(key(Some(&opted_out)), key(Some(&explicit)));
+        assert_eq!(key(None), key(Some(&opted_out)));
     }
 
     #[test]
@@ -6008,8 +6027,14 @@ mod tests {
             read_only_root_filesystem: None,
             writable_paths: vec![],
         };
+        let restricted = alien_core::ContainerSecurity {
+            profile: alien_core::ContainerSecurityProfile::Restricted,
+            ..opted_out.clone()
+        };
+        // Without a security setting the image keeps its own user, as before the profile existed.
+        assert_eq!(kubernetes_image_user(&kubernetes, None), None);
         assert_eq!(
-            kubernetes_image_user(&kubernetes, None),
+            kubernetes_image_user(&kubernetes, Some(&restricted)),
             Some("65532:65532")
         );
         assert_eq!(kubernetes_image_user(&kubernetes, Some(&opted_out)), None);
@@ -6023,7 +6048,10 @@ mod tests {
             PlatformBuildSettings::Gcp {},
             PlatformBuildSettings::Azure {},
         ] {
-            assert_eq!(kubernetes_image_user(&settings(other), None), None);
+            assert_eq!(
+                kubernetes_image_user(&settings(other), Some(&restricted)),
+                None
+            );
         }
         // The same source built with and without the user is a different artifact.
         let key = "abc".to_string();

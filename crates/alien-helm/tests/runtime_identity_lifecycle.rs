@@ -1,6 +1,8 @@
 //! Real Helm upgrades against an explicitly selected disposable cluster.
-//! The workload fixture verifies persisted state and its encryption-key fingerprint;
-//! registration and release reconciliation are covered by Operator integration tests.
+//! The workload fixture verifies persisted state and its encryption-key fingerprint. The key
+//! lives in the Secret the Operator owns, which the real Operator creates; the test creates it
+//! first and checks the chart never changes it. Registration and release reconciliation are
+//! covered by Operator integration tests.
 
 use alien_core::{Stack, StackSettings};
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
@@ -55,7 +57,7 @@ fn write_chart(directory: &Path) {
           args:
             - |
               state=/var/lib/deployment-operator
-              key=$(sha256sum /etc/deployment/secrets/encryption-key | cut -d ' ' -f 1)
+              key=$(sha256sum /etc/operator-secret/encryption-key | cut -d ' ' -f 1)
               if [ -f "$state/key-fingerprint" ]; then
                 test "$(cat "$state/key-fingerprint")" = "$key"
               else
@@ -66,6 +68,18 @@ fn write_chart(directory: &Path) {
               sleep 3600
           imagePullPolicy:"#,
             );
+        }
+        if path == "templates/deployment.yaml" {
+            // The fixture reads the key from the Operator's Secret, as the Operator does.
+            contents = contents
+                .replace(
+                    "          volumeMounts:\n            - name: config",
+                    "          volumeMounts:\n            - name: operator-secret\n              mountPath: /etc/operator-secret\n              readOnly: true\n            - name: config",
+                )
+                .replace(
+                    "      volumes:\n        - name: config",
+                    "      volumes:\n        - name: operator-secret\n          secret:\n            secretName: {{ include \"deployment.operatorSecretName\" . }}\n        - name: config",
+                );
         }
         let destination = directory.join(path);
         fs::create_dir_all(destination.parent().expect("chart parent")).expect("chart directory");
@@ -109,7 +123,22 @@ fn runtime_identity_survives_upgrade_and_pod_replacement() {
         "--set-string",
         "management.defaultUrl=https://default-manager.example.test",
     ];
-    let mut install = vec!["install", release, chart, "--create-namespace"];
+    // The Operator creates its Secret before anything reads it; do the same here.
+    run("kubectl", &["create", "namespace", namespace], &kubeconfig);
+    run(
+        "kubectl",
+        &[
+            "--namespace",
+            namespace,
+            "create",
+            "secret",
+            "generic",
+            &format!("{name}-operator"),
+            "--from-literal=encryption-key=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ],
+        &kubeconfig,
+    );
+    let mut install = vec!["install", release, chart];
     install.extend(common);
     run("helm", &install, &kubeconfig);
     let state = || {
@@ -135,7 +164,7 @@ fn runtime_identity_survives_upgrade_and_pod_replacement() {
                 namespace,
                 "get",
                 "secret",
-                name,
+                &format!("{name}-operator"),
                 "-o",
                 "jsonpath={.data.encryption-key}",
             ],
@@ -254,18 +283,6 @@ fn runtime_identity_survives_upgrade_and_pod_replacement() {
         &unsafe_upgrade,
         &kubeconfig,
         "Changing the runtime identity volume",
-    );
-    let mut unsafe_upgrade = upgrade.clone();
-    unsafe_upgrade.extend([
-        "--set-string",
-        "runtime.encryption.existingSecret.name=runtime-identity",
-        "--set-string",
-        "runtime.encryption.existingSecret.key=another-key",
-    ]);
-    rejected(
-        &unsafe_upgrade,
-        &kubeconfig,
-        "Preserve the installed key selector",
     );
     assert_eq!(state(), original_identity);
     assert_eq!(key(), original_key);

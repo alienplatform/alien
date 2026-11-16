@@ -124,8 +124,8 @@ for platform in "${platform_list[@]}"; do
           { echo "ALIEN_SANDBOX_ISOLATION is ${ALIEN_SANDBOX_ISOLATION:-unset}, not uid-split"; exit 1; }
         test "$ALIEN_SANDBOX_AUTHORIZATION" = transport ||
           { echo "ALIEN_SANDBOX_AUTHORIZATION is ${ALIEN_SANDBOX_AUTHORIZATION:-unset}, not transport"; exit 1; }
-        test "$ALIEN_SANDBOX_PORT" = 8080 ||
-          { echo "ALIEN_SANDBOX_PORT is ${ALIEN_SANDBOX_PORT:-unset}, not 8080"; exit 1; }
+        test "$ALIEN_SANDBOX_PORT" = 8971 ||
+          { echo "ALIEN_SANDBOX_PORT is ${ALIEN_SANDBOX_PORT:-unset}, not 8971"; exit 1; }
       ' 2>&1); then
     echo "::error::${platform}: ${identity:-the identity probe did not complete}"
     exit 1

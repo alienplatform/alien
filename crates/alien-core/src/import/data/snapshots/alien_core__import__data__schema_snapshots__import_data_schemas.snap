@@ -2586,8 +2586,15 @@ expression: schemas
   },
   "gcp_sandbox": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup creates no template, so this carries only the region the stack applied in. The engine registers its own id, and the template controller reads it from that dependency.",
+    "description": "GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup creates no template, so this carries the region the stack applied in and, when preview is declared, the signing identity setup created. The engine registers its own id, and the template controller reads it from that dependency.",
     "properties": {
+      "previewServiceAccount": {
+        "description": "Service account setup created to sign the edge credential for preview. Present only when the sandbox declares preview ports; the controller carries it into the binding.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "region": {
         "description": "Region the setup stack applied in; selects the regional Agent Platform endpoint.",
         "type": "string"
