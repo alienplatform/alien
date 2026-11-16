@@ -3245,6 +3245,7 @@ fn operator_deployment_doc(
     yaml.push_str("        runAsUser: 1000\n");
     yaml.push_str("        runAsGroup: 1000\n");
     yaml.push_str("        fsGroup: 1000\n");
+    yaml.push_str("        fsGroupChangePolicy: OnRootMismatch\n");
     yaml.push_str("        seccompProfile:\n");
     yaml.push_str("          type: RuntimeDefault\n");
     yaml.push_str("      containers:\n");

@@ -2618,7 +2618,13 @@ async fn public_endpoint_health_check_succeeds(
         .and_then(|url| url.host_str().map(str::to_string))
         .filter(|host| host.parse::<IpAddr>().is_err() && !host.starts_with('['))
     {
-        builder = builder.resolve_to_addrs(&host, load_balancer_addrs);
+        // Port 0 leaves the port to the URL (scheme default or explicit): the load balancer
+        // lookup carries a default port (80) that must not override an https URL's 443.
+        let pinned = load_balancer_addrs
+            .iter()
+            .map(|addr| SocketAddr::new(addr.ip(), 0))
+            .collect::<Vec<_>>();
+        builder = builder.resolve_to_addrs(&host, &pinned);
     }
     let client = match builder.build() {
         Ok(client) => client,
@@ -3670,6 +3676,28 @@ mod tests {
         assert!(
             public_endpoint_health_check_succeeds(&url, "/health", &[*server.address()]).await,
             "pinned to the load balancer address the probe succeeds with the public Host"
+        );
+    }
+
+    /// The load balancer lookup of a bare IP or host name carries port 80; the probe must still
+    /// connect to the port of the public URL (443 for https).
+    #[tokio::test]
+    async fn health_check_pin_uses_the_url_port_not_the_lookup_port() {
+        let server = MockServer::start_async().await;
+        let _ready = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/health");
+                then.status(200).body("ok");
+            })
+            .await;
+        let url = format!("http://app.generated.invalid:{}", server.port());
+        let (_, lookup_port) = dns_lookup_target("127.0.0.1");
+        assert_eq!(lookup_port, 80);
+        let lookup_addr = SocketAddr::new(server.address().ip(), lookup_port);
+
+        assert!(
+            public_endpoint_health_check_succeeds(&url, "/health", &[lookup_addr]).await,
+            "the pinned address must not force the lookup's port 80 onto the URL"
         );
     }
 
