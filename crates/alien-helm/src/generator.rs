@@ -8368,6 +8368,9 @@ fn gitops_values(indent: usize) -> String {
   enrollmentCode: replace-with-the-enrollment-code
   deploymentId: dep_replace_me
   audience: https://manager.example.com
+# The deployment's resource prefix, as the manager reports it. The Operator names the
+# service accounts from it; if it differs from this value the deployment stays provisioning.
+serviceAccountPrefix: replace-with-the-resource-prefix
 # The Terraform module's chart_infrastructure_json output.
 infrastructure: {}
 "#;
@@ -8443,10 +8446,13 @@ kind: Application
 metadata:
   name: {chart_name}
   namespace: argocd
-  # Without this finalizer, deleting the Application removes only the Application (and the
-  # chart's pre-delete cleanup), and the chart's own objects stay in the namespace.
+  # Without the first finalizer, deleting the Application leaves the chart's own objects in
+  # the namespace. The second makes Argo CD run the chart's PreDelete cleanup on delete; an
+  # Application that lists only the first can lose it on a hard refresh or re-apply, and the
+  # delete then skips the cleanup.
   finalizers:
     - resources-finalizer.argocd.argoproj.io
+    - pre-delete-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:

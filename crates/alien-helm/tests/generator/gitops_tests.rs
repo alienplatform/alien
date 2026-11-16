@@ -225,6 +225,19 @@ fn the_argo_example_installs_with_its_own_values() {
         application["spec"]["destination"]["namespace"],
         application["spec"]["source"]["chart"]
     );
+    let finalizers: Vec<&str> = application["metadata"]["finalizers"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|f| f.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        finalizers,
+        [
+            "resources-finalizer.argocd.argoproj.io",
+            "pre-delete-finalizer.argocd.argoproj.io"
+        ]
+    );
     let values = &application["spec"]["source"]["helm"]["valuesObject"];
     assert_example_values_are_the_install_values(values);
     let rendered = test_utils::helm_template(&chart, Some(&to_yaml(values)));
@@ -245,7 +258,10 @@ fn assert_example_values_are_the_install_values(values: &serde_yaml::Value) {
         .keys()
         .map(|key| key.as_str().unwrap())
         .collect();
-    assert_eq!(keys, ["management", "infrastructure"]);
+    assert_eq!(
+        keys,
+        ["management", "serviceAccountPrefix", "infrastructure"]
+    );
     let management: Vec<&str> = values["management"]
         .as_mapping()
         .unwrap()
