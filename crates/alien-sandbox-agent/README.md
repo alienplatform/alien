@@ -597,7 +597,10 @@ is read as "this is not an AWS service" for those requests only. It never excuse
 with a body, a redirect or a server error fails whatever the headers say, and every probe is
 judged on its own reply. A request that could not be made for a local reason (out of file
 descriptors, an unsupported address family) fails the check; only a refused connection, a
-timeout and a missing route count as nothing answering. A reply has to start with `HTTP/`.
+timeout and a missing route count as nothing answering. A reply has to start with `HTTP/` and has
+to be complete: exactly `Content-Length` bytes of body, a chunked body with its terminating chunk,
+or a clean end of stream. A read error, a stall or a short body after the headers fails the check,
+for every probe.
 
 This check has been exercised on EKS. GKE and AKS with gateway egress have not been run on a
 real cluster yet; their handling is covered by tests that use reply shapes from the providers'

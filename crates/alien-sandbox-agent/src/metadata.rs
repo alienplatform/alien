@@ -469,10 +469,8 @@ fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &st
         return broken("the request could not be sent");
     }
     let mut raw = Vec::new();
-    // A timeout or reset after partial data still leaves what arrived to inspect.
-    let read = (&stream).take(64 * 1024).read_to_end(&mut raw);
-    let text = String::from_utf8_lossy(&raw);
-    let Some((head, body)) = text.split_once("\r\n\r\n") else {
+    let read = (&stream).take(MAX_REPLY as u64).read_to_end(&mut raw);
+    let Some(split) = raw.windows(4).position(|window| window == b"\r\n\r\n") else {
         return match read {
             Err(error)
                 if matches!(
@@ -485,17 +483,96 @@ fn exchange(address: SocketAddr, method: &str, path: &str, headers: &[(&str, &st
             _ => broken("an incomplete or unparseable reply"),
         };
     };
+    let head = String::from_utf8_lossy(&raw[..split]).to_string();
+    let body_bytes = &raw[split + 4..];
     let status_line = head.lines().next().unwrap_or("");
     if !status_line.starts_with("HTTP/") {
         return broken("an unparseable status line");
     }
-    match status_line
+    let Some(code) = status_line
         .split_whitespace()
         .nth(1)
         .and_then(|code| code.parse::<u16>().ok())
-    {
-        Some(code) => Reply::Status(code, body.to_string(), head.to_string()),
-        None => broken("an unparseable status line"),
+    else {
+        return broken("an unparseable status line");
+    };
+    // A reply counts only when it is complete. When more than the read limit arrived the rest is
+    // not read on purpose, and the reply is judged on what came (data stays data).
+    let limit_reached = raw.len() >= MAX_REPLY;
+    if !limit_reached {
+        // A read error or timeout after the headers means the body may be cut off.
+        if let Err(error) = read {
+            return Reply::Broken(format!("the reply was cut off after its headers ({error})"));
+        }
+        let body_complete = match framing(&head) {
+            Framing::Length(Some(length)) => body_bytes.len() == length,
+            Framing::Length(None) => true, // delimited by a clean end of stream
+            Framing::Chunked => dechunk(body_bytes).is_some(),
+            Framing::Invalid => false,
+        };
+        if !body_complete {
+            return broken("a body that does not match its declared framing");
+        }
+    }
+    let body = match framing(&head) {
+        Framing::Chunked if !limit_reached => dechunk(body_bytes).unwrap_or_default(),
+        _ => body_bytes.to_vec(),
+    };
+    Reply::Status(code, String::from_utf8_lossy(&body).to_string(), head)
+}
+
+/// The most of a reply that is read.
+const MAX_REPLY: usize = 64 * 1024;
+
+enum Framing {
+    /// `Content-Length` (or none: the body runs to the end of the stream).
+    Length(Option<usize>),
+    Chunked,
+    /// A `Content-Length` that is not a number, or two that disagree.
+    Invalid,
+}
+
+fn framing(head: &str) -> Framing {
+    let mut length = None;
+    let mut chunked = false;
+    for line in head.lines().skip(1) {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let (name, value) = (name.trim().to_ascii_lowercase(), value.trim());
+        if name == "content-length" {
+            match value.parse::<usize>() {
+                Ok(parsed) if length.is_none() || length == Some(parsed) => length = Some(parsed),
+                _ => return Framing::Invalid,
+            }
+        } else if name == "transfer-encoding" && value.to_ascii_lowercase().contains("chunked") {
+            chunked = true;
+        }
+    }
+    if chunked {
+        Framing::Chunked
+    } else {
+        Framing::Length(length)
+    }
+}
+
+/// The body of a chunked reply, or `None` when it is malformed or has no terminating chunk.
+fn dechunk(mut raw: &[u8]) -> Option<Vec<u8>> {
+    let mut body = Vec::new();
+    loop {
+        let end = raw.windows(2).position(|window| window == b"\r\n")?;
+        let size_line = std::str::from_utf8(&raw[..end]).ok()?;
+        let size = usize::from_str_radix(size_line.split(';').next()?.trim(), 16).ok()?;
+        raw = &raw[end + 2..];
+        if size == 0 {
+            // Optional trailers, then the blank line that ends the message.
+            return (raw == b"\r\n" || raw.ends_with(b"\r\n\r\n")).then_some(body);
+        }
+        if raw.len() < size + 2 || &raw[size..size + 2] != b"\r\n" {
+            return None;
+        }
+        body.extend_from_slice(&raw[..size]);
+        raw = &raw[size + 2..];
     }
 }
 
@@ -1183,5 +1260,114 @@ mod tests {
         for path in [named, default, empty] {
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    // A reply is only accepted when it is complete.
+    /// Sends `reply` for the first request on every connection, then either closes or stalls.
+    fn raw_server(reply: &'static [u8], stall: bool) -> SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for mut stream in listener.incoming().flatten() {
+                let mut buffer = [0; 2048];
+                let _ = stream.read(&mut buffer);
+                let _ = stream.write_all(reply);
+                if stall {
+                    held.push(stream);
+                }
+            }
+        });
+        address
+    }
+
+    #[test]
+    fn a_body_shorter_than_its_content_length_fails_closed_after_a_close() {
+        // The listing declares 22 bytes, sends `placement/` and closes.
+        let address = raw_server(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 22\r\n\r\nplacement/",
+            false,
+        );
+        assert!(check(address)
+            .unwrap_err()
+            .unexpected
+            .unwrap()
+            .contains("declared framing"));
+    }
+
+    #[test]
+    fn a_body_shorter_than_its_content_length_fails_closed_after_a_stall() {
+        let address = raw_server(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 22\r\n\r\nplacement/",
+            true,
+        );
+        assert!(check(address)
+            .unwrap_err()
+            .unexpected
+            .unwrap()
+            .contains("cut off"));
+    }
+
+    #[test]
+    fn a_chunked_body_without_its_terminating_chunk_fails_closed() {
+        let address = raw_server(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\na\r\nplacement/\r\n",
+            false,
+        );
+        assert!(check(address)
+            .unwrap_err()
+            .unexpected
+            .unwrap()
+            .contains("declared framing"));
+        let address = raw_server(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\na\r\nplacement/\r\n",
+            true,
+        );
+        assert!(check(address).unwrap_err().unexpected.is_some());
+    }
+
+    #[test]
+    fn a_refusal_with_a_cut_off_body_fails_closed_too() {
+        // Every probe, not only the listing: a 404 that declares more than it sends.
+        let address = raw_server(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 50\r\n\r\nno",
+            false,
+        );
+        assert!(check(address).unwrap_err().unexpected.is_some());
+    }
+
+    #[test]
+    fn complete_replies_still_pass() {
+        // Content-Length exactly met, a chunked 404 with its terminator, and a body to the end of
+        // the stream with no length.
+        for reply in [
+            &b"HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\nno"[..],
+            b"HTTP/1.1 404 Not Found\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nno\r\n0\r\n\r\n",
+            b"HTTP/1.0 404 Not Found\r\n\r\nno",
+        ] {
+            assert_eq!(check(raw_server(reply, false)), Ok(()), "{reply:?}");
+        }
+    }
+
+    #[test]
+    fn a_complete_chunked_listing_is_read_as_a_list() {
+        let address = raw_server(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1a\r\nplacement/\nservices/\ntags/\r\n0\r\n\r\n",
+            false,
+        );
+        // The unauthenticated listing is this server's only reply: the extra entry fails it.
+        assert_eq!(check(address).unwrap_err().path, LISTING);
+    }
+
+    #[test]
+    fn dechunk_reads_chunks_and_rejects_malformed_input() {
+        assert_eq!(dechunk(b"3\r\nabc\r\n0\r\n\r\n"), Some(b"abc".to_vec()));
+        assert_eq!(
+            dechunk(b"3\r\nabc\r\n0\r\nX-T: 1\r\n\r\n"),
+            Some(b"abc".to_vec())
+        );
+        assert_eq!(dechunk(b"3\r\nabc\r\n"), None);
+        assert_eq!(dechunk(b"zz\r\nabc\r\n0\r\n\r\n"), None);
+        assert_eq!(dechunk(b"5\r\nabc\r\n0\r\n\r\n"), None);
     }
 }
