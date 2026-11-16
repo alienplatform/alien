@@ -1175,6 +1175,20 @@ impl TfEmitter for GcpKubernetesClusterEmitter {
     }
 }
 
+/// Azure fills in these upgrade settings on every node pool that does not set
+/// them. Stating the same values keeps the plan empty after the create without
+/// hiding a change an admin makes later.
+fn aks_default_upgrade_settings() -> hcl::Block {
+    block(
+        "upgrade_settings",
+        [
+            attr("drain_timeout_in_minutes", Expression::Number(0.into())),
+            attr("max_surge", Expression::String("10%".to_string())),
+            attr("node_soak_duration_in_minutes", Expression::Number(0.into())),
+        ],
+    )
+}
+
 impl TfEmitter for AzureKubernetesClusterEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let label = required_label(ctx)?;
@@ -1187,6 +1201,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                 Expression::Number(hcl::Number::from(node_pool.node_count)),
             ),
             attr("vm_size", Expression::String(node_pool.vm_size.to_string())),
+            nested(aks_default_upgrade_settings()),
         ];
         if let Some(network_label) = default_network_label(ctx) {
             default_node_pool.push(attr(
@@ -1338,6 +1353,7 @@ impl TfEmitter for AzureKubernetesClusterEmitter {
                         "workload_runtime",
                         Expression::String("KataVmIsolation".to_string()),
                     ),
+                    nested(aks_default_upgrade_settings()),
                 ],
             ));
         }

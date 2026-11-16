@@ -1681,6 +1681,59 @@ fn eks_turns_on_network_policy_enforcement_only_when_the_stack_has_a_sandbox() {
     );
 }
 
+/// Azure fills in these node pool upgrade settings when a pool does not set
+/// them, so the generated pools state them. Otherwise every plan after the
+/// create shows the settings being removed.
+#[test]
+fn aks_node_pools_state_the_azure_default_upgrade_settings() {
+    use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "registry.example.com/agent:latest".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("aks-upgrade".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Aks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Live)
+        .build();
+    let module = render(&stack, TerraformTarget::Aks, StackSettings::default());
+    let rendered = whole_module(&module);
+    let compact = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let settings = "upgrade_settings { drain_timeout_in_minutes = 0 max_surge = \"10%\" node_soak_duration_in_minutes = 0 }";
+
+    let cluster = rendered
+        .split("resource \"azurerm_kubernetes_cluster\"")
+        .nth(1)
+        .expect("cluster resource");
+    let cluster = cluster.split("\nresource ").next().unwrap();
+    let pool_start = cluster.find("default_node_pool {").expect("default pool");
+    let default_pool = &cluster[pool_start..];
+    let default_pool = &default_pool[..default_pool.find("\n  }\n").unwrap_or(default_pool.len())];
+    assert!(compact(default_pool).contains(settings), "{default_pool}");
+
+    let kata = rendered
+        .split("resource \"azurerm_kubernetes_cluster_node_pool\"")
+        .nth(1)
+        .expect("kata pool");
+    let kata = kata.split("\nresource ").next().unwrap();
+    assert!(compact(kata).contains(settings), "{kata}");
+}
+
 #[test]
 fn aks_adds_a_kata_node_pool_only_when_the_stack_has_a_sandbox() {
     use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
