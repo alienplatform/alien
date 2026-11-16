@@ -9,8 +9,8 @@
 
 use super::*;
 use alien_core::{
-    CapacityGroup, ComputeCluster, Container, ContainerCode, KubernetesClusterOwnership, KubernetesClusterSettings,
-    KubernetesSettings, PermissionProfile, ResourceSpec, Storage, Vault,
+    CapacityGroup, ComputeCluster, Container, ContainerCode, KubernetesClusterOwnership,
+    KubernetesClusterSettings, KubernetesSettings, PermissionProfile, ResourceSpec, Storage, Vault,
 };
 use alien_terraform::{TerraformOptions, TerraformTarget, TfRegistry};
 use std::collections::BTreeSet;
@@ -48,7 +48,7 @@ enum Format {
 /// A stack as a real app declares it: a public container, a bucket, a vault and an explicit
 /// compute cluster. (A database is not here: its Terraform emitters are registered by embedders,
 /// so the built-in registry binds one to the installer and registers nothing for it.)
-/// An explicit compute cluster 
+/// An explicit compute cluster
 fn source_stack() -> Stack {
     let container = Container::new("web".to_string())
         .code(ContainerCode::Image {
@@ -127,11 +127,7 @@ fn cloud(format: Format) -> Platform {
 
 /// The stack as the CLI prepares it before rendering a setup artifact: template preflights, then
 /// mutations for the deployment's settings.
-async fn prepared_for_render(
-    source: &Stack,
-    format: Format,
-    settings: &StackSettings,
-) -> Stack {
+async fn prepared_for_render(source: &Stack, format: Format, settings: &StackSettings) -> Stack {
     let mut stack = source.clone();
     alien_core::remove_off_platform_gated_resources(&mut stack, Platform::Kubernetes, None);
     let runner = alien_preflights::runner::PreflightRunner::new();
@@ -176,13 +172,19 @@ fn collect_json_entries(value: &serde_json::Value, found: &mut Vec<(String, Stri
             }
             map.values().for_each(|v| collect_json_entries(v, found));
         }
-        serde_json::Value::Array(items) => items.iter().for_each(|v| collect_json_entries(v, found)),
+        serde_json::Value::Array(items) => {
+            items.iter().for_each(|v| collect_json_entries(v, found))
+        }
         _ => {}
     }
 }
 
 /// The registration a Terraform module sends: the entries of its `deployment_resources` local.
-fn terraform_registration(prepared: &Stack, target: TerraformTarget, settings: &StackSettings) -> Vec<(String, String)> {
+fn terraform_registration(
+    prepared: &Stack,
+    target: TerraformTarget,
+    settings: &StackSettings,
+) -> Vec<(String, String)> {
     let registry = TfRegistry::built_in();
     let module = alien_terraform::generate_terraform_module(
         prepared,
@@ -261,7 +263,11 @@ fn collect_hcl_entries(expression: &hcl::Expression, found: &mut Vec<(String, St
 
 /// The registration a CloudFormation template sends: the `Resources` its registration custom
 /// resource carries.
-fn cloudformation_registration(prepared: &Stack, source: &Stack, settings: &StackSettings) -> Vec<(String, String)> {
+fn cloudformation_registration(
+    prepared: &Stack,
+    source: &Stack,
+    settings: &StackSettings,
+) -> Vec<(String, String)> {
     let registry = alien_cloudformation::CfRegistry::built_in();
     let template = alien_cloudformation::generate_cloudformation_template(
         prepared,
@@ -369,4 +375,50 @@ async fn every_kubernetes_setup_registers_what_the_manager_expects() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Customers already hold modules generated before this rule moved into one place (a GKE module
+/// from the 1.0.459 release is one). They never registered a `compute` for a Kubernetes target,
+/// and the manager must accept exactly what they send, without regenerating them. The ids below
+/// are the ones such a module registers for a GKE cluster that already exists, written out rather
+/// than generated so a later generator change cannot move them.
+#[tokio::test]
+async fn a_module_generated_before_the_shared_rule_still_registers() {
+    let source = source_stack();
+    let settings = settings(KubernetesClusterOwnership::Existing);
+    let registered: Vec<(String, String)> = [
+        ("assets", "storage"),
+        ("app-secrets", "vault"),
+        ("kubernetes", "kubernetes-cluster"),
+        ("app-sa", "service-account"),
+        ("enable-cloud-quotas", "service_activation"),
+        ("enable-cloud-storage", "service_activation"),
+        ("enable-compute-engine", "service_activation"),
+        ("enable-container", "service_activation"),
+        ("enable-iam-credentials", "service_activation"),
+        ("enable-secret-manager", "service_activation"),
+    ]
+    .into_iter()
+    .map(|(id, kind)| (id.to_string(), kind.to_string()))
+    .collect();
+    let req = registration_request(
+        &registered,
+        Format::Terraform(TerraformTarget::Gke),
+        &settings,
+    );
+    let prepared = prepare_import_stack(source, &req, &req.stack_settings)
+        .await
+        .expect("the manager prepares the stack");
+    validate_import_handoff(&req, &prepared)
+        .expect("a module that registers no compute must be accepted");
+    // The compute cluster stays declared, Frozen and unregistered: the executor seeds it for the
+    // Operator's Kubernetes controller (see `imported_kubernetes_compute_retries_namespace_verification`
+    // in alien-infra, which continues an imported Kubernetes state that has none), so provisioning
+    // never asks a cloud controller to create it.
+    let compute = prepared
+        .resources
+        .get("compute")
+        .expect("the stack still declares its compute cluster");
+    assert_eq!(compute.lifecycle, ResourceLifecycle::Frozen);
+    assert!(!req.resources.iter().any(|r| r.id == "compute"));
 }

@@ -297,9 +297,10 @@ fn replication_resources(
         }
     }
     if let Some(input_id) = from_input {
-        let input = crate::generator::stack_inputs_for_platform(ctx.stack, deployment_platform(ctx))
-            .into_iter()
-            .find(|input| input.id == input_id);
+        let input =
+            crate::generator::stack_inputs_for_platform(ctx.stack, deployment_platform(ctx))
+                .into_iter()
+                .find(|input| input.id == input_id);
         if let Some(input) = input {
             if input.kind != alien_core::StackInputKind::StringList {
                 return Err(alien_error::AlienError::new(
@@ -557,7 +558,10 @@ pub(crate) fn replication_slot_region(
         "Fn::Split",
         CfExpression::list([
             CfExpression::from(","),
-            CfExpression::join(",", CfExpression::list(std::iter::once(first).chain(padding))),
+            CfExpression::join(
+                ",",
+                CfExpression::list(std::iter::once(first).chain(padding)),
+            ),
         ]),
     )]);
     CfExpression::object([(

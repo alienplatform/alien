@@ -385,15 +385,7 @@ mod tests {
             assert!(ok.parse::<ValueScope>().is_ok(), "{ok}");
         }
         for bad in [
-            "",
-            "dep:",
-            "dep:a:b",
-            "dep:a/b",
-            "other:x",
-            "link:",
-            "reg:a:b",
-            "dep_x",
-            "dep:a b",
+            "", "dep:", "dep:a:b", "dep:a/b", "other:x", "link:", "reg:a:b", "dep_x", "dep:a b",
         ] {
             assert!(bad.parse::<ValueScope>().is_err(), "{bad}");
         }
