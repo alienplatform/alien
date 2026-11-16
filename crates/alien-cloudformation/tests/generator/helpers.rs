@@ -103,7 +103,7 @@ pub fn try_render_built_ins(
     description: &str,
 ) -> Result<CfTemplate> {
     let registry = CfRegistry::built_in();
-    generate_cloudformation_template(
+    let template = generate_cloudformation_template(
         stack,
         CloudFormationOptions {
             pins: alien_core::SetupPins::compiled_in(),
@@ -118,7 +118,8 @@ pub fn try_render_built_ins(
             description: Some(description.to_string()),
             management_trust: Default::default(),
         },
-    )
+    )?;
+    Ok(scan_template(template))
 }
 
 /// The registration mode the `.enabled()` tests render under: the custom
