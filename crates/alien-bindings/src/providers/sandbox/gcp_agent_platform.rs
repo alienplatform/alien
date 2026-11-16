@@ -95,6 +95,10 @@ const JOB_START: &str = "sandbox.jobStart";
 const JOB_POLL: &str = "sandbox.jobPoll";
 const JOB_CANCEL: &str = "sandbox.jobCancel";
 const TERMINATE: &str = "sandbox.terminate";
+/// Where `pause` leaves the generation the sandbox had, inside the sandbox. A resume reads it back,
+/// so a pause in one process and a resume in another compare the same two things. A replaced
+/// container starts from its image and has no such file.
+const PAUSE_MARKER: &str = "/.alien-pause-generation";
 const PAUSE: &str = "sandbox.pause";
 const RESUME: &str = "sandbox.resume";
 
@@ -161,12 +165,6 @@ pub struct GcpAgentPlatformSandbox {
     /// Granted capabilities, per sandbox and port. Only the grant is cached: the routing token
     /// and edge credential are short-lived and read fresh for every call.
     grants: std::sync::Mutex<std::collections::HashMap<(String, u16), CachedGrant>>,
-    /// The generation each sandbox this binding paused had just before the pause. `resume` compares
-    /// the sandbox it wakes against it, so a container the service replaced is reported as lost
-    /// memory instead of being handed back as the one that was paused. Held in this process only:
-    /// a resume from another process has nothing to compare, and its caller compares the
-    /// generation `get` reported before the pause.
-    paused_generations: std::sync::Mutex<std::collections::HashMap<String, u64>>,
 }
 
 /// Mints the credential the sandbox edge requires on every ingress request: a JWT signed by a
@@ -393,7 +391,6 @@ impl GcpAgentPlatformSandbox {
             preview_signer: None,
             preview_ports: Vec::new(),
             grants: Default::default(),
-            paused_generations: Default::default(),
         }
     }
 
@@ -1341,40 +1338,34 @@ impl Sandbox for GcpAgentPlatformSandbox {
             }));
         }
 
-        // Read before the call: after a pause the agent is not reachable to ask.
+        // Read and written before the call: after a pause the agent is not reachable to ask. The
+        // marker lives in the sandbox, so whichever process resumes it can compare.
         let generation = self.probe_agent(PAUSE, sandbox_id).await?;
-        self.paused_generations
-            .lock()
-            .expect("paused generations lock")
-            .insert(sandbox_id.to_string(), generation);
+        self.write_files(
+            sandbox_id,
+            BTreeMap::from([(
+                PAUSE_MARKER.to_string(),
+                generation.to_string().into_bytes(),
+            )]),
+        )
+        .await?;
 
-        let paused = async {
-            let started = self
-                .client
-                .pause_sandbox(&self.engine, sandbox_id)
-                .await
-                .context(ErrorData::SandboxCommandFailed {
-                    failure: "pauseFailed".to_string(),
-                    reason: format!("{PAUSE}: sandbox '{sandbox_id}' could not be paused"),
-                })?;
-            self.await_operation(PAUSE, started).await?;
-            self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await
-        }
-        .await;
-        if paused.is_err() {
-            // Not paused, so nothing waits to be compared on a later resume.
-            self.paused_generations
-                .lock()
-                .expect("paused generations lock")
-                .remove(sandbox_id);
-        }
-        paused
+        let started = self
+            .client
+            .pause_sandbox(&self.engine, sandbox_id)
+            .await
+            .context(ErrorData::SandboxCommandFailed {
+                failure: "pauseFailed".to_string(),
+                reason: format!("{PAUSE}: sandbox '{sandbox_id}' could not be paused"),
+            })?;
+        self.await_operation(PAUSE, started).await?;
+        self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await
     }
 
     /// Wakes a paused sandbox: `:resume`, then wait for `STATE_RUNNING` and for the agent to answer.
     ///
     /// Fails, without a retry being worth making, when the container that answers is not the one
-    /// this binding paused. Google has reported a resumed sandbox with a new container
+    /// `pause` left its generation in. Google has reported a resumed sandbox with a new container
     /// before, and what the sandbox held is gone then; handing that back as a kept sandbox would
     /// lose state silently.
     async fn resume(&self, sandbox_id: &str) -> Result<()> {
@@ -1439,24 +1430,25 @@ impl Sandbox for GcpAgentPlatformSandbox {
             .await?;
         let generation = self.settle(sandbox_id).await?;
 
+        // The container that answers must be the one that was paused. Its generation is compared
+        // with the one `pause` left inside the sandbox; a replaced container has no such file.
         let paused_as = self
-            .paused_generations
-            .lock()
-            .expect("paused generations lock")
-            .remove(sandbox_id);
-        match paused_as {
-            Some(before) if before != generation => Err(AlienError::new(
-                ErrorData::SandboxCommandFailed {
-                    failure: "memoryLost".to_string(),
-                    reason: format!(
-                        "{RESUME}: sandbox '{sandbox_id}' restarted while it was paused, so its \
-                         memory and running processes were lost; it is running a new container \
-                         and holds only what its image provides"
-                    ),
-                },
-            )),
-            _ => Ok(()),
+            .read_file(sandbox_id, PAUSE_MARKER)
+            .await
+            .ok()
+            .and_then(|contents| String::from_utf8(contents).ok())
+            .and_then(|text| text.trim().parse::<u64>().ok());
+        if paused_as == Some(generation) {
+            return Ok(());
         }
+        Err(AlienError::new(ErrorData::SandboxCommandFailed {
+            failure: "memoryLost".to_string(),
+            reason: format!(
+                "{RESUME}: sandbox '{sandbox_id}' restarted while it was paused, or was not paused \
+                 by this binding, so its memory and running processes cannot be confirmed kept; \
+                 it is running a container that holds only what its image provides"
+            ),
+        }))
     }
 
     async fn snapshot(&self, sandbox_id: &str) -> Result<String> {
@@ -1503,10 +1495,6 @@ impl Sandbox for GcpAgentPlatformSandbox {
             // Nothing can use a grant for a sandbox that is gone, and a long-lived binding that
             // creates sandboxes continually would otherwise hold every one it ever granted.
             self.forget_grants(sandbox_id);
-            self.paused_generations
-                .lock()
-                .expect("paused generations lock")
-                .remove(sandbox_id);
         }
         outcome
     }

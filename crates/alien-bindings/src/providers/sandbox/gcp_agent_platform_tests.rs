@@ -1548,6 +1548,8 @@ fn http_error(status: u16, message: &str) -> AlienError<AgentPlatformErrorData> 
 struct FakeSandbox {
     state: std::sync::Mutex<&'static str>,
     boot_id: std::sync::Mutex<&'static str>,
+    /// The one file the pause marker lands in; a replaced container starts without it.
+    file: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 impl FakeSandbox {
@@ -1555,7 +1557,44 @@ impl FakeSandbox {
         Arc::new(Self {
             state: std::sync::Mutex::new("STATE_RUNNING"),
             boot_id: std::sync::Mutex::new(boot_id),
+            file: std::sync::Mutex::new(None),
         })
+    }
+
+    /// What the sandbox's agent answers to the envelope `input`.
+    fn agent_reply(&self, input: &[u8]) -> ClientResult<Vec<u8>> {
+        let value: serde_json::Value = serde_json::from_slice(input).unwrap();
+        match op_of(input).as_str() {
+            "health" => Ok(health_reply_with_boot(*self.boot_id.lock().unwrap())),
+            "writeFile" => {
+                let contents = BASE64
+                    .decode(value["contentsBase64"].as_str().unwrap())
+                    .unwrap();
+                *self.file.lock().unwrap() = Some(contents);
+                Ok(Vec::new())
+            }
+            "readFile" => match self.file.lock().unwrap().as_ref() {
+                Some(contents) => Ok(serde_json::to_vec(
+                    &serde_json::json!({ "contentsBase64": BASE64.encode(contents) }),
+                )
+                .unwrap()),
+                None => Err(execute_refused()),
+            },
+            other => panic!("fake agent: unexpected op {other}"),
+        }
+    }
+
+    /// The state a sandbox paused by `pause` is in: the marker holds `boot_id`'s generation.
+    fn paused_with_marker(&self) {
+        let boot_id = *self.boot_id.lock().unwrap();
+        *self.file.lock().unwrap() = Some(generation_from_boot_id(boot_id).to_string().into_bytes());
+        self.set_state("STATE_PAUSED");
+    }
+
+    /// A container that replaced this one: another boot id, and nothing the old one wrote.
+    fn replace_container(&self, boot_id: &'static str) {
+        *self.boot_id.lock().unwrap() = boot_id;
+        *self.file.lock().unwrap() = None;
     }
 
     fn set_state(&self, state: &'static str) {
@@ -1574,14 +1613,10 @@ fn pausing_client(
     client
         .expect_get_sandbox()
         .returning(move |_, id| Ok(sandbox_in_state(id, *state.state.lock().unwrap())));
-    let boot = fake.clone();
+    let agent = fake.clone();
     client
         .expect_execute()
-        .withf(|_, _, input| op_of(input) == "health")
-        .returning(move |_, _, _| {
-            let boot_id = *boot.boot_id.lock().unwrap();
-            Ok(health_reply_with_boot(boot_id))
-        });
+        .returning(move |_, _, input| agent.agent_reply(input));
     let paused = fake.clone();
     client.expect_pause_sandbox().returning(move |_, _| {
         paused.set_state("STATE_PAUSED");
@@ -1590,7 +1625,9 @@ fn pausing_client(
     let resumed = fake.clone();
     client.expect_resume_sandbox().returning(move |_, _| {
         resumed.set_state("STATE_RUNNING");
-        *resumed.boot_id.lock().unwrap() = boot_after_resume;
+        if *resumed.boot_id.lock().unwrap() != boot_after_resume {
+            resumed.replace_container(boot_after_resume);
+        }
         Ok(done_op(serde_json::json!({})))
     });
     client
@@ -1639,6 +1676,42 @@ async fn a_resume_that_finds_a_new_container_is_an_error_not_a_kept_sandbox() {
     );
 }
 
+/// The marker lives in the sandbox, so a resume in another process compares the same thing: a
+/// sandbox paused by one binding is resumed by a second that never saw the pause, and a container
+/// replaced in between is still caught.
+#[tokio::test]
+async fn a_resume_in_another_process_still_compares_with_the_pause() {
+    for (boot_after, kept) in [("boot-a", true), ("boot-b", false)] {
+        let fake = FakeSandbox::running("boot-a");
+        let client: Arc<dyn AgentPlatformApi> = Arc::new(pausing_client(&fake, boot_after));
+
+        provider_from(client.clone())
+            .pause("s1")
+            .await
+            .expect("pause in the first process");
+        let outcome = provider_from(client).resume("s1").await;
+
+        assert_eq!(outcome.is_ok(), kept, "{outcome:?}");
+        if let Err(lost) = outcome {
+            assert_eq!(lost.code, "SANDBOX_COMMAND_FAILED", "{lost}");
+            assert!(!lost.retryable);
+        }
+    }
+}
+
+/// A sandbox with no pause marker was not paused by this binding, or lost its filesystem: its
+/// memory cannot be confirmed kept, so a resume does not claim it.
+#[tokio::test]
+async fn a_resume_without_a_pause_marker_is_not_reported_as_kept() {
+    let fake = FakeSandbox::running("boot-a");
+    fake.set_state("STATE_PAUSED");
+    let lost = provider(pausing_client(&fake, "boot-a"))
+        .resume("s1")
+        .await
+        .expect_err("nothing says the memory was kept");
+    assert_eq!(lost.code, "SANDBOX_COMMAND_FAILED", "{lost}");
+}
+
 /// `:resume` is refused with a 400 while the pause is under way; that is waited out.
 #[tokio::test]
 async fn a_resume_refused_during_pausing_is_retried() {
@@ -1655,7 +1728,7 @@ async fn a_resume_refused_during_pausing_is_retried() {
         let fake = fake.clone();
         client
             .expect_execute()
-            .returning(move |_, _, _| Ok(health_reply_with_boot(*fake.boot_id.lock().unwrap())));
+            .returning(move |_, _, input| fake.agent_reply(input));
     }
     {
         let fake = fake.clone();
@@ -1671,7 +1744,7 @@ async fn a_resume_refused_during_pausing_is_retried() {
             Ok(done_op(serde_json::json!({})))
         });
     }
-    fake.set_state("STATE_PAUSED");
+    fake.paused_with_marker();
 
     provider(client)
         .resume("s1")
@@ -1685,7 +1758,7 @@ async fn a_resume_refused_during_pausing_is_retried() {
 #[tokio::test]
 async fn a_503_while_paused_is_a_wake_in_progress_and_is_waited_out() {
     let fake = FakeSandbox::running("boot-a");
-    fake.set_state("STATE_PAUSED");
+    fake.paused_with_marker();
     let probes = Arc::new(AtomicUsize::new(0));
     let mut client = MockAgentPlatformApi::new();
     {
@@ -1707,7 +1780,8 @@ async fn a_503_while_paused_is_a_wake_in_progress_and_is_waited_out() {
     });
     {
         let probes = probes.clone();
-        client.expect_execute().returning(move |_, _, _| {
+        let fake = fake.clone();
+        client.expect_execute().returning(move |_, _, input| {
             // The proxy answers the same 503 until the agent is back.
             if probes.fetch_add(1, Ordering::SeqCst) == 0 {
                 return Err(http_error(
@@ -1715,7 +1789,7 @@ async fn a_503_while_paused_is_a_wake_in_progress_and_is_waited_out() {
                     "Sandbox environment is paused; resume has been initiated",
                 ));
             }
-            Ok(health_reply_with_boot("boot-a"))
+            fake.agent_reply(input)
         });
     }
 
