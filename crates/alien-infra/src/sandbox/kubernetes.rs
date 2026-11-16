@@ -699,6 +699,13 @@ async fn replenish_warm_pool(
             resource_id: Some(sandbox.id.clone()),
         })?;
 
+    if let Some(message) = older_cli_image_message(&sandbox.id, &idle.items) {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message,
+            resource_id: Some(sandbox.id.clone()),
+        }));
+    }
+
     // A pod whose retire write succeeded but whose delete failed is in no pool and would run
     // forever; every tick deletes the ones it finds.
     sweep_retired_pods(
@@ -1219,6 +1226,50 @@ fn sandbox_namespace(config: &alien_core::KubernetesClientConfig) -> Result<Stri
     }
 }
 
+/// The message when a pool pod's `check-staged-agent` init container could not run the staged
+/// agent: the image was built by an alien CLI from before the directory mount, so its agent
+/// staged no file at `/opt/alien/alien-sandbox-agent`. `None` when no pod shows that.
+pub(crate) fn older_cli_image_message(
+    sandbox_id: &str,
+    pods: &[k8s_openapi::api::core::v1::Pod],
+) -> Option<String> {
+    let failed = |state: &k8s_openapi::api::core::v1::ContainerState| {
+        state
+            .terminated
+            .as_ref()
+            .is_some_and(|terminated| terminated.exit_code != 0)
+            || state.waiting.as_ref().is_some_and(|waiting| {
+                matches!(
+                    waiting.reason.as_deref(),
+                    Some(
+                        "CreateContainerError"
+                            | "RunContainerError"
+                            | "StartError"
+                            | "CrashLoopBackOff"
+                    )
+                )
+            })
+    };
+    let hit = pods.iter().any(|pod| {
+        pod.status
+            .as_ref()
+            .and_then(|status| status.init_container_statuses.as_ref())
+            .into_iter()
+            .flatten()
+            .filter(|status| status.name == super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER)
+            .any(|status| {
+                status.state.as_ref().is_some_and(failed)
+                    || status.last_state.as_ref().is_some_and(failed)
+            })
+    });
+    hit.then(|| {
+        format!(
+            "sandbox {sandbox_id}: this sandbox image was built by an older alien CLI; rebuild \
+             and release it"
+        )
+    })
+}
+
 /// The message for a pod the API server refused under Pod Security, or `None` for any other
 /// refusal. A root-boot sandbox needs a namespace that admits `baseline`; without this the pool
 /// would stay empty and the only trace would be a warning per tick.
@@ -1281,6 +1332,76 @@ fn count_session_pods(pods: Vec<k8s_openapi::api::core::v1::Pod>) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use k8s_openapi::api::core::v1::{
+        ContainerState, ContainerStateTerminated, ContainerStateWaiting, ContainerStatus, Pod,
+        PodStatus,
+    };
+
+    fn pod_with_init(name: &str, state: ContainerState) -> Pod {
+        Pod {
+            status: Some(PodStatus {
+                init_container_statuses: Some(vec![ContainerStatus {
+                    name: name.to_string(),
+                    state: Some(state),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn start_error() -> ContainerState {
+        ContainerState {
+            waiting: Some(ContainerStateWaiting {
+                reason: Some("StartError".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_image_that_cannot_run_the_staged_agent_is_named_as_built_by_an_older_cli() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let message = super::older_cli_image_message("box", &[pod_with_init(check, start_error())])
+            .expect("the check failing is recognised");
+        assert!(
+            message.contains(
+                "this sandbox image was built by an older alien CLI; rebuild and release it"
+            ),
+            "{message}"
+        );
+        let exited = ContainerState {
+            terminated: Some(ContainerStateTerminated {
+                exit_code: 128,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(super::older_cli_image_message("box", &[pod_with_init(check, exited)]).is_some());
+    }
+
+    #[test]
+    fn other_start_failures_are_not_blamed_on_the_image() {
+        // The staging step failing, or the check still running or passed, says nothing about it.
+        assert!(super::older_cli_image_message(
+            "box",
+            &[pod_with_init("stage-protected-files", start_error())]
+        )
+        .is_none());
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let passed = ContainerState {
+            terminated: Some(ContainerStateTerminated {
+                exit_code: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(super::older_cli_image_message("box", &[pod_with_init(check, passed)]).is_none());
+        assert!(super::older_cli_image_message("box", &[Pod::default()]).is_none());
+    }
+
     #[test]
     fn a_pod_security_refusal_names_the_namespace_and_the_fix() {
         let refusal = AlienError::new(ErrorData::CloudPlatformError {
@@ -1314,7 +1435,6 @@ mod tests {
     }
 
     use super::*;
-    use k8s_openapi::api::core::v1::Pod;
 
     /// A deleted pod keeps its idle label until its grace period ends. It must not count toward
     /// the pool, or a pool of terminating pods would never be refilled.

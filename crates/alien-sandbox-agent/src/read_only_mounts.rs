@@ -18,7 +18,8 @@ use std::{
 /// First argument that switches the binary into [`stage`] (run by the init container).
 pub use alien_core::sandbox_image::STAGE_PROTECTED_FILES_ARGUMENT as STAGE_ARGUMENT;
 use alien_core::sandbox_image::{
-    STAGED_AGENT_FILE as STAGED_BINARY, STAGED_METADATA_NAME as STAGED_METADATA,
+    STAGED_AGENT_FILE as STAGED_BINARY, STAGED_AGENT_NAME as LEGACY_STAGED_BINARY,
+    STAGED_METADATA_NAME as STAGED_METADATA,
 };
 
 /// Called while single-threaded, before the supervisor's capabilities are reduced.
@@ -99,11 +100,20 @@ pub fn stage(destination: &Path, metadata: &Path) -> io::Result<()> {
     if fs::symlink_metadata(&staged).is_ok() {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            format!("{} already exists in the image's metadata", staged.display()),
+            format!(
+                "{} already exists in the image's metadata",
+                staged.display()
+            ),
         ));
     }
-    fs::copy(std::env::current_exe()?, &staged)?;
-    fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))
+    let binary = std::env::current_exe()?;
+    fs::copy(&binary, &staged)?;
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))?;
+    // The layout of earlier releases: an Operator of that release mounts this file over the
+    // image's own agent path. Nothing of this release reads it.
+    let legacy = destination.join(LEGACY_STAGED_BINARY);
+    fs::copy(&binary, &legacy)?;
+    fs::set_permissions(&legacy, fs::Permissions::from_mode(0o755))
 }
 
 fn copy_tree(source: &Path, target: &Path) -> io::Result<()> {
@@ -164,7 +174,12 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("does not run from inside"), "{error}");
-        assert!(check(&table("ro"), Path::new("/opt/alien/x/agent"), Path::new(META)).is_err());
+        assert!(check(
+            &table("ro"),
+            Path::new("/opt/alien/x/agent"),
+            Path::new(META)
+        )
+        .is_err());
     }
 
     #[test]
@@ -208,6 +223,9 @@ mod tests {
         fs::write(meta.join("sub/x"), b"x").unwrap();
         stage(&out, &meta).unwrap();
         assert!(out.join(STAGED_METADATA).join(STAGED_BINARY).is_file());
+        // The earlier layout is still written, so an Operator of an earlier release can run an
+        // image built with this agent.
+        assert!(out.join(LEGACY_STAGED_BINARY).is_file());
         let staged = out.join(STAGED_METADATA).join("image-command.json");
         assert_eq!(fs::read(&staged).unwrap(), b"{}");
         assert_eq!(

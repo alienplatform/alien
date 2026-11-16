@@ -239,7 +239,8 @@ pub(crate) fn sandbox_pod_with_labels(
                     }))
                     .collect(),
             ),
-            init_containers: root_boot.then(|| vec![stage_protected_files(&image)]),
+            init_containers: root_boot
+                .then(|| vec![stage_protected_files(&image), check_staged_agent(&image)]),
             containers: vec![Container {
                 name: "sandbox".to_string(),
                 image: Some(image.clone()),
@@ -337,6 +338,10 @@ const PROTECTED_VOLUME: &str = "alien-protected";
 const PROTECTED_VOLUME_LIMIT: &str = "256Mi";
 const PROTECTED_STAGING_PATH: &str = "/stage";
 const PROTECTED_METADATA_PATH: &str = "/opt/alien";
+const STAGE_CONTAINER: &str = "stage-protected-files";
+/// Name of the init container that runs the staged agent once before the sandbox container does.
+/// The Operator reads a failure of this container as an image built by an older alien CLI.
+pub(crate) const CHECK_STAGED_AGENT_CONTAINER: &str = "check-staged-agent";
 
 /// A pod's default seccomp profile blocks `unshare`, so the agent cannot protect its own files
 /// with a private mount namespace here. The pod does it: this init container copies the agent
@@ -347,7 +352,7 @@ const PROTECTED_METADATA_PATH: &str = "/opt/alien";
 /// holds no capability, cannot gain one, and has a read-only root filesystem.
 fn stage_protected_files(image: &str) -> Container {
     Container {
-        name: "stage-protected-files".to_string(),
+        name: STAGE_CONTAINER.to_string(),
         image: Some(image.to_string()),
         command: Some(vec![
             alien_core::sandbox_image::AGENT_PATH.to_string(),
@@ -379,6 +384,22 @@ fn stage_protected_files(image: &str) -> Container {
             ..Default::default()
         }),
         ..Default::default()
+    }
+}
+
+/// Runs the staged agent once (it prints its uid and gid and exits). An image built by an older
+/// alien CLI stages the agent at the top of the volume only, so the file the sandbox container
+/// starts is missing and this container fails by itself, ahead of the sandbox container, with a
+/// name that says why. The staging step cannot report it: it is that older agent and succeeds.
+fn check_staged_agent(image: &str) -> Container {
+    Container {
+        name: CHECK_STAGED_AGENT_CONTAINER.to_string(),
+        command: Some(vec![
+            alien_core::sandbox_image::STAGED_AGENT_PATH.to_string(),
+            alien_core::sandbox_image::AGENT_IDENTITY_ARGUMENT.to_string(),
+        ]),
+        volume_mounts: Some(protected_mounts()),
+        ..stage_protected_files(image)
     }
 }
 
@@ -920,7 +941,20 @@ mod tests {
             container.command,
             Some(vec!["/opt/alien/alien-sandbox-agent".to_string()])
         );
-        let init = &spec.init_containers.expect("the staging init container")[0];
+        let inits = spec.init_containers.expect("the init containers");
+        let check = &inits[1];
+        assert_eq!(check.name, CHECK_STAGED_AGENT_CONTAINER);
+        assert_eq!(
+            check.command,
+            Some(vec![
+                "/opt/alien/alien-sandbox-agent".to_string(),
+                "identity".to_string()
+            ])
+        );
+        let check_mount = &check.volume_mounts.as_ref().expect("check mounts")[0];
+        assert_eq!(check_mount.mount_path, "/opt/alien");
+        assert_eq!(check_mount.read_only, Some(true));
+        let init = &inits[0];
         let init_security = init.security_context.as_ref().expect("init security");
         assert_eq!(init_security.read_only_root_filesystem, Some(true));
         assert_eq!(init_security.allow_privilege_escalation, Some(false));
@@ -956,7 +990,10 @@ mod tests {
                 assert_ne!(variable.name, "ALIEN_SANDBOX_PROTECTED_MOUNTS");
             }
             assert!(spec.init_containers.is_none());
-            assert!(container.command.is_none(), "a non-root pod runs the image's own entrypoint");
+            assert!(
+                container.command.is_none(),
+                "a non-root pod runs the image's own entrypoint"
+            );
             assert_eq!(container.volume_mounts.as_ref().unwrap().len(), 2);
         }
     }
