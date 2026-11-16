@@ -262,6 +262,7 @@ async fn copy_image_into_own_project(
     ctx: &ResourceControllerContext<'_>,
     sandbox_id: &str,
     body: &mut SandboxEnvironmentTemplate,
+    created_repository: &mut Option<String>,
 ) -> Result<()> {
     let Some(spec) = body
         .custom_container_environment
@@ -302,7 +303,11 @@ async fn copy_image_into_own_project(
                     resource_id: Some(sandbox_id.to_string()),
                 })
             })?;
-    ensure_image_repository(ctx, sandbox_id, &repository).await?;
+    // Recorded as soon as it exists, so a teardown removes what this deployment created even
+    // when the copy that follows fails.
+    if ensure_image_repository(ctx, sandbox_id, &repository).await? {
+        *created_repository = Some(repository.clone());
+    }
 
     let access_token = gcp_config
         .get_bearer_token("https://www.googleapis.com/auth/cloud-platform")
@@ -360,13 +365,14 @@ async fn copy_image_into_own_project(
     Ok(())
 }
 
-/// Create the sandbox's dedicated repository if it is not there. Untagged versions are cleaned up
+/// Create the sandbox's dedicated repository if it is not there; true when this call created it.
+/// Untagged versions are cleaned up
 /// after a week; every copied digest is tagged, so a live template's digest is never cleaned.
 async fn ensure_image_repository(
     ctx: &ResourceControllerContext<'_>,
     sandbox_id: &str,
     repository: &str,
-) -> Result<()> {
+) -> Result<bool> {
     use alien_gcp_clients::artifactregistry::{
         CleanupPolicy, CleanupPolicyAction, CleanupPolicyCondition, CleanupPolicyConditionTagState,
         Repository, RepositoryFormat,
@@ -380,7 +386,7 @@ async fn ensure_image_repository(
         .get_repository(project.clone(), region.clone(), repository.to_string())
         .await
     {
-        Ok(_) => return Ok(()),
+        Ok(_) => return Ok(false),
         Err(e)
             if matches!(
                 e.error,
@@ -448,7 +454,7 @@ async fn ensure_image_repository(
             .await
             .is_ok()
         {
-            return Ok(());
+            return Ok(true);
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
@@ -531,6 +537,11 @@ pub struct GcpAgentPlatformTemplateController {
     /// and carried into the binding so a deployed workload can sign.
     #[serde(default)]
     pub(crate) preview_service_account: Option<String>,
+    /// Image repository this controller created (the direct install path). Setup-created
+    /// repositories (Terraform) are not recorded: their owner removes them. Teardown deletes
+    /// exactly this one, so nothing of ours stays in the customer's project.
+    #[serde(default)]
+    pub(crate) created_image_repository: Option<String>,
 }
 
 #[controller]
@@ -567,7 +578,13 @@ impl GcpAgentPlatformTemplateController {
             .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
         let mut body = build_template_body(config, &display_name, ctx.deployment_config)?;
-        copy_image_into_own_project(ctx, &config.id, &mut body).await?;
+        copy_image_into_own_project(
+            ctx,
+            &config.id,
+            &mut body,
+            &mut self.created_image_repository,
+        )
+        .await?;
 
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
@@ -874,7 +891,13 @@ impl GcpAgentPlatformTemplateController {
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
         let mut body = build_template_body(config, &display_name, ctx.deployment_config)?;
-        copy_image_into_own_project(ctx, &config.id, &mut body).await?;
+        copy_image_into_own_project(
+            ctx,
+            &config.id,
+            &mut body,
+            &mut self.created_image_repository,
+        )
+        .await?;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
         let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
@@ -898,6 +921,9 @@ impl GcpAgentPlatformTemplateController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+
+        self.delete_created_image_repository(ctx, &config.id)
+            .await?;
 
         let Some(engine) = self.engine.clone() else {
             // Nothing was ever created — a delete with no parent is already done.
@@ -1005,6 +1031,53 @@ fn require_operation_name(name: Option<String>, resource_id: &str) -> Result<Str
 }
 
 impl GcpAgentPlatformTemplateController {
+    /// Delete the image repository this controller created, and only that exact one. Already gone
+    /// is done; any other refusal fails the delete so the leftover is reported, not hidden.
+    async fn delete_created_image_repository(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        sandbox_id: &str,
+    ) -> Result<()> {
+        let Some(repository) = self.created_image_repository.clone() else {
+            return Ok(());
+        };
+        let expected =
+            alien_core::gar_repository::sandbox_image_repository(ctx.resource_prefix, sandbox_id);
+        if expected.as_deref() != Some(repository.as_str()) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!("recorded image repository '{repository}' is not this sandbox's"),
+                resource_id: Some(sandbox_id.to_string()),
+            }));
+        }
+        let gcp_config = ctx.get_gcp_config()?;
+        let client = ctx
+            .service_provider
+            .get_gcp_artifact_registry_client(gcp_config)?;
+        let deleted = client
+            .delete_repository(
+                gcp_config.project_id.clone(),
+                gcp_config.region.clone(),
+                repository.clone(),
+            )
+            .await;
+        let gone = matches!(
+            &deleted,
+            Err(e) if matches!(
+                e.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            )
+        );
+        if !gone {
+            deleted.map(|_| ()).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete the sandbox image repository '{repository}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
+        }
+        info!(id = %sandbox_id, repository = %repository, "Deleted the sandbox image repository");
+        self.created_image_repository = None;
+        Ok(())
+    }
+
     fn clear_state(&mut self) {
         self.engine = None;
         self.template_id = None;
@@ -1060,6 +1133,7 @@ impl GcpAgentPlatformTemplateController {
             allow_egress: None,
             preview_ports: Vec::new(),
             preview_service_account: None,
+            created_image_repository: None,
             _internal_stay_count: None,
         }
     }
@@ -2233,9 +2307,25 @@ mod tests {
             client: Arc<MockAgentPlatformApi>,
             repository_creates: usize,
         ) -> Arc<MockPlatformServiceProvider> {
+            provider_with(client, repository_creates, false, 0)
+        }
+
+        /// `exists`: setup already created the repository (the Terraform install).
+        /// `deletes`: how many repository deletes the teardown must make.
+        fn provider_with(
+            client: Arc<MockAgentPlatformApi>,
+            repository_creates: usize,
+            exists: bool,
+            deletes: usize,
+        ) -> Arc<MockPlatformServiceProvider> {
             let mut registry = MockArtifactRegistryApi::new();
+            registry
+                .expect_delete_repository()
+                .withf(|project, _, id| project == "test-project-123" && id == "test-agent-sbx-img")
+                .times(deletes)
+                .returning(|_, _, _| Ok(Default::default()));
             // The repository is missing at first and there after its create.
-            let created = Arc::new(Mutex::new(false));
+            let created = Arc::new(Mutex::new(exists));
             let seen = created.clone();
             registry.expect_get_repository().returning(move |_, _, _| {
                 if *seen.lock().unwrap() {
@@ -2331,6 +2421,59 @@ mod tests {
                 executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m), 1)).await;
             executor.run_until_terminal().await.expect("create runs");
             assert_eq!(executor.status(), ResourceStatus::Running);
+        }
+
+        fn healthy_client() -> MockAgentPlatformApi {
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_create_template()
+                .returning(|_, _| Ok(pending_op()));
+            m.expect_get_operation().returning(|_| Ok(done_op("tpl1")));
+            m.expect_get_template()
+                .returning(|_, id| Ok(active_template(id)));
+            m.expect_list_templates()
+                .returning(|_| Ok(vec![active_template("tpl1")]));
+            m.expect_delete_template().returning(|_, _| Ok(()));
+            m
+        }
+
+        /// The direct install creates the repository, so its teardown deletes exactly that one.
+        #[tokio::test]
+        async fn deleting_the_sandbox_deletes_the_repository_it_created() {
+            let (body, _) = manifest();
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            serve_source(&source, &body);
+            serve_destination(&dest);
+            let mut executor = executor(
+                SOURCE_IMAGE,
+                &source,
+                &dest,
+                provider_with(Arc::new(healthy_client()), 1, false, 1),
+            )
+            .await;
+            executor.run_until_terminal().await.expect("create runs");
+            executor.delete().expect("delete accepted");
+            executor.run_until_terminal().await.expect("delete runs");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+        }
+
+        /// A repository setup created (Terraform) belongs to setup; the controller leaves it.
+        #[tokio::test]
+        async fn deleting_the_sandbox_leaves_a_repository_setup_created() {
+            let (body, _) = manifest();
+            let (source, dest) = (MockServer::start(), MockServer::start());
+            serve_source(&source, &body);
+            serve_destination(&dest);
+            let mut executor = executor(
+                SOURCE_IMAGE,
+                &source,
+                &dest,
+                provider_with(Arc::new(healthy_client()), 0, true, 0),
+            )
+            .await;
+            executor.run_until_terminal().await.expect("create runs");
+            executor.delete().expect("delete accepted");
+            executor.run_until_terminal().await.expect("delete runs");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
         }
 
         #[tokio::test]
