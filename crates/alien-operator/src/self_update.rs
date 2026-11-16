@@ -16,7 +16,9 @@ use alien_k8s_clients::{
     KubernetesClientConfigExt,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use k8s_openapi::{api::core::v1::Secret, ByteString};
+use k8s_openapi::{
+    api::core::v1::Secret, apimachinery::pkg::apis::meta::v1::ObjectMeta, ByteString,
+};
 use tracing::{info, warn};
 
 use crate::{
@@ -108,17 +110,18 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
     Ok(())
 }
 
-/// Keep the pull Secret of the Operator's own Deployment filled with the
-/// Operator's registry pull credential. The chart creates the Secret with the
-/// one-hour enrollment code, or with the install token of an older chart. The
+/// Keep the Operator's own pull Secret filled with the Operator's registry pull
+/// credential. The chart renders a separate bootstrap Secret from the one-hour
+/// enrollment code, or from the install token, so the first Pod can pull. The
 /// credential written here lasts as long as the daily key, so the Operator pod
 /// still pulls its image on a new node after the code or token is gone, or
-/// while the Operator is down. It runs on every sync, so a `helm upgrade` that
-/// puts the old value back is overwritten again.
+/// while the Operator is down. The chart never renders this Secret, so a GitOps
+/// tool that applies the chart again cannot put the old value back.
 ///
-/// The Secret is named by `OPERATOR_REGISTRY_SECRET`. Older charts do not set
-/// it; then the Secrets the Operator Deployment references are searched for an
-/// entry for the manager's host, and only those are rewritten.
+/// The Secret is named by `OPERATOR_REGISTRY_SECRET`; the Operator creates it
+/// when it is missing. Older charts rendered and named their own Secret, and
+/// did not set it; then the Secrets the Operator Deployment references are searched
+/// for an entry for the manager's host, and only those are rewritten.
 ///
 /// The manager keeps the install token until the Operator reports that this
 /// worked, so the outcome is kept for the next sync request.
@@ -212,8 +215,34 @@ async fn refresh_secrets(
         let failed = |message: &str| ErrorData::ConfigurationError {
             message: format!("pull Secret '{name}': {message}"),
         };
-        let secret = match client.get_secret(namespace, &name).await {
-            Ok(secret) => secret,
+        let (secret, exists) = match client.get_secret(namespace, &name).await {
+            Ok(secret) => (secret, true),
+            // The Operator's own pull Secret is not rendered by the chart: create it. A
+            // chart that applies again then has nothing of ours to overwrite.
+            Err(error)
+                if own
+                    && matches!(
+                        error.error.as_ref(),
+                        Some(KubernetesErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+            {
+                (
+                    Secret {
+                        metadata: ObjectMeta {
+                            name: Some(name.clone()),
+                            namespace: Some(namespace.to_string()),
+                            labels: Some(BTreeMap::from([(
+                                "app.kubernetes.io/managed-by".to_string(),
+                                "alien-operator".to_string(),
+                            )])),
+                            ..Default::default()
+                        },
+                        type_: Some("kubernetes.io/dockerconfigjson".to_string()),
+                        ..Default::default()
+                    },
+                    false,
+                )
+            }
             Err(error)
                 if !own
                     && matches!(
@@ -228,14 +257,20 @@ async fn refresh_secrets(
         if !own && !has_registry_entry(&secret, host) {
             continue;
         }
-        // The chart owns the Secret. Only its data changes here.
         let Some(secret) = with_pull_credential(secret, host, token)? else {
             continue;
         };
-        client
-            .update_secret(namespace, &name, &secret)
-            .await
-            .context(failed("updating the Secret"))?;
+        if exists {
+            client
+                .update_secret(namespace, &name, &secret)
+                .await
+                .context(failed("updating the Secret"))?;
+        } else {
+            client
+                .create_secret(namespace, &secret)
+                .await
+                .context(failed("creating the Secret"))?;
+        }
         info!(secret = %name, "Refreshed the Operator pull Secret");
     }
     Ok(true)
@@ -417,6 +452,22 @@ mod tests {
                 cluster.secrets.lock().unwrap().insert(name, secret.clone());
                 Json(secret)
             }
+            async fn create(
+                State(cluster): State<FakeCluster>,
+                Json(secret): Json<Value>,
+            ) -> (StatusCode, Json<Value>) {
+                let name = secret["metadata"]["name"].as_str().unwrap().to_string();
+                let mut secrets = cluster.secrets.lock().unwrap();
+                if secrets.contains_key(&name) {
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(json!({"reason": "AlreadyExists"})),
+                    );
+                }
+                cluster.writes.lock().unwrap().push(name.clone());
+                secrets.insert(name, secret.clone());
+                (StatusCode::CREATED, Json(secret))
+            }
             let app = Router::new()
                 .route(
                     "/apis/apps/v1/namespaces/{ns}/deployments/{name}",
@@ -425,6 +476,10 @@ mod tests {
                 .route(
                     "/api/v1/namespaces/{ns}/secrets/{name}",
                     get(read).put(write),
+                )
+                .route(
+                    "/api/v1/namespaces/{ns}/secrets",
+                    axum::routing::post(create),
                 )
                 .with_state(self.clone());
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -557,11 +612,10 @@ mod tests {
         );
     }
 
-    /// A newer chart names the Secret. It is rewritten whatever it holds, and
-    /// a Secret that cannot be read fails the refresh instead of reporting it
-    /// done.
+    /// A newer chart names the Secret. It is rewritten whatever it holds. The chart
+    /// never renders it, so the Operator creates it the first time it holds a credential.
     #[tokio::test]
-    async fn a_named_secret_is_rewritten_and_a_missing_one_fails() {
+    async fn a_named_secret_is_rewritten_and_a_missing_one_is_created() {
         let cluster = FakeCluster::default();
         cluster.put(docker_secret("prod-registry", json!({"auths": {}})));
         let client = cluster.client(&[]).await;
@@ -589,6 +643,25 @@ mod tests {
             "ax_cap_v1_pull"
         )
         .await
-        .is_err());
+        .unwrap());
+        let created = cluster.secret("gone-registry");
+        assert_eq!(
+            created.type_.as_deref(),
+            Some("kubernetes.io/dockerconfigjson")
+        );
+        assert_eq!(password_for(&created, HOST), "deployment:ax_cap_v1_pull");
+        // The next refresh finds it right and writes nothing.
+        let writes = cluster.writes().len();
+        assert!(refresh_secrets(
+            &client,
+            "ns",
+            Some("gone-registry"),
+            None,
+            HOST,
+            "ax_cap_v1_pull"
+        )
+        .await
+        .unwrap());
+        assert_eq!(cluster.writes().len(), writes);
     }
 }

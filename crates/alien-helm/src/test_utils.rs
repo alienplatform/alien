@@ -174,6 +174,15 @@ pub fn helm_template_as_upgrade(files: &LinterFiles, values_yaml: Option<&str>) 
     helm_template_with_options(files, values_yaml, "test-release", &["--is-upgrade"], None)
 }
 
+/// Render a chart with `helm template --is-upgrade` for an explicit release name.
+pub fn helm_template_for_release_as_upgrade(
+    files: &LinterFiles,
+    values_yaml: Option<&str>,
+    release_name: &str,
+) -> LinterRun {
+    helm_template_with_options(files, values_yaml, release_name, &["--is-upgrade"], None)
+}
+
 /// Render a chart with `helm template` for an explicit release name.
 pub fn helm_template_for_release(
     files: &LinterFiles,

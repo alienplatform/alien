@@ -273,6 +273,17 @@ impl AwsRemoteStackManagementController {
         status = ResourceStatus::Updating,
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        // Outside a setup run this role may not write its own policies, attachments or
+        // boundary: the update makes no cloud call and keeps the recorded permissions
+        // revision and boundary as setup left them. The next setup run still sees any
+        // difference (`needs_update`) and applies it.
+        if !ctx.deployment_config.setup_run {
+            info!("Management permissions are setup-owned; leaving them as setup made them");
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
         if !refuse_a_config_without_the_installs_signing(
             ctx,
             &mut self.wait_for_signing_read_iterations,
