@@ -53,6 +53,7 @@ fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--egress-path-check") {
         std::process::exit(alien_sandbox_agent::gateway_egress::command_path_check(
             std::env::args().any(|argument| argument == "--privileged"),
+            std::env::args().any(|argument| argument == "--external-network"),
         ));
     }
 
@@ -61,8 +62,8 @@ fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("check-metadata") {
         return match alien_sandbox_agent::metadata::credentials_obtainable() {
             Ok(()) => Ok(()),
-            Err(leak) => {
-                eprintln!("{leak}");
+            Err(found) => {
+                eprintln!("{found}");
                 std::process::exit(1);
             }
         };

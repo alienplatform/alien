@@ -46,6 +46,7 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity, privileged: boo
     command
         .arg("--egress-path-check")
         .args(privileged.then_some("--privileged"))
+        .args(super::network_enforced_externally()?.then_some("--external-network"))
         .stdout(std::process::Stdio::piped())
         .env_clear()
         .kill_on_drop(true);
@@ -71,8 +72,14 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity, privileged: boo
             let _ = output.take(1024).read_to_string(&mut cause).await;
         }
         let cause = cause.trim();
-        let reason = status.code().map_or("the check was killed by a signal", path_check_reason);
-        let detail = if cause.is_empty() { String::new() } else { format!(": {cause}") };
+        let reason = status
+            .code()
+            .map_or("the check was killed by a signal", path_check_reason);
+        let detail = if cause.is_empty() {
+            String::new()
+        } else {
+            format!(": {cause}")
+        };
         return Err(AlienError::new(ErrorData::egress_unverified(
             "command-identity",
             format!("the command-identity path check did not confirm the path is closed: {reason} ({status}){detail}"),
@@ -106,15 +113,37 @@ fn path_check_reason(code: i32) -> &'static str {
 /// Internal child mode. It receives no token or credentials and has the command's exact identity.
 ///
 /// Returns [`PATH_CHECK_CLOSED`] when the path is closed, else the code naming the failed check.
-/// With `privileged` (a redirect exists) nothing may answer on the metadata address. Without it
-/// (Kubernetes) a NetworkPolicy may leave that address reachable, so the check is that no
-/// credentials or identity can be obtained from it. A leak is printed for the parent to report.
-pub fn command_path_check(privileged: bool) -> i32 {
+/// How the command path is checked against the node's metadata service.
+#[derive(Debug, PartialEq, Eq)]
+enum MetadataCheck {
+    /// Nothing may answer on the address (the guest's redirect, or a local run).
+    NothingMayAnswer,
+    /// A NetworkPolicy may leave it reachable; no credentials or identity may come back.
+    NoCredentials,
+}
+
+/// The check follows who enforces the network, not which user the agent runs as: an agent that
+/// nothing external polices (a local run) keeps the strict check.
+fn metadata_check(external_network: bool) -> MetadataCheck {
+    if external_network {
+        MetadataCheck::NoCredentials
+    } else {
+        MetadataCheck::NothingMayAnswer
+    }
+}
+
+/// Where something other than the agent (a Kubernetes NetworkPolicy) enforces the network
+/// (`external_network`), that policy may leave the metadata address reachable, so the check is
+/// that no credentials or identity can be obtained from it. Everywhere else (a redirect in the
+/// guest, or a local run) nothing may answer on the metadata address at all, whichever user the
+/// agent runs as. What it found is printed for the parent to
+/// report.
+pub fn command_path_check(_privileged: bool, external_network: bool) -> i32 {
     let mut addresses = vec![(
         SocketAddr::from(([1, 1, 1, 1], 443)),
         PATH_CHECK_INTERNET_ANSWERED,
     )];
-    if privileged {
+    if metadata_check(external_network) == MetadataCheck::NothingMayAnswer {
         addresses.insert(
             0,
             (
@@ -122,8 +151,8 @@ pub fn command_path_check(privileged: bool) -> i32 {
                 PATH_CHECK_METADATA_ANSWERED,
             ),
         );
-    } else if let Err(leak) = crate::metadata::credentials_obtainable() {
-        println!("{leak}");
+    } else if let Err(found) = crate::metadata::credentials_obtainable() {
+        println!("{found}");
         return PATH_CHECK_METADATA_ANSWERED;
     }
     for (address, code) in addresses {
@@ -167,7 +196,9 @@ pub fn command_path_check(privileged: bool) -> i32 {
 
 /// Whether the command identity's path is closed.
 pub fn command_path_is_closed(privileged: bool) -> bool {
-    command_path_check(privileged) == PATH_CHECK_CLOSED
+    // An environment that does not parse is not external enforcement: the strict check applies.
+    let external = super::network_enforced_externally().unwrap_or(false);
+    command_path_check(privileged, external) == PATH_CHECK_CLOSED
 }
 
 #[cfg(test)]
@@ -187,5 +218,14 @@ mod path_check_tests {
             codes.iter().map(|code| path_check_reason(*code)).collect();
         assert_eq!(reasons.len(), codes.len());
         assert_eq!(path_check_reason(1), "the check ended abnormally");
+    }
+
+    /// Only external enforcement (the Kubernetes NetworkPolicy) relaxes the metadata check to
+    /// "no credentials"; an agent without it, as Local or the AWS guest run it, keeps the strict
+    /// check whichever user it runs as.
+    #[test]
+    fn only_external_enforcement_relaxes_the_metadata_check() {
+        assert_eq!(metadata_check(false), MetadataCheck::NothingMayAnswer);
+        assert_eq!(metadata_check(true), MetadataCheck::NoCredentials);
     }
 }
