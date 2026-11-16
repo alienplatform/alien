@@ -56,7 +56,8 @@ async def worker(cmd, arg, barrier):
             out = {"terminated": True}
         elif cmd == "run":
             stream = await sbx.run_command(arg, "echo", ["ok"], timeout_ms=30000)
-            out = {"answered": any("ok" in repr(f) async for f in stream)}
+            frames = [repr(f) async for f in stream]
+            out = {"answered": any("ok" in f for f in frames)}
         else:
             sys.exit("unknown command")
     except Exception as e:  # the class and code, not a traceback
