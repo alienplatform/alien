@@ -39,16 +39,17 @@ pub fn require(binary: &Path, metadata: &Path) -> io::Result<()> {
 }
 
 /// Pure check over a `mountinfo` table: `metadata` is exactly a mount point with the read-only
-/// flag, and the agent binary lives directly inside it.
+/// flag, and the agent binary lives directly inside it. An Operator of an earlier release instead
+/// mounts the binary over the image's own agent path, so a binary outside `metadata` must be a
+/// read-only mount point of its own.
 fn check(table: &str, binary: &Path, metadata: &Path) -> Result<(), String> {
-    if binary.parent() != Some(metadata) {
-        return Err(format!(
-            "{} does not run from inside {}",
-            binary.display(),
-            metadata.display()
-        ));
-    }
-    for path in [metadata] {
+    let inside = binary.parent() == Some(metadata);
+    let paths: &[&Path] = if inside {
+        &[metadata]
+    } else {
+        &[binary, metadata]
+    };
+    for path in paths.iter().copied() {
         let mut found = None;
         // Later entries cover earlier ones at the same point; the last one is what is visible.
         for line in table.lines() {
@@ -165,21 +166,32 @@ mod tests {
         assert!(check(&table("ro"), Path::new(AGENT), Path::new(META)).is_ok());
     }
 
+    fn legacy_table(agent: &str, meta: &str) -> String {
+        format!(
+            "1 0 0:1 / / rw - overlay overlay rw\n\
+             2 1 0:2 /agent /usr/local/bin/alien-sandbox-agent {agent},relatime - ext4 /dev/vda rw\n\
+             3 1 0:2 /opt {META} {meta},relatime - ext4 /dev/vda rw\n"
+        )
+    }
+
     #[test]
-    fn an_agent_running_from_outside_the_mount_is_refused() {
-        let error = check(
-            &table("ro"),
-            Path::new("/usr/local/bin/alien-sandbox-agent"),
-            Path::new(META),
-        )
-        .unwrap_err();
-        assert!(error.contains("does not run from inside"), "{error}");
-        assert!(check(
-            &table("ro"),
-            Path::new("/opt/alien/x/agent"),
-            Path::new(META)
-        )
-        .is_err());
+    fn an_agent_started_by_an_earlier_operator_is_accepted() {
+        // That Operator mounts the agent file over the image's own path, outside /opt/alien.
+        let agent = Path::new("/usr/local/bin/alien-sandbox-agent");
+        let meta = Path::new(META);
+        assert!(check(&legacy_table("ro", "ro"), agent, meta).is_ok());
+        assert!(check(&legacy_table("rw", "ro"), agent, meta)
+            .unwrap_err()
+            .contains("writable"));
+        assert!(check(&legacy_table("ro", "rw"), agent, meta)
+            .unwrap_err()
+            .contains("writable"));
+        // Outside the mount and not mounted itself: the image's own writable copy.
+        assert!(check(&table("ro"), agent, meta)
+            .unwrap_err()
+            .contains("not a separate mount"));
+        // Nested below the mount, not directly in it: no separate mount of its own either.
+        assert!(check(&table("ro"), Path::new("/opt/alien/x/agent"), meta).is_err());
     }
 
     #[test]
