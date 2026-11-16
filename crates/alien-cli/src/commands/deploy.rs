@@ -2502,9 +2502,22 @@ async fn deploy_task_with_environment(
     // one whose update waits for setup needs setup authority this run must
     // bring: say so now instead of waiting for a lock nobody grants.
     let has_installed_release = deployment.current_release_id.is_some();
-    let initial_setup =
-        existing_deployment_plan(&status, None, ctx.is_platform(), has_installed_release)
-            == ExistingDeploymentPlan::InitialSetup;
+    let direct_setup = serde_json::to_value(&deployment.runtime_metadata)
+        .ok()
+        .and_then(|metadata| {
+            metadata
+                .get("initialSetupAuthority")
+                .and_then(serde_json::Value::as_str)
+                .map(|authority| authority == "directSetup")
+        })
+        .unwrap_or(false);
+    let initial_setup = existing_deployment_plan(
+        &status,
+        None,
+        ctx.is_platform(),
+        has_installed_release,
+        direct_setup,
+    ) == ExistingDeploymentPlan::InitialSetup;
     let initial_automatic_setup = initial_setup
         && deployment.stack_settings.as_ref().is_some_and(|settings| {
             settings
@@ -2529,6 +2542,7 @@ async fn deploy_task_with_environment(
         active_update,
         ctx.is_platform(),
         has_installed_release,
+        direct_setup,
     );
     if plan == ExistingDeploymentPlan::WaitForManager {
         return Err(AlienError::new(ErrorData::DeploymentFailed {
@@ -3547,6 +3561,7 @@ fn existing_deployment_plan(
     active_update: Option<ActiveUpdate>,
     platform_mode: bool,
     has_installed_release: bool,
+    direct_setup: bool,
 ) -> ExistingDeploymentPlan {
     // Setup can fail after a release is installed. Status alone cannot grant
     // the deployment token authority to resume setup on that installation.
@@ -3569,6 +3584,21 @@ fn existing_deployment_plan(
             | DeploymentStatus::InitialSetupFailed
     ) {
         return ExistingDeploymentPlan::InitialSetup;
+    }
+    // A deployment this CLI set up directly has no setup package and no platform to grant setup
+    // authority: running `alien deploy` again is its setup update. A runtime run would repeat
+    // the refusal that asked for setup, so a failed installed deployment re-runs setup instead.
+    if !platform_mode
+        && direct_setup
+        && has_installed_release
+        && matches!(
+            status,
+            DeploymentStatus::UpdateFailed
+                | DeploymentStatus::RefreshFailed
+                | DeploymentStatus::ProvisioningFailed
+        )
+    {
+        return ExistingDeploymentPlan::SetupUpdate { retry: true };
     }
     if platform_mode {
         if matches!(
@@ -4790,6 +4820,39 @@ mod tests {
         }
     }
 
+    /// A registered direct deployment whose update or refresh failed, for example with
+    /// DEPLOYMENT_SETUP_REQUIRED, is re-run through setup by `alien deploy`; before, only a
+    /// platform deployment was, so the runtime run repeated the refusal until destroy.
+    #[test]
+    fn a_failed_direct_deployment_without_a_platform_reruns_setup() {
+        for status in [
+            DeploymentStatus::UpdateFailed,
+            DeploymentStatus::RefreshFailed,
+            DeploymentStatus::ProvisioningFailed,
+        ] {
+            assert_eq!(
+                existing_deployment_plan(&status, None, false, true, true),
+                ExistingDeploymentPlan::SetupUpdate { retry: true },
+                "{status:?}"
+            );
+            // Not a direct install, or nothing installed yet: unchanged.
+            assert_eq!(
+                existing_deployment_plan(&status, None, false, true, false),
+                ExistingDeploymentPlan::Runtime,
+                "{status:?}"
+            );
+            assert_ne!(
+                existing_deployment_plan(&status, None, false, false, true),
+                ExistingDeploymentPlan::SetupUpdate { retry: true },
+                "{status:?}"
+            );
+        }
+        assert_eq!(
+            existing_deployment_plan(&DeploymentStatus::Running, None, false, true, true),
+            ExistingDeploymentPlan::NothingToDo
+        );
+    }
+
     #[test]
     fn existing_deployment_plan_routes_each_state_to_the_lock_that_can_take_it() {
         use ExistingDeploymentPlan::*;
@@ -4802,7 +4865,7 @@ mod tests {
         ] {
             for platform_mode in [true, false] {
                 assert_eq!(
-                    existing_deployment_plan(&status, None, platform_mode, false),
+                    existing_deployment_plan(&status, None, platform_mode, false, false),
                     InitialSetup,
                     "{status:?} is still in initial setup"
                 );
@@ -4863,7 +4926,7 @@ mod tests {
         ];
         for (status, active_update, platform_mode, expected) in cases {
             assert_eq!(
-                existing_deployment_plan(&status, active_update, platform_mode, true),
+                existing_deployment_plan(&status, active_update, platform_mode, true, false),
                 expected,
                 "{status:?} with {active_update:?} (platform: {platform_mode})"
             );
@@ -4888,15 +4951,15 @@ mod tests {
                 ),
             ] {
                 assert_eq!(
-                    existing_deployment_plan(&status, active, true, true),
+                    existing_deployment_plan(&status, active, true, true, false),
                     expected
                 );
                 assert_eq!(
-                    existing_deployment_plan(&status, active, true, false),
+                    existing_deployment_plan(&status, active, true, false, false),
                     ExistingDeploymentPlan::InitialSetup
                 );
                 assert_eq!(
-                    existing_deployment_plan(&status, active, false, true),
+                    existing_deployment_plan(&status, active, false, true, false),
                     ExistingDeploymentPlan::InitialSetup
                 );
             }
