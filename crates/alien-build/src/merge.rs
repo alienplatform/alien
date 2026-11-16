@@ -118,6 +118,8 @@ fn merge_platform(
         let mut reads_capability_file = true;
         // The same rule for the Worker runtime's identity exchange.
         let mut exchanges_identity = true;
+        // Every architecture any partial built for the resource.
+        let mut built = Vec::new();
 
         for partial in partials {
             let Some(image) = compute_image(&partial.stack, &resource_id) else {
@@ -142,6 +144,11 @@ fn merge_platform(
                 .stack
                 .command_receiver_reads_capability_file(&resource_id);
             exchanges_identity &= worker_exchanges_identity(&partial.stack, &resource_id);
+            for architecture in crate::built_architectures::recorded(&partial.stack, &resource_id) {
+                if !built.contains(&architecture) {
+                    built.push(architecture);
+                }
+            }
             for tar in read_oci_tarballs(&artifact_dir)? {
                 let name = tar
                     .file_name()
@@ -195,6 +202,8 @@ fn merge_platform(
         );
         set_commands_capability_file(&mut merged_stack, &resource_id, reads_capability_file);
         set_worker_identity_exchange(&mut merged_stack, &resource_id, exchanges_identity);
+        built.sort_by_key(|architecture| *architecture as u8);
+        crate::built_architectures::set(&mut merged_stack, &resource_id, built);
         for (source_platform, basename) in source_locations {
             artifact_rewrites.insert(
                 (source_platform, resource_id.clone(), basename),

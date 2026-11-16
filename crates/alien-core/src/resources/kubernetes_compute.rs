@@ -102,17 +102,27 @@ pub fn kubernetes_compute_architecture(stack: &Stack) -> Result<Option<Architect
     Ok(selected)
 }
 
-/// Match Pod placement to the architecture used by the stack's source images.
+/// Match Pod placement to the architecture of the workload's image.
+/// The pool's profile wins; otherwise a single built architecture recorded by
+/// `alien build` for this workload selects nodes; several built architectures
+/// (a multi-architecture image) or none leave the Pod unconstrained, as releases
+/// built before the build recorded it were.
 /// This does not associate Workers with a compute pool or reserve node capacity.
 pub fn kubernetes_compute_node_selector(
     stack: &Stack,
     pool: Option<&CapacityGroup>,
+    built_architectures: &[Architecture],
 ) -> Result<Option<BTreeMap<String, String>>, String> {
-    let built_architecture = kubernetes_compute_architecture(stack)?;
+    let stack_architecture = kubernetes_compute_architecture(stack)?;
+    let built = match built_architectures {
+        [only] => Some(*only),
+        _ => None,
+    };
     let architecture = pool
         .and_then(|pool| pool.profile.as_ref())
         .and_then(|profile| profile.architecture)
-        .or(built_architecture);
+        .or(stack_architecture)
+        .or(built);
     Ok(architecture.map(|architecture| {
         BTreeMap::from([(
             "kubernetes.io/arch".to_string(),
@@ -427,11 +437,11 @@ mod tests {
             "amd64".to_string(),
         )]));
         assert_eq!(
-            kubernetes_compute_node_selector(&stack, Some(&unspecified)).unwrap(),
+            kubernetes_compute_node_selector(&stack, Some(&unspecified), &[]).unwrap(),
             expected
         );
         assert_eq!(
-            kubernetes_compute_node_selector(&stack, None).unwrap(),
+            kubernetes_compute_node_selector(&stack, None, &[]).unwrap(),
             expected
         );
     }
@@ -471,5 +481,47 @@ mod tests {
         let stack = Stack::new("legacy".to_string()).build();
         assert!(validate_kubernetes_compute(&stack).is_empty());
         assert!(kubernetes_dynamic_pool(&stack).unwrap().is_none());
+    }
+
+    fn empty_stack() -> Stack {
+        Stack::new("test".to_string()).build()
+    }
+
+    fn arch_label(selector: Option<BTreeMap<String, String>>) -> Option<String> {
+        selector.and_then(|labels| labels.get("kubernetes.io/arch").cloned())
+    }
+
+    #[test]
+    fn a_single_built_architecture_selects_matching_nodes() {
+        let selector =
+            kubernetes_compute_node_selector(&empty_stack(), None, &[Architecture::X86_64])
+                .unwrap();
+        assert_eq!(arch_label(selector).as_deref(), Some("amd64"));
+        let selector =
+            kubernetes_compute_node_selector(&empty_stack(), None, &[Architecture::Arm64]).unwrap();
+        assert_eq!(arch_label(selector).as_deref(), Some("arm64"));
+    }
+
+    #[test]
+    fn a_multi_architecture_build_or_an_older_release_adds_no_constraint() {
+        let both = [Architecture::X86_64, Architecture::Arm64];
+        assert_eq!(
+            kubernetes_compute_node_selector(&empty_stack(), None, &both).unwrap(),
+            None
+        );
+        // A release built before the build recorded architectures.
+        assert_eq!(
+            kubernetes_compute_node_selector(&empty_stack(), None, &[]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_pool_profile_still_wins_over_the_built_architecture() {
+        let stack = stack(cluster());
+        let pool = kubernetes_dynamic_pool(&stack).unwrap();
+        let selector =
+            kubernetes_compute_node_selector(&stack, pool, &[Architecture::Arm64]).unwrap();
+        assert_eq!(arch_label(selector).as_deref(), Some("amd64"));
     }
 }

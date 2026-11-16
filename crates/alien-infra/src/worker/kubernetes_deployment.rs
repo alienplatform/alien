@@ -119,13 +119,17 @@ pub(super) async fn build_worker_deployment(
 
     // Source images share the stack build target. Workers do not select a
     // compute pool, but must still run on nodes compatible with that image.
-    let node_selector = alien_core::kubernetes_compute_node_selector(ctx.desired_stack, None)
-        .map_err(|message| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message,
-            })
-        })?;
+    let node_selector = alien_core::kubernetes_compute_node_selector(
+        ctx.desired_stack,
+        None,
+        &config.built_architectures,
+    )
+    .map_err(|message| {
+        AlienError::new(ErrorData::ResourceControllerConfigError {
+            resource_id: config.id.clone(),
+            message,
+        })
+    })?;
     let mut pod_spec = PodSpec {
         node_selector,
         service_account_name: Some(service_account_name.to_string()),
@@ -325,7 +329,10 @@ mod tests {
             .iter()
             .map(|mount| mount.mount_path.as_str())
             .collect();
-        assert!(mounts.contains(&"/tmp") && mounts.contains(&"/cache"), "{mounts:?}");
+        assert!(
+            mounts.contains(&"/tmp") && mounts.contains(&"/cache"),
+            "{mounts:?}"
+        );
 
         let opted_out = render(Some(alien_core::ContainerSecurity {
             profile: alien_core::ContainerSecurityProfile::Unrestricted,

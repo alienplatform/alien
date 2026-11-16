@@ -3109,8 +3109,12 @@ impl KubernetesContainerController {
                 })
             },
         )?;
-        let node_selector = alien_core::kubernetes_compute_node_selector(ctx.desired_stack, pool)
-            .map_err(|message| {
+        let node_selector = alien_core::kubernetes_compute_node_selector(
+            ctx.desired_stack,
+            pool,
+            &config.built_architectures,
+        )
+        .map_err(|message| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
                 message,

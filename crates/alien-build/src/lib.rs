@@ -1,3 +1,4 @@
+mod built_architectures;
 pub(crate) mod command_output;
 mod commands_receiver;
 pub mod dependencies;
@@ -291,6 +292,8 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
             worker.runtime_identity_exchange = false;
         }
     }
+    built_architectures::clear(&mut stack);
+    let built_from_source = built_architectures::built_from_source(&stack);
 
     // Collect functions that need building
     let mut functions_to_build = Vec::new();
@@ -1360,6 +1363,12 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     }
 
     strip_local_daemon_only_compute_clusters(&mut stack, settings.platform.runtime_platform());
+
+    // Kubernetes places Pods by the image's architecture, so record what was built.
+    if settings.platform.runtime_platform() == alien_core::Platform::Kubernetes {
+        let architectures = built_architectures::architectures_of_targets(&settings.get_targets());
+        built_architectures::stamp(&mut stack, &built_from_source, &architectures);
+    }
 
     // Save the modified stack configuration to stack.json
     let stack_json_path = output_dir.join("stack.json");

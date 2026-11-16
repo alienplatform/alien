@@ -740,6 +740,7 @@ fn handled() -> Vec<(&'static str, &'static str, Handling)> {
             "commands_capability_file",
             F(&COMMANDS_CAPABILITY_FILE),
         ),
+        ("Container", "built_architectures", F(&BUILT_ARCHITECTURES)),
         ("Container", "egress", F(&EGRESS)),
         ("Container", "priority", F(&PRIORITY)),
         ("Container", "resource_choices", F(&RESOURCE_CHOICES)),
@@ -748,8 +749,10 @@ fn handled() -> Vec<(&'static str, &'static str, Handling)> {
             "commands_capability_file",
             F(&COMMANDS_CAPABILITY_FILE),
         ),
+        ("Daemon", "built_architectures", F(&BUILT_ARCHITECTURES)),
         ("Daemon", "priority", F(&PRIORITY)),
         ("Daemon", "security", F(&DAEMON_SECURITY)),
+        ("Worker", "built_architectures", F(&BUILT_ARCHITECTURES)),
         (
             "Worker",
             "runtime_identity_exchange",
