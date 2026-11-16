@@ -5,6 +5,7 @@
 //! enforceable rather than merely documented.
 
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use crate::confine;
@@ -19,11 +20,22 @@ pub const MAX_TRANSFER_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Reads a whole file out of the sandbox.
 pub async fn read(root: &Path, requested: &str) -> Result<Vec<u8>> {
-    Ok(read_range(root, requested, 0, None).await?.0)
+    Ok(read_range(root, requested, 0, None).await?.contents)
+}
+
+/// One page of a file, with what a caller needs to page the rest.
+pub struct FileRange {
+    pub contents: Vec<u8>,
+    /// The file's size when it was opened.
+    pub total_bytes: u64,
+    /// Identity of the file's content as opened: inode, modification time in nanoseconds and size.
+    /// Pages of one read carry the same value unless the file was replaced or changed between
+    /// them, which lets the caller refuse to join pages of two versions.
+    pub version: String,
 }
 
 /// Reads up to `length` bytes of a file from `offset` (to the end when `length` is `None`), and
-/// returns them with the file's size when it was opened.
+/// returns them with the file's size and identity when it was opened.
 ///
 /// A caller whose transport limits one reply pages a large file with this. The transfer limit is
 /// on the file's size, not on a page, so paging cannot move more than a whole read could.
@@ -32,7 +44,7 @@ pub async fn read_range(
     requested: &str,
     offset: u64,
     length: Option<u64>,
-) -> Result<(Vec<u8>, u64)> {
+) -> Result<FileRange> {
     let root = root.to_path_buf();
     let requested = requested.to_string();
 
@@ -97,7 +109,18 @@ pub async fn read_range(
         }
         contents.truncate(wanted as usize);
 
-        Ok((contents, size))
+        let version = format!(
+            "{}-{}.{:09}-{}",
+            metadata.ino(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            size
+        );
+        Ok(FileRange {
+            contents,
+            total_bytes: size,
+            version,
+        })
     })
     .await
     .into_alien_error()

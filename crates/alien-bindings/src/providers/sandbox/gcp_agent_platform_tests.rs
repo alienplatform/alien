@@ -3344,6 +3344,7 @@ async fn read_file_pages_a_large_file() {
         Ok(serde_json::to_vec(&serde_json::json!({
             "contentsBase64": BASE64.encode(&served[offset..end]),
             "totalBytes": served.len(),
+            "version": "1-1.000000000-stable",
         }))
         .unwrap())
     });
@@ -3352,6 +3353,113 @@ async fn read_file_pages_a_large_file() {
         .await
         .expect("reads");
     assert_eq!(read, file);
+}
+
+/// What a mock agent serves for one `readFile` call: the file's bytes and its identity.
+type FileVersion = (Vec<u8>, &'static str);
+
+/// A client whose agent serves `versions[n]` to the n-th call (the last one repeats), answering
+/// each page from that version's bytes at the asked offset. Returns the client and the offsets
+/// asked for.
+fn paging_client(
+    versions: Vec<FileVersion>,
+) -> (
+    MockAgentPlatformApi,
+    std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+) {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = asked.clone();
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().returning(move |_, _, input| {
+        let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+        let offset = body["offset"].as_u64().unwrap() as usize;
+        let length = body["length"].as_u64().unwrap() as usize;
+        let mut log = log.lock().unwrap();
+        let (file, version) = &versions[log.len().min(versions.len() - 1)];
+        log.push(offset);
+        let start = offset.min(file.len());
+        let end = (offset + length).min(file.len());
+        Ok(serde_json::to_vec(&serde_json::json!({
+            "contentsBase64": BASE64.encode(&file[start..end]),
+            "totalBytes": file.len(),
+            "version": version,
+        }))
+        .unwrap())
+    });
+    (client, asked)
+}
+
+fn big_file(fill: u8) -> Vec<u8> {
+    vec![fill; GCP_READ_PAGE_BYTES * 2 + 5]
+}
+
+/// A file replaced by rename between pages is read again from the start, so the result is one
+/// version and never page one of the old file joined to the rest of the new one.
+#[tokio::test]
+async fn read_file_restarts_once_when_the_file_is_replaced_between_pages() {
+    let (client, asked) = paging_client(vec![(big_file(1), "old"), (big_file(2), "new")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, big_file(2));
+    assert_eq!(
+        *asked.lock().unwrap(),
+        vec![
+            0,
+            GCP_READ_PAGE_BYTES,
+            0,
+            GCP_READ_PAGE_BYTES,
+            GCP_READ_PAGE_BYTES * 2
+        ]
+    );
+}
+
+/// A file that shrinks below the offset between pages is not returned as an old prefix: the
+/// read restarts and returns the smaller file whole.
+#[tokio::test]
+async fn read_file_restarts_when_the_file_shrinks_below_the_offset() {
+    let small = vec![9u8; 10];
+    let (client, _) = paging_client(vec![(big_file(1), "old"), (small.clone(), "new")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, small);
+}
+
+/// A file that keeps changing fails with a retryable error after the one restart.
+#[tokio::test]
+async fn read_file_fails_retryably_when_the_file_keeps_changing() {
+    let (client, _) = paging_client(vec![
+        (big_file(1), "a"),
+        (big_file(2), "b"),
+        (big_file(3), "c"),
+        (big_file(4), "d"),
+    ]);
+    let error = provider(client)
+        .read_file("s1", "f")
+        .await
+        .expect_err("changing file");
+    assert!(error.retryable, "{error:?}");
+    assert!(error.to_string().contains("changed while"), "{error}");
+}
+
+/// A file that does not change is read in one pass, one call per page, with no restart.
+#[tokio::test]
+async fn read_file_of_a_stable_file_does_not_restart() {
+    let (client, asked) = paging_client(vec![(big_file(7), "same")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, big_file(7));
+    assert_eq!(asked.lock().unwrap().len(), 3);
+}
+
+/// The page size is what keeps a page's reply under the proxy's limit: raw bytes are base64-encoded
+/// in the agent's JSON and again in the reply, 16/9 of the raw size, and the page must leave at
+/// least a 20% margin under `GCP_REPLY_LIMIT_BYTES`. Changing the constant must change this test.
+#[test]
+fn read_page_size_leaves_a_margin_under_the_reply_limit() {
+    assert_eq!(GCP_READ_PAGE_BYTES, 900_000);
+    let on_the_wire = GCP_READ_PAGE_BYTES.div_ceil(3) * 4;
+    let on_the_wire = on_the_wire.div_ceil(3) * 4;
+    assert!(
+        on_the_wire * 12 <= GCP_REPLY_LIMIT_BYTES * 10,
+        "{on_the_wire} bytes on the wire leaves under a 20% margin below {GCP_REPLY_LIMIT_BYTES}"
+    );
 }
 
 #[tokio::test]

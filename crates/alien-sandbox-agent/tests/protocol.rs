@@ -2902,4 +2902,19 @@ async fn read_file_pages_by_offset_and_length() {
     );
     let past = page(2000, 10).await;
     assert_eq!(past["contentsBase64"], "");
+
+    // Every page of an unchanged file carries the same identity; rewriting the file with the
+    // same size changes it, so a caller can tell two versions apart.
+    assert!(second["version"].as_str().is_some_and(|v| !v.is_empty()));
+    assert_eq!(second["version"], tail["version"]);
+    let rewritten: Vec<u8> = contents.iter().map(|b| b ^ 0xff).collect();
+    let put = client
+        .put(format!("{}/v1/files", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"path": "/work/page.bin", "contentsBase64": BASE64.encode(&rewritten)}))
+        .send()
+        .await
+        .expect("rewrite");
+    assert!(put.status().is_success());
+    assert_ne!(page(300, 200).await["version"], second["version"]);
 }

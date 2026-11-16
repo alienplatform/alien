@@ -1420,11 +1420,19 @@ impl Sandbox for GcpAgentPlatformSandbox {
             contents_base64: String,
             /// Absent from an agent that predates paging, which returns the whole file.
             total_bytes: Option<u64>,
+            /// Identity of the file as the agent opened it (inode, modification time, size).
+            /// Absent from an agent that predates it; the size then still has to agree.
+            version: Option<String>,
         }
 
         // One `:execute` reply cannot carry a large file, so the file is read a page at a time
-        // and joined here; the agent's own transfer limit is on the file, not on a page.
+        // and joined here; the agent's own transfer limit is on the file, not on a page. Each
+        // page reopens the file, so a page is only joined to the pages before it when the file is
+        // the same one: a file replaced or changed between pages restarts the read from the
+        // start once, and a second change fails rather than return a mix of two versions.
         let mut contents = Vec::new();
+        let mut identity: Option<(Option<String>, u64)> = None;
+        let mut restarted = false;
         loop {
             let body = self
                 .execute_op(
@@ -1461,6 +1469,25 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 // An agent without paging ignored the range and sent the whole file.
                 return Ok(page);
             };
+            let seen = (read.version, total);
+            match &identity {
+                Some(first) if *first != seen => {
+                    if restarted {
+                        return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                            operation: READ_FILE.to_string(),
+                            reason: format!("'{path}' changed while it was being read; try again"),
+                        }));
+                    }
+                    restarted = true;
+                    contents.clear();
+                    identity = None;
+                    // This page belongs to the new version only when it starts at the start; it
+                    // was asked for at the old offset, so read again from 0.
+                    continue;
+                }
+                Some(_) => {}
+                None => identity = Some(seen),
+            }
             let page_empty = page.is_empty();
             contents.extend_from_slice(&page);
             // An empty page ends the read even when the size says more: the file shrank, and

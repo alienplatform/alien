@@ -209,6 +209,9 @@ pub struct ReadFileResponse {
     /// The file's size, so a caller paging it knows when it has all of it. Absent from agents
     /// that predate paging, which return the whole file.
     pub total_bytes: u64,
+    /// Identity of the file as opened (inode, modification time, size). A caller paging a file
+    /// compares it between pages and starts over when it changes. Absent from older agents.
+    pub version: String,
 }
 
 /// A file on the way in.
@@ -849,7 +852,7 @@ async fn read_file(
 ) -> std::result::Result<Json<ReadFileResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
-    let (contents, total_bytes) = files::read_range(
+    let range = files::read_range(
         &state.session_root,
         &query.path,
         query.offset.unwrap_or(0),
@@ -858,8 +861,9 @@ async fn read_file(
     .await?;
 
     Ok(Json(ReadFileResponse {
-        contents_base64: BASE64.encode(contents),
-        total_bytes,
+        contents_base64: BASE64.encode(range.contents),
+        total_bytes: range.total_bytes,
+        version: range.version,
     }))
 }
 
