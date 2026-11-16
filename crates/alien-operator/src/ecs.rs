@@ -330,27 +330,30 @@ pub(crate) async fn list_log_groups(
     Ok(names)
 }
 
-/// Read what is new in one group and queue it. Returns the number of records.
-pub(crate) async fn poll_group(
-    state: &OperatorState,
+/// Pages scanned in one poll that held no new event are not counted against
+/// the page budget (a window of already-stored events must not use it up), but
+/// they are bounded so one poll cannot read for ever.
+const MAX_SCANNED_PAGES: usize = 100;
+
+/// One queued batch: the records and the position saved with them.
+pub(crate) struct LogBatch {
+    pub records: Vec<PodLogRecord>,
+    pub position: LogPosition,
+}
+
+/// Read what is new in one group, from `position`, in batches. At most
+/// `MAX_PAGES_PER_POLL` pages with new events are taken per call; pages that
+/// hold only events stored before do not count, so a busy group's re-read
+/// window can never keep a poll from reaching what is new.
+pub(crate) async fn read_group(
     logs: &dyn EcsApi,
-    deployment_id: &str,
     group: &str,
-    started_ms: i64,
-) -> Result<usize> {
-    let key = format!("ecs:logs:{group}");
-    let mut position = state
-        .db
-        .get_pod_log_offset(&key, "logs", 0)
-        .await?
-        .and_then(|offset| LogPosition::decode(&offset.timestamp))
-        .unwrap_or(LogPosition {
-            timestamp_ms: started_ms + LATE_EVENT_WINDOW_MS,
-            seen: Vec::new(),
-        });
-    let mut total = 0;
+    mut position: LogPosition,
+) -> Result<Vec<LogBatch>> {
+    let mut batches = Vec::new();
     let mut token: Option<String> = None;
-    for _ in 0..MAX_PAGES_PER_POLL {
+    let mut productive_pages = 0;
+    for _ in 0..MAX_SCANNED_PAGES {
         let mut request = json!({
             "logGroupName": group,
             "startTime": position.start_time(),
@@ -366,29 +369,62 @@ pub(crate) async fn poll_group(
                     message: format!("could not read log group {group}"),
                 })?;
         let parsed = parse_events_page(group, &page, &position);
-        if !parsed.records.is_empty() {
-            let count = parsed.records.len();
-            let encoded = pod_log_records_to_otlp(parsed.records, deployment_id)?;
-            state
-                .db
-                .store_pod_log_batch(
-                    &key,
-                    "logs",
-                    0,
-                    &PodLogOffset {
-                        timestamp: parsed.position.encode(),
-                        ordinal: 0,
-                    },
-                    &encoded,
-                )
-                .await?;
-            total += count;
+        let productive = !parsed.records.is_empty();
+        if productive {
+            productive_pages += 1;
+            batches.push(LogBatch {
+                records: parsed.records,
+                position: parsed.position.clone(),
+            });
         }
         position = parsed.position;
         token = parsed.next_token;
+        // A cut page is read again from the new position, without a token.
         if token.is_none() && !parsed.cut {
             break;
         }
+        if productive_pages >= MAX_PAGES_PER_POLL {
+            break;
+        }
+    }
+    Ok(batches)
+}
+
+/// Read what is new in one group and queue it. Returns the number of records.
+pub(crate) async fn poll_group(
+    state: &OperatorState,
+    logs: &dyn EcsApi,
+    deployment_id: &str,
+    group: &str,
+    started_ms: i64,
+) -> Result<usize> {
+    let key = format!("ecs:logs:{group}");
+    let position = state
+        .db
+        .get_pod_log_offset(&key, "logs", 0)
+        .await?
+        .and_then(|offset| LogPosition::decode(&offset.timestamp))
+        .unwrap_or(LogPosition {
+            timestamp_ms: started_ms + LATE_EVENT_WINDOW_MS,
+            seen: Vec::new(),
+        });
+    let mut total = 0;
+    for batch in read_group(logs, group, position).await? {
+        total += batch.records.len();
+        let encoded = pod_log_records_to_otlp(batch.records, deployment_id)?;
+        state
+            .db
+            .store_pod_log_batch(
+                &key,
+                "logs",
+                0,
+                &PodLogOffset {
+                    timestamp: batch.position.encode(),
+                    ordinal: 0,
+                },
+                &encoded,
+            )
+            .await?;
     }
     Ok(total)
 }
@@ -559,6 +595,7 @@ pub(crate) async fn collect_services(
             .context(ErrorData::PodLogReadFailed {
                 message: "could not describe ECS services".to_string(),
             })?;
+        let before = samples.len();
         samples.extend(
             described
                 .get("services")
@@ -567,6 +604,15 @@ pub(crate) async fn collect_services(
                 .flatten()
                 .filter_map(service_sample),
         );
+        // A listed service that came back as a failure, or not at all, is missing
+        // from this batch, not gone: the batch must not replace the scope.
+        let failed = described
+            .get("failures")
+            .and_then(Value::as_array)
+            .is_some_and(|failures| !failures.is_empty());
+        if failed || samples.len() - before < chunk.len() {
+            complete = false;
+        }
     }
     Ok((samples, complete))
 }
@@ -846,6 +892,84 @@ mod tests {
         let (samples, complete) = collect_services(&many, "c").await.unwrap();
         assert_eq!(samples.len(), MAX_SERVICES);
         assert!(!complete);
+    }
+
+    #[derive(Debug)]
+    struct Partial;
+
+    #[async_trait::async_trait]
+    impl EcsApi for Partial {
+        async fn call(&self, operation: &str, request: Value) -> alien_client_core::Result<Value> {
+            Ok(match operation {
+                "ListServices" => json!({"serviceArns": [
+                    "arn:aws:ecs:r:1:service/c/a", "arn:aws:ecs:r:1:service/c/b", "arn:aws:ecs:r:1:service/c/c"]}),
+                "DescribeServices" if request["services"].as_array().unwrap().len() == 3 => json!({
+                    "services": [{"serviceName": "a", "serviceArn": "arn:aws:ecs:r:1:service/c/a", "status": "ACTIVE", "desiredCount": 1, "runningCount": 1}],
+                    "failures": [{"arn": "arn:aws:ecs:r:1:service/c/b", "reason": "MISSING"}]
+                }),
+                other => panic!("unexpected {other}"),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_partial_describe_answer_is_not_a_complete_inventory() {
+        let (samples, complete) = collect_services(&Partial, "c").await.unwrap();
+        // Two of three came back (one answer, one failure, one silently absent).
+        assert_eq!(samples.len(), 1);
+        assert!(!complete);
+    }
+
+    /// A group with more events inside the late-event window than one poll may
+    /// take. Each poll must move on to the events after what it stored.
+    #[derive(Debug)]
+    struct BusyGroup {
+        total: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl EcsApi for BusyGroup {
+        async fn call(&self, _op: &str, request: Value) -> alien_client_core::Result<Value> {
+            let start = request["startTime"].as_i64().unwrap();
+            let first: usize = request
+                .get("nextToken")
+                .and_then(Value::as_str)
+                .map_or(0, |token| token.parse().unwrap());
+            // Events are one per millisecond from t=1000 (all inside one 30 s window).
+            let events: Vec<Value> = (0..self.total)
+                .map(|i| (i, 1000 + i as i64))
+                .filter(|(_, ts)| *ts >= start)
+                .skip(first)
+                .take(PAGE_LIMIT as usize)
+                .map(|(i, ts)| json!({"timestamp": ts, "eventId": format!("e{i}"), "message": format!("m{i}"), "logStreamName": "s"}))
+                .collect();
+            let eligible = (0..self.total)
+                .filter(|i| 1000 + *i as i64 >= start)
+                .count();
+            let mut page = json!({ "events": events });
+            if first + PAGE_LIMIT as usize > 0 && first + (PAGE_LIMIT as usize) < eligible {
+                page["nextToken"] = json!((first + PAGE_LIMIT as usize).to_string());
+            }
+            Ok(page)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_busy_group_is_read_to_the_end_over_several_polls() {
+        let group = BusyGroup { total: 700 };
+        let mut position = LogPosition {
+            timestamp_ms: 1000,
+            seen: Vec::new(),
+        };
+        let mut stored = 0;
+        for _ in 0..10 {
+            let batches = read_group(&group, "g", position.clone()).await.unwrap();
+            if let Some(last) = batches.last() {
+                position = last.position.clone();
+            }
+            stored += batches.iter().map(|b| b.records.len()).sum::<usize>();
+        }
+        assert_eq!(stored, 700, "every event is stored exactly once");
     }
 
     #[tokio::test]
