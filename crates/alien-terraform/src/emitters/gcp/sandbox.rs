@@ -869,7 +869,13 @@ mod tests {
                 .permission("empty", PermissionProfile::new())
                 .build();
             let mut names = names();
-            for profile in ["named", "wildcard", "other-sandbox", "heartbeat-only", "empty"] {
+            for profile in [
+                "named",
+                "wildcard",
+                "other-sandbox",
+                "heartbeat-only",
+                "empty",
+            ] {
                 names.insert(
                     format!("{profile}-sa"),
                     format!("{}_sa", profile.replace('-', "_")),
@@ -892,7 +898,8 @@ mod tests {
                 .resource_blocks
                 .iter()
                 .filter(|b| {
-                    b.labels.first().map(|l| l.as_str()) == Some("google_service_account_iam_member")
+                    b.labels.first().map(|l| l.as_str())
+                        == Some("google_service_account_iam_member")
                 })
                 .map(|b| attribute(b, "member"))
                 .collect();
@@ -904,6 +911,140 @@ mod tests {
                     "\"serviceAccount:${google_service_account.wildcard_sa.email}\"".to_string(),
                 ],
                 "only the two profiles that hold execute on this sandbox may sign as the edge signer"
+            );
+        }
+
+        /// Every item the package creates for a sandbox is listed in
+        /// `alien_core::sandbox_setup_parity`, with whether direct setup creates it. An item the
+        /// emitter produces that the table does not name is a piece direct setup would miss
+        /// without anyone noticing; a listed item the emitter no longer produces is a stale row.
+        #[test]
+        fn every_item_the_package_creates_is_accounted_for_in_direct_setup() {
+            use alien_core::permissions::{ManagementPermissions, PermissionProfile};
+            use alien_core::sandbox_setup_parity::{DirectSetup, GCP_SANDBOX_ITEMS};
+
+            // Remote access excludes preview ports and internet egress, so two stacks between
+            // them reach every item: one published for a remote caller, one with preview.
+            let build = |remote_access: bool| {
+                let base = Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                        bundled_from: None,
+                    })
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    });
+                let builder = Stack::new("acme".to_string())
+                    .add(
+                        GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                    .add(
+                        RemoteStackManagement::new("manager".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                    .add(
+                        RemoteBindings::new("access".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    );
+                let builder = if remote_access {
+                    builder.add_with_remote_access(
+                        base.egress(SandboxEgress::Allow).build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                } else {
+                    builder.add(
+                        base.egress(SandboxEgress::Internet)
+                            .preview_ports(vec![8080])
+                            .build(),
+                        ResourceLifecycle::Frozen,
+                    )
+                };
+                builder
+                    .management(ManagementPermissions::Extend(
+                        PermissionProfile::new().resource("agents", ["sandbox/templates"]),
+                    ))
+                    .permission(
+                        "runner",
+                        PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+                    )
+                    .build()
+            };
+
+            let mut emitted = BTreeSet::new();
+            for remote_access in [true, false] {
+                let stack = build(remote_access);
+                let mut names = names();
+                names.insert("manager".to_string(), "manager".to_string());
+                names.insert("runner-sa".to_string(), "runner_sa".to_string());
+                let resource = stack.resources.get("agents").expect("sandbox");
+                let settings = StackSettings::default();
+                let ctx = EmitContext {
+                    stack: &stack,
+                    resource,
+                    resource_id: "agents",
+                    platform: alien_core::Platform::Gcp,
+                    targets_kubernetes: false,
+                    stack_settings: &settings,
+                    names: &names,
+                    pins: &alien_core::SetupPins::default(),
+                };
+                let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+                for block in fragment.resource_blocks.iter() {
+                    let kind = block.labels.first().map(|l| l.as_str()).unwrap_or_default();
+                    let label = block.labels.get(1).map(|l| l.as_str()).unwrap_or_default();
+                    let item = match kind {
+                        "google_vertex_ai_reasoning_engine_iam_member" => {
+                            let purpose = ["_access_", "_templates_", "_preview_"]
+                                .iter()
+                                .find(|purpose| label.contains(*purpose))
+                                .unwrap_or_else(|| {
+                                    panic!("an engine grant with no purpose: {label}")
+                                });
+                            format!("engine-grant:{}", purpose.trim_matches('_'))
+                        }
+                        "google_service_account" => "preview-signer-account".to_string(),
+                        "google_project_iam_custom_role" => "preview-sign-role".to_string(),
+                        "google_service_account_iam_member" => "preview-sign-binding".to_string(),
+                        other => panic!(
+                            "the Google Cloud sandbox emitter produced `{other}` ({label}), which \
+                             alien_core::sandbox_setup_parity does not account for. Add it there \
+                             as `Creates` once direct setup creates it with the same grant, \
+                             `Pending`, or `PackageOnly` with the build refusal that covers it"
+                        ),
+                    };
+                    emitted.insert(item);
+                }
+            }
+
+            let listed: BTreeSet<String> = GCP_SANDBOX_ITEMS
+                .iter()
+                .map(|(item, _)| item.to_string())
+                .collect();
+            assert_eq!(
+                emitted, listed,
+                "the emitter's items and alien_core::sandbox_setup_parity::GCP_SANDBOX_ITEMS differ"
+            );
+
+            // The honest state today: these are the known gaps. Flip one to `Creates` in the same
+            // change that makes direct setup create it, and add its controller test.
+            let pending: BTreeSet<&str> = GCP_SANDBOX_ITEMS
+                .iter()
+                .filter(|(_, status)| matches!(status, DirectSetup::Pending(_)))
+                .map(|(item, _)| *item)
+                .collect();
+            assert_eq!(
+                pending,
+                BTreeSet::from([
+                    "engine-grant:access",
+                    "engine-grant:preview",
+                    "engine-grant:templates",
+                    "preview-sign-binding",
+                    "preview-sign-role",
+                    "preview-signer-account",
+                ]),
+                "a Pending item changed status: update this list with it"
             );
         }
 
