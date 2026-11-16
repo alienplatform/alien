@@ -325,6 +325,7 @@ fn create_initial_state(stack: Stack) -> DeploymentState {
     };
 
     DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::Pending,
         platform: Platform::Test,
         current_release: None,
@@ -3691,6 +3692,7 @@ async fn an_update_introducing_a_gated_frozen_resource_refuses_instead_of_droppi
     );
 
     let state = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::UpdatePending,
         platform: Platform::Test,
         current_release: Some(ReleaseInfo {

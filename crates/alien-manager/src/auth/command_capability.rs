@@ -583,6 +583,7 @@ mod tests {
 
     fn deployment_record() -> DeploymentRecord {
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
             id: "deployment-1".to_string(),

@@ -2548,6 +2548,7 @@ mod tests {
 
     fn aws_state_with_stack(stack: Stack) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Aws,
             current_release: None,
@@ -2569,6 +2570,7 @@ mod tests {
 
     fn gcp_state_with_stack(stack: Stack) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Gcp,
             current_release: Some(ReleaseInfo {

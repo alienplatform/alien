@@ -90,6 +90,17 @@ pub struct StepResult {
     pub heartbeats: Vec<ResourceHeartbeat>,
 }
 
+/// What [`StackExecutor::step_requested`] did.
+#[derive(Debug)]
+pub struct RequestedStep {
+    /// The stack state with the resource's controller state after the step.
+    pub state: StackState,
+    /// How far the request is.
+    pub progress: alien_core::OperatorRequestProgress,
+    /// Heartbeats the step emitted.
+    pub heartbeats: Vec<ResourceHeartbeat>,
+}
+
 /// What [`StackExecutor::observe_running`] saw.
 #[derive(Debug)]
 pub struct RunningObservation {
@@ -2197,6 +2208,98 @@ impl StackExecutor {
     /// It is suitable for periodic observation of a Running deployment.
     pub async fn refresh(&self, state: StackState) -> Result<StepResult> {
         self.step_inner(state, false, None).await
+    }
+
+    /// Carries out one step of an operator request on the resource it names, and nothing else.
+    ///
+    /// The request runs whatever the resource's status is, failed ones included. Nothing is
+    /// planned, no other resource is stepped, and the resource's status and error are left as
+    /// they were: the controller keeps the request's progress in its own state. A failure of
+    /// the step itself is returned to the caller and changes nothing.
+    pub async fn step_requested(
+        &self,
+        state: StackState,
+        request: &alien_core::OperatorRequest,
+    ) -> Result<RequestedStep> {
+        let resource_id = request.resource_id().to_string();
+        let mut next_state = state;
+        let Some(resource_state) = next_state.resources.get(&resource_id).cloned() else {
+            return Ok(RequestedStep {
+                state: next_state,
+                progress: alien_core::OperatorRequestProgress::Refused {
+                    reason: format!("resource '{resource_id}' is not part of this deployment"),
+                },
+                heartbeats: Vec::new(),
+            });
+        };
+        if !resource_state.has_internal_state() {
+            return Ok(RequestedStep {
+                state: next_state,
+                progress: alien_core::OperatorRequestProgress::Refused {
+                    reason: format!("resource '{resource_id}' has no running controller yet"),
+                },
+                heartbeats: Vec::new(),
+            });
+        }
+
+        let controller_platform = controller_platform_for_state(next_state.platform, &resource_state);
+        let controller_client_config = self
+            .client_config
+            .config_for_platform(controller_platform)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ClientConfigMismatch {
+                    required_platform: controller_platform,
+                    found_platform: self.client_config.platform(),
+                })
+            })?;
+        let heartbeat_collector = HeartbeatCollector::default();
+        let context_resource = resource_state.config.clone();
+        let context = ResourceControllerContext {
+            desired_config: &context_resource,
+            platform: controller_platform,
+            client_config: controller_client_config,
+            state: &next_state,
+            resource_prefix: &next_state.resource_prefix,
+            registry: &self.resource_registry,
+            desired_stack: &self.desired_stack,
+            service_provider: &self.service_provider,
+            deployment_config: &self.deployment_config,
+            initial_setup_authority: self.initial_setup_authority,
+            heartbeat_collector: heartbeat_collector.clone(),
+        };
+
+        let mut controller = resource_state
+            .get_internal_controller()?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ExecutionStepFailed {
+                    message: format!("resource '{resource_id}' lost its controller state"),
+                    resource_id: Some(resource_id.clone()),
+                })
+            })?;
+        // Keep the controller's state even when the step errs part way: what it already
+        // drained or terminated must not be forgotten.
+        let outcome = controller.step_operator_request(&context, request).await;
+        drop(context);
+        let updated = next_state
+            .resources
+            .get_mut(&resource_id)
+            .expect("resource checked above");
+        updated.set_internal_controller(Some(controller))?;
+        // A failed step is not a refusal: the cloud call may succeed next time, and the
+        // controller's own state says how far it got. It is reported as progress so the
+        // caller keeps that state; the controller ends the request when it gives up.
+        let progress = match outcome {
+            Ok(progress) => progress,
+            Err(error) => alien_core::OperatorRequestProgress::InProgress {
+                waiting_for: format!("retrying after an error: {error}"),
+                delay: Duration::from_secs(30),
+            },
+        };
+        Ok(RequestedStep {
+            state: next_state,
+            progress,
+            heartbeats: heartbeat_collector.drain(),
+        })
     }
 
     /// Runs the Ready handler of every Running resource. Nothing is planned and no other

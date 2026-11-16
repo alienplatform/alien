@@ -1889,6 +1889,7 @@ mod tests {
 
     fn revision_checkpoint_state(status: DeploymentStatus) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status,
             platform: Platform::Test,
             current_release: None,
@@ -8279,6 +8280,7 @@ async fn push_initial_setup_targeted(
         })?;
 
     let mut state = DeploymentState {
+        operator_request: None,
         status,
         platform,
         current_release: None,
@@ -8839,6 +8841,7 @@ pub async fn push_deletion(
     };
 
     let mut state = DeploymentState {
+        operator_request: None,
         status,
         platform,
         current_release: current_release.clone(),

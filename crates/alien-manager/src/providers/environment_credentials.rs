@@ -170,6 +170,7 @@ pub(super) mod tests {
             .insert("management".to_string(), remote_state);
 
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id: "deployment".to_string(),
             workspace_id: "default".to_string(),

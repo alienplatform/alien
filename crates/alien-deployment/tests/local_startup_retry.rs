@@ -99,6 +99,7 @@ async fn local_startup_retry_prepares_new_release_and_preserves_existing_data() 
             .allow_frozen_changes(false)
             .build();
         let state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Pending,
             platform: Platform::Local,
             current_release: None,

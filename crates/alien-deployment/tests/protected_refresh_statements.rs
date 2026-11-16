@@ -239,6 +239,7 @@ async fn running_install(
 ) -> DeploymentState {
     register_probe();
     let mut state = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::Pending,
         platform: Platform::Test,
         current_release: None,

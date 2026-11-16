@@ -564,6 +564,7 @@ mod tests {
             .add(compute.clone(), ResourceLifecycle::Frozen)
             .build();
         let mut state = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Provisioning,
             current_release: None,

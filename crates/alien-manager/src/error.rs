@@ -107,6 +107,17 @@ pub enum ErrorData {
         deployment_group_id: String,
     },
 
+    /// An operator request cannot be recorded or a retry/redeploy cannot start because of
+    /// another one
+    #[error(
+        code = "OPERATOR_REQUEST_CONFLICT",
+        message = "{reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    OperatorRequestConflict { reason: String },
+
     /// Imported deployment setup fingerprint mismatch or non-idempotent re-import
     #[error(
         code = "IMPORTED_DEPLOYMENT_CONFLICT",

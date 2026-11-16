@@ -262,6 +262,7 @@ fn worker_stack() -> Stack {
 
 fn state(status: DeploymentStatus) -> DeploymentState {
     DeploymentState {
+        operator_request: None,
         status,
         platform: Platform::Aws,
         current_release: None,

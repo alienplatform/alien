@@ -64,6 +64,7 @@ async fn failed_first_install(installed: Stack, target: Stack) -> DeploymentStat
         .await
         .expect("release 1 prepares");
     DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::InitialSetupFailed,
         platform: Platform::Kubernetes,
         current_release: None,

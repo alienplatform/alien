@@ -337,6 +337,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
         .route(
+            "/v1/deployments/{id}/operator-request",
+            post(request_operator_action),
+        )
+        .route(
             "/v1/deployments/{id}/quota-warning-overrides",
             patch(set_quota_warning_overrides),
         )
@@ -1341,6 +1345,103 @@ async fn set_quota_warning_overrides(
     }
 }
 
+/// Body of `POST /v1/deployments/{id}/operator-request`.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRequestBody {
+    /// What is requested.
+    #[serde(flatten)]
+    pub kind: alien_core::OperatorRequestKind,
+    /// Who asked, for the audit trail.
+    pub requested_by: String,
+}
+
+/// Response of a recorded operator request.
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorRequestResponse {
+    /// Identifies the request in events and in the resource's state.
+    pub request_id: String,
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/v1/deployments/{id}/operator-request",
+    tag = "deployments",
+    params(
+        ("id" = String, Path, description = "Deployment ID"),
+    ),
+    request_body = OperatorRequestBody,
+    responses(
+        (status = 202, description = "Request recorded; the resource's controller carries it out", body = OperatorRequestResponse),
+        (status = 400, description = "The deployment's status takes no operator requests"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+        (status = 409, description = "Another request, a retry or an update is pending"),
+    )
+))]
+async fn request_operator_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(body): Json<OperatorRequestBody>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot request an action on this deployment")
+            .into_response();
+    }
+
+    let request = alien_core::OperatorRequest {
+        id: uuid::Uuid::new_v4().to_string(),
+        kind: body.kind,
+        requested_by: body.requested_by,
+        requested_at: chrono::Utc::now(),
+        outcome: None,
+    };
+    let conflict = |reason: String| {
+        alien_error::AlienError::new(ErrorData::OperatorRequestConflict { reason })
+            .into_response()
+    };
+    match state
+        .deployment_store
+        .set_operator_request(&subject, &id, &request)
+        .await
+    {
+        Ok(crate::traits::deployment_store::OperatorRequestOutcome::Recorded) => (
+            StatusCode::ACCEPTED,
+            Json(OperatorRequestResponse {
+                request_id: request.id,
+            }),
+        )
+            .into_response(),
+        Ok(crate::traits::deployment_store::OperatorRequestOutcome::RequestPending) => conflict(format!(
+            "Deployment '{id}' already has an operator request pending; wait until it ends"
+        )),
+        Ok(crate::traits::deployment_store::OperatorRequestOutcome::DeploymentBusy) => conflict(format!(
+            "Deployment '{id}' has a retry or an update queued or running; wait until it settles"
+        )),
+        Ok(crate::traits::deployment_store::OperatorRequestOutcome::StatusNotAccepted) => ErrorData::bad_request(format!(
+            "Deployment '{id}' is in status '{}', which takes no operator requests",
+            deployment.status
+        ))
+        .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/deployments/{id}/retry",
@@ -1372,6 +1473,16 @@ async fn retry_deployment(
     };
     if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot retry deployment").into_response();
+    }
+
+    if deployment.operator_request.is_some() {
+        return alien_error::AlienError::new(ErrorData::OperatorRequestConflict {
+            reason: format!(
+                "Deployment '{}' has an operator request pending; retry after it ends",
+                deployment.id
+            ),
+        })
+        .into_response();
     }
 
     if !retry_accepted(&deployment) {
@@ -1449,6 +1560,18 @@ async fn redeploy(
     };
     if !state.authz.can_update_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Cannot redeploy").into_response();
+    }
+
+    let pending = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(d)) => d.operator_request.is_some(),
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if pending {
+        return alien_error::AlienError::new(ErrorData::OperatorRequestConflict {
+            reason: format!("Deployment '{id}' has an operator request pending; redeploy after it ends"),
+        })
+        .into_response();
     }
 
     if let Err(e) = state.deployment_store.set_redeploy(&subject, &id).await {
@@ -1566,6 +1689,7 @@ mod tests {
 
     fn deployment_record() -> DeploymentRecord {
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id: "deployment-1".to_string(),
             workspace_id: "default".to_string(),

@@ -173,6 +173,7 @@ mod tests {
 
     fn failed_state() -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::ProvisioningFailed,
             current_release: None,

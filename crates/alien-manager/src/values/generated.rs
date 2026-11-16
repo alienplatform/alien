@@ -210,6 +210,7 @@ mod tests {
             .external_bindings(Default::default())
             .build();
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id: "dep_1".to_string(),
             workspace_id: "workspace".to_string(),

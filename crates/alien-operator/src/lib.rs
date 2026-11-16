@@ -1396,6 +1396,7 @@ mod tests {
         .await
         .expect("create operator database");
         let mut deployment = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Running,
             current_release: None,
@@ -1447,6 +1448,7 @@ mod tests {
         .await
         .expect("create operator database");
         let mut deployment = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Running,
             current_release: None,
@@ -1523,6 +1525,7 @@ mod tests {
             .await
             .expect("persist deployment ID");
         let deployment = DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Pending,
             current_release: None,

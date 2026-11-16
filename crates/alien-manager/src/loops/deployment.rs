@@ -2438,6 +2438,7 @@ fn state_from_record(
     target_release_id: Option<&str>,
 ) -> DeploymentState {
     DeploymentState {
+        operator_request: deployment.operator_request.clone(),
         status,
         platform: deployment.platform,
         current_release: deployment_stack.and_then(|stack| {
@@ -2545,6 +2546,7 @@ mod tests {
         stack_state: Option<StackState>,
     ) -> DeploymentRecord {
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id: "dep_test".to_string(),
             workspace_id: "default".to_string(),

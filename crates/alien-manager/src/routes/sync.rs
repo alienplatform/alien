@@ -4848,6 +4848,7 @@ pub(in crate::routes) mod tests {
 
     fn uninitialized_state() -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             platform: Platform::Kubernetes,
             status: DeploymentStatus::Pending,
             current_release: None,
@@ -5175,6 +5176,7 @@ pub(in crate::routes) mod tests {
     ) -> DeploymentRecord {
         let now = Utc::now();
         DeploymentRecord {
+            operator_request: None,
             supplied_stacks: None,
             id: "dep_test".to_string(),
             workspace_id: "default".to_string(),
@@ -7548,6 +7550,7 @@ fn deployment_state_from_record(
 ) -> Option<DeploymentState> {
     let status = deployment_status_from_record(&deployment.status)?;
     Some(DeploymentState {
+        operator_request: deployment.operator_request.clone(),
         platform: deployment.platform,
         status,
         current_release,

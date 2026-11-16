@@ -2484,6 +2484,7 @@ mod tests {
         error: Option<AlienError>,
     ) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status,
             platform: Platform::Test,
             current_release: None,

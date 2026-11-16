@@ -22,5 +22,8 @@ pub use domain::*;
 mod compute;
 pub use compute::*;
 
+mod operator_request;
+pub use operator_request::*;
+
 mod config;
 pub use config::*;

@@ -1633,6 +1633,7 @@ mod tests {
                 .build();
             let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
             let mut current = DeploymentState {
+                operator_request: None,
                 status: DeploymentStatus::Deleting,
                 platform: Platform::Aws,
                 current_release: None,
@@ -1913,6 +1914,7 @@ mod tests {
             .build();
         let client = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
         let mut current = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Deleting,
             platform: Platform::Aws,
             current_release: None,
@@ -2023,6 +2025,7 @@ mod tests {
         runtime_metadata: Option<alien_core::RuntimeMetadata>,
     ) -> DeploymentStatus {
         let current = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Deleting,
             platform: Platform::Aws,
             current_release: None,
@@ -2201,6 +2204,7 @@ mod tests {
             .allow_frozen_changes(false)
             .build();
         let current = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::DeletePending,
             platform: Platform::Local,
             current_release: None,
@@ -2292,6 +2296,7 @@ mod tests {
             ),
         );
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::DeletePending,
             platform: Platform::Aws,
             current_release: None,
@@ -2432,6 +2437,7 @@ mod tests {
                 ),
             ] {
                 let state = DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::DeletePending,
                     platform,
                     current_release: None,

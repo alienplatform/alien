@@ -206,6 +206,7 @@ impl Server {
     /// Report the deployment Running on `release`, as its runtime does.
     async fn report_running(&self, deployment_id: &str, release: &str) {
         let state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(ReleaseInfo {

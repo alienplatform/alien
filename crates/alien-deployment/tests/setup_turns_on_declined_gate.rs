@@ -112,6 +112,7 @@ async fn deployment(setup_stack: Stack, setup_input: Option<bool>, next: Stack) 
     .expect("initial setup preparation");
     let installed = installed_state(metadata.prepared_stack.as_ref().unwrap());
     DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::UpdatePending,
         platform: Platform::Aws,
         current_release: Some(release(setup_stack, "1")),

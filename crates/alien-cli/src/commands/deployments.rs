@@ -141,6 +141,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::DrainMachine { json: true, .. }
                 | DeploymentsCmd::CancelMachineDrain { json: true, .. }
                 | DeploymentsCmd::RemoveMachine { json: true, .. }
+                | DeploymentsCmd::ReplaceMachine { json: true, .. }
                 | DeploymentsCmd::SetCompute { json: true, .. }
                 | DeploymentsCmd::SetEnv { json: true, .. }
                 | DeploymentsCmd::Inputs { json: true, .. }
@@ -355,6 +356,32 @@ pub enum DeploymentsCmd {
 
         /// Machine ID, as shown by `alien deployments machines`
         machine_id: String,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+
+        /// Print the result as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace one machine of a cloud compute cluster
+    ///
+    /// The machine is drained, terminated through the cluster's scaling group
+    /// without lowering its size, and a fresh machine takes its place. Works
+    /// while the deployment is failed. The manager carries the request out;
+    /// follow it with `alien deployments machines`. Machines deployments use
+    /// `remove-machine`.
+    ReplaceMachine {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Machine ID, as shown by `alien deployments machines`
+        machine_id: String,
+
+        /// Compute cluster resource, when the deployment has several
+        #[arg(long)]
+        cluster: Option<String>,
 
         /// Skip confirmation prompt
         #[arg(long)]
@@ -1542,6 +1569,29 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 &target.workspace,
                 target.deployment.id.as_str(),
                 &machine_id,
+                confirmation,
+                json,
+            )
+            .await
+        }
+        DeploymentsCmd::ReplaceMachine {
+            id,
+            machine_id,
+            cluster,
+            yes,
+            json,
+        } => {
+            let confirmation = InteractionMode::current(json).confirmation_mode(
+                yes,
+                "Replacing a machine needs confirmation. Re-run with `--yes`.",
+            )?;
+            let target = resolve_platform_target(&ctx, &id, json, "Machine replacement").await?;
+            deployment_actions::replace_machine_task(
+                &target.client,
+                &target.workspace,
+                target.deployment.id.as_str(),
+                &machine_id,
+                cluster.as_deref(),
                 confirmation,
                 json,
             )

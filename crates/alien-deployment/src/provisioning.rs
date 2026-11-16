@@ -541,6 +541,7 @@ mod tests {
 
     fn provisioning(state: StackState, target: Stack) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Provisioning,
             platform: Platform::Test,
             current_release: None,

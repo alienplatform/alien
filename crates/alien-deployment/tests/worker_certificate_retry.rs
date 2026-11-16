@@ -103,6 +103,7 @@ async fn unchanged_deployment_retry_recovers_legacy_certificate_update_failure()
             .allow_frozen_changes(false)
             .build();
         let state = DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::RefreshFailed,
             platform,
             current_release: Some(ReleaseInfo {
@@ -219,6 +220,7 @@ async fn failed_certificate_renewal_preserves_delay_through_deployment_step() {
             }}
         })).unwrap()).build();
     let mut state = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::Running,
         platform: Platform::Aws,
         current_release: Some(ReleaseInfo {

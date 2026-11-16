@@ -212,6 +212,7 @@ async fn release_update_keeps_a_declined_key_out_of_the_pending_boundary() {
         signer_lists: Vec::new(),
     };
     let current = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::UpdatePending,
         platform: Platform::Aws,
         current_release: Some(release("1")),

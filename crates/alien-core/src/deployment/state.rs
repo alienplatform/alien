@@ -7,7 +7,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
+use super::{DeploymentStatus, EnvironmentInfo, OperatorRequest, ReleaseInfo};
 
 /// Actor that owns structural work during the initial setup phase.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -450,6 +450,11 @@ pub struct DeploymentState {
     /// When true and status is a failed state, the deployment system will retry failed resources
     #[serde(default, skip_serializing_if = "is_false")]
     pub retry_requested: bool,
+    /// A one-off operator request waiting for its resource's controller (for example replacing
+    /// one machine). Executed in any non-deleting status, including failed ones, without
+    /// planning or changing the status. Cleared when the controller reports it done or refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_request: Option<OperatorRequest>,
     /// Protocol version for cross-actor compatibility.
     /// All actors (manager, push client, agent) check this before stepping.
     /// Mismatched versions produce a clear error instead of silent corruption.
@@ -581,6 +586,7 @@ mod tests {
 
     fn state() -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status: DeploymentStatus::Pending,
             platform: Platform::Kubernetes,
             current_release: None,

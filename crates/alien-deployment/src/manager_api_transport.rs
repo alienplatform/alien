@@ -1281,6 +1281,7 @@ mod tests {
 
     fn running_state() -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status: alien_core::DeploymentStatus::Running,
             platform: alien_core::Platform::Aws,
             current_release: None,
@@ -2129,6 +2130,7 @@ mod tests {
             .await;
         let client = ManagerClient::new(&server.base_url());
         let state = DeploymentState {
+            operator_request: None,
             status: alien_core::DeploymentStatus::Running,
             platform: alien_core::Platform::Aws,
             current_release: None,
@@ -2167,6 +2169,7 @@ mod tests {
             .await;
         let client = ManagerClient::new(&server.base_url());
         let state = DeploymentState {
+            operator_request: None,
             status: alien_core::DeploymentStatus::Deleted,
             platform: alien_core::Platform::Aws,
             current_release: None,

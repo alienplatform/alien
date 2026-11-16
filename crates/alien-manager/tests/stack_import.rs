@@ -1224,6 +1224,7 @@ async fn re_import_replaces_stack_state() {
                 session: "test-reconcile".to_string(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Running,
                     platform: imported.platform,
                     current_release: Some(ReleaseInfo {
@@ -1320,6 +1321,7 @@ async fn re_import_repairs_terminal_initial_failures() {
                     session: "failed-initial-deployment".to_string(),
                     execution_claim: None,
                     state: DeploymentState {
+                        operator_request: None,
                         status: failed_status,
                         platform: deployment.platform,
                         current_release: Some(ReleaseInfo {
@@ -1417,6 +1419,7 @@ async fn re_import_advances_setup_registration_replay_baseline() {
                 session: "test-reconcile".to_string(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Running,
                     platform: deployment.platform,
                     current_release: Some(ReleaseInfo {
@@ -1854,6 +1857,7 @@ async fn a_reimport_flipping_a_frozen_gate_answer_is_refused() {
                 session: "test-reconcile".to_string(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Running,
                     platform: persisted.platform,
                     current_release: Some(ReleaseInfo {
@@ -1917,6 +1921,7 @@ async fn mark_imported_deployment_running(fixture: &Fixture, deployment_id: &str
                 session: "test-reconcile".to_string(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Running,
                     platform: imported.platform,
                     current_release: Some(ReleaseInfo {
@@ -2103,6 +2108,7 @@ async fn import_create_new_network_and_discover(fixture: &Fixture) -> String {
                 session: "network-discovered".to_string(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Running,
                     platform: deployment.platform,
                     current_release: Some(ReleaseInfo {
@@ -2264,6 +2270,7 @@ async fn a_gate_introduced_by_a_later_release_records_its_first_answer_on_reimpo
                 session: "test-reconcile".to_string(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Running,
                     platform: persisted.platform,
                     current_release: Some(ReleaseInfo {
@@ -2478,6 +2485,7 @@ async fn a_write_back_without_the_answer_map_keeps_the_record_and_import_can_tur
         .expect("runtime_metadata must be persisted");
     stripped_metadata.persisted_gate_answers = Default::default();
     let state_without_map = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::Running,
         platform: persisted.platform,
         current_release: Some(ReleaseInfo {
@@ -2738,6 +2746,7 @@ impl DeclinedGateDeployment {
         stack_state: Option<StackState>,
     ) -> DeploymentState {
         DeploymentState {
+            operator_request: None,
             status,
             platform: self.persisted.platform,
             current_release: Some(ReleaseInfo {
@@ -3035,6 +3044,7 @@ async fn a_generated_secret_is_created_once_and_kept_across_reimport() {
                 session: "test-reconcile".to_string(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Running,
                     platform: imported.platform,
                     current_release: Some(ReleaseInfo {
@@ -3457,6 +3467,7 @@ async fn runtime_reports_cannot_grant_automatic_setup_to_an_imported_installatio
     let mut metadata = stored.runtime_metadata.clone().unwrap();
     metadata.automatic_setup = true;
     let reported = DeploymentState {
+        operator_request: None,
         status: DeploymentStatus::Running,
         platform: stored.platform,
         current_release: Some(ReleaseInfo {
@@ -3611,6 +3622,7 @@ async fn assert_reserved_setup_management(
                         session: "setup-completed".into(),
                         execution_claim: None,
                         state: DeploymentState {
+                            operator_request: None,
                             status: DeploymentStatus::Running,
                             platform: Platform::Aws,
                             current_release: Some(ReleaseInfo {
@@ -3922,6 +3934,7 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
                     session: "test-reconcile".into(),
                     execution_claim: None,
                     state: DeploymentState {
+                        operator_request: None,
                         status: DeploymentStatus::Running,
                         platform,
                         current_release: Some(ReleaseInfo {
@@ -4299,6 +4312,7 @@ async fn import_requires_only_deployer_answers_and_allows_deployment_token_repla
                     session: "test-reconcile".into(),
                     execution_claim: None,
                     state: DeploymentState {
+                        operator_request: None,
                         status: DeploymentStatus::Running,
                         platform: imported.platform,
                         current_release: Some(ReleaseInfo {
@@ -4427,6 +4441,7 @@ async fn older_template_reregistration_allows_new_required_inputs_but_validates_
                 session: "test-reconcile".into(),
                 execution_claim: None,
                 state: DeploymentState {
+                    operator_request: None,
                     status: DeploymentStatus::Running,
                     platform: imported.platform,
                     current_release: Some(ReleaseInfo {
