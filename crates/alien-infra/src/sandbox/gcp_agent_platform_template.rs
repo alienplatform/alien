@@ -10,6 +10,11 @@
 //! only then reaps the old one, so a release never leaves a session pointing at a template that
 //! has already been deleted. [`template_identity`] names those fields and says what a change
 //! outside them does.
+//!
+//! Egress belongs to setup. A replacement that widens it (the serving template has no internet
+//! access, the release wants it) is refused as setup-required unless this is a setup run;
+//! narrowing to `none` only reduces access, so it applies without setup. See
+//! [`GcpAgentPlatformTemplateController::refuse_unapproved_widening`].
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -146,6 +151,14 @@ fn internet_access_or_refuse(sandbox: &Sandbox) -> Result<bool> {
             resource_id: Some(sandbox.id().to_string()),
         })
     })
+}
+
+/// Whether this step may widen egress: only a direct setup run, which has the admin's
+/// credentials. After setup the management identity creates templates, and it never opens a
+/// sandbox to the internet on its own.
+fn may_widen_egress(ctx: &ResourceControllerContext<'_>) -> bool {
+    ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        && ctx.deployment_config.setup_run
 }
 
 /// The egress switch a template reports. The API omits a false `internetAccess`, answering `{}`
@@ -614,6 +627,8 @@ impl GcpAgentPlatformTemplateController {
     )]
     async fn update_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        // First, before this step records anything: a refused widening changes nothing.
+        self.refuse_unapproved_widening(ctx, config).await?;
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
         self.preview_ports = config.preview_ports.clone();
@@ -772,6 +787,46 @@ fn require_operation_name(name: Option<String>, resource_id: &str) -> Result<Str
 }
 
 impl GcpAgentPlatformTemplateController {
+    /// Refuses a replacement that would open the internet to sessions unless this is a setup run.
+    ///
+    /// Egress is the customer's setup-time decision: after setup the management identity creates
+    /// templates, so a release could otherwise widen it on its own. The comparison is against the
+    /// template that is serving, read from the cloud, not against the previous declaration: after
+    /// a refused widening the recorded declaration is already the wider one, and a later release
+    /// would otherwise see "no change". Narrowing (to deny) only reduces access and applies
+    /// without setup, as does every change that leaves the switch alone.
+    async fn refuse_unapproved_widening(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Result<()> {
+        if !internet_access_or_refuse(config)? || may_widen_egress(ctx) {
+            return Ok(());
+        }
+        let (engine, template_id) = self.engine_and_template(&config.id)?;
+        let client = ctx
+            .service_provider
+            .get_gcp_agent_platform_client(ctx.get_gcp_config()?)?;
+        let serving = client.get_template(&engine, &template_id).await.context(
+            ErrorData::CloudPlatformError {
+                message: format!("Failed to read template '{template_id}' to check its egress"),
+                resource_id: Some(config.id.clone()),
+            },
+        )?;
+        if served_internet_access(&serving) {
+            return Ok(());
+        }
+        Err(AlienError::new(ErrorData::SetupRerunRequired {
+            resource_id: config.id.clone(),
+            message: format!(
+                "this release opens the internet to sandbox '{}', whose serving template has no \
+                 internet access. Widening egress needs the installation's setup: rerun setup \
+                 with this release",
+                config.id
+            ),
+        }))
+    }
+
     fn clear_state(&mut self) {
         self.engine = None;
         self.template_id = None;
@@ -1422,6 +1477,189 @@ mod tests {
             Some("tpl1"),
             "an unchanged body keeps the original template"
         );
+    }
+
+    // ---- 2b. Egress is setup's: management may narrow it, never widen it. ---------------------
+
+    /// A ready template serving `served` egress, updated to `desired` with `new_image` as
+    /// management (not a setup run). Returns the executor after the update ran, the run's result
+    /// and how many templates were created.
+    async fn management_update(
+        served: SandboxEgress,
+        desired: SandboxEgress,
+        new_image: &str,
+        setup_run: bool,
+    ) -> (
+        SingleControllerExecutor,
+        Result<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        management_update_from(served.clone(), served, desired, new_image, setup_run).await
+    }
+
+    /// Like [`management_update`], with the declaration the state recorded (`declared`) apart from
+    /// what the cloud's template serves.
+    async fn management_update_from(
+        declared: SandboxEgress,
+        served: SandboxEgress,
+        desired: SandboxEgress,
+        new_image: &str,
+        setup_run: bool,
+    ) -> (
+        SingleControllerExecutor,
+        Result<()>,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let creates = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let serving = served.internet_access_switch() == Some(true);
+        let mut m = MockAgentPlatformApi::new();
+        {
+            let creates = creates.clone();
+            m.expect_create_template().returning(move |_, _| {
+                creates.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(pending_op())
+            });
+        }
+        m.expect_get_operation().returning(|_| Ok(done_op("tpl2")));
+        m.expect_get_template().returning(move |_, id| {
+            Ok(SandboxEnvironmentTemplate {
+                egress_control_config: Some(EgressControlConfig {
+                    internet_access: serving.then_some(true),
+                    extra: Default::default(),
+                }),
+                ..active_template(id)
+            })
+        });
+        m.expect_list_templates()
+            .returning(|_| Ok(vec![active_template("tpl1"), active_template("tpl2")]));
+        m.expect_delete_template().returning(|_, _| Ok(()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox_with(declared, "old:v1", None, None))
+            .controller(GcpAgentPlatformTemplateController::mock_ready(
+                "eng", "tpl1",
+            ))
+            .platform(Platform::Gcp)
+            .initial_setup_authority(if setup_run {
+                alien_core::InitialSetupAuthority::DirectSetup
+            } else {
+                alien_core::InitialSetupAuthority::ImportedHandoff
+            })
+            .setup_run(setup_run)
+            .service_provider(provider_with(Arc::new(m)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor builds");
+        executor
+            .update(sandbox_with(desired, new_image, None, None))
+            .expect("update accepted");
+        let result = executor.run_until_terminal().await;
+        (executor, result, creates)
+    }
+
+    fn serving_template(executor: &SingleControllerExecutor) -> Option<String> {
+        executor
+            .internal_state::<GcpAgentPlatformTemplateController>()
+            .expect("downcasts")
+            .template_id
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn management_cannot_widen_egress_and_changes_nothing() {
+        for (served, desired) in [
+            (SandboxEgress::None, SandboxEgress::Allow),
+            (SandboxEgress::None, SandboxEgress::Internet),
+        ] {
+            // With and without an image change alongside.
+            for image in ["old:v1", "new:v2"] {
+                let (executor, result, creates) =
+                    management_update(served.clone(), desired.clone(), image, false).await;
+                let error = result.expect_err("a widening release needs setup");
+                assert!(
+                    crate::error::requires_setup_rerun(&error),
+                    "{served:?} -> {desired:?}: {error:?}"
+                );
+                assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
+                assert_eq!(serving_template(&executor).as_deref(), Some("tpl1"));
+                let state = executor
+                    .internal_state::<GcpAgentPlatformTemplateController>()
+                    .expect("downcasts");
+                assert_eq!(state.egress, None, "the refused release is not recorded");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_setup_run_may_widen_egress() {
+        let (executor, result, creates) =
+            management_update(SandboxEgress::None, SandboxEgress::Internet, "old:v1", true).await;
+        result.expect("setup replaces the template");
+        assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(serving_template(&executor).as_deref(), Some("tpl2"));
+    }
+
+    /// The widening is judged against the template that serves, not the previous declaration, which
+    /// after a refused release is already the wider one.
+    #[tokio::test]
+    async fn a_refused_widening_is_not_forgotten_by_the_next_release() {
+        let (_, result, creates) = management_update_from(
+            SandboxEgress::Internet,
+            SandboxEgress::None,
+            SandboxEgress::Internet,
+            "new:v3",
+            false,
+        )
+        .await;
+        let error = result.expect_err("still refused");
+        assert!(crate::error::requires_setup_rerun(&error), "{error:?}");
+        assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Narrowing only reduces access, so management applies it without setup.
+    #[tokio::test]
+    async fn management_may_narrow_egress() {
+        for served in [SandboxEgress::Internet, SandboxEgress::Allow] {
+            let (executor, result, creates) =
+                management_update(served, SandboxEgress::None, "old:v1", false).await;
+            result.expect("narrowing applies");
+            assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(serving_template(&executor).as_deref(), Some("tpl2"));
+        }
+    }
+
+    #[tokio::test]
+    async fn management_still_rolls_out_image_only_changes() {
+        for egress in [SandboxEgress::None, SandboxEgress::Allow] {
+            let (executor, result, creates) =
+                management_update(egress.clone(), egress, "new:v2", false).await;
+            result.expect("an image-only change applies");
+            assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(serving_template(&executor).as_deref(), Some("tpl2"));
+        }
+    }
+
+    /// `allow` and `internet` are the same switch, so moving between them widens nothing.
+    #[tokio::test]
+    async fn management_may_switch_between_modes_with_the_same_access() {
+        let (executor, result, _) = management_update(
+            SandboxEgress::Allow,
+            SandboxEgress::Internet,
+            "new:v2",
+            false,
+        )
+        .await;
+        result.expect("same access applies");
+        assert_eq!(serving_template(&executor).as_deref(), Some("tpl2"));
+    }
+
+    #[tokio::test]
+    async fn management_unchanged_egress_creates_no_template() {
+        let (executor, result, creates) =
+            management_update(SandboxEgress::None, SandboxEgress::None, "old:v1", false).await;
+        result.expect("a no-op update succeeds");
+        assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(serving_template(&executor).as_deref(), Some("tpl1"));
     }
 
     // ---- 3. Replace on image change: new template ACTIVE before the old is reaped. -------------
