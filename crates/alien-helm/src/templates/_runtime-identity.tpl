@@ -132,18 +132,22 @@ sync-token
 {{- end -}}
 {{- join "," $keys -}}
 {{- end -}}
-{{- /* The Operator image tag to run. This chart installs the Operator version in
-.Chart.AppVersion. A semver tag older than that can only be a stale default carried by
-helm upgrade --reuse-values from an earlier chart, and an older Operator cannot run this chart,
-so it is replaced by the chart's own version (keeping the tag's "v" prefix style). A newer
-semver tag and any non-semver tag are kept as set. */ -}}
+{{- /* The Operator release version this chart was built to install. Packaging writes it here
+as a literal, so values cannot change it. Empty (a dev or latest build) means no override.
+It is not .Chart.AppVersion: a product chart sets that to its own release version. */ -}}
+{{- define "deployment.operatorVersion" -}}{{- end -}}
+
+{{- /* The Operator image tag to run. A semver tag older than the Operator version above can only
+be a stale default carried by helm upgrade --reuse-values from an earlier chart, and an older
+Operator cannot run this chart, so it is replaced by that version (keeping the tag's "v" prefix
+style). A newer semver tag and any non-semver tag are kept as set. */ -}}
 {{- define "deployment.operatorTag" -}}
 {{- $tag := toString .Values.runtime.image.tag -}}
 {{- $bare := (split "@" $tag)._0 | trimPrefix "v" -}}
-{{- $appVersion := .Chart.AppVersion | trimPrefix "v" -}}
+{{- $version := include "deployment.operatorVersion" . -}}
 {{- $semver := "^[0-9]+\\.[0-9]+\\.[0-9]+$" -}}
-{{- if and (regexMatch $semver $bare) (regexMatch $semver $appVersion) (semverCompare (printf "< %s" $appVersion) $bare) -}}
-{{- if hasPrefix "v" $tag }}v{{ end }}{{ $appVersion }}
+{{- if and $version (regexMatch $semver $bare) (regexMatch $semver $version) (semverCompare (printf "< %s" $version) $bare) -}}
+{{- if hasPrefix "v" $tag }}v{{ end }}{{ $version }}
 {{- else -}}
 {{- $tag -}}
 {{- end -}}

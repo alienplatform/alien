@@ -10266,7 +10266,7 @@ mod tests {
     }
 
     #[test]
-    fn an_operator_tag_older_than_the_chart_is_ignored() {
+    fn an_operator_tag_older_than_the_operator_release_is_ignored() {
         let stack = Stack::new("database-stack".into())
             .add(
                 alien_core::Postgres::new("database".into()).build(),
@@ -10274,7 +10274,7 @@ mod tests {
             )
             .build();
         let registry = HelmRegistry::built_in();
-        let mut chart = generate_helm_chart(
+        let generated = generate_helm_chart(
             &stack,
             HelmOptions {
                 registry: &registry,
@@ -10283,10 +10283,26 @@ mod tests {
             },
         )
         .unwrap();
-        let metadata = chart.files.get_mut("Chart.yaml").unwrap();
-        let mut value: serde_yaml::Value = serde_yaml::from_str(metadata).unwrap();
-        value["appVersion"] = "3.3.66".into();
-        *metadata = serde_yaml::to_string(&value).unwrap();
+        let package = |operator_tag: &str| {
+            let mut chart = crate::package::apply_package_defaults(
+                generated.clone(),
+                &crate::package::PackageDefaults {
+                    operator_image: Some(crate::package::OperatorImageDefault {
+                        repository: "registry.example.com/deployment/operator",
+                        tag: operator_tag,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            // An embedder's product chart carries its own release version as appVersion.
+            let metadata = chart.files.get_mut("Chart.yaml").unwrap();
+            let mut value: serde_yaml::Value = serde_yaml::from_str(metadata).unwrap();
+            value["appVersion"] = "9.9.9".into();
+            *metadata = serde_yaml::to_string(&value).unwrap();
+            chart
+        };
+        let chart = package("v3.3.66");
         let render = |tag: &str, digest: &str| {
             let values = format!(
                 "postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\nruntime:\n  image:\n    tag: \"{tag}\"\n    digest: \"{digest}\"\n"
@@ -10332,6 +10348,15 @@ mod tests {
             operator_image("v3.3.65", &digest),
             format!("{repository}@{digest}")
         );
+        // A build without an Operator release version applies no override.
+        let dev = package("latest");
+        let rendered = crate::test_utils::helm_template_for_release(
+            &dev.files,
+            Some("postgres:\n  database:\n    enabled: true\n    existingPasswordSecret: database-credentials\n    recordedImage: pgvector/pgvector:pg17-bookworm\nruntime:\n  image:\n    tag: \"v3.3.65\"\n"),
+            "app",
+        );
+        rendered.assert_ok("dev build");
+        assert!(rendered.stdout.contains("deployment/operator:v3.3.65"));
     }
 
     #[test]

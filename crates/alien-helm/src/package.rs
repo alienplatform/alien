@@ -122,6 +122,26 @@ pub fn apply_package_defaults(
         }
     }
 
+    if let Some(image) = defaults.operator_image {
+        // The Operator release this chart installs, as a literal the values cannot change.
+        // A dev or latest build has no release version and gets no override.
+        let release = image
+            .tag
+            .split('@')
+            .next()
+            .unwrap_or_default()
+            .trim_start_matches('v');
+        if release.split('.').count() == 3 && release.split('.').all(|p| p.parse::<u64>().is_ok()) {
+            let identity = file_mut(&mut chart, "templates/_runtime-identity.tpl")?;
+            replace_once(
+                identity,
+                "{{- define \"deployment.operatorVersion\" -}}{{- end -}}",
+                &format!(
+                    "{{{{- define \"deployment.operatorVersion\" -}}}}{release}{{{{- end -}}}}"
+                ),
+            )?;
+        }
+    }
     let values = file_mut(&mut chart, "values.yaml")?;
     if let Some(url) = defaults.management_url {
         replace_once(

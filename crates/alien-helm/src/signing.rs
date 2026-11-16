@@ -713,6 +713,10 @@ mod tests {
         let same =
             apply_package_defaults(chart.clone(), &defaults(&format!("1.4.0@{DIGEST}"))).unwrap();
         assert_eq!(operator_tag(&same), format!("1.4.0@{DIGEST}"));
+        // The protected chart's Operator template reads the packaged literal, not Chart.yaml.
+        let identity = &packaged.files["templates/_runtime-identity.tpl"];
+        assert!(identity.contains("{{- define \"deployment.operatorVersion\" -}}1.4.0{{- end -}}"));
+        assert!(OPERATOR_IMAGE_TEMPLATE.contains("deployment.operatorTag"));
         let other = format!("1.4.0@sha256:{}", "b".repeat(64));
         let error = apply_package_defaults(chart, &defaults(&other)).unwrap_err();
         assert!(error.to_string().contains("pins Operator image"), "{error}");
