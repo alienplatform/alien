@@ -1587,7 +1587,8 @@ impl FakeSandbox {
     /// The state a sandbox paused by `pause` is in: the marker holds `boot_id`'s generation.
     fn paused_with_marker(&self) {
         let boot_id = *self.boot_id.lock().unwrap();
-        *self.file.lock().unwrap() = Some(generation_from_boot_id(boot_id).to_string().into_bytes());
+        *self.file.lock().unwrap() =
+            Some(generation_from_boot_id(boot_id).to_string().into_bytes());
         self.set_state("STATE_PAUSED");
     }
 

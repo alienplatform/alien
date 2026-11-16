@@ -523,10 +523,12 @@ Limits the plan refuses with a message, rather than discovering them at the firs
   pause the sandbox explicitly with `pause()` instead.
 
 `pause()` and `resume()` keep the sandbox's memory and running processes (`pause_resume` is on).
-The binding records the container's generation before the pause and fails a `resume()` that finds
-another one, saying the sandbox restarted and its memory was lost, so a fresh container never
-reaches a caller as a kept one. The record lives in the process that paused; a caller resuming from
-another process compares the generation `get` reported before the pause. Any request to a paused
+Before pausing, the binding writes the container's generation to
+`/.alien-pause-generation` inside the sandbox, and `resume()` reads it back and fails when it is
+missing or differs, saying the sandbox restarted and its memory was lost. A fresh container has no
+such file, so a pause in one process and a resume in another are checked the same way, and a fresh
+container never reaches a caller as a kept one. A sandbox not paused by `pause()` has no marker,
+so resuming it reports the same error. Any request to a paused
 sandbox, a command or a preview call included, wakes it: Google offers no way to turn that off, so
 a paused sandbox stays paused only while nothing talks to it. A `resume()` after such a wake
 returns once the sandbox answers and changes nothing.

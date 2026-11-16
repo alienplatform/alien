@@ -428,9 +428,7 @@ impl GcpAgentPlatformSandbox {
             if sandbox_state(operation, state)? == SandboxState::Terminated {
                 return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "sandboxTerminated".to_string(),
-                    reason: format!(
-                        "{operation}: sandbox '{sandbox_id}' reached a terminal state"
-                    ),
+                    reason: format!("{operation}: sandbox '{sandbox_id}' reached a terminal state"),
                 }));
             }
         }

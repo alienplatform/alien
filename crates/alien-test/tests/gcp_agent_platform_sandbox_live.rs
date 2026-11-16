@@ -928,7 +928,10 @@ async fn pause_and_resume_keep_memory() {
         );
 
         outcome.expect("resume returns the same container");
-        assert_eq!(generation, after_generation, "the container's boot id changed");
+        assert_eq!(
+            generation, after_generation,
+            "the container's boot id changed"
+        );
         assert_eq!(before.token, after.token, "the in-memory token changed");
         assert_eq!(before.pid, after.pid, "the probe process was replaced");
         assert!(after.ticks > before.ticks, "the counter did not continue");

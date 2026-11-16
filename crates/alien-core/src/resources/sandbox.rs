@@ -542,8 +542,8 @@ impl SandboxCapabilities {
             // WebSocket. The edge consumes `Authorization` for its own JWT, so the caller's bearer
             // travels in its own header and the agent hands it to the workload as `Authorization`.
             preview: true,
-            // `:pause` and `:resume` keep memory and running processes: the binding records the
-            // container's generation before a pause and fails a resume that finds another, so a
+            // `:pause` and `:resume` keep memory and running processes: the binding leaves the
+            // container's generation inside the sandbox before a pause and fails a resume that finds another, so a
             // fresh container is an error and never a kept sandbox. Any request to a paused
             // sandbox wakes it, and Google has no idle policy, so idle pause stays refused at plan
             // time and only an explicit `pause` is offered.
