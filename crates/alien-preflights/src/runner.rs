@@ -374,6 +374,17 @@ impl PreflightRunner {
                     "Automatic machine selection moved a pool that has no machines yet"
                 );
                 group.instance_type = Some(machine.to_string());
+                // The profile is the machine's hardware: it moves with the machine, or the
+                // first update sees a frozen compute change.
+                if let (Some(old_profile), Some(spec)) = (
+                    group.profile.as_ref(),
+                    alien_core::instance_catalog::find_instance_type(stack_state.platform, machine),
+                ) {
+                    let mut profile =
+                        spec.to_machine_profile_for_storage(old_profile.ephemeral_storage_bytes);
+                    profile.data_disk = old_profile.data_disk.clone();
+                    group.profile = Some(profile);
+                }
                 changed = true;
             }
         }
@@ -1155,6 +1166,77 @@ mod setup_update_authorization_tests {
         );
         // Nothing to move once the pick matches the stack.
         assert!(PreflightRunner::with_chosen_machines(&updated, &state, &chosen).is_none());
+    }
+
+    /// The profile is derived from the machine, so a pool moved to another family carries that
+    /// family's profile. A profile left from the old machine makes the first update look like a
+    /// frozen compute change.
+    #[cfg(feature = "runtime-checks")]
+    #[test]
+    fn first_setup_selection_gives_a_moved_pool_the_new_machines_profile() {
+        use alien_core::{
+            instance_catalog, CapacityGroup, ComputeCluster, ComputePoolSelection, ComputeSettings,
+        };
+        let profile_of = |machine: &str| {
+            instance_catalog::find_instance_type(Platform::Azure, machine)
+                .expect("machine is in the catalog")
+                .to_machine_profile_for_storage(0)
+        };
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some("Standard_D8s_v5".to_string()),
+                profile: Some(profile_of("Standard_D8s_v5")),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+                data_disk_gib_range: None,
+            })
+            .build();
+        let stack = Stack::new("azure-pool".into())
+            .add(cluster, ResourceLifecycle::Frozen)
+            .build();
+        let mut chosen = deployment_config();
+        chosen.stack_settings.compute = Some(ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("Standard_F8s_v2".to_string()),
+                    failure_domains: None,
+                    data_disk_gib: None,
+                },
+            )]
+            .into(),
+            containers: Default::default(),
+        });
+
+        let updated = PreflightRunner::with_chosen_machines(
+            &stack,
+            &StackState::new(Platform::Azure),
+            &chosen,
+        )
+        .expect("the pool moves");
+        let group = updated
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<ComputeCluster>())
+            .flat_map(|cluster| cluster.capacity_groups.iter())
+            .next()
+            .unwrap();
+        assert_eq!(group.instance_type.as_deref(), Some("Standard_F8s_v2"));
+        let expected = profile_of("Standard_F8s_v2");
+        assert_eq!(group.profile.as_ref().map(|p| &p.cpu), Some(&expected.cpu));
+        assert_eq!(
+            group.profile.as_ref().map(|p| p.memory_bytes),
+            Some(expected.memory_bytes)
+        );
+        assert_ne!(
+            group.profile,
+            Some(profile_of("Standard_D8s_v5")),
+            "the profile still belongs to the machine the pool moved from"
+        );
     }
 
     #[cfg(feature = "runtime-checks")]

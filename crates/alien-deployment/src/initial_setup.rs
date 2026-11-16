@@ -425,6 +425,7 @@ fn carry_selection_into_imported_state(stack_state: &mut StackState, selected: &
                 .find(|pick| pick.group_id == group.group_id)
             {
                 group.instance_type = pick.instance_type.clone();
+                group.profile = pick.profile.clone();
             }
         }
     }
@@ -2693,6 +2694,49 @@ mod tests {
         assert_eq!(
             stack_state.resources["compute"].config,
             alien_core::Resource::new(cluster("Standard_D8s_v6"))
+        );
+    }
+
+    #[test]
+    fn a_pick_carries_the_machines_profile_into_the_registered_cluster() {
+        use alien_core::{instance_catalog, CapacityGroup, ComputeCluster};
+        let cluster = |machine: &str| {
+            let profile = instance_catalog::find_instance_type(Platform::Azure, machine)
+                .unwrap()
+                .to_machine_profile_for_storage(0);
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: Some(machine.to_string()),
+                    profile: Some(profile),
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                })
+                .build()
+        };
+        let mut registered = alien_core::StackResourceState::new_pending(
+            "compute-cluster".to_string(),
+            alien_core::Resource::new(cluster("Standard_D8s_v5")),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        registered.status = ResourceStatus::Provisioning;
+        let mut stack_state = StackState::new(Platform::Azure);
+        stack_state
+            .resources
+            .insert("compute".to_string(), registered);
+        let selected = Stack::new("azure".to_string())
+            .add(cluster("Standard_F8s_v2"), ResourceLifecycle::Frozen)
+            .build();
+
+        carry_selection_into_imported_state(&mut stack_state, &selected);
+
+        assert_eq!(
+            stack_state.resources["compute"].config,
+            alien_core::Resource::new(cluster("Standard_F8s_v2"))
         );
     }
 

@@ -70,6 +70,17 @@ fn runtime_managed_frozen_change(platform: Platform, old: &Resource, new: &Resou
         if runtime_disk_change(platform, old_group, new_group) {
             old_group.profile = new_group.profile.clone();
         }
+        // A first-setup pick once moved the machine without its profile. The install then
+        // carries a profile that is not its machine's, and the update brings the right one.
+        if old_group.instance_type == new_group.instance_type
+            && old_group.profile != new_group.profile
+            && old_group.profile.is_some()
+            && !profile_has_machines_hardware(platform, old_group)
+            && profile_has_machines_hardware(platform, new_group)
+            && validated_machine_profile(platform, new_group)
+        {
+            old_group.profile = new_group.profile.clone();
+        }
     }
     normalized == *new_cluster
 }
@@ -91,6 +102,23 @@ fn runtime_disk_change(platform: Platform, old: &CapacityGroup, new: &CapacityGr
         Platform::Machines => true,
         Platform::Kubernetes | Platform::Local | Platform::Test => false,
     }
+}
+
+/// Whether the group's profile has the hardware of the machine it names. Disk sizes are the
+/// deployment's choice and are not part of the hardware.
+fn profile_has_machines_hardware(platform: Platform, group: &CapacityGroup) -> bool {
+    let (Some(machine), Some(profile)) = (group.instance_type.as_deref(), group.profile.as_ref())
+    else {
+        return false;
+    };
+    let Some(spec) = alien_core::instance_catalog::find_instance_type(platform, machine) else {
+        return false;
+    };
+    let hardware = spec.to_machine_profile();
+    profile.cpu == hardware.cpu
+        && profile.memory_bytes == hardware.memory_bytes
+        && profile.architecture == hardware.architecture
+        && profile.gpu == hardware.gpu
 }
 
 fn validated_machine_profile(platform: Platform, group: &CapacityGroup) -> bool {
@@ -1239,6 +1267,48 @@ mod tests {
                 data_disk_gib_range: None,
             })
             .build()
+    }
+
+    /// An install whose first-setup pick moved the machine but not the profile registered a
+    /// profile that is not its machine's. The first update brings the machine's own profile and
+    /// is not a frozen compute change.
+    #[tokio::test]
+    async fn an_install_with_a_profile_from_another_machine_takes_the_machines_profile() {
+        use alien_core::instance_catalog;
+        let cluster = |machine: &str, profile_of: &str| {
+            let profile = instance_catalog::find_instance_type(Platform::Azure, profile_of)
+                .unwrap()
+                .to_machine_profile_for_storage(0);
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(CapacityGroup {
+                    group_id: "workers".to_string(),
+                    instance_type: Some(machine.to_string()),
+                    profile: Some(profile),
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                })
+                .build()
+        };
+        let check = |old: ComputeCluster, new: ComputeCluster| async move {
+            FrozenResourcesUnchangedCheck {
+                platform: Platform::Azure,
+            }
+            .check(&compute_stack(old), &compute_stack(new))
+            .await
+            .unwrap()
+        };
+        // Registered with the F machine and the D machine's hardware.
+        let stale = cluster("Standard_F8s_v2", "Standard_D8s_v5");
+        let result = check(stale.clone(), cluster("Standard_F8s_v2", "Standard_F8s_v2")).await;
+        assert!(result.success, "{:?}", result.errors);
+        // A profile that matches no machine is still a change setup owns.
+        let mut invented = cluster("Standard_F8s_v2", "Standard_F8s_v2");
+        invented.capacity_groups[0].profile.as_mut().unwrap().cpu = "3.0".to_string();
+        let result = check(stale, invented).await;
+        assert!(!result.success);
     }
 
     #[tokio::test]
