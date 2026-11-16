@@ -391,6 +391,8 @@ fn stage_protected_files(image: &str) -> Container {
 /// alien CLI stages the agent at the top of the volume only, so the file the sandbox container
 /// starts is missing and this container fails by itself, ahead of the sandbox container, with a
 /// name that says why. The staging step cannot report it: it is that older agent and succeeds.
+/// This is a diagnostic only: an image can be made to pass it. The agent's own check at start
+/// (the mounted directory must be read-only) is the protection.
 fn check_staged_agent(image: &str) -> Container {
     Container {
         name: CHECK_STAGED_AGENT_CONTAINER.to_string(),

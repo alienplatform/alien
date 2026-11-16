@@ -699,16 +699,7 @@ async fn replenish_warm_pool(
             resource_id: Some(sandbox.id.clone()),
         })?;
 
-    if let Some(message) = older_cli_image_message(&sandbox.id, &idle.items) {
-        return Err(AlienError::new(ErrorData::CloudPlatformError {
-            message,
-            resource_id: Some(sandbox.id.clone()),
-        }));
-    }
-
-    // A pod whose retire write succeeded but whose delete failed is in no pool and would run
-    // forever; every tick deletes the ones it finds.
-    sweep_retired_pods(
+    sweep_then_check_image(
         &client,
         namespace,
         &sandbox.id,
@@ -718,8 +709,9 @@ async fn replenish_warm_pool(
             deployment_label_key,
             deployment_label_value
         ),
+        &idle.items,
     )
-    .await;
+    .await?;
 
     let mut created = 0;
     let Some(egress_environment) = super::kubernetes_egress::bootstrap_environment(
@@ -1226,6 +1218,27 @@ fn sandbox_namespace(config: &alien_core::KubernetesClientConfig) -> Result<Stri
     }
 }
 
+/// Deletes retired pods first, then reports an image the pool pods show to be built by an older
+/// CLI. The sweep runs even when the image is refused: a retired pod left behind would run forever.
+async fn sweep_then_check_image(
+    client: &std::sync::Arc<dyn alien_k8s_clients::PodApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    retired_selector: &str,
+    idle: &[k8s_openapi::api::core::v1::Pod],
+) -> Result<()> {
+    // A pod whose retire write succeeded but whose delete failed is in no pool and would run
+    // forever; every tick deletes the ones it finds.
+    sweep_retired_pods(client, namespace, sandbox_id, retired_selector).await;
+    match older_cli_image_message(sandbox_id, idle) {
+        Some(message) => Err(AlienError::new(ErrorData::CloudPlatformError {
+            message,
+            resource_id: Some(sandbox_id.to_string()),
+        })),
+        None => Ok(()),
+    }
+}
+
 /// The message when a pool pod's `check-staged-agent` init container could not run the staged
 /// agent: the image was built by an alien CLI from before the directory mount, so its agent
 /// staged no file at `/opt/alien/alien-sandbox-agent`. `None` when no pod shows that.
@@ -1257,10 +1270,9 @@ pub(crate) fn older_cli_image_message(
             .into_iter()
             .flatten()
             .filter(|status| status.name == super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER)
-            .any(|status| {
-                status.state.as_ref().is_some_and(failed)
-                    || status.last_state.as_ref().is_some_and(failed)
-            })
+            // Only the current state: an earlier, transient start failure (`last_state`) must not
+            // blame the image for the rest of the pod's life.
+            .any(|status| status.state.as_ref().is_some_and(failed))
     });
     hit.then(|| {
         format!(
@@ -1380,6 +1392,49 @@ mod tests {
             ..Default::default()
         };
         assert!(super::older_cli_image_message("box", &[pod_with_init(check, exited)]).is_some());
+    }
+
+    #[tokio::test]
+    async fn the_sweep_of_retired_pods_runs_when_the_image_is_refused() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = deleted.clone();
+        let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
+        pods.expect_list_pods().returning(|_, _, _| {
+            Ok(k8s_openapi::List {
+                items: vec![idle_with_hash("stuck", Some("old"))],
+                ..Default::default()
+            })
+        });
+        pods.expect_delete_pod().returning(move |_, name| {
+            seen.lock().unwrap().push(name.to_string());
+            Ok(())
+        });
+        let client: std::sync::Arc<dyn alien_k8s_clients::PodApi> = std::sync::Arc::new(pods);
+        let result = sweep_then_check_image(
+            &client,
+            "ns",
+            "sbx",
+            &retired_selector("sbx"),
+            &[pod_with_init(check, start_error())],
+        )
+        .await;
+        assert!(result.is_err(), "the older image is still reported");
+        assert_eq!(*deleted.lock().unwrap(), ["stuck"]);
+    }
+
+    #[test]
+    fn an_earlier_start_failure_of_the_check_does_not_blame_the_image() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let mut pod = pod_with_init(check, ContainerState::default());
+        pod.status
+            .as_mut()
+            .unwrap()
+            .init_container_statuses
+            .as_mut()
+            .unwrap()[0]
+            .last_state = Some(start_error());
+        assert!(super::older_cli_image_message("box", &[pod]).is_none());
     }
 
     #[test]
