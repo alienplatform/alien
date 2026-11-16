@@ -652,6 +652,7 @@ mod tests {
         StackState, Vault,
     };
     use httpmock::prelude::*;
+    use regex::Regex;
     use serde_json::json;
 
     #[tokio::test]
@@ -1402,7 +1403,8 @@ mod tests {
         // The sandbox used to be an internet sandbox: the gateway Service policy it left in its
         // own namespace is removed by the same pass that refills its pool, so a restarted
         // Operator (which remembers nothing) cleans it up too.
-        let leftover = gateway_service_policy(&ctx, "subject", "sandboxes", "10.96.0.7".parse().unwrap());
+        let leftover =
+            gateway_service_policy(&ctx, "subject", "sandboxes", "10.96.0.7".parse().unwrap());
         let leftover_path =
             "/apis/networking.k8s.io/v1/namespaces/sandboxes/networkpolicies/alien-sbx-subject-gateway-service";
         elsewhere
@@ -1857,5 +1859,189 @@ mod tests {
         )
         .unwrap();
         assert!(kube_api_targets(&service, &empty).is_err());
+    }
+
+    /// An idle pod as an earlier pass left it: built for `egress`, with a template digest that no
+    /// longer matches. Named, labelled idle, and carrying the gateway variable when asked.
+    fn idle_pod_for(name: &str, with_gateway: bool) -> serde_json::Value {
+        let mut pod = crate::sandbox::kubernetes_spec::idle_pool_pod_with_labels(
+            &internet_sandbox("subject"),
+            "sandboxes",
+            "gvisor",
+            None,
+            None,
+            Default::default(),
+        );
+        pod.metadata.generate_name = None;
+        pod.metadata.name = Some(name.into());
+        pod.metadata.annotations = Some(
+            [(
+                crate::sandbox::kubernetes::ANNOTATION_TEMPLATE_HASH.to_string(),
+                "built-for-another-egress".to_string(),
+            )]
+            .into(),
+        );
+        if with_gateway {
+            pod.spec.as_mut().unwrap().containers[0]
+                .env
+                .get_or_insert_default()
+                .push(EnvVar {
+                    name: "ALIEN_SANDBOX_EGRESS_GATEWAY".into(),
+                    value: Some("10.96.0.7:3128".into()),
+                    value_from: None,
+                });
+        }
+        serde_json::to_value(pod).unwrap()
+    }
+
+    /// Mocks everything one pool pass reads, with `idle` as the idle pods. Returns the update and
+    /// delete mocks for pod `name`.
+    async fn pool_pass_cluster<'a>(
+        server: &'a MockServer,
+        idle: Vec<serde_json::Value>,
+        gateway_service: bool,
+    ) -> (httpmock::Mock<'a>, httpmock::Mock<'a>) {
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/api/v1/namespaces/sandboxes/pods")
+                    .matches(|request| {
+                        request.query_params.as_ref().is_some_and(|params| {
+                            params.iter().any(|(name, value)| {
+                                name == "labelSelector" && value.contains("sandbox-pool=idle")
+                            })
+                        })
+                    });
+                then.status(200).json_body(
+                    json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":idle}),
+                );
+            })
+            .await;
+        // Nothing is waiting to be deleted from an earlier pass.
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/api/v1/namespaces/sandboxes/pods")
+                    .matches(|request| {
+                        request.query_params.as_ref().is_some_and(|params| {
+                            params.iter().any(|(name, value)| {
+                                name == "labelSelector" && value.contains("sandbox-pool=retired")
+                            })
+                        })
+                    });
+                then.status(200).json_body(
+                    json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[]}),
+                );
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/namespaces/default/services/kubernetes");
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"kubernetes"},"spec":{"clusterIP":"10.96.0.1","ports":[{"port":443}]}}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/apis/discovery.k8s.io/v1/namespaces/default/endpointslices/kubernetes");
+                then.status(200).json_body(json!({"apiVersion":"discovery.k8s.io/v1","kind":"EndpointSlice","metadata":{"name":"kubernetes"},"addressType":"IPv4","endpoints":[{"addresses":["172.16.0.2"]}],"ports":[{"port":6443}]}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(
+                    "/apis/networking.k8s.io/v1/namespaces/sandboxes/networkpolicies/alien-sbx-subject-gateway-service",
+                );
+                then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
+            })
+            .await;
+        if !gateway_service {
+            server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path_matches(Regex::new("/api/v1/namespaces/test-ns/services/.*egress-gateway").unwrap());
+                    then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
+                })
+                .await;
+        }
+        let update = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/api/v1/namespaces/sandboxes/pods/stale");
+                then.status(200).json_body(idle_pod_for("stale", true));
+            })
+            .await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(DELETE)
+                    .path("/api/v1/namespaces/sandboxes/pods/stale");
+                then.status(200)
+                    .json_body(json!({"kind":"Status","apiVersion":"v1","status":"Success"}));
+            })
+            .await;
+        (update, delete)
+    }
+
+    /// A sandbox that goes from `internet` to `none` builds its pods without the gateway
+    /// variable, so an idle pod made with it no longer matches and is replaced.
+    #[tokio::test]
+    async fn an_idle_pod_made_for_internet_is_replaced_when_the_sandbox_has_no_egress() {
+        let mut none = internet_sandbox("subject");
+        none.egress = SandboxEgress::None;
+        let stack = Stack::new("test".into())
+            .add(none.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let state = deployment_state(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(none.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        let (update, delete) =
+            pool_pass_cluster(&server, vec![idle_pod_for("stale", true)], true).await;
+
+        let _ = crate::sandbox::kubernetes::replenish_warm_pool(
+            &ctx,
+            &none,
+            "sandboxes",
+            "gvisor",
+            1,
+            None,
+        )
+        .await;
+        update.assert_hits_async(1).await;
+        delete.assert_hits_async(1).await;
+    }
+
+    /// The other direction: an internet sandbox whose gateway is not up yet has no pod that can
+    /// serve it, and an idle pod without the gateway variable must not stay claimable meanwhile.
+    #[tokio::test]
+    async fn an_idle_pod_without_the_gateway_is_replaced_for_an_internet_sandbox() {
+        let sandbox = internet_sandbox("subject");
+        let stack = Stack::new("test".into())
+            .add(sandbox.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let state = deployment_state(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(sandbox.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        let (update, delete) =
+            pool_pass_cluster(&server, vec![idle_pod_for("stale", false)], false).await;
+
+        let _ = crate::sandbox::kubernetes::replenish_warm_pool(
+            &ctx,
+            &sandbox,
+            "sandboxes",
+            "gvisor",
+            1,
+            None,
+        )
+        .await;
+        update.assert_hits_async(1).await;
+        delete.assert_hits_async(1).await;
     }
 }

@@ -793,10 +793,17 @@ pub(crate) async fn replenish_warm_pool(
     )
     .await?
     else {
-        return Ok(WarmPool {
-            idle: without_terminating(idle.items).len(),
-            created,
-        });
+        // The gateway is not up, so no pod can be built for this sandbox yet, and an idle pod
+        // made earlier (for another egress mode, or for a gateway address that is gone) cannot
+        // serve it. Take them out of the pool rather than leave them to be claimed.
+        retire_stale_idle_pods(
+            &client,
+            namespace,
+            &sandbox.id,
+            without_terminating(idle.items),
+        )
+        .await;
+        return Ok(WarmPool { idle: 0, created });
     };
     // A session's only route to the internet is the gateway Service's ClusterIP, which the
     // chart's policy cannot name (see `gateway_service_policy`), so the Operator admits it.
