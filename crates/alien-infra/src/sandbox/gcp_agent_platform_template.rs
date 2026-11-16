@@ -387,8 +387,21 @@ async fn ensure_image_repository(
                 Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
             ) => {}
         Err(e) => {
+            let denied = matches!(
+                e.error,
+                Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
+            );
             return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("Failed to read the sandbox image repository '{repository}': {e}"),
+                message: if denied {
+                    format!(
+                        "No access to the sandbox image repository '{repository}'. An install set \
+                         up before sandbox images were copied into the project lacks it: update \
+                         the setup (re-apply the current Terraform module) and retry. Nothing was \
+                         copied or created"
+                    )
+                } else {
+                    format!("Failed to read the sandbox image repository '{repository}': {e}")
+                },
                 resource_id: Some(sandbox_id.to_string()),
             }));
         }
