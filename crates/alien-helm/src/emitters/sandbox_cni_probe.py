@@ -136,7 +136,7 @@ def main():
                                         "readOnlyRootFilesystem": True,
                                         "capabilities": {"drop": ["ALL"]}},
                     "resources": {"requests": {"cpu": "10m", "memory": "24Mi"},
-                                  "limits": {"cpu": "100m", "memory": "64Mi"}}}],
+                                  "limits": {"cpu": "100m", "memory": "128Mi"}}}],
             },
         }
 
