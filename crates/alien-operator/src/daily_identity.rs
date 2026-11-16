@@ -1520,6 +1520,33 @@ mod persistence_tests {
         assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
     }
 
+    /// A GitOps tool applies the same values again and again, with the code that
+    /// enrolled the Operator long since spent. That changes nothing: no request
+    /// reaches the manager's enrollment endpoint and the saved key stays.
+    #[tokio::test]
+    async fn applying_a_spent_code_again_is_a_no_op() {
+        let (db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(20)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        for _ in 0..3 {
+            let (deployment, token) = identity
+                .clone()
+                .connect(request(&state, "ax_enroll_original"))
+                .await
+                .unwrap();
+            assert_eq!(deployment, "deployment-one");
+            assert_eq!(token, "ax_cap_v1_recovered");
+        }
+        assert_eq!(manager.enrolls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!(saved.current, state.current);
+        assert_eq!(
+            saved.enrolled_code_hash.as_deref(),
+            Some(key_hash("ax_enroll_original").as_str())
+        );
+    }
+
     /// `helm upgrade` put a new code in the release Secret while the key
     /// still works. The operator uses the code up, so a reader of the Secret
     /// cannot enroll with it. A code that does not work changes nothing.
