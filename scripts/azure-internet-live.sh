@@ -62,6 +62,10 @@ arm_status() { # arm_status <METHOD> <path>  -> HTTP status only
 teardown() {
   local out="$WORK/cleanup.txt"
   : > "$out"
+  # The module's identities get roles at subscription scope; those assignments outlive the group
+  # (and break the next apply with "already exists"). Remember who they belong to.
+  identities=$(arm GET "/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.ManagedIdentity/userAssignedIdentities?api-version=2023-01-31" \
+    | jq -r '.value[]?.properties.principalId' 2>/dev/null || true)
   for group in "$RG" "$ACR_RG"; do
     echo "$(date -u +%FT%TZ) DELETE resource group $group" | tee -a "$out"
     arm DELETE "/subscriptions/$SUB/resourcegroups/$group?api-version=2021-04-01" >/dev/null || true
@@ -86,7 +90,15 @@ teardown() {
       echo "delete role definition $id" | tee -a "$out"
       arm DELETE "$id?api-version=2022-04-01" >/dev/null || true
     done
-  # Role assignments scoped inside a deleted group go with it; list any left at subscription scope.
+  # Role assignments scoped inside a deleted group go with it; delete the module identities' ones
+  # at subscription scope, then list what is left for this principal.
+  for principal in $identities; do
+    arm GET "/subscriptions/$SUB/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&\$filter=principalId%20eq%20'$principal'" \
+      | jq -r '.value[]? | .id' | while read -r id; do
+        echo "delete role assignment $id" | tee -a "$out"
+        arm DELETE "$id?api-version=2022-04-01" >/dev/null || true
+      done
+  done
   arm GET "/subscriptions/$SUB/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&\$filter=principalId%20eq%20'$(sp_object_id)'" \
     | jq -r '.value[]? | select(.properties.scope | contains("'"$P"'")) | .id' | tee -a "$out"
   echo "cleanup complete" | tee -a "$out"
