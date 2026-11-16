@@ -1374,6 +1374,84 @@ pub(crate) async fn remove_machine_task(
     Ok(())
 }
 
+/// Whether a 404 answer is about the deployment, not about the route: an API that predates
+/// `replace-machine` answers 404 for the route itself.
+fn replace_machine_404_names_a_missing_deployment(body: &str) -> bool {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|body| body.get("code").and_then(Value::as_str).map(str::to_string))
+        .is_some_and(|code| code.contains("DEPLOYMENT_NOT_FOUND"))
+}
+
+pub(crate) async fn replace_machine_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    machine_id: &str,
+    cluster: Option<&str>,
+    confirmation: ConfirmationMode,
+    json: bool,
+) -> Result<()> {
+    if !json {
+        println!("Replacing machine {machine_id} of deployment {deployment_id}.");
+        println!(
+            "{}",
+            dim_label("The machine is drained, terminated and replaced by a fresh one of the same pool. Its workloads move meanwhile.")
+        );
+    }
+    if matches!(confirmation, ConfirmationMode::Prompt)
+        && !prompt_confirm("Replace this machine?", false)?
+    {
+        println!("{}", dim_label("Nothing changed."));
+        return Ok(());
+    }
+    let body = match cluster {
+        Some(cluster) => serde_json::json!({ "clusterResourceId": cluster }),
+        None => serde_json::json!({}),
+    };
+    let path = format!("/v1/deployments/{deployment_id}/machines/{machine_id}/replace");
+    let action = format!("replacing machine '{machine_id}' of deployment '{deployment_id}'");
+    let (status, text) = value_access::platform_request(
+        client,
+        reqwest::Method::POST,
+        &path,
+        workspace,
+        Some(&body),
+    )
+    .await?;
+    if status == 404 && !replace_machine_404_names_a_missing_deployment(&text) {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "{action}: this Alien API does not support replacing machines yet. Update the API, or replace the instance through its scaling group."
+            ),
+            url: None,
+        }));
+    }
+    if !(200..300).contains(&status) {
+        return Err(value_access::platform_error(status, &text))
+            .context(ErrorData::ApiRequestFailed {
+                message: action,
+                url: None,
+            });
+    }
+    let response: Value = serde_json::from_str(&text)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse".to_string(),
+            reason: format!("the answer to: {action}"),
+        })?;
+    if json {
+        return print_json(&response);
+    }
+    println!(
+        "{}",
+        success_line(&format!(
+            "Replacement of {machine_id} recorded. The manager carries it out; follow it with `alien deployments machines {deployment_id}`."
+        ))
+    );
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Machine join tokens
 // ---------------------------------------------------------------------------
@@ -2032,5 +2110,21 @@ mod tests {
             .expect_err("stdin twice")
             .to_string();
         assert!(error.contains("Only one --secret-input-file"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod replace_machine_tests {
+    use super::replace_machine_404_names_a_missing_deployment;
+
+    #[test]
+    fn a_route_that_does_not_exist_is_not_a_missing_deployment() {
+        assert!(!replace_machine_404_names_a_missing_deployment(""));
+        assert!(!replace_machine_404_names_a_missing_deployment(
+            r#"{"code":"NOT_FOUND","message":"Not Found"}"#
+        ));
+        assert!(replace_machine_404_names_a_missing_deployment(
+            r#"{"code":"DEPLOYMENT_NOT_FOUND","message":"Deployment 'x' not found"}"#
+        ));
     }
 }
