@@ -4582,6 +4582,8 @@ async fn helm_upgrade(
         // The tag carries the pin; a digest from the values would name another image.
         node["digest"] = "".into();
     }
+    // The bundle names the exact Operator image; the chart must run it, not its packaged default.
+    overrides["runtime"]["image"]["pin"] = true.into();
     overrides["runtime"]["image"]["pullWithManagementToken"] = false.into();
     overrides["runtime"]["image"]["selfUpdate"] = false.into();
     let overrides_file = tempfile::NamedTempFile::new()

@@ -28,6 +28,7 @@ pub mod error;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
+mod owned_secret;
 pub mod pod_logs;
 pub mod protected;
 pub mod readiness_server;

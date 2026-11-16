@@ -343,7 +343,7 @@ fn workload_vault_permissions_render_runtime_secret_rbac() {
 }
 
 #[test]
-fn manager_chart_generates_keys_and_requires_safe_identity_configuration() {
+fn manager_chart_generates_nothing_and_requires_safe_identity_configuration() {
     let stack = Stack::new("manager-only".to_string()).build();
     let chart = render(&stack, StackSettings::default());
     let render_documents = || {
@@ -355,24 +355,12 @@ fn manager_chart_generates_keys_and_requires_safe_identity_configuration() {
     };
     let first = render_documents();
     let second = render_documents();
-    let key = |documents: &[Value]| {
-        documents
-            .iter()
-            .find_map(|document| document.pointer("/stringData/encryption-key"))
-            .and_then(Value::as_str)
-            .expect("generated runtime encryption key")
-            .to_string()
-    };
-    let first_key = key(&first);
-    assert_eq!(first_key.len(), 64);
-    assert!(first_key
-        .chars()
-        .all(|character| character.is_ascii_hexdigit()));
-    assert_ne!(
-        first_key,
-        key(&second),
-        "separate installs must not share keys"
-    );
+    // The Operator creates its encryption key in its own Secret; a render holds none, so
+    // two renders are the same.
+    assert_eq!(first, second);
+    assert!(first
+        .iter()
+        .all(|document| document.pointer("/stringData/encryption-key").is_none()));
     assert!(first
         .iter()
         .any(|document| document["kind"] == "PersistentVolumeClaim"));

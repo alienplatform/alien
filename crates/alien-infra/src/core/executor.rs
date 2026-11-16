@@ -1114,6 +1114,15 @@ impl StackExecutor {
             || current_resource_state.outputs != outputs)
     }
 
+    /// Whether this executor is a setup run: direct setup authority and the run is a setup
+    /// run. An ordinary release on an install the manager set up has the same authority but
+    /// is not setup, so it only records an ordering-only edge change on a setup-created Frozen
+    /// resource, as it does on an imported install.
+    fn is_setup_run(&self) -> bool {
+        self.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            && self.deployment_config.setup_run
+    }
+
     /// Whether runtime must leave this resource to setup: a Frozen resource that setup owns
     /// outright, under a setup that is not this executor. Frozen resources with management
     /// operations are still reconciled by runtime.
@@ -1694,8 +1703,7 @@ impl StackExecutor {
                                     )?;
                                 if edges_only
                                     && status != ResourceStatus::UpdateFailed
-                                    && self.initial_setup_authority
-                                        != InitialSetupAuthority::DirectSetup
+                                    && !self.is_setup_run()
                                     && desired_config.lifecycle == ResourceLifecycle::Frozen
                                     && current_resource_state.lifecycle
                                         == Some(ResourceLifecycle::Frozen)
