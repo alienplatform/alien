@@ -766,7 +766,9 @@ async fn signing_from_first_release_to_recovery() {
         &[("Code from Bob ▸", "0000-0000-0000-0000\n")],
     ));
     assert!(
-        output.contains(&format!("{bob_id} (bob@example.com) · tpm asks to: release")),
+        output.contains(&format!(
+            "{bob_id} (bob@example.com) · tpm asks to: release"
+        )),
         "{output}"
     );
     assert!(output.contains("That isn't the pairing code"), "{output}");
