@@ -1816,10 +1816,8 @@ mod tests {
                 group.clone(),
                 signed.clone(),
                 request(&|r| {
-                    r.labels.insert(
-                        alien_core::SANDBOX_REQUEST_KEY_LABEL.into(),
-                        "a".repeat(65),
-                    );
+                    r.labels
+                        .insert(alien_core::SANDBOX_REQUEST_KEY_LABEL.into(), "a".repeat(65));
                 }),
                 None,
             ),
@@ -1828,10 +1826,8 @@ mod tests {
                 group.clone(),
                 signed.clone(),
                 request(&|r| {
-                    r.labels.insert(
-                        alien_core::SANDBOX_REQUEST_KEY_LABEL.into(),
-                        "a/b c".into(),
-                    );
+                    r.labels
+                        .insert(alien_core::SANDBOX_REQUEST_KEY_LABEL.into(), "a/b c".into());
                 }),
                 None,
             ),
