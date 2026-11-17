@@ -34,13 +34,12 @@ impl StackMutation for SandboxGatewayMutation {
         matches!(
             state.platform,
             Platform::Aws | Platform::Kubernetes | Platform::Azure
-        )
-            && stack.resources().any(|(_, entry)| {
-                entry
-                    .config
-                    .downcast_ref::<Sandbox>()
-                    .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
-            })
+        ) && stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
+        })
     }
 
     async fn mutate(

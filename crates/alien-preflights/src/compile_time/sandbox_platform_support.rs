@@ -79,7 +79,10 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
                     ));
                 }
                 if sandbox.egress == SandboxEgress::Internet
-                    && !matches!(platform, Platform::Aws | Platform::Kubernetes | Platform::Azure)
+                    && !matches!(
+                        platform,
+                        Platform::Aws | Platform::Kubernetes | Platform::Azure | Platform::Gcp
+                    )
                 {
                     return Some(format!(
                         "Sandbox '{}': SANDBOX_EGRESS_GATEWAY_UNAVAILABLE: {platform} does not yet \

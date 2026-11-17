@@ -1,6 +1,8 @@
 use crate::{
-    ownership_policy_for_resource_type, ErrorData, Key, ManagementPermissions, Platform,
-    ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack, Storage,
+    is_prepared_cluster, ownership_policy_for_resource_type, ComputeCluster, ErrorData, Key,
+    KubernetesCluster, KubernetesClusterOwnership, ManagementPermissions, NetworkSettings,
+    Platform, ResourceEntry, ResourceLifecycle, Result, Sandbox, SetupManagement, Stack,
+    StackSettings, Storage,
 };
 use alien_error::AlienError;
 
@@ -97,19 +99,195 @@ pub enum SetupConfigurationProfile {
     Advanced,
 }
 
-/// Automatic packages install access and secret storage, then let the runtime
-/// create application infrastructure. Cloud API activation and Azure's containing
-/// resource group must exist before their management identity can be installed.
-/// Azure also installs application identities so management can name their
-/// principals in the role-assignment conditions.
+/// Where a setup package installs: the platform the deployment runs on and the cloud its
+/// infrastructure lives in. They differ for managed Kubernetes (an EKS, GKE or AKS cluster runs
+/// on `Kubernetes`, in the `Aws`, `Gcp` or `Azure` cloud).
+///
+/// Every question about what a setup package emits and registers is answered from this, so the
+/// generators, the emitters and the manager's registration check cannot disagree about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetupTarget {
+    /// The platform the deployment runs on.
+    pub deployment_platform: Platform,
+    /// The cloud the setup's infrastructure lives in.
+    pub cloud_platform: Platform,
+}
+
+impl SetupTarget {
+    /// A target from a registration's `platform` and `basePlatform`.
+    pub fn new(deployment_platform: Platform, base_platform: Option<Platform>) -> Self {
+        Self {
+            deployment_platform,
+            cloud_platform: base_platform.unwrap_or(deployment_platform),
+        }
+    }
+
+    /// A target from the cloud and whether the setup installs onto a Kubernetes cluster in it.
+    pub fn from_cloud(cloud_platform: Platform, targets_kubernetes: bool) -> Self {
+        Self {
+            deployment_platform: if targets_kubernetes {
+                Platform::Kubernetes
+            } else {
+                cloud_platform
+            },
+            cloud_platform,
+        }
+    }
+
+    pub fn is_kubernetes(&self) -> bool {
+        self.deployment_platform == Platform::Kubernetes
+    }
+}
+
+/// Whether the resource type is one a Kubernetes target runs on the cluster itself: a
+/// `ComputeCluster` is a set of logical pools the Operator validates and a `Sandbox` is a pod.
+/// Setup creates no cloud infrastructure for either, and runtime provisioning verifies them
+/// through the Kubernetes controllers rather than a cloud controller.
+///
+/// Setup's emit rule ([`emits_package_scaffolding`]) and the executor's choice of controller
+/// both ask this, so they cannot disagree.
+pub fn is_kubernetes_native_resource_type(resource_type: &crate::ResourceType) -> bool {
+    *resource_type == Sandbox::RESOURCE_TYPE || *resource_type == ComputeCluster::RESOURCE_TYPE
+}
+
+/// Whether this resource is a cloud database (Postgres or Redis) whose private endpoint needs a
+/// network of the cloud's own. On a Kubernetes target a stack keeps a network for it in every
+/// cluster mode; without one an existing cluster's own network serves the workloads.
+///
+/// The network preflight and the setup generators both ask this, so "this stack needs a network"
+/// has one answer.
+pub fn is_network_database(entry: &ResourceEntry) -> bool {
+    let resource_type = entry.config.resource_type();
+    resource_type == crate::Postgres::RESOURCE_TYPE || resource_type == crate::Redis::RESOURCE_TYPE
+}
+
+/// Whether setup can put this resource's private endpoint on the network of an existing
+/// Kubernetes cluster, so that the cluster's workloads reach it.
+///
+/// Only a GCP Postgres can: the module looks the cluster's own network up. A Memorystore
+/// instance cannot move to another network after creation, and on AWS and Azure the module keeps
+/// a network of its own that the cluster is not attached to. A resource that is not a cloud
+/// database needs no network, so the answer for it is `true`.
+///
+/// The network preflight (at build time) and the generated modules (at plan time, where the
+/// cluster mode is chosen) both ask this, so they refuse the same cases.
+pub fn existing_cluster_network_hosts(entry: &ResourceEntry, cloud_platform: Platform) -> bool {
+    if !is_network_database(entry) {
+        return true;
+    }
+    entry.config.resource_type() == crate::Postgres::RESOURCE_TYPE
+        && cloud_platform == Platform::Gcp
+}
+
+/// The message for a database or cache that setup cannot place on an existing cluster's network.
+/// `network_hint`, when the deployer can bring the cluster's own network, names how in the
+/// caller's terms.
+pub fn existing_cluster_network_refusal(
+    resource_type: &str,
+    resource_id: &str,
+    network_hint: Option<&str>,
+) -> String {
+    let hint = network_hint
+        .map(|hint| format!(" {hint},"))
+        .unwrap_or_default();
+    format!(
+        "Setup cannot yet place the {resource_type} '{resource_id}' on an existing cluster's network, so the cluster could not reach it. Use a cluster that setup creates,{hint} or remove the {resource_type}."
+    )
+}
+
+/// Whether the setup is for an existing Kubernetes cluster: the cluster the source stack declares
+/// decides; with none declared, the stack settings do. A setup that serves both modes (the
+/// deployer picks at apply) is not "existing" here.
+pub fn setup_targets_existing_cluster(stack: &Stack, settings: &StackSettings) -> bool {
+    let ownership = stack
+        .resources()
+        .filter(|(id, entry)| !is_prepared_cluster(id, entry))
+        .find_map(|(_, entry)| entry.config.downcast_ref::<KubernetesCluster>())
+        .map(|cluster| cluster.ownership)
+        .or_else(|| {
+            settings
+                .kubernetes
+                .as_ref()
+                .and_then(|kubernetes| kubernetes.cluster.as_ref())
+                .map(|cluster| cluster.ownership)
+        });
+    ownership.is_some_and(|ownership| ownership != KubernetesClusterOwnership::Managed)
+}
+
+/// The first resource setup would create that an existing cluster could not reach, as the error
+/// a generator returns when it knows the cluster is existing. `creates` says whether setup
+/// creates the resource: one the installer binds to infrastructure it already has is the
+/// deployer's, so it is not refused. A network the deployer names in the settings is theirs to
+/// choose, so nothing is refused for it.
+pub fn refuse_unreachable_databases(
+    stack: &Stack,
+    settings: &StackSettings,
+    cloud_platform: Platform,
+    network_hint: Option<&str>,
+    creates: impl Fn(&ResourceEntry) -> bool,
+) -> Result<()> {
+    if !setup_targets_existing_cluster(stack, settings)
+        || matches!(
+            settings.network,
+            Some(
+                NetworkSettings::ByoVpcAws { .. }
+                    | NetworkSettings::ByoVpcGcp { .. }
+                    | NetworkSettings::ByoVnetAzure { .. }
+            )
+        )
+    {
+        return Ok(());
+    }
+    for (id, entry) in stack.resources() {
+        // A resource the deployer can decline is checked by the module's plan instead, once its
+        // input is known.
+        if entry.enabled_when.is_none()
+            && !existing_cluster_network_hosts(entry, cloud_platform)
+            && creates(entry)
+        {
+            return Err(AlienError::new(ErrorData::SetupPlacementUnsupported {
+                message: existing_cluster_network_refusal(
+                    entry.config.resource_type().as_ref(),
+                    id,
+                    network_hint,
+                ),
+                resource_type: entry.config.resource_type().to_string(),
+                resource_id: id.to_string(),
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// Whether setup emits this resource and registers it with the manager.
+///
+/// This is the one rule. Both setup generators render exactly the resources it accepts, and the
+/// manager expects a registration to hold exactly those, so a change here moves all three
+/// together.
+///
+/// - On Kubernetes the cluster's own nodes and pods stand in for the cloud machines: a
+///   `ComputeCluster` is a set of logical pools the Operator validates, and a `Sandbox` is a pod.
+///   Setup creates no cloud infrastructure for either, whatever the cloud or whether the cluster
+///   is new or existing.
+/// - Automatic packages install access and secret storage, then let the runtime create
+///   application infrastructure. Cloud API activation and Azure's containing resource group must
+///   exist before their management identity can be installed. Azure also installs application
+///   identities so management can name their principals in the role-assignment conditions.
+/// - Manual packages emit what the resource's ownership policy says.
+///
+/// Whether a Kubernetes cluster is new or existing decides which resources the stack declares
+/// (the cluster and network mutations add or omit them), not which of them setup emits.
 pub fn emits_package_scaffolding(
     entry: &ResourceEntry,
     management: SetupManagement,
-    platform: Platform,
+    target: SetupTarget,
 ) -> bool {
     let resource_type = entry.config.resource_type();
+    if target.is_kubernetes() && is_kubernetes_native_resource_type(&resource_type) {
+        return false;
+    }
     if management == SetupManagement::Automatic {
-        is_automatic_setup_package_resource_type(resource_type.as_ref(), platform)
+        is_automatic_setup_package_resource_type(resource_type.as_ref(), target.cloud_platform)
     } else {
         ownership_policy_for_resource_type(resource_type.as_ref())
             .emits_setup_scaffolding(entry.lifecycle)

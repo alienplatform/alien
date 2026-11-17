@@ -1543,14 +1543,21 @@ fn deployer_secret_notes_tpl(stack: &Stack) -> Option<String> {
          Helm or the deployment's control plane.\n",
     );
     for input in inputs {
+        let label = input.label.trim();
+        let requirement = if input.required {
+            Some("required; workloads that read it wait until it exists")
+        } else if label.to_ascii_lowercase().ends_with("(optional)") {
+            // The label already says so.
+            None
+        } else {
+            Some("optional")
+        };
+        let heading = match requirement {
+            Some(requirement) => format!("{label} ({requirement})"),
+            None => label.to_string(),
+        };
         notes.push_str(&format!(
-            "  - {} ({}): deployer-secrets vault key {}\n",
-            input.label,
-            if input.required {
-                "required; workloads that read it wait until it exists"
-            } else {
-                "optional"
-            },
+            "  - {heading}: deployer-secrets vault key {}\n",
             alien_core::deployer_secret_vault_key(&input.id),
         ));
     }
@@ -3238,6 +3245,7 @@ fn operator_deployment_doc(
     yaml.push_str("        runAsUser: 1000\n");
     yaml.push_str("        runAsGroup: 1000\n");
     yaml.push_str("        fsGroup: 1000\n");
+    yaml.push_str("        fsGroupChangePolicy: OnRootMismatch\n");
     yaml.push_str("        seccompProfile:\n");
     yaml.push_str("          type: RuntimeDefault\n");
     yaml.push_str("      containers:\n");
@@ -4194,6 +4202,7 @@ runtime:
       runAsUser: 10001
       runAsGroup: 10001
       fsGroup: 10001
+      fsGroupChangePolicy: OnRootMismatch
       seccompProfile:
         type: RuntimeDefault
     containerSecurityContext:
@@ -7078,6 +7087,19 @@ spec:
               fi
               {{- end }}
               done
+              {{- $sandboxNamespace := dig "namespace" "" (default dict .Values.sandbox) }}
+              {{- if and $sandboxIds $sandboxNamespace (ne $sandboxNamespace .Release.Namespace) }}
+
+              # Sandbox pods run in their own namespace, where the Operator also wrote
+              # one NetworkPolicy per internet sandbox. Remove the ones this deployment owns.
+              sandbox_namespace={{ $sandboxNamespace | quote }}
+              for cleanup_selector in $selectors; do
+                if ! kubectl -n "$sandbox_namespace" delete networkpolicies.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false; then
+                  echo "Refusing cleanup: cannot delete NetworkPolicies in sandbox namespace $sandbox_namespace." >&2
+                  exit 1
+                fi
+              done
+              {{- end }}
 
               sort -u "$scratch/env-secrets" -o "$scratch/env-secrets"
               while IFS="$(printf '\t')" read -r secret_name resource_id; do
@@ -7187,11 +7209,13 @@ fn deployment_tpl(sandbox_broker: bool) -> String {
         "            - name: {}\n              value: {{{{ join \",\" (default list (dig \"clusterDNS\" (list) (default dict .Values.sandbox))) | quote }}}}\n",
         alien_core::ENV_ALIEN_SANDBOX_CLUSTER_DNS
     );
-    // The Operator's own pod address: a sandbox pod proves its NetworkPolicy is enforced by
-    // finding this address unreachable. `$(VAR)` expands an env var defined earlier in the list.
+    // The Operator's own Service: a sandbox pod proves its NetworkPolicy is enforced by finding
+    // the Service's ClusterIP unreachable. The ClusterIP is read from the Service by the Operator
+    // (a chart cannot know it at render time, and Argo CD renders without lookups), and stays
+    // fixed while the Service exists, where the Operator pod's own address moves on reschedule.
     let operator_address = format!(
-        "            - name: ALIEN_OPERATOR_POD_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.podIP\n            - name: {}\n              value: {{{{ printf \"$(ALIEN_OPERATOR_POD_IP):%d\" (int .Values.runtime.api.port) | quote }}}}\n",
-        alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS
+        "            - name: {}\n              value: {{{{ printf \"%s:%d\" (include \"deployment.fullname\" .) (int .Values.runtime.api.port) | quote }}}}\n",
+        alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE
     );
     // Set only when the administrator chose a namespace, so an unset value renders exactly the
     // Deployment it always has.
@@ -11951,6 +11975,38 @@ infrastructureExistingSecret: customer-bindings
     }
 
     #[test]
+    fn deployer_secret_notes_do_not_repeat_an_optional_label() {
+        let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
+            id: id.to_string(),
+            kind: alien_core::StackInputKind::Secret,
+            when: None,
+            provided_by: vec![alien_core::StackInputProvider::Deployer],
+            required,
+            label: label.to_string(),
+            description: String::new(),
+            placeholder: None,
+            default: None,
+            platforms: None,
+            validation: None,
+            generate: None,
+            env: Vec::new(),
+        };
+        let stack = Stack::new("input-stack".to_string())
+            .inputs(vec![
+                secret("licenseKey", "License key", false),
+                secret("githubApp", "Existing GitHub App credentials (optional)", false),
+            ])
+            .build();
+        let notes = deployer_secret_notes_tpl(&stack).expect("notes");
+        assert!(notes.contains("  - License key (optional): deployer-secrets"), "{notes}");
+        assert!(
+            notes.contains("  - Existing GitHub App credentials (optional): deployer-secrets"),
+            "{notes}"
+        );
+        assert!(!notes.contains("(optional) (optional)"), "{notes}");
+    }
+
+    #[test]
     fn deployer_secrets_are_kubernetes_secrets_not_helm_values() {
         let secret = |id: &str, label: &str, required: bool| alien_core::StackInputDefinition {
             id: id.to_string(),
@@ -11971,6 +12027,7 @@ infrastructureExistingSecret: customer-bindings
             .inputs(vec![
                 secret("databasePassword", "Database password", true),
                 secret("licenseKey", "License key", false),
+                secret("githubApp", "Existing GitHub App credentials (optional)", false),
             ])
             .build();
         let registry = HelmRegistry::built_in();
@@ -12002,6 +12059,11 @@ infrastructureExistingSecret: customer-bindings
             notes.contains("License key (optional): deployer-secrets vault key license-key"),
             "{notes}"
         );
+        assert!(
+            notes.contains("Existing GitHub App credentials (optional): deployer-secrets vault key"),
+            "{notes}"
+        );
+        assert!(!notes.contains("(optional) (optional)"), "{notes}");
         assert!(
             notes.contains("kubectl create secret generic <name> --namespace apps --from-literal=value='<VALUE>'"),
             "{notes}"
@@ -12162,6 +12224,30 @@ infrastructureExistingSecret: customer-bindings
             Some("management:\n  token: test-credential\nruntime:\n  networkPolicy:\n    enabled: true\n    mode: strict\n"),
         );
         assert!(!bad.is_ok());
+    }
+
+    #[test]
+    fn every_pod_that_sets_an_fs_group_keeps_file_modes_across_restarts() {
+        let files = sample_chart_files();
+        let values = "management:\n  token: test-credential\n  url: https://manager.example.com\n";
+        let rendered = crate::test_utils::helm_template(&files, Some(values));
+        rendered.assert_ok("default values");
+        let mut seen = 0;
+        for doc in serde_yaml::Deserializer::from_str(&rendered.stdout) {
+            let doc = serde_yaml::Value::deserialize(doc).unwrap();
+            let pod = &doc["spec"]["template"]["spec"]["securityContext"];
+            if pod["fsGroup"].is_null() {
+                continue;
+            }
+            seen += 1;
+            assert_eq!(
+                pod["fsGroupChangePolicy"], "OnRootMismatch",
+                "{} {}",
+                doc["kind"].as_str().unwrap_or_default(),
+                doc["metadata"]["name"].as_str().unwrap_or_default()
+            );
+        }
+        assert!(seen > 0, "expected a pod with an fsGroup in the chart");
     }
 
     #[test]
