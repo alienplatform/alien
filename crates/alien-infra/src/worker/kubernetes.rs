@@ -8,7 +8,7 @@ use crate::core::{
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
-    delete_kubernetes_public_endpoint, reconcile_kubernetes_public_endpoint,
+    delete_kubernetes_public_endpoint, note_endpoint_wait, reconcile_kubernetes_public_endpoint,
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
@@ -398,12 +398,23 @@ impl KubernetesWorkerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting {
+                kind,
+                certificate_failed,
                 suggested_delay,
                 max_polls,
-            } => Ok(HandlerAction::Stay {
-                max_times: Some(max_polls),
-                suggested_delay: Some(suggested_delay),
-            }),
+            } => {
+                note_endpoint_wait(
+                    kind,
+                    certificate_failed,
+                    max_polls,
+                    &mut self.public_endpoint,
+                    &mut self._internal_stay_count,
+                )?;
+                Ok(HandlerAction::Stay {
+                    max_times: Some(max_polls),
+                    suggested_delay: Some(suggested_delay),
+                })
+            }
         }
     }
 
@@ -551,10 +562,19 @@ impl KubernetesWorkerController {
             )
             .await?;
             if let KubernetesEndpointAction::Waiting {
+                kind,
+                certificate_failed,
                 suggested_delay,
                 max_polls,
             } = action
             {
+                note_endpoint_wait(
+                    kind,
+                    certificate_failed,
+                    max_polls,
+                    &mut self.public_endpoint,
+                    &mut self._internal_stay_count,
+                )?;
                 return Ok(HandlerAction::Stay {
                     max_times: Some(max_polls),
                     suggested_delay: Some(suggested_delay),
@@ -914,12 +934,23 @@ impl KubernetesWorkerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting {
+                kind,
+                certificate_failed,
                 suggested_delay,
                 max_polls,
-            } => Ok(HandlerAction::Stay {
-                max_times: Some(max_polls),
-                suggested_delay: Some(suggested_delay),
-            }),
+            } => {
+                note_endpoint_wait(
+                    kind,
+                    certificate_failed,
+                    max_polls,
+                    &mut self.public_endpoint,
+                    &mut self._internal_stay_count,
+                )?;
+                Ok(HandlerAction::Stay {
+                    max_times: Some(max_polls),
+                    suggested_delay: Some(suggested_delay),
+                })
+            }
         }
     }
 
@@ -1587,8 +1618,18 @@ mod tests {
                 "spec": {}
             }));
         });
-        // An empty cluster: every object lookup is "not found".
-        server.mock(|when, then| {
+        // The Ingress exists but has no load balancer address yet.
+        let mut no_address = server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/networking.k8s.io/v1/namespaces/test-ns/ingresses/worker-ingress");
+            then.status(200).json_body(serde_json::json!({
+                "metadata": {"name": "worker-ingress", "namespace": "test-ns"},
+                "spec": {},
+                "status": {"loadBalancer": {}}
+            }));
+        });
+        // Otherwise an empty cluster: every object lookup is "not found".
+        let mut empty_cluster = server.mock(|when, then| {
             when.any_request();
             then.status(404).json_body(serde_json::json!({
                 "kind": "Status", "apiVersion": "v1", "status": "Failure",
@@ -1610,9 +1651,9 @@ mod tests {
                         certificate_status: status,
                         dns_status: DnsRecordStatus::Pending,
                         dns_error: None,
-                        certificate_chain: None,
-                        private_key: None,
-                        issued_at: None,
+                        certificate_chain: Some("chain".into()),
+                        private_key: Some("key".into()),
+                        issued_at: Some("2026-01-01T00:00:00Z".into()),
                         endpoints: Default::default(),
                         aliases: Vec::new(),
                     },
@@ -1673,10 +1714,61 @@ mod tests {
             );
         }
 
+        // The certificate issues after more than the 60 polls a load balancer wait gets. The
+        // ingress then has no address yet; that wait has a window of its own, so it must not
+        // time out on the polls the certificate wait used.
+        harness.deployment_config_mut().domain_metadata = domain(CertificateStatus::Issued);
+        for poll in 0..10 {
+            crate::core::ResourceController::step(&mut controller, &ctx_for(&harness, &url))
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("poll {poll} waiting for the ingress address after issuance: {error}")
+                });
+            assert_eq!(
+                crate::core::ResourceController::get_status(&controller),
+                ResourceStatus::Provisioning
+            );
+        }
+
+        // The same controller state, with the issuer reporting a failure from here on.
+        let failing = controller.clone();
+
+        // The ingress then gets its address and the endpoint is ready.
+        no_address.delete();
+        empty_cluster.delete();
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/apis/networking.k8s.io/v1/namespaces/test-ns/ingresses/worker-ingress");
+            then.status(200).json_body(serde_json::json!({
+                "metadata": {"name": "worker-ingress", "namespace": "test-ns"},
+                "spec": {},
+                "status": {"loadBalancer": {"ingress": [{"ip": "203.0.113.10"}]}}
+            }));
+        });
+        server.mock(|when, then| {
+            when.any_request();
+            then.status(404).json_body(serde_json::json!({
+                "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                "reason": "NotFound", "code": 404
+            }));
+        });
+        let mut status = ResourceStatus::Provisioning;
+        for poll in 0..5 {
+            crate::core::ResourceController::step(&mut controller, &ctx_for(&harness, &url))
+                .await
+                .unwrap_or_else(|error| panic!("poll {poll} after the address arrived: {error}"));
+            status = crate::core::ResourceController::get_status(&controller);
+            if status == ResourceStatus::Running {
+                break;
+            }
+        }
+        assert_eq!(status, ResourceStatus::Running);
+
         // A failed attempt may be retried by the issuer, so it keeps waiting too, until the bound.
+        let mut controller = failing;
         harness.deployment_config_mut().domain_metadata = domain(CertificateStatus::Failed);
         let mut failure = None;
-        for poll in 200..(CERTIFICATE_WAIT_MAX_POLLS + 10) {
+        for poll in 0..(CERTIFICATE_WAIT_MAX_POLLS + 10) {
             match crate::core::ResourceController::step(&mut controller, &ctx_for(&harness, &url))
                 .await
             {
@@ -1692,7 +1784,10 @@ mod tests {
             poll >= CERTIFICATE_WAIT_MAX_POLLS - 1,
             "failed early at poll {poll}"
         );
-        assert!(error.to_string().contains("Polling timed out"), "{error}");
+        assert!(
+            error.to_string().contains("Certificate issuance failed"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

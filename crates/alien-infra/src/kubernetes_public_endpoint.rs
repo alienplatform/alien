@@ -55,6 +55,9 @@ pub(crate) struct KubernetesPublicEndpointState {
     /// delete must use it even after the endpoint switches to another certificate mode.
     #[serde(default)]
     pub(crate) managed_acm_region: Option<String>,
+    /// The wait the last poll was in; see `stay_while_waiting`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_wait: Option<EndpointWait>,
     pub(crate) public_url: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) named_public_endpoints: HashMap<String, alien_core::PublicEndpointOutput>,
@@ -93,15 +96,58 @@ pub(crate) struct KubernetesPublicEndpointTarget<'a> {
 pub(crate) enum KubernetesEndpointAction {
     Ready,
     Waiting {
+        kind: EndpointWait,
+        /// The certificate's last reported status is `Failed`. Waiting continues because the
+        /// issuer retries, but running out of polls then reports the failure, not a timeout.
+        certificate_failed: bool,
         suggested_delay: Duration,
         max_polls: u32,
     },
+}
+
+/// What a reconcile is waiting for. Each kind gets its own polling window: the controller's
+/// stay counter belongs to the whole state, so a wait that follows another one in the same
+/// state would otherwise inherit the polls the first one used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum EndpointWait {
+    Certificate,
+    Endpoint,
+}
+
+/// Bookkeeping before a `Stay` for a waiting endpoint. Resets the stay counter when the wait kind changed since
+/// the last poll, so the certificate wait and the load balancer/DNS wait each get a full window.
+pub(crate) fn note_endpoint_wait(
+    kind: EndpointWait,
+    certificate_failed: bool,
+    max_polls: u32,
+    state: &mut KubernetesPublicEndpointState,
+    stay_count: &mut Option<u32>,
+) -> Result<()> {
+    if state.last_wait != Some(kind) {
+        state.last_wait = Some(kind);
+        *stay_count = None;
+    }
+    // The controller turns the last poll into a plain polling timeout; when the certificate
+    // never recovered from a failure, say that instead so the customer sees why.
+    if certificate_failed && stay_count.unwrap_or(0) + 1 >= max_polls {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!(
+                "Certificate issuance failed and did not recover within {} minutes",
+                u64::from(max_polls) * CERTIFICATE_WAIT_POLL_SECS / 60
+            ),
+            resource_id: None,
+        }));
+    }
+    Ok(())
 }
 
 impl KubernetesEndpointAction {
     /// Waiting for the cluster: load balancer, DNS, health check.
     fn waiting_for_endpoint(suggested_delay: Duration) -> Self {
         Self::Waiting {
+            kind: EndpointWait::Endpoint,
+            certificate_failed: false,
             suggested_delay,
             max_polls: ENDPOINT_WAIT_MAX_POLLS,
         }
@@ -111,8 +157,10 @@ impl KubernetesEndpointAction {
     /// It shares the bound the public workers on other clouds use: `CERTIFICATE_WAIT` (30 minutes,
     /// `worker/certificate_wait.rs:7`), sized to cover several issuance attempts and their retry
     /// backoff. A `Failed` status keeps waiting too, because the issuer retries failed attempts.
-    fn waiting_for_certificate() -> Self {
+    fn waiting_for_certificate(certificate_failed: bool) -> Self {
         Self::Waiting {
+            kind: EndpointWait::Certificate,
+            certificate_failed,
             suggested_delay: Duration::from_secs(CERTIFICATE_WAIT_POLL_SECS),
             max_polls: CERTIFICATE_WAIT_MAX_POLLS,
         }
@@ -132,7 +180,7 @@ struct EndpointPlan {
 #[derive(Debug, Clone)]
 enum EndpointPlanResolution {
     Disabled,
-    WaitingForCertificate,
+    WaitingForCertificate { failed: bool },
     Ready(EndpointPlan),
 }
 
@@ -190,8 +238,8 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             state.load_balancer_endpoint = None;
             return Ok(KubernetesEndpointAction::Ready);
         }
-        EndpointPlanResolution::WaitingForCertificate => {
-            return Ok(KubernetesEndpointAction::waiting_for_certificate());
+        EndpointPlanResolution::WaitingForCertificate { failed } => {
+            return Ok(KubernetesEndpointAction::waiting_for_certificate(failed));
         }
         EndpointPlanResolution::Ready(plan) => plan,
     };
@@ -1540,7 +1588,9 @@ fn resolve_endpoint_plan(
                         | KubernetesCertificateMode::TlsSecretRef(_)
                 )
             {
-                return Ok(EndpointPlanResolution::WaitingForCertificate);
+                return Ok(EndpointPlanResolution::WaitingForCertificate {
+                    failed: domain.certificate_status == CertificateStatus::Failed,
+                });
             }
 
             if domain.certificate_status != CertificateStatus::Issued

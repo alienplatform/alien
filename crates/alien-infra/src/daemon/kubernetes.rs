@@ -13,7 +13,7 @@ use crate::core::{
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
-    daemon_public_endpoint_target, delete_kubernetes_public_endpoint,
+    daemon_public_endpoint_target, delete_kubernetes_public_endpoint, note_endpoint_wait,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
@@ -326,12 +326,23 @@ impl KubernetesDaemonController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting {
+                kind,
+                certificate_failed,
                 suggested_delay,
                 max_polls,
-            } => Ok(HandlerAction::Stay {
-                max_times: Some(max_polls),
-                suggested_delay: Some(suggested_delay),
-            }),
+            } => {
+                note_endpoint_wait(
+                    kind,
+                    certificate_failed,
+                    max_polls,
+                    &mut self.public_endpoint,
+                    &mut self._internal_stay_count,
+                )?;
+                Ok(HandlerAction::Stay {
+                    max_times: Some(max_polls),
+                    suggested_delay: Some(suggested_delay),
+                })
+            }
         }
     }
 
@@ -446,10 +457,19 @@ impl KubernetesDaemonController {
         // drift, and a deleted Service/route are otherwise never re-applied
         // until an unrelated config change triggers the Update flow.
         if let KubernetesEndpointAction::Waiting {
+            kind,
+            certificate_failed,
             suggested_delay,
             max_polls,
         } = self.reconcile_endpoint(ctx).await?
         {
+            note_endpoint_wait(
+                kind,
+                certificate_failed,
+                max_polls,
+                &mut self.public_endpoint,
+                &mut self._internal_stay_count,
+            )?;
             return Ok(HandlerAction::Stay {
                 max_times: Some(max_polls),
                 suggested_delay: Some(suggested_delay),
@@ -712,12 +732,23 @@ impl KubernetesDaemonController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting {
+                kind,
+                certificate_failed,
                 suggested_delay,
                 max_polls,
-            } => Ok(HandlerAction::Stay {
-                max_times: Some(max_polls),
-                suggested_delay: Some(suggested_delay),
-            }),
+            } => {
+                note_endpoint_wait(
+                    kind,
+                    certificate_failed,
+                    max_polls,
+                    &mut self.public_endpoint,
+                    &mut self._internal_stay_count,
+                )?;
+                Ok(HandlerAction::Stay {
+                    max_times: Some(max_polls),
+                    suggested_delay: Some(suggested_delay),
+                })
+            }
         }
     }
 
