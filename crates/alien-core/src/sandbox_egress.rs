@@ -38,6 +38,12 @@ pub const EMBEDDED_REPLICA_SECRET_GATEWAY_DIGESTS: &[&str] = &[
 pub const NO_CONFIG_FILE_GATEWAY_DIGESTS: &[&str] =
     &["sha256:8538880f99141888e54bedc7d290194dfee5bfe11910266b309dde53de2601b0"];
 
+/// Gateway images pinned before gateways served `GET /v1/protocol`, their admin protocol
+/// version. A binding that requires a protocol version cannot use a gateway on one of these.
+/// The list never grows.
+pub const NO_ADMIN_PROTOCOL_GATEWAY_DIGESTS: &[&str] =
+    &["sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1"];
+
 fn is_pinned_to(image: &str, digests: &[&str]) -> bool {
     digests
         .iter()
@@ -55,6 +61,11 @@ pub fn gateway_image_reads_replica_secret_source(image: &str) -> bool {
 pub fn gateway_image_reads_config_files(image: &str) -> bool {
     gateway_image_reads_replica_secret_source(image)
         && !is_pinned_to(image, NO_CONFIG_FILE_GATEWAY_DIGESTS)
+}
+
+/// Whether a gateway running `image` serves its admin protocol (`GET /v1/protocol`).
+pub fn gateway_image_serves_admin_protocol(image: &str) -> bool {
+    !is_pinned_to(image, NO_ADMIN_PROTOCOL_GATEWAY_DIGESTS)
 }
 
 /// Whether preflight installed the managed gateway for this deployment.
@@ -352,6 +363,19 @@ pub fn sandbox_egress_network(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_listed_gateway_images_lack_the_admin_protocol() {
+        let listed = format!(
+            "ghcr.io/alienplatform/alien-egress-gateway@{}",
+            NO_ADMIN_PROTOCOL_GATEWAY_DIGESTS[0]
+        );
+        assert!(!gateway_image_serves_admin_protocol(&listed));
+        assert!(gateway_image_serves_admin_protocol(
+            "ghcr.io/alienplatform/alien-egress-gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ));
+    }
+
     use crate::{ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
     use SandboxEgressRefusal::{DefaultVpc, NoNetwork, OtherCloudNetwork};
     use SandboxEgressVpc::{BroughtByCustomer, Created};

@@ -411,6 +411,9 @@ impl PreflightRegistry {
             deployment_prerequisites::SandboxEgressGatewayCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::AzureInternetSandboxGatewayProtocolCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::AzureSandboxGroupFromSetupCheck,
         ));
 
