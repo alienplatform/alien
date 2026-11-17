@@ -27,6 +27,7 @@ const PROJECT: &str = "test-project-123";
 const MANAGER: &str = "manager@test-project-123.iam.gserviceaccount.com";
 const CALLER: &str = "caller@test-project-123.iam.gserviceaccount.com";
 const WORKLOAD: &str = "workload@test-project-123.iam.gserviceaccount.com";
+const ADDED: &str = "added@test-project-123.iam.gserviceaccount.com";
 
 fn op(done: bool) -> Operation {
     Operation {
@@ -240,6 +241,14 @@ async fn executor_full(
                 ..Default::default()
             },
         )
+        // An identity for a profile the stack gains later; it holds nothing until the profile exists.
+        .with_dependency(
+            ServiceAccount::new("added-sa".to_string()).build(),
+            GcpServiceAccountController {
+                service_account_email: Some(ADDED.to_string()),
+                ..Default::default()
+            },
+        )
         .permission_profile(
             "workload",
             PermissionProfile::new().global(["sandbox/execute"]),
@@ -448,18 +457,59 @@ async fn a_signer_account_an_earlier_attempt_made_is_adopted_by_the_retry() {
     assert_eq!(calls.lock().unwrap().deleted_accounts.len(), 1);
 }
 
-/// A setup run again, with a remote caller added since, places its engine grant; a run that is
-/// not a setup run asks for nothing.
+/// A setup run again with nothing changed asks for no update; with a profile added since, it asks
+/// for exactly one, which places the grant, and then none again.
+#[tokio::test]
+async fn a_setup_rerun_updates_only_when_the_profiles_changed() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (iam, platform) = clients(&calls);
+    let mut executor = executor(iam, platform, true).await;
+    executor.run_until_terminal().await.expect("create runs");
+    assert!(
+        !executor.needs_update().unwrap(),
+        "a steady state asks for no update"
+    );
+
+    let signer_members = |calls: &Arc<Mutex<Calls>>| {
+        let calls = calls.lock().unwrap();
+        calls
+            .signer_policy
+            .as_ref()
+            .map(|policy| members(policy, "sandbox_preview_sign"))
+            .unwrap_or_default()
+    };
+    assert_eq!(signer_members(&calls), vec![format!("serviceAccount:{WORKLOAD}")]);
+
+    executor.add_permission_profile(
+        "added",
+        PermissionProfile::new().resource("box", ["sandbox/execute"]),
+    );
+    assert!(
+        executor.needs_update().unwrap(),
+        "a new profile asks for the update"
+    );
+    executor
+        .update(sandbox(vec![8080], alien_core::SandboxEgress::None))
+        .expect("update is accepted");
+    executor.run_until_terminal().await.expect("update runs");
+    assert!(
+        signer_members(&calls).contains(&format!("serviceAccount:{ADDED}")),
+        "the new profile's identity may sign: {:?}",
+        signer_members(&calls)
+    );
+    assert!(
+        !executor.needs_update().unwrap(),
+        "the update settled the check: exactly one"
+    );
+}
+
+/// A setup run again, with a remote caller added since, places its engine grant.
 #[tokio::test]
 async fn a_setup_rerun_places_the_grants_a_new_caller_needs() {
     let calls = Arc::new(Mutex::new(Calls::default()));
     let (iam, platform) = clients(&calls);
     let mut executor = executor_full(iam, platform, true, false, true).await;
     executor.run_until_terminal().await.expect("create runs");
-    assert!(
-        executor.needs_update().unwrap(),
-        "a setup rerun reconciles the grants"
-    );
     // The caller's grant disappears (as if never placed), the rerun puts it back.
     calls.lock().unwrap().engine_policy = Some(IamPolicy::default());
     executor

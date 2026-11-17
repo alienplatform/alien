@@ -769,6 +769,18 @@ impl SingleControllerExecutor {
 
     /// The desired stack's configuration of another resource, to change after the stack
     /// mutations ran, as a later release would.
+    /// Adds a permission profile to the desired stack, as a stack edited between two setup runs.
+    pub fn add_permission_profile(
+        &mut self,
+        name: impl Into<String>,
+        profile: alien_core::permissions::PermissionProfile,
+    ) {
+        self.desired_stack
+            .permissions
+            .profiles
+            .insert(name.into(), profile);
+    }
+
     pub fn desired_resource_config_mut(&mut self, resource_id: &str) -> Option<&mut Resource> {
         self.desired_stack
             .resources

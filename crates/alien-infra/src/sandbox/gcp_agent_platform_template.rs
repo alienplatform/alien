@@ -304,6 +304,10 @@ pub struct GcpAgentPlatformTemplateController {
     /// grants), so teardown removes exactly that. Empty when a setup package made them.
     #[serde(default)]
     pub(crate) engine_setup: crate::sandbox::gcp_engine_setup::EngineSetupRecord,
+    /// Fingerprint of the grant inputs the last direct setup run reconciled, so a rerun updates
+    /// only when a profile or caller changed.
+    #[serde(default)]
+    pub(crate) reconciled_grants: Option<String>,
 }
 
 #[controller]
@@ -362,6 +366,8 @@ impl GcpAgentPlatformTemplateController {
             if signer.is_some() {
                 self.preview_service_account = signer;
             }
+            self.reconciled_grants =
+                Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?);
         }
 
         info!(id=%config.id, engine=%engine, "Creating sandbox environment template");
@@ -652,6 +658,8 @@ impl GcpAgentPlatformTemplateController {
                 if signer.is_some() {
                     self.preview_service_account = signer;
                 }
+                self.reconciled_grants =
+                    Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?);
             }
         }
 
@@ -755,12 +763,18 @@ impl GcpAgentPlatformTemplateController {
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
-    /// Every direct setup run reconciles the grants around the engine, so a profile or remote
-    /// caller added since the last run gets its grant.
+    /// A direct setup run places the grants around the engine for the profiles and callers the
+    /// stack declares now. It updates once when those inputs differ from what it last placed,
+    /// and not at all in a steady state.
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        Ok(matches!(self.state, GcpAgentPlatformTemplateState::Ready)
+        if !(matches!(self.state, GcpAgentPlatformTemplateState::Ready)
             && ctx.deployment_config.setup_run
             && ctx.is_direct_setup_run())
+        {
+            return Ok(false);
+        }
+        Ok(self.reconciled_grants.as_deref()
+            != Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?.as_str()))
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
@@ -881,6 +895,7 @@ impl GcpAgentPlatformTemplateController {
             preview_ports: Vec::new(),
             preview_service_account: None,
             engine_setup: Default::default(),
+            reconciled_grants: None,
             _internal_stay_count: None,
         }
     }

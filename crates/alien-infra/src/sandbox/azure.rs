@@ -105,6 +105,10 @@ pub struct AzureSandboxController {
     /// package imported is left to `terraform destroy`.
     #[serde(default)]
     pub(crate) created_group: bool,
+    /// Fingerprint of the grant inputs the last direct setup run reconciled, so a rerun updates
+    /// only when a profile or caller changed.
+    #[serde(default)]
+    pub(crate) reconciled_grants: Option<String>,
     /// Recorded, and saved, after the group was found absent and before the create call. A group
     /// that exists while this is unset was not made by this deployment and is never taken over;
     /// one that exists while it is set is this deployment's own earlier attempt.
@@ -642,8 +646,13 @@ impl AzureSandboxController {
             return Ok(false);
         }
         if ctx.deployment_config.setup_run {
-            // Every setup run reconciles the grants of a group it created.
-            return Ok(self.setup_owns_grants(ctx));
+            // A setup run reconciles the grants of a group it created when the profiles or
+            // callers differ from what it last placed, and does nothing in a steady state.
+            return Ok(self.setup_owns_grants(ctx)
+                && self.reconciled_grants.as_deref()
+                    != Some(
+                        crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?.as_str(),
+                    ));
         }
         let config = ctx.desired_resource_config::<Sandbox>()?;
         Ok(self.disk_image.is_none()
@@ -1201,7 +1210,7 @@ impl AzureSandboxController {
 
     /// Places the grants on the group. Idempotent: an assignment already there is left alone.
     async fn apply_group_grants(
-        &self,
+        &mut self,
         ctx: &ResourceControllerContext<'_>,
         config: &Sandbox,
     ) -> Result<()> {
@@ -1220,7 +1229,10 @@ impl AzureSandboxController {
             "Sandbox",
             "sandbox",
         )
-        .await
+        .await?;
+        self.reconciled_grants =
+            Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?);
+        Ok(())
     }
 
     /// A direct setup made this group, so a later setup run owns its grants too: a profile added
@@ -1479,6 +1491,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            reconciled_grants: None,
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1539,6 +1552,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            reconciled_grants: None,
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1709,6 +1723,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            reconciled_grants: None,
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1765,6 +1780,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            reconciled_grants: None,
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1829,6 +1845,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            reconciled_grants: None,
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1870,6 +1887,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            reconciled_grants: None,
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1985,6 +2003,7 @@ mod tests {
                 egress_config_digest: None,
                 egress_replica_secret_ready: false,
                 created_group: false,
+                reconciled_grants: None,
                 group_create_intent: false,
                 group_role_definitions: Vec::new(),
                 default_policy: None,
@@ -3685,6 +3704,7 @@ mod direct_setup_tests {
             region: Some("eastus".to_string()),
             resource_group: Some("default-resource-group".to_string()),
             created_group: true,
+            reconciled_grants: None,
             group_create_intent: true,
             ..Default::default()
         };
@@ -3705,12 +3725,24 @@ mod direct_setup_tests {
         .await;
         assert!(
             executor.needs_update().unwrap(),
-            "a setup rerun reconciles the grants"
+            "grants not yet reconciled for these profiles are reconciled"
         );
         executor
             .update(sandbox(SandboxEgress::None))
             .expect("update is accepted");
         drive(&mut executor).await;
+        assert!(
+            !executor.needs_update().unwrap(),
+            "one update settles the check; a steady state asks for none"
+        );
+        executor.add_permission_profile(
+            "added",
+            alien_core::permissions::PermissionProfile::new().resource("box", ["sandbox/execute"]),
+        );
+        assert!(
+            executor.needs_update().unwrap(),
+            "a profile added since asks for the next update"
+        );
         let assigned = assigned.lock().unwrap();
         assert!(
             assigned
@@ -3771,6 +3803,7 @@ mod direct_setup_tests {
                 region: Some("eastus".to_string()),
                 resource_group: Some("rg".to_string()),
                 created_group: created,
+                reconciled_grants: None,
                 group_create_intent: false,
                 group_role_definitions: Vec::new(),
                 ..Default::default()
@@ -3858,6 +3891,7 @@ mod direct_setup_tests {
             region: Some("eastus".to_string()),
             resource_group: Some("rg".to_string()),
             created_group: true,
+            reconciled_grants: None,
             group_create_intent: false,
             ..Default::default()
         };

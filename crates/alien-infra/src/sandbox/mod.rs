@@ -77,6 +77,9 @@ mod local;
 #[cfg(feature = "local")]
 pub use local::*;
 
+#[cfg(any(feature = "gcp", feature = "azure"))]
+pub(crate) mod grant_fingerprint;
+
 #[cfg(feature = "gcp")]
 mod gcp_agent_platform_template;
 #[cfg(feature = "gcp")]
