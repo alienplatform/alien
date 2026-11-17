@@ -13,6 +13,7 @@ mod generator {
     pub mod protected_registration_tests;
     pub mod remote_kv_tests;
     pub mod remote_queue_tests;
+    pub mod sandbox_live_declaration_tests;
 
     pub mod aws_boundary_size_tests;
     pub mod aws_bucket_lifecycle_parity_tests;
