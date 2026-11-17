@@ -1,8 +1,15 @@
 import * as alien from "@alienplatform/core"
 
-// `tasks` moves a message to `tasks-failed` after five failed deliveries.
+// `tasks` moves a message to `tasks-failed` after five failed deliveries. Setting
+// DLQ_E2E_NO_DEAD_LETTER=1 declares the same stack without the setting, to show what a
+// message that always fails does without it.
 const failed = new alien.Queue("tasks-failed").build()
-const tasks = new alien.Queue("tasks").deadLetter(failed, { maxAttempts: 5 }).build()
+const tasksBuilder = new alien.Queue("tasks")
+const tasks = (
+  process.env.DLQ_E2E_NO_DEAD_LETTER === "1"
+    ? tasksBuilder
+    : tasksBuilder.deadLetter(failed, { maxAttempts: 5 })
+).build()
 const results = new alien.Storage("results").build()
 const worker = new alien.Worker("consumer")
   .code({ type: "source", src: "./", toolchain: { type: "typescript" } })

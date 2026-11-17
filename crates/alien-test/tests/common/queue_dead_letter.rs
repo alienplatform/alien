@@ -28,6 +28,64 @@ async fn json_request(client: &Client, request: reqwest::RequestBuilder) -> Valu
     response.json().await.unwrap()
 }
 
+/// Without a dead-letter setting (`DLQ_E2E_NO_DEAD_LETTER=1`) a message that always fails keeps
+/// being redelivered. Sends the same messages, waits until every poison message was delivered
+/// more than `MAX_ATTEMPTS` times, and checks that nothing reached `tasks-failed`. Returns the
+/// delivery counts.
+pub async fn check_without_dead_letter(
+    deployment: &TestDeployment,
+    prefix: &str,
+) -> BTreeMap<String, usize> {
+    let url = super::bindings::deployment_url(deployment).unwrap();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .unwrap();
+    let sent = json_request(
+        &client,
+        client
+            .post(format!("{url}/send"))
+            .json(&json!({"good": GOOD, "poison": POISON, "prefix": prefix})),
+    )
+    .await;
+    assert_eq!(sent["sent"], GOOD + POISON);
+    let started = Instant::now();
+    loop {
+        assert!(
+            started.elapsed() < Duration::from_secs(45 * 60),
+            "poison messages were not redelivered past {MAX_ATTEMPTS} attempts"
+        );
+        let deliveries = json_request(&client, client.get(format!("{url}/deliveries"))).await;
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for record in deliveries.as_array().unwrap() {
+            let id = record["id"].as_str().unwrap();
+            if id.starts_with(prefix) {
+                *counts.entry(id.to_string()).or_default() += 1;
+            }
+        }
+        let past = (0..POISON).all(|n| {
+            counts
+                .get(&format!("{prefix}-poison-{n}"))
+                .copied()
+                .unwrap_or(0) as u64
+                > MAX_ATTEMPTS
+        });
+        if past {
+            let drained = json_request(&client, client.post(format!("{url}/failed/drain"))).await;
+            assert!(
+                drained.as_array().unwrap().is_empty(),
+                "nothing may reach tasks-failed without a dead-letter setting: {drained}"
+            );
+            info!(
+                ?counts,
+                "redelivered past {MAX_ATTEMPTS} attempts, no dead-letter move"
+            );
+            return counts;
+        }
+        sleep(Duration::from_secs(15)).await;
+    }
+}
+
 /// Sends the messages, then waits for every good message to be processed and every poison
 /// message to arrive in `tasks-failed`, and returns the delivery counts the Worker recorded.
 pub async fn check_dead_letter(
@@ -104,4 +162,13 @@ pub async fn check_dead_letter(
     }
     info!(?counts, "dead-letter delivery counts");
     counts
+}
+
+/// The dead-letter check, or the same run without the setting when `DLQ_E2E_NO_DEAD_LETTER=1`.
+pub async fn check(deployment: &TestDeployment, prefix: &str) -> BTreeMap<String, usize> {
+    if std::env::var("DLQ_E2E_NO_DEAD_LETTER").as_deref() == Ok("1") {
+        check_without_dead_letter(deployment, prefix).await
+    } else {
+        check_dead_letter(deployment, prefix).await
+    }
 }

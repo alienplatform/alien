@@ -82,7 +82,7 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
             }
         }
         TestApp::QueueDeadLetter => {
-            common::queue_dead_letter::check_dead_letter(&ctx.deployment, "m").await;
+            common::queue_dead_letter::check(&ctx.deployment, "m").await;
         }
         TestApp::StorageNotifications => {
             common::storage_notifications::check_delivery(&ctx.deployment).await;
