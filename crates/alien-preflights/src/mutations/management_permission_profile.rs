@@ -579,6 +579,22 @@ pub(crate) fn generate_auto_management_profile(
             permission_set_ids.insert("queue/storage-notifications".to_string());
         }
 
+        if platform == Platform::Gcp
+            && resource_entry.lifecycle == ResourceLifecycle::Live
+            && resource_entry
+                .config
+                .downcast_ref::<alien_core::Queue>()
+                .is_some_and(|queue| {
+                    queue.dead_letter.is_some()
+                        || !alien_core::queues_dead_lettering_to(stack, resource_id).is_empty()
+                })
+        {
+            // Live queues may not exist at setup time, so this grant must be project-scoped.
+            // Pub/Sub's service agent needs publisher on the target and subscriber on the
+            // source's subscriptions.
+            permission_set_ids.insert("queue/dead-letter".to_string());
+        }
+
         if platform == Platform::Azure
             && resource_entry.lifecycle == ResourceLifecycle::Live
             && resource_entry

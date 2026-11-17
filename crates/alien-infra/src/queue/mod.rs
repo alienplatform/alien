@@ -3,6 +3,8 @@ pub mod aws;
 
 #[cfg(feature = "gcp")]
 pub mod gcp;
+#[cfg(feature = "gcp")]
+pub(crate) mod gcp_dead_letter;
 
 #[cfg(feature = "azure")]
 pub mod azure;
