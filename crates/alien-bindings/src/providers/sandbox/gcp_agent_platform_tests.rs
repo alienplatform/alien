@@ -3370,6 +3370,52 @@ async fn a_finished_job_with_pages_left_is_drained_past_the_deadline() {
     );
 }
 
+/// The agent reports a finished job's outcome while pages remain, but the public poll hands it out
+/// only with the last page, so a caller that stops at the first `exit` or `error` misses nothing.
+/// Mutation check: drop the `settled` filter in `poll_job` and the first poll carries the exit.
+#[tokio::test]
+async fn a_public_poll_reports_the_outcome_only_when_no_pages_remain() {
+    let polls = AtomicUsize::new(0);
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(3).returning(move |_, _, _| {
+        let body = match polls.fetch_add(1, Ordering::SeqCst) {
+            n @ 0..=1 => serde_json::json!({
+                "running": true, "finished": true, "exitCode": 7, "truncated": true,
+                "frames": [stdout_frame(n as u64, b"x")]
+            }),
+            _ => serde_json::json!({
+                "running": false, "finished": true, "exitCode": 7, "truncated": true,
+                "frames": [stdout_frame(2, b"x")]
+            }),
+        };
+        Ok(serde_json::to_vec(&body).unwrap())
+    });
+    let sandbox = provider(client);
+    let mut seq = None;
+    for _ in 0..2 {
+        let poll = sandbox.poll_job("s1", "j1", seq).await.expect("polls");
+        assert!(
+            poll.running && poll.exit.is_none() && poll.error.is_none(),
+            "{poll:?}"
+        );
+        assert_eq!(poll.frames.len(), 1);
+        seq = Some(seq.map_or(0, |s| s + 1));
+    }
+    let last = sandbox.poll_job("s1", "j1", seq).await.expect("polls");
+    assert!(!last.running);
+    assert_eq!(last.frames.len(), 1);
+    assert!(
+        matches!(
+            last.exit,
+            Some(JobExit {
+                code: 7,
+                truncated: true
+            })
+        ),
+        "{last:?}"
+    );
+}
+
 /// A file larger than one reply is read in pages and joined, and an agent without paging, which
 /// answers with the whole file and no size, still reads.
 #[tokio::test]

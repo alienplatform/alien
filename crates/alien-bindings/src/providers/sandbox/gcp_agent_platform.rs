@@ -1406,6 +1406,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
         )
         .await?;
 
+        // The agent reports a finished job's outcome while pages of its output are still to be
+        // read (`running` stays true until the last page). A caller that stops at the first
+        // `exit` or `error` would miss those pages, so the outcome is public only when no pages
+        // remain. `finished` stays internal: it is how this client avoids cancelling or timing
+        // out a job that has already ended.
+        let settled = !reply.running;
         Ok(JobPoll {
             running: reply.running,
             frames: reply
@@ -1413,11 +1419,11 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 .into_iter()
                 .map(WireFrame::into_output)
                 .collect::<Result<Vec<_>>>()?,
-            exit: reply.exit_code.map(|code| JobExit {
+            exit: reply.exit_code.filter(|_| settled).map(|code| JobExit {
                 code,
                 truncated: reply.truncated.unwrap_or(false),
             }),
-            error: reply.error.map(|error| JobError {
+            error: reply.error.filter(|_| settled).map(|error| JobError {
                 code: error.code,
                 message: error.message,
             }),
