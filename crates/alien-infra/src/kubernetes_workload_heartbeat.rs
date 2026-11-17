@@ -109,7 +109,7 @@ const DEFAULT_PROGRESS_DEADLINE_SECS: i64 = 600;
 
 /// Consecutive healthy checks a failed resource needs before it returns to Running, so a pod
 /// that crash-loops does not flip the resource between Running and RefreshFailed on every
-/// check. Checks are 10 s apart, so this is about 30 s of continuous health.
+/// check. Checks are 10 s apart, so the third healthy check comes 20 s after the first.
 pub(crate) const RECOVERY_HEALTHY_CHECKS: u32 = 3;
 
 /// An unfinished rollout of one revision of a workload.
@@ -125,7 +125,17 @@ pub(crate) struct RolloutProbe {
 pub struct RolloutWatch {
     pub key: String,
     pub first_seen_unix: i64,
+    /// Since when the workload has been fully rolled out and ready. The watch is dropped only
+    /// after that holds for `ROLLOUT_COMPLETE_WINDOW_SECS`, so pods that flap between ready and
+    /// unready cannot restart the time bound. Absent in state written by earlier releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complete_since_unix: Option<i64>,
 }
+
+/// How long a rollout must stay complete and ready before its time bound is forgotten: the span
+/// of `RECOVERY_HEALTHY_CHECKS` checks `RECOVERY_CHECK_MIN_GAP_SECS` apart.
+pub(crate) const ROLLOUT_COMPLETE_WINDOW_SECS: i64 =
+    (RECOVERY_HEALTHY_CHECKS as i64 - 1) * RECOVERY_CHECK_MIN_GAP_SECS;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RolloutWait {
@@ -168,22 +178,38 @@ pub(crate) fn statefulset_rollout(statefulset: &StatefulSet) -> Option<RolloutPr
 
 /// Measures how long the current rollout has been seen, from the first check that saw it.
 /// The count lives in the controller state, so it survives restarts and does not use the
-/// executor's retry budget.
+/// executor's retry budget. `fully_ready` is true when every replica is updated and ready on
+/// the current generation; only a continuous `ROLLOUT_COMPLETE_WINDOW_SECS` of that ends the
+/// watch.
 pub(crate) fn track_rollout(
     watch: &mut Option<RolloutWatch>,
     probe: Option<RolloutProbe>,
+    fully_ready: bool,
     now_unix: i64,
 ) -> RolloutWait {
     let Some(probe) = probe else {
-        *watch = None;
+        if let Some(existing) = watch {
+            if fully_ready {
+                let since = *existing.complete_since_unix.get_or_insert(now_unix);
+                if now_unix.saturating_sub(since) >= ROLLOUT_COMPLETE_WINDOW_SECS {
+                    *watch = None;
+                }
+            } else {
+                existing.complete_since_unix = None;
+            }
+        }
         return RolloutWait::NotRolling;
     };
     let first_seen = match watch {
-        Some(existing) if existing.key == probe.key => existing.first_seen_unix,
+        Some(existing) if existing.key == probe.key => {
+            existing.complete_since_unix = None;
+            existing.first_seen_unix
+        }
         _ => {
             *watch = Some(RolloutWatch {
                 key: probe.key.clone(),
                 first_seen_unix: now_unix,
+                complete_since_unix: None,
             });
             now_unix
         }
@@ -209,23 +235,157 @@ pub(crate) fn deployment_stalled_rollout(deployment: &Deployment) -> Option<i64>
     })
 }
 
-/// Seconds a StatefulSet rollout has been seen for, once past its bound. Old pods can still be
-/// serving: the new version is not rolling out.
-pub(crate) fn statefulset_stalled_rollout(
-    watch: &mut Option<RolloutWatch>,
-    statefulset: &StatefulSet,
-    now_unix: i64,
-) -> Option<i64> {
-    match track_rollout(watch, statefulset_rollout(statefulset), now_unix) {
-        RolloutWait::TimedOut { elapsed_secs } => Some(elapsed_secs),
-        _ => None,
+/// Whether every replica of the workload is updated and ready on the current generation.
+fn workload_fully_ready(workload: &KubernetesWorkload) -> bool {
+    match workload {
+        KubernetesWorkload::Deployment(deployment) => {
+            let Some(status) = &deployment.status else {
+                return false;
+            };
+            let desired = deployment
+                .spec
+                .as_ref()
+                .and_then(|s| s.replicas)
+                .unwrap_or(1);
+            status.observed_generation.unwrap_or(0) >= deployment.metadata.generation.unwrap_or(1)
+                && status.updated_replicas.unwrap_or(0) == desired
+                && status.replicas.unwrap_or(0) == desired
+                && status.ready_replicas.unwrap_or(0) == desired
+        }
+        KubernetesWorkload::StatefulSet(statefulset) => {
+            let Some(status) = &statefulset.status else {
+                return false;
+            };
+            let desired = statefulset
+                .spec
+                .as_ref()
+                .and_then(|s| s.replicas)
+                .unwrap_or(1);
+            status.observed_generation.unwrap_or(0) >= statefulset.metadata.generation.unwrap_or(1)
+                && status.updated_replicas.unwrap_or(0) == desired
+                && status.replicas == desired
+                && status.ready_replicas.unwrap_or(0) == desired
+        }
+        _ => false,
     }
 }
 
-pub(crate) fn stalled_rollout_message(secs: i64) -> String {
-    format!(
-        "the rollout of the new version did not finish within {secs} s; the previous version may still be serving"
-    )
+/// What the rollout of a workload looks like on this check.
+pub(crate) struct RolloutAssessment {
+    pub wait: RolloutWait,
+    /// Why the rollout is stalled, once Kubernetes or the time bound says so. A stalled rollout
+    /// is drift even while old pods still serve.
+    pub stall: Option<String>,
+}
+
+/// Updates the watch from the workload and says whether to wait for it or call it stalled.
+pub(crate) fn assess_rollout(
+    watch: &mut Option<RolloutWatch>,
+    workload: &KubernetesWorkload,
+    now_unix: i64,
+) -> RolloutAssessment {
+    let probe = match workload {
+        KubernetesWorkload::Deployment(deployment) => deployment_rollout(deployment),
+        KubernetesWorkload::StatefulSet(statefulset) => statefulset_rollout(statefulset),
+        _ => None,
+    };
+    let wait = track_rollout(watch, probe, workload_fully_ready(workload), now_unix);
+    let stall = match (workload, &wait) {
+        (KubernetesWorkload::Deployment(deployment), _)
+            if deployment_stalled_rollout(deployment).is_some() =>
+        {
+            let secs = deployment_stalled_rollout(deployment).unwrap_or_default();
+            let detail = deployment
+                .status
+                .as_ref()
+                .and_then(|status| status.conditions.as_ref())
+                .and_then(|conditions| {
+                    conditions
+                        .iter()
+                        .find(|c| c.type_ == "Progressing" && c.status != "True")
+                })
+                .and_then(|c| c.message.clone());
+            Some(match detail {
+                Some(detail) => format!(
+                    "ProgressDeadlineExceeded: no progress for {secs} s ({detail})"
+                ),
+                None => format!("ProgressDeadlineExceeded: no progress for {secs} s"),
+            })
+        }
+        (KubernetesWorkload::Deployment(_), RolloutWait::TimedOut { elapsed_secs }) => Some(
+            format!("the rollout has not finished after {elapsed_secs} s"),
+        ),
+        (KubernetesWorkload::StatefulSet(_), RolloutWait::TimedOut { elapsed_secs }) => Some(
+            format!(
+                "the StatefulSet rollout has not finished within its {STATEFULSET_ROLLOUT_DEADLINE_SECS} s deadline ({elapsed_secs} s)"
+            ),
+        ),
+        _ => None,
+    };
+    RolloutAssessment { wait, stall }
+}
+
+/// The message for a stalled rollout: names the workload, why it is stalled and, when known,
+/// what the pods report (ImagePullBackOff, CrashLoopBackOff, a ReplicaFailure).
+pub(crate) fn stalled_rollout_message(
+    kind: &str,
+    workload_name: &str,
+    cause: &str,
+    pod_reason: Option<&str>,
+) -> String {
+    match pod_reason {
+        Some(reason) => format!("{kind} '{workload_name}' rollout is stalled: {cause}; {reason}"),
+        None => format!("{kind} '{workload_name}' rollout is stalled: {cause}"),
+    }
+}
+
+/// What the pods of a workload report while they are not ready: the first waiting container
+/// reason (ImagePullBackOff, CrashLoopBackOff, ...) with the pod name.
+pub(crate) fn pod_waiting_reason(pods: &[k8s_openapi::api::core::v1::Pod]) -> Option<String> {
+    pods.iter()
+        .filter(|pod| pod.metadata.deletion_timestamp.is_none())
+        .find_map(|pod| {
+            let waiting = pod
+                .status
+                .as_ref()?
+                .container_statuses
+                .as_deref()?
+                .iter()
+                .find_map(|status| status.state.as_ref()?.waiting.as_ref())?;
+            let reason = waiting.reason.as_deref()?;
+            Some(format!(
+                "pod {} is waiting: {reason}",
+                pod.metadata.name.as_deref().unwrap_or("?")
+            ))
+        })
+}
+
+/// Best effort: a failure to list pods must not hide the drift being reported.
+pub(crate) async fn workload_pod_reason(
+    ctx: &ResourceControllerContext<'_>,
+    namespace: &str,
+    selector: &std::collections::BTreeMap<String, String>,
+    workload_failure: Option<&str>,
+) -> Option<String> {
+    let pods = async {
+        let client = ctx
+            .service_provider
+            .get_kubernetes_pod_client(ctx.get_kubernetes_config().ok()?)
+            .await
+            .ok()?;
+        client
+            .list_pods(namespace, Some(label_selector(selector)), None)
+            .await
+            .ok()
+    }
+    .await;
+    let from_pods = pods.and_then(|pods| pod_waiting_reason(&pods.items));
+    match (from_pods, workload_failure) {
+        (Some(pods), Some(failure)) => Some(format!("{pods}; {failure}")),
+        (Some(pods), None) => Some(pods),
+        (None, Some(failure)) => Some(failure.to_string()),
+        (None, None) => None,
+    }
 }
 
 /// Minimum seconds between two healthy checks that count towards recovery. The executor can
@@ -640,28 +800,110 @@ mod tests {
         };
         let mut watch = None;
         assert_eq!(
-            track_rollout(&mut watch, probe("a"), 1000),
+            track_rollout(&mut watch, probe("a"), false, 1000),
             RolloutWait::Wait
         );
         assert_eq!(
-            track_rollout(&mut watch, probe("a"), 1599),
+            track_rollout(&mut watch, probe("a"), false, 1599),
             RolloutWait::Wait
         );
         assert_eq!(
-            track_rollout(&mut watch, probe("a"), 1600),
+            track_rollout(&mut watch, probe("a"), false, 1600),
             RolloutWait::TimedOut { elapsed_secs: 600 }
         );
         // A new revision starts over.
         assert_eq!(
-            track_rollout(&mut watch, probe("b"), 1700),
+            track_rollout(&mut watch, probe("b"), false, 1700),
             RolloutWait::Wait
         );
-        // A finished rollout forgets the watch.
-        assert_eq!(
-            track_rollout(&mut watch, None, 1800),
-            RolloutWait::NotRolling
-        );
+        // A finished, ready rollout forgets the watch after the completion window.
+        for now in [1800, 1810, 1820] {
+            assert_eq!(
+                track_rollout(&mut watch, None, true, now),
+                RolloutWait::NotRolling
+            );
+        }
         assert!(watch.is_none());
+    }
+
+    fn flapping_deployment(ready: i32) -> KubernetesWorkload {
+        KubernetesWorkload::Deployment(
+            serde_json::from_value(serde_json::json!({
+                "metadata": {"generation": 5},
+                "spec": {"replicas": 3, "progressDeadlineSeconds": 600, "selector": {}, "template": {}},
+                "status": {"observedGeneration": 5, "replicas": 4, "updatedReplicas": 2, "readyReplicas": ready,
+                    "conditions": [{"type": "Progressing", "status": "True", "reason": "ReplicaSetUpdated"}]}
+            }))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn pods_that_flap_ready_and_unready_do_not_restart_the_time_bound() {
+        let mut watch = None;
+        let mut now = 1000;
+        // The rollout never finishes; ready replicas go 3 -> 1 -> 3 -> 1 for longer than the bound.
+        for ready in [1, 3, 1, 3].iter().cycle().take(80) {
+            let assessment = assess_rollout(&mut watch, &flapping_deployment(*ready), now);
+            if now - 1000 >= 600 {
+                assert!(
+                    assessment.stall.is_some(),
+                    "flapping past the bound is drift at {now}"
+                );
+            } else {
+                assert!(assessment.stall.is_none());
+            }
+            now += 10;
+        }
+        assert!(now - 1000 > 600);
+    }
+
+    #[test]
+    fn the_watch_ends_only_after_a_continuous_complete_window() {
+        let probe = Some(RolloutProbe {
+            key: "a".into(),
+            deadline_secs: 600,
+        });
+        let mut watch = None;
+        track_rollout(&mut watch, probe.clone(), false, 1000);
+        // Complete for 10 s, then unfinished again: the watch and its first sighting stay.
+        track_rollout(&mut watch, None, true, 1100);
+        track_rollout(&mut watch, None, true, 1110);
+        assert!(watch.is_some());
+        assert_eq!(
+            track_rollout(&mut watch, probe, false, 1120),
+            RolloutWait::Wait
+        );
+        assert_eq!(watch.as_ref().unwrap().first_seen_unix, 1000);
+        // Complete for the whole window: forgotten.
+        track_rollout(&mut watch, None, true, 1200);
+        track_rollout(&mut watch, None, true, 1210);
+        assert!(watch.is_some());
+        track_rollout(&mut watch, None, true, 1220);
+        assert!(watch.is_none());
+    }
+
+    #[test]
+    fn a_watch_written_before_the_completion_window_existed_still_loads() {
+        let watch: RolloutWatch =
+            serde_json::from_str(r#"{"key":"generation-3","first_seen_unix":1000}"#).unwrap();
+        assert_eq!(watch.complete_since_unix, None);
+        // Absent fields are not written back, so an older release reads what a newer one wrote.
+        let written = serde_json::to_value(&watch).unwrap();
+        assert!(written.get("complete_since_unix").is_none());
+    }
+
+    #[test]
+    fn a_stalled_message_names_the_workload_cause_and_pod_reason() {
+        let message = stalled_rollout_message(
+            "Deployment",
+            "gateway",
+            "ProgressDeadlineExceeded: no progress for 600 s; 1 of 3 replicas ready",
+            Some("pod gateway-1 is waiting: ImagePullBackOff"),
+        );
+        for part in ["gateway", "ProgressDeadlineExceeded", "ImagePullBackOff"] {
+            assert!(message.contains(part), "{message}");
+        }
     }
 
     #[test]

@@ -18,11 +18,10 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    deployment_has_ready_replicas, deployment_rollout, deployment_rollout_complete,
-    deployment_stalled_rollout, emit_kubernetes_workload_heartbeat, label_selector, recovery_check,
-    stalled_rollout_message, statefulset_has_ready_replicas, statefulset_rollout,
-    statefulset_stalled_rollout, track_rollout, KubernetesWorkload, KubernetesWorkloadDataKind,
-    KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
+    assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
+    emit_kubernetes_workload_heartbeat, label_selector, recovery_check, stalled_rollout_message,
+    statefulset_has_ready_replicas, workload_pod_reason, KubernetesWorkload,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
     KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -1038,57 +1037,52 @@ impl KubernetesContainerController {
                 }
                 KubernetesWorkload::DaemonSet(_) => false,
             };
-            let mut rollout_note = String::new();
-            if healthy {
-                // Old pods can keep serving while the new version never becomes ready.
-                let stalled = match &workload {
-                    KubernetesWorkload::Deployment(deployment) => {
-                        self.rollout_watch = None;
-                        deployment_stalled_rollout(deployment)
-                    }
-                    KubernetesWorkload::StatefulSet(statefulset) => statefulset_stalled_rollout(
-                        &mut self.rollout_watch,
-                        statefulset,
-                        chrono::Utc::now().timestamp(),
-                    ),
-                    KubernetesWorkload::DaemonSet(_) => None,
-                };
-                if let Some(secs) = stalled {
+            let workload_kind = if self.is_stateful {
+                "StatefulSet"
+            } else {
+                "Deployment"
+            };
+            let assessment = assess_rollout(
+                &mut self.rollout_watch,
+                &workload,
+                chrono::Utc::now().timestamp(),
+            );
+            let selector = self.workload_labels(ctx, &config.id, self.build_labels(workload_name));
+            if let Some(cause) = &assessment.stall {
+                // The new version is not rolling out, even if old pods still serve.
+                let pod_reason = workload_pod_reason(
+                    ctx,
+                    namespace,
+                    &selector,
+                    self.workload_failure.as_deref(),
+                )
+                .await;
+                if healthy || ready_replicas.unwrap_or(0) > 0 {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
-                        message: stalled_rollout_message(secs),
+                        message: stalled_rollout_message(
+                            workload_kind,
+                            workload_name,
+                            &format!(
+                                "{cause}; {} of {} replicas ready",
+                                ready_replicas.unwrap_or(0),
+                                replicas.unwrap_or(0)
+                            ),
+                            pod_reason.as_deref(),
+                        ),
                     }));
                 }
-            } else {
-                let probe = match &workload {
-                    KubernetesWorkload::Deployment(deployment) => deployment_rollout(deployment),
-                    KubernetesWorkload::StatefulSet(statefulset) => {
-                        statefulset_rollout(statefulset)
-                    }
-                    KubernetesWorkload::DaemonSet(_) => None,
-                };
-                match track_rollout(
-                    &mut self.rollout_watch,
-                    probe,
-                    chrono::Utc::now().timestamp(),
-                ) {
-                    RolloutWait::Wait => {
-                        // Kubernetes is still replacing replicas. Check again without using
-                        // the retry budget; the bound is the rollout's own time limit.
-                        self.zero_ready_observed = false;
-                        self.recovery_checks = 0;
-                        self.last_recovery_check_unix = None;
-                        return Ok(HandlerAction::Stay {
-                            max_times: None,
-                            suggested_delay: Some(Duration::from_secs(10)),
-                        });
-                    }
-                    RolloutWait::TimedOut { elapsed_secs } => {
-                        rollout_note =
-                            format!("; the rollout has not finished after {elapsed_secs} seconds");
-                    }
-                    RolloutWait::NotRolling => {}
-                }
+            }
+            if !healthy && matches!(assessment.wait, RolloutWait::Wait) {
+                // Kubernetes is still replacing replicas. Check again without using
+                // the retry budget; the bound is the rollout's own time limit.
+                self.zero_ready_observed = false;
+                self.recovery_checks = 0;
+                self.last_recovery_check_unix = None;
+                return Ok(HandlerAction::Stay {
+                    max_times: None,
+                    suggested_delay: Some(Duration::from_secs(10)),
+                });
             }
             let zero_ready = ready_replicas.unwrap_or(0) == 0;
             let previous_zero = self.zero_ready_observed;
@@ -1102,13 +1096,22 @@ impl KubernetesContainerController {
                 });
             }
             if !healthy {
+                let pod_reason = workload_pod_reason(
+                    ctx,
+                    namespace,
+                    &selector,
+                    self.workload_failure.as_deref(),
+                )
+                .await;
+                let cause = assessment.stall.clone().unwrap_or_default();
                 return Err(AlienError::new(ErrorData::ResourceDrift {
                     resource_id: config.id.clone(),
                     message: format!(
-                        "Container workload has {} ready replicas out of {} observed{}",
+                        "{workload_kind} '{workload_name}' has {} ready replicas out of {} observed{}{}",
                         ready_replicas.unwrap_or(0),
                         replicas.unwrap_or(0),
-                        rollout_note
+                        if cause.is_empty() { String::new() } else { format!("; {cause}") },
+                        pod_reason.map(|r| format!("; {r}")).unwrap_or_default(),
                     ),
                 }));
             }
@@ -3790,6 +3793,7 @@ mod tests {
             controller.rollout_watch = Some(RolloutWatch {
                 key: key.into(),
                 first_seen_unix: now - seen_for,
+                complete_since_unix: None,
             });
             let result = controller.ready(&ctx).await;
             if expect_drift {
@@ -3857,6 +3861,7 @@ mod tests {
                 controller.rollout_watch = Some(RolloutWatch {
                     key: "generation-3-web-2".into(),
                     first_seen_unix: now - seen_for,
+                    complete_since_unix: None,
                 });
             }
             if expect_drift {
@@ -3866,10 +3871,9 @@ mod tests {
                     .expect_err("the new version never rolled out");
                 assert_eq!(error.code, "RESOURCE_DRIFT");
                 assert!(
-                    error.message.contains("did not finish within")
-                        && error
-                            .message
-                            .contains("previous version may still be serving"),
+                    error.message.contains("'web' rollout is stalled")
+                        && (error.message.contains("ProgressDeadlineExceeded")
+                            || error.message.contains("deadline")),
                     "{}",
                     error.message
                 );
@@ -4446,6 +4450,24 @@ mod tests {
                 .insert(name.to_string(), value.to_string());
         }
         config
+    }
+
+    #[test]
+    fn controller_state_written_before_rollout_tracking_still_loads() {
+        let mut state = serde_json::to_value(manifest_test_controller()).unwrap();
+        for field in [
+            "rollout_watch",
+            "recovery_checks",
+            "last_recovery_check_unix",
+            "zero_ready_observed",
+        ] {
+            state.as_object_mut().unwrap().remove(field);
+        }
+        let controller: KubernetesContainerController = serde_json::from_value(state).unwrap();
+        assert!(controller.rollout_watch.is_none());
+        assert_eq!(controller.recovery_checks, 0);
+        assert_eq!(controller.last_recovery_check_unix, None);
+        assert!(!controller.zero_ready_observed);
     }
 
     fn manifest_test_controller() -> KubernetesContainerController {
