@@ -7,8 +7,8 @@ use crate::rerun_credential::{self, InClusterUse, KubeAccess};
 use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{ClientConfig, Platform, StackState};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_infra::ClientConfigExt;
+use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use clap::Parser;
 use std::{future::Future, path::PathBuf, str::FromStr};
 

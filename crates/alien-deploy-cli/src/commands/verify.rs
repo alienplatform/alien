@@ -508,21 +508,14 @@ pub fn check_signed(
     // belongs to no signed release.
     let allowed: Option<Vec<String>> = match matching {
         Some((id, verified)) => {
-            let left = verified.kept
-                && !verified.signers.iter().all(|signer| {
-                    trust
-                        .chain()
-                        .current()
-                        .signer(signer)
-                        .is_some_and(|(_, roles)| roles.contains(&Role::Release))
-                });
+            let left = verified.kept;
             lines.push(line(
                 "Template",
                 format!(
                     "matches release {id} · {} · {digest}{}",
                     verified.body.channel,
                     if left {
-                        " · signed by a key no longer on the list; it keeps running"
+                        " · signed by a key no longer on the list; the device list keeps it"
                     } else {
                         ""
                     }

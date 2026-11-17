@@ -82,8 +82,13 @@ pub enum ReleasesCmd {
     },
     /// Make protected deployments refuse a release, also as a rollback (signs a device list change)
     Revoke {
-        /// Release ID (`rel_…`)
-        id: String,
+        /// Release ID (`rel_…`), as the control plane names it
+        #[arg(required_unless_present = "sequence", conflicts_with = "sequence")]
+        id: Option<String>,
+        /// The release's signed sequence, as `alien releases revoke` prints it. Names the
+        /// release by what its statements sign instead of by the control plane's id.
+        #[arg(long)]
+        sequence: Option<u64>,
     },
     /// Delete a non-production release channel
     DeleteChannel {
@@ -191,7 +196,9 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             }
             create_channel_task(&ctx, &name, project.as_deref(), release.as_deref(), json).await
         }
-        ReleasesCmd::Revoke { id } => crate::commands::signing::revoke_release(&ctx, &id).await,
+        ReleasesCmd::Revoke { id, sequence } => {
+            crate::commands::signing::revoke_release(&ctx, id.as_deref(), sequence).await
+        }
         ReleasesCmd::DeleteChannel { name, project } => {
             if !ctx.is_platform() {
                 let client = manager_client(&ctx, project.as_deref(), false).await?;

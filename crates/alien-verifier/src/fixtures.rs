@@ -94,6 +94,7 @@ pub fn signer_list_of(project: &str, key: &SecretKey) -> SignedStatement {
                 label: None,
             }],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
     )

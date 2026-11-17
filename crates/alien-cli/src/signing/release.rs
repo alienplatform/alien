@@ -204,6 +204,7 @@ pub async fn enable(api: &SigningApi, dir: &Path, project: &str) -> Result<Optio
             },
         ],
         deny: Vec::new(),
+        keep: Vec::new(),
         recovered: false,
     };
     let envelope = Envelope {

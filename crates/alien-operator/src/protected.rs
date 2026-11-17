@@ -21,9 +21,9 @@
 //! - a target's stack comes only from its verified statement; the manager may
 //!   move an image to another registry, never change its digest;
 //! - a signer list older than the one accepted is refused; a new release or
-//!   config must be signed by a key on the current list, while one the install
-//!   already accepted keeps running after its signer is removed, unless the
-//!   list denies it;
+//!   config must be signed by a key on the current list, while a statement
+//!   whose signer was removed runs only when the current list's `keep` names
+//!   it (and the deny-list doesn't); the ledger never makes one verify;
 //! - the deployment configuration is rebuilt here: environment variables only
 //!   for the input mappings the signed stack declares, developer inputs and
 //!   configurable env only from the deployment's signed `config/v1`, deployer
@@ -393,8 +393,8 @@ pub struct VerifiedRelease {
     pub digest: String,
     /// The stack, read from the signed bytes.
     pub stack: Stack,
-    /// Signers whose signatures counted; empty for the release the install
-    /// already accepted, which is kept rather than verified again.
+    /// Signers whose signatures counted; empty for a release the current
+    /// signer list keeps, which needs no signature.
     pub signers: Vec<String>,
     /// The verified release body.
     pub body: ReleaseBody,
@@ -893,6 +893,7 @@ fn test_list_body(previous: Option<String>, with_ci: bool) -> alien_signing::Sig
         admin_threshold: 1,
         signers,
         deny: Vec::new(),
+        keep: Vec::new(),
         recovered: false,
     }
 }
@@ -900,17 +901,21 @@ fn test_list_body(previous: Option<String>, with_ci: bool) -> alien_signing::Sig
 /// Version 2 of the test signer list, which removes the CI key.
 #[cfg(test)]
 pub(crate) fn test_signer_list_without_ci(project: &str) -> SignedStatement {
+    test_signer_list_without_ci_keeping(project, Vec::new())
+}
+
+/// Version 2 of the test signer list, which removes the CI key and keeps `keep`.
+#[cfg(test)]
+pub(crate) fn test_signer_list_without_ci_keeping(
+    project: &str,
+    keep: Vec<alien_signing::Keep>,
+) -> SignedStatement {
     let previous = test_signer_list(project).open().unwrap().digest;
-    test_statement(
-        project,
-        Kind::SignerList,
-        None,
-        2,
-        1,
-        test_list_body(Some(previous), false),
-    )
-    .sign_with("alice-laptop", &test_key(2))
-    .unwrap()
+    let mut body = test_list_body(Some(previous), false);
+    body.keep = keep;
+    test_statement(project, Kind::SignerList, None, 2, 1, body)
+        .sign_with("alice-laptop", &test_key(2))
+        .unwrap()
 }
 
 /// Version 2 of the test signer list, which denies `digests`.
@@ -1236,31 +1241,64 @@ pub(crate) mod tests {
         );
     }
 
-    /// Removing a signer keeps what the install already accepted running, and refuses what is
-    /// new from that key.
+    /// Removing a signer keeps what the signer list keeps running, and refuses what is new
+    /// from that key. The ledger plays no part.
     #[test]
-    fn removing_the_ci_key_keeps_what_the_install_accepted_and_refuses_what_is_new() {
+    fn removing_the_ci_key_keeps_what_the_list_keeps_and_refuses_what_is_new() {
         let accepted_release = signed_release(5, &stack(&pinned()));
         let mut accepted = target(accepted_release.clone(), vec![]);
-        accepted.signed_config = Some(signed_config(
+        let config = signed_config(
             1,
             &this_install(),
             serde_json::json!({"inputs": {"logLevel": "info"}}),
-        ));
+        );
+        accepted.signed_config = Some(config.clone());
         let stored = accept(&fresh(), &accepted).unwrap();
 
-        let lists = vec![signer_list(), test_signer_list_without_ci("shop")];
+        let keep_of = |statement: &SignedStatement, kind| {
+            let opened = statement.open().unwrap();
+            alien_signing::Keep {
+                digest: opened.digest,
+                kind,
+                release_id: None,
+                sequence: opened.sequence,
+            }
+        };
+        let keep = vec![
+            keep_of(
+                accepted_release.signed.as_ref().unwrap(),
+                alien_signing::KeptKind::Release,
+            ),
+            keep_of(&config, alien_signing::KeptKind::Config),
+        ];
+        let lists = vec![
+            signer_list(),
+            test_signer_list_without_ci_keeping("shop", keep),
+        ];
         let mut without_ci = accepted_release.clone();
         without_ci.signer_lists = lists.clone();
 
-        // The Operator's re-check before a pass: the accepted release and config still verify.
+        // The Operator's re-check before a pass: the kept release and config still verify.
         let verified = signing()
             .verify_release(Platform::Kubernetes, &without_ci, &stored)
-            .expect("the accepted release keeps running after its signer left");
+            .expect("the release the list keeps runs after its signer left");
         assert!(verified.trust.chain().current().version == 2);
         let mut kept = accepted.clone();
         kept.release_info.signer_lists = lists.clone();
-        let stored = accept(&stored, &kept).expect("the accepted config keeps running too");
+        let stored = accept(&stored, &kept).expect("the kept config runs too");
+
+        // A new Operator instance with an empty ledger accepts them from the list alone.
+        accept(&fresh(), &kept).expect("a new instance needs nothing from the ledger");
+
+        // A list that keeps nothing refuses what the removed key signed, ledger or not.
+        let mut dropped = accepted.clone();
+        dropped.release_info.signer_lists =
+            vec![signer_list(), test_signer_list_without_ci("shop")];
+        let refusal = accept(&stored, &dropped).unwrap_err().to_string();
+        assert!(
+            refusal.contains("not on signer list version 2"),
+            "{refusal}"
+        );
 
         // A new release by the removed CI key is refused.
         let mut new_by_ci = release_by(6, &stack(&pinned()), "production", "ci");

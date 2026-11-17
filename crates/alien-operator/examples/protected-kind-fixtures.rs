@@ -211,6 +211,7 @@ fn main() -> Result<(), Error> {
                 signer("ci", &ci, SignerKind::Ci, vec![Role::Release]),
             ],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
     )?
@@ -226,6 +227,7 @@ fn main() -> Result<(), Error> {
             admin_threshold: 1,
             signers: vec![laptop_signer],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
     )?

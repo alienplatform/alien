@@ -125,6 +125,7 @@ fn signer_list() -> Result<SignedStatement, Error> {
                 label: Some(env("LIST_LABEL")?),
             }],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
     )

@@ -6622,6 +6622,7 @@ mod tests {
                         label: None,
                     }],
                     deny: Vec::new(),
+                    keep: Vec::new(),
                     recovered: false,
                 },
             )
@@ -6687,7 +6688,7 @@ mod tests {
         }
 
         /// Version 1 trusts `admin` and `ci`; version 2 drops `ci`.
-        fn chain_that_drops_ci() -> (Vec<SignedStatement>, String) {
+        fn chain_that_drops_ci(keep: Vec<alien_signing::Keep>) -> (Vec<SignedStatement>, String) {
             let admin = key(2);
             let ci = key(3);
             let signer = |id: &str, key: &SecretKey, roles: Vec<Role>, kind| Signer {
@@ -6716,6 +6717,7 @@ mod tests {
                         signer("ci", &ci, vec![Role::Release], SignerKind::Ci),
                     ],
                     deny: Vec::new(),
+                    keep: Vec::new(),
                     recovered: false,
                 },
             )
@@ -6731,6 +6733,7 @@ mod tests {
                     admin_threshold: 1,
                     signers: vec![admin_signer],
                     deny: Vec::new(),
+                    keep,
                     recovered: false,
                 },
             )
@@ -6740,22 +6743,29 @@ mod tests {
         }
 
         #[test]
-        fn a_machine_that_accepted_a_release_joins_after_its_signer_was_removed() {
+        fn a_new_machine_joins_and_runs_a_release_the_list_keeps_after_its_signer_was_removed() {
             let dir = tempfile::tempdir().unwrap();
-            let (chain, fingerprint) = chain_that_drops_ci();
-            let settings = signing_settings(&fingerprint);
             let mut by_ci = release("production", AGENT, &key(3));
             by_ci.signatures.clear();
             let by_ci = by_ci.sign_with("ci", &key(3)).unwrap();
-            let manifest = MachineBundleManifest {
-                signing: Some(MachineBundleSigning {
-                    signer_lists: chain,
-                    release: by_ci.clone(),
-                }),
-                ..test_manifest()
+            let opened = by_ci.open().unwrap();
+            let kept = alien_signing::Keep {
+                digest: opened.digest.clone(),
+                kind: alien_signing::KeptKind::Release,
+                release_id: None,
+                sequence: opened.sequence,
             };
-            let agent = agent_file(dir.path(), AGENT);
-            let verify = |ledger: &Ledger| {
+            let verify = |chain: Vec<SignedStatement>, fingerprint: &str| {
+                let settings = signing_settings(fingerprint);
+                let manifest = MachineBundleManifest {
+                    signing: Some(MachineBundleSigning {
+                        signer_lists: chain,
+                        release: by_ci.clone(),
+                    }),
+                    ..test_manifest()
+                };
+                let agent = agent_file(dir.path(), AGENT);
+                // A machine that never accepted anything: its ledger is empty.
                 verify_machine_agent(
                     &settings,
                     &machine(),
@@ -6763,15 +6773,16 @@ mod tests {
                     MachineArch::X64,
                     dir.path(),
                     &agent,
-                    ledger,
+                    &Ledger::new(&settings.prefix),
                 )
             };
-            // A machine with no record of the release refuses a removed signer's.
-            verify(&Ledger::new(&settings.prefix)).unwrap_err();
-            // The install's ledger holds it: it joins.
-            let mut ledger = Ledger::new(&settings.prefix);
-            ledger.accept(&by_ci.open().unwrap().digest);
-            verify(&ledger).unwrap();
+            // The list that removed CI kept the release: a new machine joins.
+            let (chain, fingerprint) = chain_that_drops_ci(vec![kept]);
+            verify(chain, &fingerprint).unwrap();
+            // The list that kept nothing refuses what CI signed, even for a machine
+            // whose ledger holds the digest.
+            let (chain, fingerprint) = chain_that_drops_ci(Vec::new());
+            verify(chain, &fingerprint).unwrap_err();
         }
 
         #[test]
@@ -6786,7 +6797,7 @@ mod tests {
             std::fs::create_dir_all(state.parent().unwrap()).unwrap();
             let digest = format!("sha256:{}", "a".repeat(64));
             let mut ledger = Ledger::new(&settings.prefix);
-            ledger.accept(&digest);
+            ledger.accept(&digest).unwrap();
             std::fs::write(&state, format!(r#"{{"ledger":{}}}"#, ledger.to_json())).unwrap();
             assert!(read_machine_ledger(root.path(), &settings)
                 .unwrap()

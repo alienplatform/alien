@@ -115,6 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 label: None,
             }],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
     )?

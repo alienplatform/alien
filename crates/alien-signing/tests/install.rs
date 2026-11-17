@@ -115,7 +115,11 @@ fn a_ledger_entry_makes_nothing_verify() {
     for forged in [&unsigned, &by_ci] {
         ledger.accept(&forged.open().unwrap().digest).unwrap();
     }
-    let base = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &Ledger::new(PREFIX));
+    let base = fresh_trust(
+        &keys,
+        &[genesis(&keys), version_2(&keys)],
+        &Ledger::new(PREFIX),
+    );
     let dropped = without_ci(&keys, &base, &[], &[]);
     let chain = [genesis(&keys), version_2(&keys), dropped];
     let trust = Trust::new(settings(&keys), install(), &chain, &ledger).unwrap();
@@ -132,7 +136,11 @@ fn a_ledger_entry_makes_nothing_verify() {
 #[test]
 fn a_keep_entry_binds_the_digest_kind_and_sequence() {
     let keys = keys();
-    let base = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &Ledger::new(PREFIX));
+    let base = fresh_trust(
+        &keys,
+        &[genesis(&keys), version_2(&keys)],
+        &Ledger::new(PREFIX),
+    );
     let by_ci = release(&keys, 10);
     let mut wrong_sequence = keep_of(&by_ci);
     wrong_sequence.sequence = 99;
@@ -152,7 +160,11 @@ fn a_keep_entry_binds_the_digest_kind_and_sequence() {
 #[test]
 fn a_new_machine_accepts_a_kept_statement_from_the_list_alone() {
     let keys = keys();
-    let base = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &Ledger::new(PREFIX));
+    let base = fresh_trust(
+        &keys,
+        &[genesis(&keys), version_2(&keys)],
+        &Ledger::new(PREFIX),
+    );
     let by_ci = release(&keys, 10);
     let dropped = without_ci(&keys, &base, &[], &[keep_of(&by_ci)]);
     // A later version carries the keep along (the admin changes something else).

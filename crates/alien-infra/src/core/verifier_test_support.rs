@@ -81,6 +81,7 @@ fn new_signer_list() -> SignedStatement {
                 label: None,
             }],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
     )

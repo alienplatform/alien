@@ -758,6 +758,7 @@ mod tests {
                         label: None,
                     }],
                     deny: Vec::new(),
+                    keep: Vec::new(),
                     recovered: false,
                 },
             }

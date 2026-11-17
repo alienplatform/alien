@@ -14,8 +14,8 @@ use std::process::{Command, Stdio};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::signer_list::KeyBackend;
 use alien_signing::{
-    display_fingerprint, Kind, PublicKey, RecoveryCode, Role, SecretKey, SignedStatement, Signer,
-    SignerChain, SignerKind, SignerListBody,
+    display_fingerprint, Keep, KeptKind, Kind, PublicKey, RecoveryCode, Role, SecretKey,
+    SignedStatement, Signer, SignerChain, SignerKind, SignerListBody,
 };
 use clap::{Args, Subcommand};
 use serde::Serialize;
@@ -94,6 +94,10 @@ pub enum DevicesCommand {
     Remove {
         /// The device's name, as `alien devices list` shows it.
         name: String,
+        /// Keep none of what the device signed: refuse the releases and configs that are
+        /// current. By default they keep running, and the command prints each one.
+        #[arg(long)]
+        revoke: bool,
     },
     /// Trust GitHub Actions in a repository to sign releases
     AddCi {
@@ -112,7 +116,8 @@ pub enum DevicesCommand {
     Rotate {
         /// The key's name, as `alien devices list` shows it.
         name: String,
-        /// Also refuse the recent releases the old key signed.
+        /// Keep none of what the old key signed: refuse the releases and configs that are
+        /// current. By default they keep running, and the command prints each one.
         #[arg(long)]
         revoke: bool,
         /// For a key made by `add-key`: write the new key to this file (mode 0600) instead of printing it.
@@ -410,6 +415,20 @@ fn diff(current: &SignerListBody, next: &SignerListBody) -> Vec<String> {
     {
         lines.push(format!("- stop refusing {}", deny_text(entry)));
     }
+    for entry in next
+        .keep
+        .iter()
+        .filter(|entry| !current.keep.iter().any(|held| held.digest == entry.digest))
+    {
+        lines.push(format!("+ keep {}", keep_text(entry)));
+    }
+    for entry in current
+        .keep
+        .iter()
+        .filter(|entry| !next.keep.iter().any(|held| held.digest == entry.digest))
+    {
+        lines.push(format!("- stop keeping {}", keep_text(entry)));
+    }
     if next.admin_threshold != current.admin_threshold {
         lines.push(format!(
             "~ admin signatures needed: {} → {}",
@@ -420,6 +439,18 @@ fn diff(current: &SignerListBody, next: &SignerListBody) -> Vec<String> {
         lines.push("no device changes".to_string());
     }
     lines
+}
+
+/// A kept statement in words.
+fn keep_text(entry: &Keep) -> String {
+    format!(
+        "{} signed as {} ({}) · called {} by the control plane · {}",
+        entry.kind.as_str(),
+        entry.sequence,
+        signed_date(entry.sequence),
+        entry.release_id.as_deref().unwrap_or("no release id"),
+        entry.digest
+    )
 }
 
 /// A deny-list entry in words: a whole release or one statement.
@@ -600,7 +631,7 @@ pub async fn devices_task(args: DevicesArgs, ctx: ExecutionMode) -> Result<()> {
     match args.command.unwrap_or(DevicesCommand::List) {
         DevicesCommand::Init { project } => init(&ctx, project.as_deref()).await,
         DevicesCommand::List => list(&ctx, args.json).await,
-        DevicesCommand::Remove { name } => remove(&ctx, &name).await,
+        DevicesCommand::Remove { name, revoke } => remove(&ctx, &name, revoke).await,
         DevicesCommand::AddCi { repository } => add_ci(&ctx, &repository).await,
         DevicesCommand::AddKey { name, out } => add_key(&ctx, &name, out.as_deref()).await,
         DevicesCommand::Rotate { name, revoke, out } => {
@@ -755,19 +786,314 @@ fn without_signer(current: &SignerListBody, name: &str) -> Result<SignerListBody
     Ok(body)
 }
 
-async fn remove(ctx: &ExecutionMode, name: &str) -> Result<()> {
+async fn remove(ctx: &ExecutionMode, name: &str, revoke: bool) -> Result<()> {
     let admin = admin(ctx).await?;
-    let body = without_signer(&admin.chain.current().body, name)?;
+    let mut body = without_signer(&admin.chain.current().body, name)?;
+    let removed = admin
+        .chain
+        .current()
+        .body
+        .signers
+        .iter()
+        .find(|signer| signer.id == name)
+        .cloned()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: format!("No trusted device is named '{name}'; see `alien devices list`"),
+            })
+        })?;
     println!(
         "Removing {name} from the devices of {}.",
         admin.chain.project()
     );
+    let keeps = keep_current(ctx, &admin, &removed, revoke).await?;
+    add_keeps(&mut body, keeps)?;
     let statement = admin.sign_next(body, "sign")?;
     admin.publish(&statement).await?;
     println!(
         "✓ {name} can no longer sign · delivered to protected deployments as the next device list"
     );
     Ok(())
+}
+
+/// One statement a key signed that is current on a channel or run by a deployment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Found {
+    keep: Keep,
+    /// The release's platform, for a release statement.
+    platform: Option<String>,
+    /// Channels the control plane says the release is current on.
+    channels: Vec<String>,
+    /// Deployments the control plane says run it (or the config).
+    deployments: Vec<String>,
+    /// The release's channel as the statement signs it.
+    signed_channel: Option<String>,
+}
+
+/// When a statement was signed: its sequence is the time in milliseconds.
+fn signed_date(sequence: u64) -> String {
+    i64::try_from(sequence)
+        .ok()
+        .and_then(chrono::DateTime::from_timestamp_millis)
+        .map(|date| date.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|| "unknown date".to_string())
+}
+
+/// Print what is kept, one line per statement, so the admin sees exactly what the
+/// next list signs.
+fn found_text(found: &Found) -> String {
+    let what = match (&found.keep.kind, &found.platform) {
+        (KeptKind::Release, Some(platform)) => format!("release for {platform}"),
+        (KeptKind::Release, None) => "release".to_string(),
+        (KeptKind::Config, _) => "config".to_string(),
+    };
+    let mut places = Vec::new();
+    if !found.channels.is_empty() {
+        places.push(format!("current on {}", found.channels.join(", ")));
+    }
+    if !found.deployments.is_empty() {
+        places.push(format!("run by {}", found.deployments.join(", ")));
+    }
+    format!(
+        "{what} signed as {} ({}){}{} · called {} by the control plane · {}",
+        found.keep.sequence,
+        signed_date(found.keep.sequence),
+        found
+            .signed_channel
+            .as_ref()
+            .map(|channel| format!(" · channel {channel}"))
+            .unwrap_or_default(),
+        if places.is_empty() {
+            String::new()
+        } else {
+            format!(" · {}", places.join(" · "))
+        },
+        found.keep.release_id.as_deref().unwrap_or("no release id"),
+        found.keep.digest,
+    )
+}
+
+/// The statements `key` signed (as `signer`) that are current on a channel or run by
+/// a deployment, from what the control plane lists. Only signatures that verify
+/// count, so a control plane can't get other statements kept this way. A statement the
+/// control plane leaves out is not kept, which is the safe direction: it is refused.
+fn current_signed_by(
+    releases: &[serde_json::Value],
+    channels: &[serde_json::Value],
+    deployments: &[(serde_json::Value, Vec<SignedStatement>)],
+    project: &str,
+    signer: &str,
+    key: &PublicKey,
+) -> Vec<Found> {
+    let mut channels_of: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for channel in channels {
+        if let (Some(release), Some(name)) = (
+            channel["currentReleaseId"].as_str(),
+            channel["name"].as_str(),
+        ) {
+            channels_of
+                .entry(release.to_string())
+                .or_default()
+                .push(name.to_string());
+        }
+    }
+    let mut running: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (deployment, _) in deployments {
+        let Some(id) = deployment["id"].as_str() else {
+            continue;
+        };
+        for field in ["currentReleaseId", "desiredReleaseId"] {
+            if let Some(release) = deployment[field].as_str() {
+                let held = running.entry(release.to_string()).or_default();
+                if !held.iter().any(|name| name == id) {
+                    held.push(id.to_string());
+                }
+            }
+        }
+    }
+    let mut found: Vec<Found> = Vec::new();
+    let mut push = |item: Found| {
+        if !found
+            .iter()
+            .any(|held| held.keep.digest == item.keep.digest)
+        {
+            found.push(item);
+        }
+    };
+    for release in releases {
+        let Some(id) = release["id"].as_str() else {
+            continue;
+        };
+        let mut release_channels = channels_of.get(id).cloned().unwrap_or_default();
+        for name in release["currentChannels"].as_array().into_iter().flatten() {
+            if let Some(name) = name.as_str() {
+                if !release_channels.iter().any(|held| held == name) {
+                    release_channels.push(name.to_string());
+                }
+            }
+        }
+        let deployments_running = running.get(id).cloned().unwrap_or_default();
+        if release_channels.is_empty() && deployments_running.is_empty() {
+            continue;
+        }
+        for (platform, statement) in release["signedStacks"].as_object().into_iter().flatten() {
+            let Ok(statement) = serde_json::from_value::<SignedStatement>(statement.clone()) else {
+                continue;
+            };
+            let Some(opened) = signed_by_key(&statement, Kind::Release, project, signer, key)
+            else {
+                continue;
+            };
+            let signed_channel = opened
+                .body::<alien_signing::ReleaseBody>()
+                .ok()
+                .map(|body| body.channel);
+            push(Found {
+                keep: Keep {
+                    digest: opened.digest,
+                    kind: KeptKind::Release,
+                    release_id: Some(id.to_string()),
+                    sequence: opened.sequence,
+                },
+                platform: Some(platform.clone()),
+                channels: release_channels.clone(),
+                deployments: deployments_running.clone(),
+                signed_channel,
+            });
+        }
+    }
+    for (deployment, statements) in deployments {
+        let Some(id) = deployment["id"].as_str() else {
+            continue;
+        };
+        // The config a deployment runs is its newest.
+        let newest = statements
+            .iter()
+            .filter_map(|statement| statement.open().ok())
+            .filter(|opened| opened.kind == Kind::Config && opened.project == project)
+            .max_by_key(|opened| opened.sequence);
+        let Some(newest) = newest else {
+            continue;
+        };
+        let signed = newest.signatures.iter().any(|signature| {
+            signature.signer == signer && key.verify(&newest.bytes, &signature.sig).is_ok()
+        });
+        if signed {
+            push(Found {
+                keep: Keep {
+                    digest: newest.digest,
+                    kind: KeptKind::Config,
+                    release_id: deployment["currentReleaseId"].as_str().map(str::to_string),
+                    sequence: newest.sequence,
+                },
+                platform: None,
+                channels: Vec::new(),
+                deployments: vec![id.to_string()],
+                signed_channel: None,
+            });
+        }
+    }
+    found
+}
+
+/// `statement` opened, when it is a `kind` statement of `project` that `key` signed as `signer`.
+fn signed_by_key(
+    statement: &SignedStatement,
+    kind: Kind,
+    project: &str,
+    signer: &str,
+    key: &PublicKey,
+) -> Option<alien_signing::envelope::Opened> {
+    let opened = statement.open().ok()?;
+    let ours = opened.kind == kind
+        && opened.project == project
+        && opened.signatures.iter().any(|signature| {
+            signature.signer == signer && key.verify(&opened.bytes, &signature.sig).is_ok()
+        });
+    ours.then_some(opened)
+}
+
+/// Add `keeps` to `body`'s `keep`, once each.
+fn add_keeps(body: &mut SignerListBody, keeps: Vec<Keep>) -> Result<()> {
+    for keep in keeps {
+        if !body.keep.iter().any(|held| held.digest == keep.digest) {
+            body.keep.push(keep);
+        }
+    }
+    if body.keep.len() > alien_signing::MAX_KEEP {
+        return Err(AlienError::new(ErrorData::SigningFailed {
+            message: format!(
+                "The device list would keep {} statements; a list keeps at most {}",
+                body.keep.len(),
+                alien_signing::MAX_KEEP
+            ),
+        }));
+    }
+    Ok(())
+}
+
+/// Ask the control plane for what `signer`'s key signed that is current and print it.
+/// Returns what to keep: all of it, or none with `revoke`. Prints exactly what is kept.
+async fn keep_current(
+    ctx: &ExecutionMode,
+    admin: &Admin,
+    signer: &Signer,
+    revoke: bool,
+) -> Result<Vec<Keep>> {
+    let key = PublicKey::parse(&signer.key).context(ErrorData::SigningFailed {
+        message: format!("The key of '{}' on the list doesn't parse", signer.id),
+    })?;
+    let project = admin.chain.project().to_string();
+    let query = api::project_query(ctx, &project).await?;
+    let releases = all_items(ctx, "/v1/releases", &query).await?;
+    let channels = all_items(ctx, "/v1/release-channels", &query).await?;
+    let mut deployments = Vec::new();
+    for deployment in all_items(ctx, "/v1/deployments", &query).await? {
+        let id = deployment["id"].as_str().ok_or_else(|| {
+            AlienError::new(ErrorData::SigningFailed {
+                message: "The server listed a deployment without an id".to_string(),
+            })
+        })?;
+        let statements = admin.api.config_statements(id).await?;
+        deployments.push((deployment.clone(), statements));
+    }
+    let found = current_signed_by(
+        &releases,
+        &channels,
+        &deployments,
+        &project,
+        &signer.id,
+        &key,
+    );
+    if found.is_empty() {
+        println!(
+            "  {} signed no release current on a channel and no config a deployment runs, so nothing needs keeping.",
+            signer.id
+        );
+        return Ok(Vec::new());
+    }
+    if revoke {
+        println!(
+            "  --revoke: keeping none. Protected deployments will refuse these {} statement(s) {} signed:",
+            found.len(),
+            signer.id
+        );
+    } else {
+        println!(
+            "  Keeping these {} statement(s) {} signed, so they keep running (pass --revoke to keep none):",
+            found.len(),
+            signer.id
+        );
+    }
+    for item in &found {
+        println!("    - {}", found_text(item));
+    }
+    Ok(if revoke {
+        Vec::new()
+    } else {
+        found.into_iter().map(|item| item.keep).collect()
+    })
 }
 
 /// The signer id a CI key in `repository` gets.
@@ -959,14 +1285,8 @@ async fn rotate(ctx: &ExecutionMode, name: &str, revoke: bool, out: Option<&Path
         .and_then(|label| label.strip_prefix("GitHub Actions ("))
         .and_then(|rest| rest.strip_suffix(')'))
         .map(str::to_string);
-    let old_key = PublicKey::parse(&old.key).context(ErrorData::SigningFailed {
-        message: format!("CI key '{}' on the list doesn't parse", old.id),
-    })?;
-    let deny = if revoke {
-        signed_by(ctx, &admin.api, admin.chain.project(), &old.id, &old_key).await?
-    } else {
-        Vec::new()
-    };
+    println!("Replacing the key {name}.");
+    let keeps = keep_current(ctx, &admin, &old, revoke).await?;
     let key = new_ci_key()?;
     let who_can = match &github {
         Some(repository) => {
@@ -980,19 +1300,8 @@ async fn rotate(ctx: &ExecutionMode, name: &str, revoke: bool, out: Option<&Path
         signer.key = key.public_key().as_str().to_string();
         signer.backend = Some(KeyBackend::Software);
     }
-    for digest in &deny {
-        if !body.deny.contains(digest) {
-            body.deny.push(digest.clone());
-        }
-    }
+    add_keeps(&mut body, keeps)?;
     body.recovered = false;
-    println!("Replacing the key {name}.");
-    if revoke {
-        println!(
-            "  Protected deployments will refuse the {} release and config statement(s) the old key signed.",
-            deny.len()
-        );
-    }
     let statement = admin.sign_next(body, "sign")?;
     admin.publish(&statement).await?;
     match who_can {
@@ -1008,130 +1317,267 @@ async fn rotate(ctx: &ExecutionMode, name: &str, revoke: bool, out: Option<&Path
     Ok(())
 }
 
-/// `alien releases revoke`: refuse a release's statements everywhere, as the
-/// next signer list version. Refused while a channel points at the release,
-/// so no install is left following a release it refuses.
-pub async fn revoke_release(ctx: &ExecutionMode, id: &str) -> Result<()> {
-    let admin = admin(ctx).await?;
-    let project = admin.chain.project().to_string();
-    let query = api::project_query(ctx, &project).await?;
-    let release = api::get_json(ctx, &format!("/v1/releases/{id}"), &query).await?;
-    let mut current: Vec<String> = release["currentChannels"]
+/// One platform's statement of a release, as the admin's own list verifies it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SignedFacts {
+    platform: String,
+    sequence: u64,
+    digest: String,
+    channel: String,
+    /// What the control plane calls the release.
+    called: String,
+    /// Channels the control plane says the release is current on.
+    current_on: Vec<String>,
+}
+
+/// The release statements the control plane lists, each checked against the admin's
+/// verified signer list, by the list version each names. A statement that doesn't check
+/// out is an error when `strict` (the admin named that release) and skipped otherwise.
+fn signed_facts(
+    chain: &SignerChain,
+    release: &serde_json::Value,
+    channels: &[serde_json::Value],
+    strict: bool,
+) -> Result<Vec<SignedFacts>> {
+    let id = release["id"].as_str().unwrap_or("unknown").to_string();
+    let mut current_on: Vec<String> = release["currentChannels"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|channel| channel.as_str().map(str::to_string))
         .collect();
-    for channel in all_items(ctx, "/v1/release-channels", &query).await? {
-        if channel["currentReleaseId"].as_str() == Some(id) {
+    for channel in channels {
+        if channel["currentReleaseId"].as_str() == Some(id.as_str()) {
             if let Some(name) = channel["name"].as_str() {
-                if !current.iter().any(|held| held == name) {
-                    current.push(name.to_string());
+                if !current_on.iter().any(|held| held == name) {
+                    current_on.push(name.to_string());
                 }
             }
         }
     }
-    if let Some(channel) = current.first() {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "id".to_string(),
-            message: format!(
-                "Release {id} is current on {channel}. Promote another release first."
-            ),
-        }));
-    }
-    // The statements the server returned count only when they verify as
-    // releases of this project from the pinned list.
-    let mut digests = Vec::new();
-    for (_, statement) in release["signedStacks"].as_object().into_iter().flatten() {
-        let statement: SignedStatement =
-            serde_json::from_value(statement.clone()).map_err(|error| {
-                AlienError::new(ErrorData::SigningFailed {
+    let mut facts = Vec::new();
+    for (platform, statement) in release["signedStacks"].as_object().into_iter().flatten() {
+        let parsed: std::result::Result<SignedStatement, _> =
+            serde_json::from_value(statement.clone());
+        let statement = match parsed {
+            Ok(statement) => statement,
+            Err(error) if strict => {
+                return Err(AlienError::new(ErrorData::SigningFailed {
                     message: format!(
                         "The server returned a release statement that doesn't parse: {error}"
                     ),
-                })
-            })?;
-        let opened = statement.open().context(ErrorData::SigningFailed {
-            message: "The server returned a release statement that doesn't open".to_string(),
-        })?;
-        crate::signing::check_statement(&admin.chain, &opened, Kind::Release, None).map_err(
-            |reason| {
-                AlienError::new(ErrorData::SigningFailed {
+                }))
+            }
+            Err(_) => continue,
+        };
+        let opened = match statement.open() {
+            Ok(opened) => opened,
+            Err(_) if !strict => continue,
+            Err(_) => {
+                return Err(AlienError::new(ErrorData::SigningFailed {
+                    message: "The server returned a release statement that doesn't open"
+                        .to_string(),
+                }))
+            }
+        };
+        if let Err(reason) = crate::signing::check_statement(chain, &opened, Kind::Release, None) {
+            if strict {
+                return Err(AlienError::new(ErrorData::SigningFailed {
                     message: format!(
                         "A statement of release {id} doesn't check out against the device list: {reason}. Nothing was signed."
                     ),
-                })
-            },
-        )?;
-        // Every platform's statement of one release carries one sequence, so
-        // refusing the release by it covers a platform the server left out.
-        // Its digests are refused too.
-        let entry = alien_signing::release_deny_entry(opened.sequence);
-        if !digests.contains(&entry) {
-            digests.push(entry);
+                }));
+            }
+            continue;
         }
-        if !digests.contains(&opened.digest) {
-            digests.push(opened.digest);
-        }
+        let channel = opened
+            .body::<alien_signing::ReleaseBody>()
+            .map(|body| body.channel)
+            .unwrap_or_default();
+        facts.push(SignedFacts {
+            platform: platform.clone(),
+            sequence: opened.sequence,
+            digest: opened.digest,
+            channel,
+            called: id.clone(),
+            current_on: current_on.clone(),
+        });
     }
-    if digests.is_empty() {
-        return Err(AlienError::new(ErrorData::ValidationError {
+    Ok(facts)
+}
+
+/// What `alien releases revoke` will refuse: every statement of one signed release,
+/// found by the release id the admin named (as the control plane resolves it) or by
+/// the signed sequence. Refuses when the statements don't all belong to one signed
+/// release, or when that release is current on a channel.
+fn revoke_target(
+    chain: &SignerChain,
+    releases: &[serde_json::Value],
+    channels: &[serde_json::Value],
+    id: Option<&str>,
+    sequence: Option<u64>,
+) -> Result<Vec<SignedFacts>> {
+    let refuse = |message: String| {
+        AlienError::new(ErrorData::ValidationError {
             field: "id".to_string(),
-            message: format!("Release {id} is not signed, so there is nothing to refuse"),
-        }));
+            message,
+        })
+    };
+    let mut all = Vec::new();
+    for release in releases {
+        all.extend(signed_facts(chain, release, channels, false)?);
     }
-    let mut body = admin.chain.current().body.clone();
-    let added: Vec<String> = digests
+    let named: Vec<SignedFacts> = match (id, sequence) {
+        (Some(id), None) => {
+            let release = releases
+                .iter()
+                .find(|release| release["id"].as_str() == Some(id))
+                .ok_or_else(|| refuse(format!("The control plane has no release {id}")))?;
+            let facts = signed_facts(chain, release, channels, true)?;
+            if facts.is_empty() {
+                return Err(refuse(format!(
+                    "Release {id} is not signed, so there is nothing to refuse"
+                )));
+            }
+            // The control plane's id is only a name: the statements it returns must be one
+            // signed release, one sequence and one channel, or they are not what was asked for.
+            let mut sequences: Vec<u64> = facts.iter().map(|fact| fact.sequence).collect();
+            sequences.dedup();
+            let mut signed_channels: Vec<&str> =
+                facts.iter().map(|fact| fact.channel.as_str()).collect();
+            signed_channels.dedup();
+            if sequences.len() != 1 || signed_channels.len() != 1 {
+                return Err(refuse(format!(
+                    "The statements returned for release {id} are not one signed release (sequences {sequences:?}, channels {signed_channels:?}). Nothing was signed."
+                )));
+            }
+            facts
+        }
+        (None, Some(sequence)) => all
+            .iter()
+            .filter(|fact| fact.sequence == sequence)
+            .cloned()
+            .collect(),
+        _ => {
+            return Err(refuse(
+                "Name a release id or --sequence, not both".to_string(),
+            ))
+        }
+    };
+    if named.is_empty() {
+        return Err(refuse(
+            "No statement of that release checks out against the device list, so there is nothing to refuse".to_string(),
+        ));
+    }
+    // The signed sequence is the release. Any release the control plane lists under it that
+    // is current on a channel stops the revoke, whichever id was named.
+    let sequences: Vec<u64> = named.iter().map(|fact| fact.sequence).collect();
+    if let Some((fact, channel)) = all
+        .iter()
+        .filter(|fact| sequences.contains(&fact.sequence))
+        .find_map(|fact| fact.current_on.first().map(|channel| (fact, channel)))
+    {
+        return Err(refuse(format!(
+            "The release signed as {} ({}) is current on {channel} (the control plane calls it {}). Promote another release first.",
+            fact.sequence,
+            signed_date(fact.sequence),
+            fact.called
+        )));
+    }
+    let mut all_named = named;
+    for fact in all
         .into_iter()
-        .filter(|digest| !body.deny.contains(digest))
-        .collect();
-    if added.is_empty() {
-        println!("Release {id} is already refused.");
+        .filter(|fact| sequences.contains(&fact.sequence))
+    {
+        if !all_named.iter().any(|held| held.digest == fact.digest) {
+            all_named.push(fact);
+        }
+    }
+    Ok(all_named)
+}
+
+/// `alien releases revoke`: refuse a release's statements everywhere, as the
+/// next signer list version. The release is named by id or by its signed
+/// sequence. It prints every deny-list entry it adds, led by what the statements
+/// sign: the sequence, when it was signed, the channel, the platforms and the
+/// digests. The control plane's release id appears only as what it calls the release.
+pub async fn revoke_release(
+    ctx: &ExecutionMode,
+    id: Option<&str>,
+    sequence: Option<u64>,
+) -> Result<()> {
+    let admin = admin(ctx).await?;
+    let project = admin.chain.project().to_string();
+    let query = api::project_query(ctx, &project).await?;
+    let releases = all_items(ctx, "/v1/releases", &query).await?;
+    let channels = all_items(ctx, "/v1/release-channels", &query).await?;
+    let target = revoke_target(&admin.chain, &releases, &channels, id, sequence)?;
+    let mut body = admin.chain.current().body.clone();
+    let lines = revoke_lines(&target);
+    let mut entries: Vec<String> = Vec::new();
+    for fact in &target {
+        for entry in [
+            alien_signing::release_deny_entry(fact.sequence),
+            fact.digest.clone(),
+        ] {
+            if !entries.contains(&entry) && !body.deny.contains(&entry) {
+                entries.push(entry);
+            }
+        }
+    }
+    for line in &lines {
+        println!("{line}");
+    }
+    if entries.is_empty() {
+        println!("Already refused: every entry is on the device list.");
         return Ok(());
     }
-    body.deny.extend(added.iter().cloned());
+    println!("Adding {} deny-list entries for {project}:", entries.len());
+    for entry in &entries {
+        println!("  + refuse {}", deny_text(entry));
+    }
+    println!("Protected deployments will not apply it, also as a rollback.");
+    body.deny.extend(entries.iter().cloned());
+    // The deny-list wins over keep; the list drops what it no longer needs.
+    body.keep
+        .retain(|kept| !target.iter().any(|fact| fact.digest == kept.digest));
     body.recovered = false;
-    println!(
-        "Refusing release {id} ({} deny-list entries) for {project}. Protected deployments will not apply it, also as a rollback.",
-        added.len()
-    );
     let statement = admin.sign_next(body, "sign")?;
     admin.publish(&statement).await?;
     println!(
-        "✓ Release {id} is refused · delivered to protected deployments as the next device list"
+        "✓ The release is refused · delivered to protected deployments as the next device list"
     );
     Ok(())
 }
 
-/// Digests of the release and config statements the server holds that
-/// `key` signed as `signer`: every release of the project and every config
-/// statement of its deployments. Only signatures that verify count, so a
-/// server can't get other statements refused this way.
-async fn signed_by(
-    ctx: &ExecutionMode,
-    api: &SigningApi,
-    project: &str,
-    signer: &str,
-    key: &PublicKey,
-) -> Result<Vec<String>> {
-    let query = api::project_query(ctx, project).await?;
-    let mut statements = Vec::new();
-    for release in all_items(ctx, "/v1/releases", &query).await? {
-        for (_, statement) in release["signedStacks"].as_object().into_iter().flatten() {
-            if let Ok(statement) = serde_json::from_value::<SignedStatement>(statement.clone()) {
-                statements.push(statement);
-            }
-        }
+/// The signed facts of a revoke, before anything is added.
+fn revoke_lines(target: &[SignedFacts]) -> Vec<String> {
+    let Some(first) = target.first() else {
+        return Vec::new();
+    };
+    let mut lines = vec![format!(
+        "Release signed as {} ({}), channel {}:",
+        first.sequence,
+        signed_date(first.sequence),
+        first.channel
+    )];
+    for fact in target {
+        lines.push(format!(
+            "  {} · {} · signed as {} ({})",
+            fact.platform,
+            fact.digest,
+            fact.sequence,
+            signed_date(fact.sequence)
+        ));
     }
-    for deployment in all_items(ctx, "/v1/deployments", &query).await? {
-        let id = deployment["id"].as_str().ok_or_else(|| {
-            AlienError::new(ErrorData::SigningFailed {
-                message: "The server listed a deployment without an id".to_string(),
-            })
-        })?;
-        statements.extend(api.config_statements(id).await?);
-    }
-    Ok(digests_signed_by(&statements, project, signer, key))
+    let mut called: Vec<&str> = target.iter().map(|fact| fact.called.as_str()).collect();
+    called.sort_unstable();
+    called.dedup();
+    lines.push(format!(
+        "  called {} by the control plane",
+        called.join(", ")
+    ));
+    lines
 }
 
 /// Every item of the list at `path`, following the server's pages to the end:
@@ -1156,31 +1602,6 @@ async fn all_items(
             return Ok(items);
         }
     }
-}
-
-/// Digests of the release and config statements in `statements` that `key`
-/// signed as `signer`, each once.
-fn digests_signed_by(
-    statements: &[SignedStatement],
-    project: &str,
-    signer: &str,
-    key: &PublicKey,
-) -> Vec<String> {
-    let mut digests = Vec::new();
-    for statement in statements {
-        let Ok(opened) = statement.open() else {
-            continue;
-        };
-        let ours = matches!(opened.kind, Kind::Release | Kind::Config)
-            && opened.project == project
-            && opened.signatures.iter().any(|signature| {
-                signature.signer == signer && key.verify(&opened.bytes, &signature.sig).is_ok()
-            });
-        if ours && !digests.contains(&opened.digest) {
-            digests.push(opened.digest);
-        }
-    }
-    digests
 }
 
 async fn recover(ctx: &ExecutionMode) -> Result<()> {
@@ -1996,6 +2417,7 @@ mod tests {
             admin_threshold: 1,
             signers,
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         }
     }
@@ -2059,28 +2481,249 @@ mod tests {
         statement
     }
 
+    const PROJECT: &str = "prj";
+
+    fn key(seed: u8) -> SecretKey {
+        SecretKey::from_secret_bytes(&[seed; 32]).unwrap()
+    }
+
+    /// A chain whose version 1 trusts `alice` (admin, release) and `ci` (release).
+    fn chain() -> SignerChain {
+        let signer = |id: &str, seed: u8, kind, roles: Vec<Role>| Signer {
+            id: id.to_string(),
+            key: key(seed).public_key().as_str().to_string(),
+            kind,
+            backend: None,
+            roles,
+            label: None,
+        };
+        let body = SignerListBody {
+            previous: None,
+            admin_threshold: 1,
+            signers: vec![
+                signer(
+                    "alice",
+                    1,
+                    SignerKind::Device,
+                    vec![Role::Admin, Role::Release],
+                ),
+                signer("ci", 7, SignerKind::Ci, vec![Role::Release]),
+            ],
+            deny: Vec::new(),
+            keep: Vec::new(),
+            recovered: false,
+        };
+        let statement = SignedStatement::new(
+            &alien_signing::Envelope {
+                kind: Kind::SignerList.as_str().to_string(),
+                project: PROJECT.to_string(),
+                install: None,
+                sequence: 1,
+                not_after: None,
+                signer_list_version: 1,
+                body,
+            }
+            .to_payload()
+            .unwrap(),
+        )
+        .sign_with("alice", &key(1))
+        .unwrap();
+        let digest = statement.open().unwrap().digest;
+        SignerChain::genesis(&alien_signing::fingerprint(&digest), &statement).unwrap()
+    }
+
+    /// A release statement of `platform` signed as `sequence` by `signer`.
+    fn release_statement(
+        platform: &str,
+        channel: &str,
+        sequence: u64,
+        signer: (&str, u8),
+    ) -> SignedStatement {
+        SignedStatement::new(
+            &alien_signing::Envelope {
+                kind: Kind::Release.as_str().to_string(),
+                project: PROJECT.to_string(),
+                install: None,
+                sequence,
+                not_after: None,
+                signer_list_version: 1,
+                body: serde_json::json!({
+                    "platform": platform, "channel": channel, "workloads": []
+                }),
+            }
+            .to_payload()
+            .unwrap(),
+        )
+        .sign_with(signer.0, &key(signer.1))
+        .unwrap()
+    }
+
+    fn release_json(
+        id: &str,
+        current_on: &[&str],
+        statements: &[(&str, SignedStatement)],
+    ) -> serde_json::Value {
+        let stacks: serde_json::Map<String, serde_json::Value> = statements
+            .iter()
+            .map(|(platform, statement)| {
+                (
+                    platform.to_string(),
+                    serde_json::to_value(statement).unwrap(),
+                )
+            })
+            .collect();
+        serde_json::json!({"id": id, "currentChannels": current_on, "signedStacks": stacks})
+    }
+
     #[test]
-    fn revoking_a_ci_key_refuses_its_releases_and_configs_only() {
-        let old = SecretKey::from_secret_bytes(&[7; 32]).unwrap().public_key();
-        let digest = |statement: &SignedStatement| statement.open().unwrap().digest;
-        let release = statement(Kind::Release, "prj", 1, &[("ci", 7)]);
-        let config = statement(Kind::Config, "prj", 2, &[("ci", 7), ("alice", 1)]);
-        let statements = vec![
-            release.clone(),
-            config.clone(),
-            release.clone(),
-            // Under the CI id, but another key: a server can't get it refused.
-            statement(Kind::Release, "prj", 3, &[("ci", 8)]),
-            // Signed by the old key for another project.
-            statement(Kind::Release, "other", 4, &[("ci", 7)]),
-            // Not a release or config.
-            statement(Kind::SignerList, "prj", 5, &[("ci", 7)]),
-            statement(Kind::Config, "prj", 6, &[("alice", 1)]),
+    fn what_a_key_signed_that_is_current_is_found_and_nothing_else() {
+        let old = key(7).public_key();
+        let live = release_statement("aws", "production", 1_700_000_000_000, ("ci", 7));
+        let live_gcp = release_statement("gcp", "production", 1_700_000_000_000, ("ci", 7));
+        let stale = release_statement("aws", "production", 1_600_000_000_000, ("ci", 7));
+        // Under the CI id, but another key: a server can't get it kept.
+        let forged = release_statement("aws", "production", 1_700_000_000_001, ("ci", 8));
+        let releases = vec![
+            release_json("rel_live", &[], &[("aws", live.clone()), ("gcp", live_gcp)]),
+            release_json("rel_stale", &[], &[("aws", stale)]),
+            release_json("rel_forged", &["production"], &[("aws", forged)]),
         ];
-        assert_eq!(
-            digests_signed_by(&statements, "prj", "ci", &old),
-            [digest(&release), digest(&config)]
+        let channels =
+            vec![serde_json::json!({"name": "production", "currentReleaseId": "rel_live"})];
+        let config = |sequence: u64, by: (&str, u8)| {
+            SignedStatement::new(
+                &alien_signing::Envelope {
+                    kind: Kind::Config.as_str().to_string(),
+                    project: PROJECT.to_string(),
+                    install: Some("aws:111122223333:us-east-1:acme".to_string()),
+                    sequence,
+                    not_after: None,
+                    signer_list_version: 1,
+                    body: serde_json::json!({}),
+                }
+                .to_payload()
+                .unwrap(),
+            )
+            .sign_with(by.0, &key(by.1))
+            .unwrap()
+        };
+        let newest = config(20, ("ci", 7));
+        let deployments = vec![
+            (
+                serde_json::json!({"id": "dep_a", "currentReleaseId": "rel_live"}),
+                // Only the newest config is current.
+                vec![config(10, ("ci", 7)), newest.clone()],
+            ),
+            // Its newest config is by a current signer: nothing to keep.
+            (
+                serde_json::json!({"id": "dep_b", "currentReleaseId": "rel_live"}),
+                vec![config(10, ("ci", 7)), config(30, ("alice", 1))],
+            ),
+        ];
+        let found = current_signed_by(&releases, &channels, &deployments, PROJECT, "ci", &old);
+        let digests: Vec<_> = found.iter().map(|item| item.keep.digest.clone()).collect();
+        assert_eq!(found.len(), 3, "{found:#?}");
+        assert!(digests.contains(&live.open().unwrap().digest));
+        assert!(digests.contains(&newest.open().unwrap().digest));
+        let release = found
+            .iter()
+            .find(|item| item.platform.as_deref() == Some("aws"))
+            .unwrap();
+        assert_eq!(release.keep.release_id.as_deref(), Some("rel_live"));
+        assert_eq!(release.keep.sequence, 1_700_000_000_000);
+        assert_eq!(release.channels, ["production"]);
+        assert_eq!(release.deployments, ["dep_a", "dep_b"]);
+        // Printed text leads with the signed facts and names the id as the control plane's.
+        let text = found_text(release);
+        assert!(
+            text.starts_with("release for aws signed as 1700000000000 (2023-11-14 22:13 UTC)"),
+            "{text}"
         );
+        assert!(
+            text.contains("called rel_live by the control plane"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn revoke_names_one_signed_release_and_prints_what_it_signed() {
+        let chain = chain();
+        let aws = release_statement("aws", "production", 1_700_000_000_000, ("alice", 1));
+        let gcp = release_statement("gcp", "production", 1_700_000_000_000, ("alice", 1));
+        let releases = vec![release_json(
+            "rel_old",
+            &[],
+            &[("aws", aws.clone()), ("gcp", gcp.clone())],
+        )];
+        for (id, sequence) in [(Some("rel_old"), None), (None, Some(1_700_000_000_000))] {
+            let target = revoke_target(&chain, &releases, &[], id, sequence).unwrap();
+            assert_eq!(target.len(), 2);
+            let lines = revoke_lines(&target).join("\n");
+            assert!(
+                lines.starts_with(
+                    "Release signed as 1700000000000 (2023-11-14 22:13 UTC), channel production:"
+                ),
+                "{lines}"
+            );
+            assert!(lines.contains(&aws.open().unwrap().digest), "{lines}");
+            assert!(
+                lines.ends_with("called rel_old by the control plane"),
+                "{lines}"
+            );
+        }
+    }
+
+    #[test]
+    fn revoke_refuses_statements_that_are_not_the_release_asked_for() {
+        let chain = chain();
+        // The control plane answers for rel_old with the statements of two releases.
+        let old = release_statement("aws", "production", 1_700_000_000_000, ("alice", 1));
+        let live = release_statement("gcp", "production", 1_700_000_000_999, ("alice", 1));
+        let mixed = vec![release_json("rel_old", &[], &[("aws", old), ("gcp", live)])];
+        let error = revoke_target(&chain, &mixed, &[], Some("rel_old"), None).unwrap_err();
+        assert!(
+            error.message.contains("not one signed release"),
+            "{}",
+            error.message
+        );
+
+        // Different channels under one sequence are refused too.
+        let a = release_statement("aws", "production", 5, ("alice", 1));
+        let b = release_statement("gcp", "dev", 5, ("alice", 1));
+        let mixed = vec![release_json("rel_x", &[], &[("aws", a), ("gcp", b)])];
+        assert!(revoke_target(&chain, &mixed, &[], Some("rel_x"), None).is_err());
+
+        // A statement that is not signed by the list is an error, not a deny entry.
+        let forged = release_statement("aws", "production", 6, ("alice", 2));
+        let releases = vec![release_json("rel_f", &[], &[("aws", forged)])];
+        let error = revoke_target(&chain, &releases, &[], Some("rel_f"), None).unwrap_err();
+        assert!(
+            error.message.contains("doesn't check out"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn revoke_refuses_a_release_that_is_current_under_any_name() {
+        let chain = chain();
+        let one = release_statement("aws", "production", 1_700_000_000_000, ("alice", 1));
+        // Another release the control plane lists carries the same signed sequence and is
+        // current on a channel: revoking the first by id or by sequence refuses.
+        let releases = vec![
+            release_json("rel_old", &[], &[("aws", one.clone())]),
+            release_json("rel_live", &[], &[("aws", one)]),
+        ];
+        let channels =
+            vec![serde_json::json!({"name": "production", "currentReleaseId": "rel_live"})];
+        for (id, sequence) in [(Some("rel_old"), None), (None, Some(1_700_000_000_000))] {
+            let error = revoke_target(&chain, &releases, &channels, id, sequence).unwrap_err();
+            assert!(
+                error.message.contains("current on production"),
+                "{}",
+                error.message
+            );
+        }
     }
 
     /// Revoking reads every release and deployment, so it follows the server's

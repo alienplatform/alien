@@ -92,6 +92,7 @@ pub(crate) fn genesis() -> SignedStatement {
                 signer("recovery", 3, SignerKind::Recovery, &[Role::Admin], None),
             ],
             deny: Vec::new(),
+            keep: Vec::new(),
             recovered: false,
         },
         &[("alice-mbp", 1)],
@@ -482,6 +483,23 @@ fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
     let mut body: SignerListBody = genesis().open().unwrap().body().unwrap();
     body.previous = Some(genesis().open().unwrap().digest);
     body.signers.retain(|signer| signer.kind != SignerKind::Ci);
+    // The admins keep the release the removed key signed.
+    for (_, statement) in &observed.releases {
+        let opened = statement.open().unwrap();
+        if opened
+            .signatures
+            .iter()
+            .any(|s| s.signer == "github-acme-app")
+        {
+            body.keep.push(alien_signing::Keep {
+                digest: opened.digest,
+                kind: alien_signing::KeptKind::Release,
+                release_id: None,
+                sequence: opened.sequence,
+            });
+        }
+    }
+    assert_eq!(body.keep.len(), 1);
     observed.signer_lists.push(signed(
         Kind::SignerList,
         2,
