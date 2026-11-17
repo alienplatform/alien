@@ -94,8 +94,27 @@ class PodThatRan(unittest.TestCase):
         with self.assertRaises(RuntimeError) as raised:
             cluster.wait()
         self.assertEqual(cluster.recreated, [])
-        self.assertIn("the client pod failed", str(raised.exception))
+        self.assertIn("the client pod reached the listener it must not reach", str(raised.exception))
         self.assertIn("FAILED: NetworkPolicy did not block traffic", str(raised.exception))
+        self.assertIn(probe.FIX_HINT, str(raised.exception))
+
+    def test_a_pod_that_failed_for_another_reason_reports_it_and_no_hint(self):
+        control = pod("Failed", {"exitCode": 1, "startedAt": "2026-01-01T00:00:00Z",
+                                 "message": "FAILED: <urlopen error timed out>"})
+        with self.assertRaises(RuntimeError) as raised:
+            Cluster(control).wait("control")
+        self.assertIn("exit code 1", str(raised.exception))
+        self.assertIn("<urlopen error timed out>", str(raised.exception))
+        self.assertNotIn(probe.FIX_HINT, str(raised.exception))
+
+    def test_an_oom_killed_pod_with_an_empty_message_names_oom_killed(self):
+        oom = pod("Failed", {"exitCode": 137, "reason": "OOMKilled", "message": "",
+                             "startedAt": "2026-01-01T00:00:00Z"})
+        with self.assertRaises(RuntimeError) as raised:
+            Cluster(oom).wait("denied")
+        self.assertIn("OOMKilled", str(raised.exception))
+        self.assertIn("137", str(raised.exception))
+        self.assertNotIn(probe.FIX_HINT, str(raised.exception))
 
     def test_a_pod_lost_with_its_node_is_not_recreated(self):
         lost = pod("Failed", {"exitCode": 137, "reason": "ContainerStatusUnknown",
@@ -121,7 +140,7 @@ class PodThatNeverRuns(unittest.TestCase):
         self.assertIn("Unschedulable", text)
         self.assertIn("0/3 nodes are available: 3 Insufficient memory.", text)
         self.assertEqual(cluster.recreated, [])
-        self.assertLessEqual(cluster.clock, probe.CLIENT_PENDING_SECONDS + 2)
+        self.assertLessEqual(cluster.clock, probe.PENDING_SECONDS + 2)
 
     def test_an_image_that_does_not_pull_names_the_kubelet_reason(self):
         cluster = Cluster(IMAGE_PULL)

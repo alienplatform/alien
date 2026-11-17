@@ -101,11 +101,6 @@ class Pods(unittest.TestCase):
         self.assertIn('"memory": CLIENT_MEMORY_LIMIT', self.source)
         self.assertNotIn('"64Mi"', self.source)
 
-    def test_the_clients_of_a_stage_start_together(self):
-        self.assertEqual([[role for role, _, _ in stage] for stage in probe.STAGES],
-                         [["control", "denied", "ingress-denied"],
-                          ["control-after", "ingress-control-after"]])
-
     def test_the_verdict_comes_from_the_termination_message_not_the_logs(self):
         self.assertNotIn("FallbackToLogsOnError", self.source)
 

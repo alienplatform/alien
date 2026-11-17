@@ -3933,7 +3933,7 @@ metadata:
   name: pure-fn
 spec:
   interval: 10m
-  # The chart's setup check runs as a Helm hook that waits up to 11 minutes; Flux's default
+  # The chart's setup check runs as a Helm hook that waits up to 13 minutes; Flux's default
   # Helm timeout is 5 minutes. This applies to install and upgrade.
   timeout: 15m
   # Without retries Flux marks the release Stalled after one failed install or upgrade and

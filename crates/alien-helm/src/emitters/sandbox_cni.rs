@@ -1,7 +1,7 @@
 //! Setup-owned, short-lived NetworkPolicy enforcement gate.
 //!
-//! This samples pod-to-pod traffic on the nodes selected by the scheduler, with the
-//! subject pods in the sandbox runtime class. It does not certify every node, address
+//! This samples pod-to-pod traffic on the nodes sessions run on (`sandbox.nodeSelector`,
+//! `sandbox.tolerations`), with every probe pod, the listener included, in the sandbox runtime class. It does not certify every node, address
 //! family, or CNI exception for traffic to the host.
 //!
 //! The probe must create pods and NetworkPolicies, which Kubernetes RBAC cannot restrict

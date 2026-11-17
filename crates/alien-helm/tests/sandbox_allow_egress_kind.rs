@@ -218,7 +218,7 @@ fn install_allow_chart(context: &str) -> (Cleanup, Output) {
             NAMESPACE,
             "--create-namespace",
             "--timeout",
-            "6m",
+            "15m",
             "--set-string",
             "runtime.image.repository=busybox",
             "--set-string",

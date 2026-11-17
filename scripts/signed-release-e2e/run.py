@@ -604,7 +604,7 @@ esac
             {**values, "management": {**values["management"], "token": "<redacted>"}}, indent=2))
         run(["helm", command, RELEASE_NAME, chart, "--plain-http", "--kube-context", CONTEXT,
              "--namespace", NAMESPACE, "--create-namespace", "--values", values_file,
-             "--wait", "--timeout", "5m"])
+             "--wait", "--timeout", "15m"])
         # The customer opts in to dynamic containers; protected mode must still refuse them.
         kubectl("-n", NAMESPACE, "set", "env", f"deployment/{RELEASE_NAME}", "OPERATOR_DYNAMIC_CONTAINERS=true")
         kubectl("-n", NAMESPACE, "rollout", "status", f"deployment/{RELEASE_NAME}", "--timeout=180s")

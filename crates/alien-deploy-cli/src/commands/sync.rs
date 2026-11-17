@@ -4604,7 +4604,7 @@ async fn helm_upgrade(
         .arg("--reset-then-reuse-values")
         // The chart's setup check runs as a hook and Helm applies this timeout to each hook. A
         // typical check takes about a minute and a half on runc or gVisor; the 15 minutes cover
-        // nodes that start pods slowly or must be provisioned (the check's own budget is 679 s).
+        // nodes that start pods slowly or must be provisioned (the check's own budget is 625 s, 745 s for its Job).
         .args(["--wait", "--timeout", "15m"]);
     if let Some(fingerprint) = fingerprint {
         cmd.args(["--description", fingerprint]);

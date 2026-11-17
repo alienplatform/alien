@@ -222,6 +222,8 @@ fn each_install_lets_its_own_operator_check_runtime_classes() {
                 "--namespace",
                 namespace,
                 "--create-namespace",
+                "--timeout",
+                "15m",
                 "--set",
                 "logCollector.enabled=false",
                 "--set",
