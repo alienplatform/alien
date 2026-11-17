@@ -8,9 +8,12 @@
 //! own copy, and write the result back. Values only rise. An older signed
 //! release or config may run again: what the ledger holds is trust, not a version floor.
 //!
-//! Each entry is the `(sequence, digest)` of a statement the enforcer can
-//! verify again, so a ledger written by someone without a signing key can
-//! cause refusals, but can't make anything unsigned run.
+//! The accepted digests are what makes removing a signer safe: a statement
+//! on the list keeps running after its signer leaves. Only enforcers write
+//! them, after verifying the statement; management has no access to the
+//! ledger (it is denied `/signed/*`). A digest still has to match a statement
+//! with a valid signature at the list version it names, so a forged entry
+//! can't make anything unsigned run.
 
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
@@ -30,8 +33,12 @@ pub struct Entry {
     pub digest: String,
 }
 
-/// How many accepted digests a ledger keeps; the oldest go first.
+/// How many accepted digests a ledger keeps besides the ones running now; the
+/// oldest go first.
 pub const MAX_ACCEPTED: usize = 32;
+
+/// What a ledger may hold at most: the history plus what runs now.
+pub const MAX_LEDGER_ACCEPTED: usize = 1024;
 
 /// The ledger of one install.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,7 +104,7 @@ impl Ledger {
                 return Err(refused(format!("'{}' is not a digest", entry.digest)));
             }
         }
-        if ledger.accepted.len() > MAX_ACCEPTED {
+        if ledger.accepted.len() > MAX_LEDGER_ACCEPTED {
             return Err(refused("it lists too many accepted statements"));
         }
         for digest in &ledger.accepted {
@@ -126,9 +133,18 @@ impl Ledger {
         merge_root(&mut self.fingerprint, &other.fingerprint)?;
         merge_root(&mut self.install, &other.install)?;
         merge_entry(&mut self.signer_list, &other.signer_list)?;
-        for digest in &other.accepted {
-            self.accept(digest);
-        }
+        // Digests only the other side holds count as older than ours, so
+        // merging never pushes out what this enforcer runs.
+        let mut merged: Vec<String> = other
+            .accepted
+            .iter()
+            .filter(|digest| !self.accepted(digest))
+            .cloned()
+            .collect();
+        merged.extend(std::mem::take(&mut self.accepted));
+        let excess = merged.len().saturating_sub(MAX_LEDGER_ACCEPTED);
+        merged.drain(..excess);
+        self.accepted = merged;
         Ok(())
     }
 
@@ -164,14 +180,36 @@ impl Ledger {
         self.accepted.iter().any(|held| held == digest)
     }
 
-    /// Record an accepted statement's digest.
+    /// Record an accepted statement's digest. Accepting one again moves it to
+    /// the end, so the newest are the last to go.
     pub fn accept(&mut self, digest: &str) {
-        if self.accepted(digest) {
-            return;
+        self.accept_with(digest, &[]);
+    }
+
+    /// Record the digests of the statements running now. They are never
+    /// evicted, whatever else the install accepted since: a key rotation must
+    /// not stop what runs.
+    pub fn accept_running(&mut self, running: &[&str]) {
+        let running: Vec<String> = running.iter().map(|digest| digest.to_string()).collect();
+        for digest in &running {
+            self.accept_with(digest, &running);
         }
+    }
+
+    fn accept_with(&mut self, digest: &str, running: &[String]) {
+        self.accepted.retain(|held| held != digest);
         self.accepted.push(digest.to_string());
-        if self.accepted.len() > MAX_ACCEPTED {
-            self.accepted.remove(0);
+        while self.accepted.len() > MAX_ACCEPTED + running.len() {
+            match self
+                .accepted
+                .iter()
+                .position(|held| held != digest && !running.contains(held))
+            {
+                Some(oldest) => {
+                    self.accepted.remove(oldest);
+                }
+                None => break,
+            }
         }
     }
 
@@ -264,4 +302,62 @@ fn refused(reason: impl Into<String>) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::LedgerRefused {
         reason: reason.into(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest(n: usize) -> String {
+        format!("sha256:{n:064x}")
+    }
+
+    #[test]
+    fn the_running_release_and_config_survive_forty_config_changes() {
+        let mut ledger = Ledger::new("shop-prod");
+        let release = digest(1);
+        for n in 0..40 {
+            let config = digest(100 + n);
+            ledger.accept_running(&[release.as_str(), config.as_str()]);
+        }
+        assert!(ledger.accepted(&release));
+        assert!(ledger.accepted(&digest(139)));
+        assert!(ledger.accepted.len() <= MAX_ACCEPTED + 2);
+        // The oldest configs are gone, the history is bounded.
+        assert!(!ledger.accepted(&digest(100)));
+    }
+
+    #[test]
+    fn accepting_again_moves_a_digest_to_the_end() {
+        let mut ledger = Ledger::new("shop-prod");
+        ledger.accept(&digest(1));
+        for n in 0..MAX_ACCEPTED - 1 {
+            ledger.accept(&digest(10 + n));
+        }
+        ledger.accept(&digest(1));
+        ledger.accept(&digest(500));
+        assert!(ledger.accepted(&digest(1)));
+        assert!(!ledger.accepted(&digest(10)));
+    }
+
+    #[test]
+    fn merging_never_pushes_out_what_this_side_holds() {
+        let mut ours = Ledger::new("shop-prod");
+        ours.accept_running(&[digest(1).as_str(), digest(2).as_str()]);
+        let mut theirs = Ledger::new("shop-prod");
+        for n in 0..MAX_ACCEPTED {
+            theirs.accept(&digest(100 + n));
+        }
+        ours.merge(&theirs).unwrap();
+        assert!(ours.accepted(&digest(1)) && ours.accepted(&digest(2)));
+    }
+
+    #[test]
+    fn a_batch_larger_than_the_history_is_kept_whole() {
+        let mut ledger = Ledger::new("shop-prod");
+        let running: Vec<String> = (0..40).map(digest).collect();
+        let refs: Vec<&str> = running.iter().map(String::as_str).collect();
+        ledger.accept_running(&refs);
+        assert!(running.iter().all(|d| ledger.accepted(d)));
+    }
 }

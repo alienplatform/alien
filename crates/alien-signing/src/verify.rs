@@ -98,9 +98,7 @@ impl Trust {
         ledger.check_chain(&self.chain)?;
         ledger.adopt_root(&self.settings.fingerprint, &self.install);
         ledger.record_chain(&self.chain);
-        for digest in accepted {
-            ledger.accept(digest);
-        }
+        ledger.accept_running(accepted);
         Ok(())
     }
 
@@ -140,7 +138,7 @@ impl Trust {
                 current: current.version,
             }));
         }
-        if current.denies(&opened.digest) {
+        if current.refuses(&opened) {
             return Err(AlienError::new(ErrorData::Denied {
                 digest: opened.digest,
             }));

@@ -71,11 +71,7 @@ pub fn signing_off_hint() -> String {
 /// Decide how this release is signed. `interactive` is a person at a
 /// terminal: only then is a trust request filed, and only with a hardware
 /// key. A repository without the signing pin never reaches the control plane.
-pub async fn plan(
-    api: &SigningApi,
-    dir: &Path,
-    interactive: bool,
-) -> Result<SigningPlan> {
+pub async fn plan(api: &SigningApi, dir: &Path, interactive: bool) -> Result<SigningPlan> {
     let home = SigningHome::current()?;
     let ci = ci_key()?;
     let Some(repo) = RepoSigning::read(dir)? else {

@@ -79,10 +79,7 @@ fn a_removed_signer_keeps_what_it_signed_but_signs_nothing_new() {
     let denying = without_ci(&keys, &trust, &[digest]);
     let chain = [genesis(&keys), version_2(&keys), chain[2].clone(), denying];
     let trust = fresh_trust(&keys, &chain, &ledger);
-    assert_eq!(
-        code(trust.verify_release(&by_ci, now())),
-        "SIGNING_DENIED"
-    );
+    assert_eq!(code(trust.verify_release(&by_ci, now())), "SIGNING_DENIED");
 }
 
 #[test]
@@ -137,12 +134,7 @@ fn a_new_machine_starts_from_the_install_ledger() {
         .unwrap();
     // The control plane withholds version 3 to keep Bob, who was removed.
     assert_eq!(
-        code(Trust::new(
-            settings(&keys),
-            install(),
-            &chain[..2],
-            &seeded
-        )),
+        code(Trust::new(settings(&keys), install(), &chain[..2], &seeded)),
         "SIGNING_SIGNER_LIST_MISSING"
     );
     // With the full chain it accepts what the signer lists allow.
@@ -309,12 +301,7 @@ fn protection_is_sticky() {
     let mut other = settings(&keys);
     other.fingerprint = format!("SHA256:{}", "a".repeat(64));
     assert_eq!(
-        code(Trust::new(
-            other,
-            install(),
-            &[genesis(&keys)],
-            &ledger
-        )),
+        code(Trust::new(other, install(), &[genesis(&keys)], &ledger)),
         "SIGNING_TRUST_ROOT_CHANGED"
     );
     // The install id changed, which is a new trust root too.

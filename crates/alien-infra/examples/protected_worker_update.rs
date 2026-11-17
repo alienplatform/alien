@@ -93,14 +93,13 @@ fn key() -> Result<SecretKey, Error> {
 }
 
 fn statement<B: Serialize>(kind: Kind, sequence: u64, body: B) -> Result<SignedStatement, Error> {
-    let not_after: DateTime<Utc> = env("NOT_AFTER")?.parse()?;
     Ok(SignedStatement::new(
         &Envelope {
             kind: kind.as_str().to_string(),
             project: "prj_control_plane_e2e".to_string(),
             install: None,
             sequence,
-            not_after: (kind == Kind::SignerList).then_some(not_after),
+            not_after: None,
             signer_list_version: 1,
             body,
         }
@@ -120,8 +119,10 @@ fn signer_list() -> Result<SignedStatement, Error> {
                 id: "ci".to_string(),
                 key: key()?.public_key().as_str().to_string(),
                 kind: SignerKind::Ci,
+                backend: None,
                 roles: vec![Role::Admin, Role::Release],
-                label: None,
+                // Names the list: another label is another list, so another fingerprint.
+                label: Some(env("LIST_LABEL")?),
             }],
             deny: Vec::new(),
             recovered: false,

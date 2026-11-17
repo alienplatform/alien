@@ -73,6 +73,8 @@ const MEMORY_TOLERANCE_PERCENT: u64 = 90;
 /// (xfs) 99%. Accept a filesystem of at least this share of the pool's size.
 const STORAGE_TOLERANCE_PERCENT: u64 = 85;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+/// Where horizond keeps what the machine accepted, the ledger included.
+const MACHINE_STATE_FILE: &str = "var/lib/horizond/state";
 /// Where the machine agent reads its signing settings. Fixed here and in the agent, never
 /// taken from the bundle, so a bundle can't send them where the agent doesn't look.
 const SIGNING_SETTINGS_FILE: &str = "etc/machine-agent/signing.toml";
@@ -1651,6 +1653,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
             request.plan.arch,
             &extracted_dir,
             &executable_path,
+            &read_machine_ledger(&request.install_root, settings)?,
         )?;
         write_signing_settings(&request.install_root, settings, &install)?;
     }
@@ -1755,6 +1758,7 @@ async fn reconcile_existing_join(
             request.plan.arch,
             &bundle_root,
             &state.executable_path,
+            &read_machine_ledger(&request.install_root, settings)?,
         )?;
         write_signing_settings(&request.install_root, settings, &install)?;
     }
@@ -3435,6 +3439,40 @@ fn read_signing_settings(install_root: &Path) -> Result<Option<(SigningSettings,
     Ok(Some((settings, install)))
 }
 
+/// What this machine already accepted: the ledger in horizond's state file, or
+/// an empty one on a first join. A state file that can't be read is an error,
+/// never a fresh start.
+fn read_machine_ledger(install_root: &Path, settings: &SigningSettings) -> Result<Ledger> {
+    let path = rooted_path(install_root, MACHINE_STATE_FILE);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Ledger::new(&settings.prefix))
+        }
+        Err(error) => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::FileOperationFailed {
+                    operation: "read".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read what the machine accepted".to_string(),
+                })
+        }
+    };
+    let unreadable = || ErrorData::FileOperationFailed {
+        operation: "parse".to_string(),
+        file_path: path.display().to_string(),
+        reason: "What the machine accepted is not valid".to_string(),
+    };
+    let state: serde_json::Value = serde_json::from_slice(&bytes)
+        .into_alien_error()
+        .context(unreadable())?;
+    let ledger = state
+        .get("ledger")
+        .ok_or_else(|| AlienError::new(unreadable()))?;
+    Ledger::parse(ledger.to_string().as_bytes(), &settings.prefix).context(unreadable())
+}
+
 /// The machine's install id: the one join wrote with the same settings, or a
 /// new one generated here, on the machine. Nothing the control plane sends
 /// can name it.
@@ -3554,6 +3592,7 @@ fn verify_machine_agent(
     arch: MachineArch,
     bundle_root: &Path,
     executable: &Path,
+    ledger: &Ledger,
 ) -> Result<()> {
     let refused = |message: String| {
         AlienError::new(ErrorData::ValidationError {
@@ -3575,12 +3614,13 @@ fn verify_machine_agent(
             settings.fingerprint, settings.channel
         ),
     };
-    // Join checks the agent build only; the agent holds the install's signer list version.
+    // Join checks the agent build only, against what the machine already accepted: a release
+    // whose signer was removed since still joins a machine that runs it.
     let trust = Trust::new(
         settings.clone(),
         install.clone(),
         &signing.signer_lists,
-        &Ledger::new(&settings.prefix),
+        ledger,
     )
     .context(release_refused("signer list chain"))?;
     let release = trust
@@ -4060,7 +4100,10 @@ mod tests {
         .await;
         result.expect("first refresh succeeds");
         let token = directory.path().join("machine-token");
-        assert_eq!(std::fs::read_to_string(&token).expect("token kept"), "old-token");
+        assert_eq!(
+            std::fs::read_to_string(&token).expect("token kept"),
+            "old-token"
+        );
         // Second run: stale daily key and the old machine token, agent writes nothing.
         let (result, recovered) =
             run_refresh_verification(directory.path(), Some("daily-key\n"), |_, _| {}).await;
@@ -6643,6 +6686,115 @@ mod tests {
             path
         }
 
+        /// Version 1 trusts `admin` and `ci`; version 2 drops `ci`.
+        fn chain_that_drops_ci() -> (Vec<SignedStatement>, String) {
+            let admin = key(2);
+            let ci = key(3);
+            let signer = |id: &str, key: &SecretKey, roles: Vec<Role>, kind| Signer {
+                id: id.to_string(),
+                key: key.public_key().as_str().to_string(),
+                kind,
+                backend: None,
+                roles,
+                label: None,
+            };
+            let admin_signer = signer(
+                "admin",
+                &admin,
+                vec![Role::Release, Role::Admin],
+                SignerKind::Device,
+            );
+            let first = envelope(
+                "signer-list/v1",
+                1,
+                None,
+                SignerListBody {
+                    previous: None,
+                    admin_threshold: 1,
+                    signers: vec![
+                        admin_signer.clone(),
+                        signer("ci", &ci, vec![Role::Release], SignerKind::Ci),
+                    ],
+                    deny: Vec::new(),
+                    recovered: false,
+                },
+            )
+            .sign_with("admin", &admin)
+            .unwrap();
+            let opened = first.open().unwrap();
+            let second = envelope(
+                "signer-list/v1",
+                2,
+                None,
+                SignerListBody {
+                    previous: Some(opened.digest.clone()),
+                    admin_threshold: 1,
+                    signers: vec![admin_signer],
+                    deny: Vec::new(),
+                    recovered: false,
+                },
+            )
+            .sign_with("admin", &admin)
+            .unwrap();
+            (vec![first, second], fingerprint(&opened.digest))
+        }
+
+        #[test]
+        fn a_machine_that_accepted_a_release_joins_after_its_signer_was_removed() {
+            let dir = tempfile::tempdir().unwrap();
+            let (chain, fingerprint) = chain_that_drops_ci();
+            let settings = signing_settings(&fingerprint);
+            let mut by_ci = release("production", AGENT, &key(3));
+            by_ci.signatures.clear();
+            let by_ci = by_ci.sign_with("ci", &key(3)).unwrap();
+            let manifest = MachineBundleManifest {
+                signing: Some(MachineBundleSigning {
+                    signer_lists: chain,
+                    release: by_ci.clone(),
+                }),
+                ..test_manifest()
+            };
+            let agent = agent_file(dir.path(), AGENT);
+            let verify = |ledger: &Ledger| {
+                verify_machine_agent(
+                    &settings,
+                    &machine(),
+                    &manifest,
+                    MachineArch::X64,
+                    dir.path(),
+                    &agent,
+                    ledger,
+                )
+            };
+            // A machine with no record of the release refuses a removed signer's.
+            verify(&Ledger::new(&settings.prefix)).unwrap_err();
+            // The install's ledger holds it: it joins.
+            let mut ledger = Ledger::new(&settings.prefix);
+            ledger.accept(&by_ci.open().unwrap().digest);
+            verify(&ledger).unwrap();
+        }
+
+        #[test]
+        fn the_machine_ledger_comes_from_horizonds_state_and_never_fails_open() {
+            let root = tempfile::tempdir().unwrap();
+            let settings = signing_settings(&genesis().1);
+            assert!(read_machine_ledger(root.path(), &settings)
+                .unwrap()
+                .accepted
+                .is_empty());
+            let state = root.path().join(MACHINE_STATE_FILE);
+            std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+            let digest = format!("sha256:{}", "a".repeat(64));
+            let mut ledger = Ledger::new(&settings.prefix);
+            ledger.accept(&digest);
+            std::fs::write(&state, format!(r#"{{"ledger":{}}}"#, ledger.to_json())).unwrap();
+            assert!(read_machine_ledger(root.path(), &settings)
+                .unwrap()
+                .accepted(&digest));
+            std::fs::write(&state, b"not json").unwrap();
+            read_machine_ledger(root.path(), &settings).unwrap_err();
+        }
+
         #[test]
         fn a_protected_join_runs_no_validator_or_loader_setting_the_release_does_not_name() {
             let dir = tempfile::tempdir().unwrap();
@@ -6654,7 +6806,10 @@ mod tests {
             std::fs::write(dir.path().join("same-build"), AGENT).unwrap();
             let validator = |executable: &str| MachineBundleConfigValidator {
                 executable: executable.to_string(),
-                args: vec!["validate-config".to_string(), "{candidate_path}".to_string()],
+                args: vec![
+                    "validate-config".to_string(),
+                    "{candidate_path}".to_string(),
+                ],
             };
             let verify = |manifest: &MachineBundleManifest| {
                 verify_machine_agent(
@@ -6664,6 +6819,7 @@ mod tests {
                     MachineArch::X64,
                     dir.path(),
                     &agent,
+                    &Ledger::new(&settings.prefix),
                 )
             };
 
@@ -6720,6 +6876,7 @@ mod tests {
                 MachineArch::X64,
                 dir.path(),
                 &agent_file(dir.path(), AGENT),
+                &Ledger::new(&settings.prefix),
             )
             .expect("the signed build is accepted");
 
@@ -6731,6 +6888,7 @@ mod tests {
                 MachineArch::X64,
                 dir.path(),
                 &agent_file(dir.path(), b"unsigned build"),
+                &Ledger::new(&settings.prefix),
             )
             .unwrap_err();
             assert!(
@@ -6747,6 +6905,7 @@ mod tests {
                 MachineArch::Arm64,
                 dir.path(),
                 &agent_file(dir.path(), AGENT),
+                &Ledger::new(&settings.prefix),
             )
             .unwrap_err();
             assert!(
@@ -6763,6 +6922,7 @@ mod tests {
                 MachineArch::X64,
                 dir.path(),
                 &agent_file(dir.path(), AGENT),
+                &Ledger::new(&settings.prefix),
             )
             .unwrap_err();
             assert!(
@@ -6781,6 +6941,7 @@ mod tests {
                     MachineArch::X64,
                     dir.path(),
                     &agent_file(dir.path(), AGENT),
+                    &Ledger::new(&settings.prefix),
                 )
                 .unwrap_err();
                 assert!(
@@ -6799,6 +6960,7 @@ mod tests {
                 MachineArch::X64,
                 dir.path(),
                 &agent_file(dir.path(), AGENT),
+                &Ledger::new(&settings.prefix),
             )
             .unwrap_err();
             assert!(
@@ -6906,6 +7068,7 @@ mod tests {
                 MachineArch::X64,
                 dir.path(),
                 &agent_file(dir.path(), AGENT),
+                &Ledger::new(&settings.prefix),
             )
         }
 

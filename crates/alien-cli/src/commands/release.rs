@@ -799,12 +799,7 @@ async fn previous_components(
         .open()
         .map_err(|error| format!("it doesn't open ({error})"))
         .and_then(|opened| {
-            signing::check_statement(
-                chain,
-                &opened,
-                alien_signing::Kind::Release,
-                None,
-            )?;
+            signing::check_statement(chain, &opened, alien_signing::Kind::Release, None)?;
             let body: alien_signing::ReleaseBody = opened
                 .body()
                 .map_err(|error| format!("its body doesn't parse ({error})"))?;

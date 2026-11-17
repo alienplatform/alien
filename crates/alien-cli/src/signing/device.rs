@@ -254,7 +254,8 @@ pub(crate) mod software {
         let pem = std::fs::read_to_string(&path)
             .into_alien_error()
             .context(file_failed(&path, "read the software key"))?;
-        let key = SecretKey::from_pkcs8_pem(&pem).context(signing_failed("read the software key"))?;
+        let key =
+            SecretKey::from_pkcs8_pem(&pem).context(signing_failed("read the software key"))?;
         Ok(messages.iter().map(|message| key.sign(message)).collect())
     }
 }

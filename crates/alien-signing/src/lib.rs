@@ -50,7 +50,8 @@ pub use release::{
 };
 pub use settings::{candidate_prefixes, discover, InstallId, Lookup, SigningSettings};
 pub use signer_list::{
-    display_fingerprint, fingerprint, Signer, SignerChain, SignerKind, SignerListBody, TrustedList,
+    display_fingerprint, fingerprint, release_deny_entry, Signer, SignerChain, SignerKind,
+    SignerListBody, TrustedList,
 };
 pub use verify::{Trust, Verified};
 

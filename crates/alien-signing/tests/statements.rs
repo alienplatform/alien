@@ -46,13 +46,7 @@ fn local() -> LocalValues {
 }
 
 fn trust(keys: &Keys, chain: &[SignedStatement]) -> Trust {
-    Trust::new(
-        settings(keys),
-        install(),
-        chain,
-        &Ledger::new(PREFIX),
-    )
-    .expect("the chain is valid")
+    Trust::new(settings(keys), install(), chain, &Ledger::new(PREFIX)).expect("the chain is valid")
 }
 
 fn code<T: std::fmt::Debug>(result: alien_signing::Result<T>) -> String {
@@ -593,6 +587,49 @@ fn denied_and_expired_statements_are_refused() {
     trust
         .verify::<ReleaseBody>(&expired, Kind::Release, now() - Duration::seconds(2))
         .unwrap();
+}
+
+#[test]
+fn a_denied_release_id_refuses_every_platform_statement_of_it() {
+    let keys = keys();
+    // Two platforms' statements of one release share its sequence; the deny
+    // entry names the release, so neither digest has to be listed.
+    let aws = release(&keys, 10);
+    let mut other_body = release_body();
+    other_body.platform = "gcp".to_string();
+    let gcp = statement("release/v2", PROJECT, None, 10, 1, other_body)
+        .sign_with("ci", &keys.ci)
+        .unwrap();
+    let mut body = version_2_body(&keys);
+    body.deny.push(alien_signing::release_deny_entry(10));
+    let next = list(PROJECT, 2, 1, body)
+        .sign_with("alice-laptop", &keys.admin)
+        .unwrap();
+    let trust = trust(&keys, &[genesis(&keys), next]);
+    for denied in [&aws, &gcp] {
+        assert_eq!(
+            code(trust.verify::<ReleaseBody>(denied, Kind::Release, now())),
+            "SIGNING_DENIED"
+        );
+    }
+    trust
+        .verify::<ReleaseBody>(&release(&keys, 11), Kind::Release, now())
+        .unwrap();
+
+    // One the install already accepted is refused too: a rollback to it.
+    let mut ledger = Ledger::new(PREFIX);
+    ledger.accept(&aws.open().unwrap().digest);
+    let with_ledger = Trust::new(
+        settings(&keys),
+        install(),
+        &[genesis(&keys), trust.chain().statements()[1].clone()],
+        &ledger,
+    )
+    .unwrap();
+    assert_eq!(
+        code(with_ledger.verify::<ReleaseBody>(&aws, Kind::Release, now())),
+        "SIGNING_DENIED"
+    );
 }
 
 #[test]

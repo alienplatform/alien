@@ -622,7 +622,7 @@ pub fn check_statement(
             ));
         }
     }
-    if chain.current().denies(&opened.digest) {
+    if chain.current().refuses(opened) {
         return Err("it is deny-listed".to_string());
     }
     let version = opened.signer_list_version;
@@ -866,9 +866,8 @@ mod tests {
 
         // A name the release doesn't declare: the install would refuse every
         // update until a new config replaced it.
-        let error =
-            check_config_for_release(&chain, "rel_1", &release(1), &config("V8_PROBE"))
-                .unwrap_err();
+        let error = check_config_for_release(&chain, "rel_1", &release(1), &config("V8_PROBE"))
+            .unwrap_err();
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert_eq!(
             error.message,
@@ -878,9 +877,8 @@ mod tests {
         );
 
         // The release's word is checked before it is trusted.
-        let forged =
-            check_config_for_release(&chain, "rel_1", &release(9), &config("LOG_LEVEL"))
-                .unwrap_err();
+        let forged = check_config_for_release(&chain, "rel_1", &release(9), &config("LOG_LEVEL"))
+            .unwrap_err();
         assert!(
             forged
                 .message

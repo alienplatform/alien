@@ -1697,8 +1697,7 @@ async fn sign_config(
     let stored = api.config_statements(&deployment).await?;
     let (release_id, release) = release_for_config(ctx, target, &install.deployment).await?;
     let install = &install.id;
-    let mut body =
-        crate::signing::latest_config(&chain, install, &stored)?.unwrap_or_default();
+    let mut body = crate::signing::latest_config(&chain, install, &stored)?.unwrap_or_default();
     change(&mut body);
     crate::signing::check_config_for_release(&chain, &release_id, &release, &body)?;
     let envelope =

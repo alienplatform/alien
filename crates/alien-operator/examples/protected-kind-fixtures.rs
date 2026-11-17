@@ -20,7 +20,6 @@ use alien_signing::{
     SigningSettings,
 };
 use base64::Engine as _;
-use chrono::{Duration, Utc};
 use serde::Serialize;
 
 type Error = Box<dyn std::error::Error>;
@@ -40,7 +39,7 @@ fn statement<B: Serialize>(
             project: PROJECT.to_string(),
             install: install.map(str::to_string),
             sequence,
-            not_after: (kind == Kind::SignerList).then(|| Utc::now() + Duration::days(60)),
+            not_after: None,
             signer_list_version: list_version,
             body,
         }
@@ -189,6 +188,7 @@ fn main() -> Result<(), Error> {
         id: id.to_string(),
         key: key.public_key().as_str().to_string(),
         kind,
+        backend: None,
         roles,
         label: None,
     };

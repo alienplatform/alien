@@ -77,6 +77,7 @@ fn new_signer_list() -> SignedStatement {
                 id: "ci".to_string(),
                 key: key().public_key().as_str().to_string(),
                 kind: SignerKind::Ci,
+                backend: None,
                 roles: vec![Role::Admin, Role::Release],
                 label: None,
             }],

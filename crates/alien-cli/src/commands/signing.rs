@@ -396,19 +396,19 @@ fn diff(current: &SignerListBody, next: &SignerListBody) -> Vec<String> {
             ));
         }
     }
-    for digest in next
+    for entry in next
         .deny
         .iter()
-        .filter(|digest| !current.deny.contains(digest))
+        .filter(|entry| !current.deny.contains(entry))
     {
-        lines.push(format!("+ refuse statement {digest}"));
+        lines.push(format!("+ refuse {}", deny_text(entry)));
     }
-    for digest in current
+    for entry in current
         .deny
         .iter()
-        .filter(|digest| !next.deny.contains(digest))
+        .filter(|entry| !next.deny.contains(entry))
     {
-        lines.push(format!("- stop refusing statement {digest}"));
+        lines.push(format!("- stop refusing {}", deny_text(entry)));
     }
     if next.admin_threshold != current.admin_threshold {
         lines.push(format!(
@@ -420,6 +420,14 @@ fn diff(current: &SignerListBody, next: &SignerListBody) -> Vec<String> {
         lines.push("no device changes".to_string());
     }
     lines
+}
+
+/// A deny-list entry in words: a whole release or one statement.
+fn deny_text(entry: &str) -> String {
+    match entry.strip_prefix("release:") {
+        Some(sequence) => format!("release signed as {sequence}"),
+        None => format!("statement {entry}"),
+    }
 }
 
 /// The first characters of a public key, enough to tell keys apart.
@@ -1024,7 +1032,9 @@ pub async fn revoke_release(ctx: &ExecutionMode, id: &str) -> Result<()> {
         let statement: SignedStatement =
             serde_json::from_value(statement.clone()).map_err(|error| {
                 AlienError::new(ErrorData::SigningFailed {
-                    message: format!("The server returned a release statement that doesn't parse: {error}"),
+                    message: format!(
+                        "The server returned a release statement that doesn't parse: {error}"
+                    ),
                 })
             })?;
         let opened = statement.open().context(ErrorData::SigningFailed {
@@ -1039,6 +1049,13 @@ pub async fn revoke_release(ctx: &ExecutionMode, id: &str) -> Result<()> {
                 })
             },
         )?;
+        // Every platform's statement of one release carries one sequence, so
+        // refusing the release by it covers a platform the server left out.
+        // Its digests are refused too.
+        let entry = alien_signing::release_deny_entry(opened.sequence);
+        if !digests.contains(&entry) {
+            digests.push(entry);
+        }
         if !digests.contains(&opened.digest) {
             digests.push(opened.digest);
         }
@@ -1061,12 +1078,14 @@ pub async fn revoke_release(ctx: &ExecutionMode, id: &str) -> Result<()> {
     body.deny.extend(added.iter().cloned());
     body.recovered = false;
     println!(
-        "Refusing release {id} ({} statement(s)) for {project}. Protected deployments will not apply it, also as a rollback.",
+        "Refusing release {id} ({} deny-list entries) for {project}. Protected deployments will not apply it, also as a rollback.",
         added.len()
     );
     let statement = admin.sign_next(body, "sign")?;
     admin.publish(&statement).await?;
-    println!("✓ Release {id} is refused · delivered to protected deployments as the next device list");
+    println!(
+        "✓ Release {id} is refused · delivered to protected deployments as the next device list"
+    );
     Ok(())
 }
 
