@@ -1269,6 +1269,14 @@ impl StackExecutor {
         }
     }
 
+    /// Whether the update this resource asked for, with its config unchanged, already ran in
+    /// this rollout. A check that stays true after that update is not asked again: it would
+    /// re-run on every step and a setup would never reach its handoff. A rollout is known by its
+    /// release, so without one nothing is recorded and nothing is held back.
+    fn requested_update_already_ran(&self, current: &StackResourceState) -> bool {
+        self.rollout_id.is_some() && current.requested_update_ran == self.rollout_id
+    }
+
     /// Whether the dependency's controller asks for an update that its dependents must wait
     /// for. A controller that cannot be asked does not hold them. One that keeps asking after
     /// the update it asked for already ran does not either: that update did not settle the
@@ -1958,12 +1966,16 @@ impl StackExecutor {
                         if let Some(resource_controller) =
                             current_resource_state.get_internal_controller()?
                         {
-                            if self.controller_needs_update(
+                            let asks = self.controller_needs_update(
                                 resource_controller.as_ref(),
                                 desired_config,
                                 current_resource_state,
                                 state,
-                            )? {
+                            )?;
+                            if asks && self.requested_update_already_ran(current_resource_state) {
+                                // Its update ran in this rollout and the check is still true:
+                                // keep the record, so it is neither run again nor held for.
+                            } else if asks {
                                 debug!(
                                     "Scheduling UPDATE transition for '{}' due to deployment config drift",
                                     resource_id

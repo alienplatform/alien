@@ -1119,6 +1119,37 @@ mod rollout_order {
         Ok(())
     }
 
+    /// A controller whose check stays true after its update ran (the sandbox reconciling its
+    /// grants on every direct setup run) is updated once in a rollout, not on every step: a setup
+    /// that re-ran the update each step never reached its handoff until the step budget ran out.
+    #[tokio::test]
+    async fn a_dependency_that_keeps_asking_is_updated_once_per_rollout() -> Result<()> {
+        let (dep, app) = ("dep-asks-once", "app-asks-once");
+        let mut state = run_to_synced(
+            &new_executor(&requested_stack(dep, app, "r1", false))?,
+            new_test_state(),
+        )
+        .await?;
+
+        crate::worker::request_test_worker_update(dep, true);
+        let executor = rollout_executor(&requested_stack(dep, app, "r1", false), "rel_once")?;
+        let mut updates_started = 0;
+        for _ in 0..40 {
+            let before = get_status(&state, dep);
+            state = executor.step(state).await?.next_state;
+            if get_status(&state, dep) == Some(ResourceStatus::Updating)
+                && before != Some(ResourceStatus::Updating)
+            {
+                updates_started += 1;
+            }
+        }
+        crate::worker::request_test_worker_update(dep, false);
+
+        assert_eq!(updates_started, 1, "one update per rollout");
+        assert_all_running(&state, &[dep, app]);
+        Ok(())
+    }
+
     /// The executor of one rollout (release) of `requested_stack`.
     fn rollout_executor(stack: &Stack, rollout: &str) -> Result<StackExecutor> {
         StackExecutor::builder(stack, ClientConfig::Test)
