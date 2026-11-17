@@ -10,15 +10,237 @@ import urllib.request
 import uuid
 
 
-# Where the cluster has a NetworkPolicy controller that is off by default, name the switch.
+# Shown with a verdict that NetworkPolicy is not enforced. It does not name the cluster the
+# install is running on, so it lists the switches by provider.
 FIX_HINT = (
-    "Turn on NetworkPolicy enforcement and re-run the install. "
-    "EKS Auto Mode: kubectl apply a ConfigMap amazon-vpc-cni in kube-system with data "
-    "enable-network-policy-controller: \"true\" (the NodeClass networkPolicy field only sets the "
-    "default). EKS with the VPC CNI add-on: enable network policy in the add-on configuration. "
-    "GKE: enable network policy (Dataplane V2 or Calico). AKS: create the cluster with "
-    "--network-policy azure|calico|cilium."
+    "Turn on NetworkPolicy enforcement in the cluster's network plugin and re-run the install. "
+    "Examples: EKS Auto Mode: a ConfigMap amazon-vpc-cni in kube-system with "
+    "enable-network-policy-controller: \"true\"; EKS with the VPC CNI add-on: enable network "
+    "policy in the add-on configuration; GKE: Dataplane V2 or Calico; AKS: create the cluster "
+    "with --network-policy azure|calico|cilium."
 )
+
+# The time budget of one run, stated here and only here. The chart reads JOB_DEADLINE_SECONDS from
+# this file for the Job's activeDeadlineSeconds, and the script's deadline and every pod's
+# activeDeadlineSeconds are SCRIPT_BUDGET_SECONDS. Helm's timeout (15m in every install path)
+# applies to each hook, so the Job must fit in it with room for the next hook. A pod takes about
+# 35 s to start when each pod is a VM (Kata). The listener is the first pod on the sandbox nodes:
+# a node pool that scales from zero provisions a node for it, so it may take 210 s. The clients
+# then land on that node. A run that passes needs:
+#   ADMISSION_SECONDS         30   both admission policies answer
+#   LISTENER_SECONDS         210   the listener is scheduled, starts and is ready
+#   stage 1: 35 + 15               control, denied and ingress-denied start together and finish
+#   stage 2: 35 + 35               both controls start together; one may retry for RECOVER_SECONDS
+#   one recreate: 45 + 35          a pod the runtime never started waits RUNTIME_START_BOUND_SECONDS
+#   CLEANUP_SECONDS           10   delete what was created
+# The runner's own wait for its network (API_READY_SECONDS) comes before this and counts in the Job.
+API_READY_SECONDS = 60
+ADMISSION_SECONDS = 30
+POD_START_SECONDS = 35
+LISTENER_SECONDS = 210
+STAGE_ONE_SECONDS = POD_START_SECONDS + 15
+RECOVER_SECONDS = 30
+STAGE_TWO_SECONDS = POD_START_SECONDS + RECOVER_SECONDS + 5
+RUNTIME_START_BOUND_SECONDS = 45
+CLEANUP_SECONDS = 10
+SCRIPT_BUDGET_SECONDS = (ADMISSION_SECONDS + LISTENER_SECONDS + STAGE_ONE_SECONDS + STAGE_TWO_SECONDS
+                         + RUNTIME_START_BOUND_SECONDS + POD_START_SECONDS + CLEANUP_SECONDS)
+RUNNER_START_SECONDS = 30
+BUDGET_MARGIN_SECONDS = 30
+# The Job's deadline is API_READY + SCRIPT_BUDGET + RUNNER_START + BUDGET_MARGIN, written as a
+# number because the chart reads it from this line (a test keeps the two equal).
+JOB_DEADLINE_SECONDS = 570
+# A client pod after the listener lands on the listener's node; one that is still Pending after
+# this long fails naming why.
+CLIENT_PENDING_SECONDS = 90
+# The memory limit of a client pod. A pod whose runtime is a VM adds the limit to the VM's memory:
+# 64Mi never started on AKS (Kata), 128Mi does.
+CLIENT_MEMORY_LIMIT = "128Mi"
+
+# The client pods' code. The caller sets DENIED and RECOVER before it. It writes one line to the
+# pod's termination message; the runner reads that line and the exit code from the pod's status.
+CLIENT = r'''
+import errno,time,urllib.request,urllib.error
+def require(condition,message):
+    if not condition: raise RuntimeError(message)
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+DENIED=globals().get('DENIED',False)
+RECOVER=globals().get('RECOVER',0)
+LOG=globals().get('LOG','/dev/termination-log')
+BLOCKED=(errno.ECONNREFUSED,errno.ENETUNREACH,errno.EHOSTUNREACH,errno.ETIMEDOUT)
+def note(text):
+    print(text,flush=True)
+    try:
+        with open(LOG,'w') as log: log.write(text[:2048])
+    except OSError: pass
+def run():
+    # A recovering control waits, within the pod deadline, for a CNI that removes a deleted
+    # policy slowly; it must still be reached once.
+    begun=time.monotonic()
+    reached=0
+    attempts=0
+    while True:
+        attempts+=1
+        try:
+            body=opener.open(@URL@,timeout=3).read()
+            require(body==@MARKER@, 'wrong positive control body')
+            require(not DENIED, 'NetworkPolicy did not block traffic')
+            reached+=1
+            if RECOVER: break
+        except (urllib.error.URLError,TimeoutError,OSError) as error:
+            reason=getattr(error,'reason',error)
+            require((DENIED or RECOVER) and (isinstance(reason,TimeoutError) or
+                    getattr(reason,'errno',None) in BLOCKED), repr(error))
+        if attempts>=3 and not RECOVER: break
+        require(not RECOVER or time.monotonic()-begun<RECOVER, 'traffic did not resume after removing the policy')
+        time.sleep(1)
+    require(DENIED or reached, 'traffic did not resume after removing the policy')
+    note('refused on all %d attempts'%attempts if DENIED else 'reached the listener on %d of %d attempts'%(reached,attempts))
+try:
+    run()
+except BaseException as error:
+    note('FAILED: %s'%error)
+    raise
+'''
+
+
+def client_code(url, marker):
+    """Source of a client pod; the caller prepends `DENIED=...` and `RECOVER=...`."""
+    return CLIENT.replace("@URL@", repr(url)).replace("@MARKER@", repr(marker.encode()))
+
+
+# The clients of a stage do not depend on each other, so a stage starts them together and then
+# waits for each: one after the other, a runtime that takes tens of seconds per pod does not fit
+# in the install's wait. A refusal is only meaningful bracketed by working controls, so stage 2
+# starts after stage 1. `ingress-denied` may leave its own node; the listener's ingress allow
+# list is what refuses it. Entries are (role, denied, seconds the pod may retry for its first reply).
+STAGES = [
+    [("control", False, 0), ("denied", True, 0), ("ingress-denied", True, 0)],
+    [("control-after", False, 0), ("ingress-control-after", False, RECOVER_SECONDS)],
+]
+
+# A client pod whose probe container never ran says nothing about NetworkPolicy: the sandbox
+# runtime could not start it. These are the container states the kubelet reports for that.
+RUNTIME_START_REASONS = {
+    "StartError", "ContainerCannotRun", "CreateContainerError", "RunContainerError",
+}
+IMAGE_PULL_REASONS = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull"}
+
+
+def _statuses(pod):
+    return pod.get("status", {}).get("containerStatuses", [])
+
+
+def terminated_message(pod):
+    """The termination message of every container: the clients' one-line verdict."""
+    return " ".join((s.get("state", {}).get("terminated") or {}).get("message", "")
+                    for s in _statuses(pod)).strip()
+
+
+def runtime_start_failure(pod, pending_seconds):
+    """The runtime's message when the probe container never ran, else None.
+
+    A pod that ran is judged by its own verdict. A container the runtime did not start carries
+    the runtime's reason and message instead: as a failed pod with no start time, or as a pod
+    stuck waiting past RUNTIME_START_BOUND_SECONDS (the kubelet's own retries come first).
+    """
+    for status in _statuses(pod):
+        state = status.get("state", {})
+        terminated = state.get("terminated")
+        if terminated:
+            started = terminated.get("startedAt") or ""
+            if (terminated.get("reason") in RUNTIME_START_REASONS
+                    and (not started or started[:4] in ("0001", "1970"))):
+                return terminated.get("message") or terminated.get("reason")
+        waiting = state.get("waiting") or {}
+        if waiting.get("reason") in RUNTIME_START_REASONS and pending_seconds > RUNTIME_START_BOUND_SECONDS:
+            return waiting.get("message") or waiting["reason"]
+    return None
+
+
+def stuck_reason(pod):
+    """The scheduler's or the kubelet's reason a pod has not started running, else None."""
+    for condition in pod.get("status", {}).get("conditions", []):
+        if condition.get("type") == "PodScheduled" and condition.get("status") == "False":
+            return "not scheduled (%s): %s" % (condition.get("reason") or "Unschedulable",
+                                               condition.get("message") or "no message")
+    for status in _statuses(pod):
+        waiting = status.get("state", {}).get("waiting") or {}
+        if waiting.get("reason"):
+            kind = "image did not pull" if waiting["reason"] in IMAGE_PULL_REASONS else "container waiting"
+            return "%s (%s): %s" % (kind, waiting["reason"], waiting.get("message") or "no message")
+    return None
+
+
+def replace_object(request, path, resource, deadline, now=time.monotonic, sleep=time.sleep):
+    """Delete an object, wait until it is gone, create it again.
+
+    A pod deleted with no grace period can stay in the API for a moment; creating the same name
+    then answers 409, so the new object is only created once the old one answers 404.
+    """
+    name = resource["metadata"]["name"]
+    try:
+        request("DELETE", path + "/" + name, {"gracePeriodSeconds": 0})
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    while True:
+        try:
+            request("GET", path + "/" + name)
+        except urllib.error.HTTPError as gone:
+            if gone.code == 404:
+                break
+            raise
+        if now() >= deadline:
+            raise RuntimeError(f"{name} is still being deleted at the probe's deadline; cannot recreate it")
+        sleep(1)
+    return request("POST", path, resource)
+
+
+def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate,
+                 now=time.monotonic, sleep=time.sleep, out=print, created_at=None,
+                 pending_bound=CLIENT_PENDING_SECONDS):
+    """Wait for a pod to satisfy `predicate`. The decision is the pod's status.
+
+    A pod that ran is judged by its termination message and exit code. A pod the runtime never
+    started is recreated once and named as such. A pod Pending for longer than `pending_bound`
+    fails naming the scheduler's or the kubelet's reason. Each failure names the pod.
+    `created_at` is when the pod was created: the pods of a stage are created together and
+    waited for one by one, so a pod's stuck time counts from its creation.
+    """
+    first_seen = now() if created_at is None else created_at
+    recreated = False
+    current = {}
+    while now() < deadline:
+        current = request("GET", pods + "/" + prefix + "-" + role)
+        phase = current.get("status", {}).get("phase")
+        failure = runtime_start_failure(current, now() - first_seen) if phase in ("Failed", "Pending") else None
+        if failure:
+            if recreated:
+                raise RuntimeError(f"the runtime failed to start the {role} pod twice: {failure[:512]}")
+            out(f"the runtime failed to start the {role} pod: {failure[:512]}; recreated", flush=True)
+            recreate(role)
+            recreated = True
+            first_seen = now()
+            sleep(1)
+            continue
+        if phase == "Failed":
+            raise RuntimeError(f"the {role} pod failed (NetworkPolicy enforcement is unproven): "
+                               + (terminated_message(current) or "no termination message")[:1024]
+                               + " | " + FIX_HINT)
+        if predicate(current):
+            verdict = terminated_message(current)
+            out(f"{role}: {phase}; node={current['spec'].get('nodeName')}; "
+                f"ip={current.get('status', {}).get('podIP')}" + (f"; verdict: {verdict[:256]}" if verdict else ""),
+                flush=True)
+            return current
+        reason = stuck_reason(current) if phase == "Pending" else None
+        if reason and now() - first_seen > pending_bound:
+            raise RuntimeError(f"the {role} pod never ran, so NetworkPolicy was not tested: {reason}")
+        sleep(1)
+    reason = stuck_reason(current) or "phase " + str(current.get("status", {}).get("phase"))
+    raise RuntimeError(f"the {role} pod did not finish before the probe's deadline ({reason}); "
+                       "NetworkPolicy enforcement is unproven")
 
 
 def main():
@@ -70,37 +292,27 @@ def main():
     node_selector = json.loads(os.environ.get("PROBE_NODE_SELECTOR") or "{}")
     tolerations = json.loads(os.environ.get("PROBE_TOLERATIONS") or "[]")
     created = []
-    deadline = time.monotonic() + 210
+    deadline = time.monotonic() + SCRIPT_BUDGET_SECONDS
     marker = uuid.uuid4().hex
     server = (
-        "from http.server import BaseHTTPRequestHandler,HTTPServer\n"
+        "from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\n"
         "class Handler(BaseHTTPRequestHandler):\n"
         " def do_GET(self):\n"
         "  self.send_response(200); self.end_headers(); "
         f"self.wfile.write({marker.encode()!r})\n"
         " def log_message(self,*args): pass\n"
-        "HTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
+        "ThreadingHTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
     )
 
     def create(path, resource):
         resource["metadata"]["ownerReferences"] = owner_ref
-        name = resource["metadata"]["name"]
         try:
             result = request("POST", path, resource)
         except urllib.error.HTTPError as error:
             if error.code != 409:
                 raise
             # A previous run's object with the same fixed name; replace it.
-            request("DELETE", path + "/" + name, {"gracePeriodSeconds": 0})
-            while time.monotonic() < deadline:
-                try:
-                    request("GET", path + "/" + name)
-                except urllib.error.HTTPError as gone:
-                    if gone.code == 404:
-                        break
-                    raise
-                time.sleep(1)
-            result = request("POST", path, resource)
+            result = replace_object(request, path, resource, deadline)
         created.append(path + "/" + result["metadata"]["name"])
         return result
 
@@ -125,40 +337,41 @@ def main():
                          "annotations": {"karpenter.sh/do-not-disrupt": "true"}},
             "spec": {
                 "automountServiceAccountToken": False, "restartPolicy": "Never",
-                "activeDeadlineSeconds": 240, "terminationGracePeriodSeconds": 1,
+                "activeDeadlineSeconds": SCRIPT_BUDGET_SECONDS, "terminationGracePeriodSeconds": 1,
                 "securityContext": {"runAsNonRoot": True, "runAsUser": 65534,
                                     "seccompProfile": {"type": "RuntimeDefault"}},
                 **({"imagePullSecrets": pull_secrets} if pull_secrets else {}),
                 "containers": [{"name": "probe", "image": image,
                     "command": ["python3", "-B", "-c", code],
-                    "terminationMessagePolicy": "FallbackToLogsOnError",
                     "securityContext": {"allowPrivilegeEscalation": False,
                                         "readOnlyRootFilesystem": True,
                                         "capabilities": {"drop": ["ALL"]}},
                     "resources": {"requests": {"cpu": "10m", "memory": "24Mi"},
-                                  "limits": {"cpu": "100m", "memory": "64Mi"}}}],
+                                  "limits": {"cpu": "100m", "memory": CLIENT_MEMORY_LIMIT}}}],
             },
         }
 
-    def wait(role, predicate):
-        while time.monotonic() < deadline:
-            current = request("GET", pods + "/" + prefix + "-" + role)
-            phase = current.get("status", {}).get("phase")
-            if phase == "Failed":
-                details = [status.get("state", {}).get("terminated", {}).get("message", "")
-                           for status in current.get("status", {}).get("containerStatuses", [])]
-                raise RuntimeError(f"{role} probe failed: NetworkPolicy enforcement is unproven; "
-                                   + " ".join(details)[:1024] + " | " + FIX_HINT)
-            if predicate(current):
-                print(f"{role}: {phase}; node={current['spec'].get('nodeName')}; "
-                      f"ip={current.get('status', {}).get('podIP')}", flush=True)
-                return current
-            time.sleep(1)
-        raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement. " + FIX_HINT)
+    created_at = {}
+    specs = {}
+
+    def start(role, spec):
+        specs[role] = spec
+        create(pods, spec)
+        created_at[role] = time.monotonic()
+
+    def recreate(role):
+        replace_object(request, pods, specs[role], deadline)
+        created_at[role] = time.monotonic()
+
+    def wait(role, predicate, pending_bound=CLIENT_PENDING_SECONDS):
+        return wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate,
+                            created_at=created_at.get(role), pending_bound=pending_bound)
 
     # Pod and NetworkPolicy creation are confined by admission policies for this account.
     # Refuse to run unless each one rejects a request it must reject, with its own message.
     admission = os.environ["PROBE_ADMISSION_POLICY"]
+
+    admission_until = time.monotonic() + ADMISSION_SECONDS
 
     def require_denied(path, body, policy, message):
         while True:
@@ -169,7 +382,7 @@ def main():
                 if f"ValidatingAdmissionPolicy '{policy}'" in text and message in text:
                     return
                 raise RuntimeError(f"unexpected admission answer {error.code}: {text[:512]}")
-            if time.monotonic() > deadline - 180:
+            if time.monotonic() > admission_until:
                 raise RuntimeError(f"admission policy {policy} is not enforced; refusing to run")
             time.sleep(1)
 
@@ -194,47 +407,20 @@ def main():
         listener = pod("listener", server)
         listener["spec"]["containers"][0]["readinessProbe"] = {
             "httpGet": {"path": "/", "port": 8080}, "periodSeconds": 1}
-        create(pods, listener)
+        start("listener", listener)
         listener = wait("listener", lambda p: any(
             c["type"] == "Ready" and c["status"] == "True"
-            for c in p.get("status", {}).get("conditions", [])))
+            for c in p.get("status", {}).get("conditions", [])),
+            pending_bound=LISTENER_SECONDS)
         ip = listener["status"]["podIP"]
         authority = f"[{ip}]" if ":" in ip else ip
-        url = f"http://{authority}:8080/"
-        probe = (
-            "import errno,socket,time,urllib.request,urllib.error\n"
-            "def require(condition,message):\n"
-            " if not condition: raise RuntimeError(message)\n"
-            "opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
-            # A recovering control waits, within the pod deadline, for a CNI that removes a
-            # deleted policy slowly; it must still be reached once.
-            "RECOVER=globals().get('RECOVER',False)\n"
-            "reached=False\n"
-            "for attempt in range(30 if RECOVER else 3):\n"
-            " try:\n"
-            f"  body=opener.open({url!r},timeout=3).read()\n"
-            f"  require(body=={marker.encode()!r}, 'wrong positive control body')\n"
-            "  require(not DENIED, 'NetworkPolicy did not block traffic')\n"
-            "  reached=True\n"
-            "  if RECOVER: break\n"
-            " except (urllib.error.URLError,TimeoutError,OSError) as error:\n"
-            "  reason=getattr(error,'reason',error)\n"
-            "  require((DENIED or RECOVER) and (isinstance(reason,TimeoutError) or "
-            "getattr(reason,'errno',None) in (errno.ECONNREFUSED,errno.ENETUNREACH,"
-            "errno.EHOSTUNREACH,errno.ETIMEDOUT)), repr(error))\n"
-            " time.sleep(1)\n"
-            "require(DENIED or reached, 'traffic did not resume after removing the policy')\n"
-        )
-        # A successful negative result is only meaningful bracketed by working controls.
-        for role, denied in [("control", False), ("denied", True), ("control-after", False)]:
-            create(pods, pod(role, f"DENIED={denied!r}\n" + probe))
-            wait(role, lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        # An egress-only implementation must not pass the ingress endpoint gate: this pod may
-        # leave its own node, but the listener's ingress allow list does not admit it.
-        create(pods, pod("ingress-denied", "DENIED=True\n" + probe))
-        wait("ingress-denied", lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        create(pods, pod("ingress-control-after", "DENIED=False\nRECOVER=True\n" + probe))
-        wait("ingress-control-after", lambda p: p.get("status", {}).get("phase") == "Succeeded")
+        code = client_code(f"http://{authority}:8080/", marker)
+        succeeded = lambda p: p.get("status", {}).get("phase") == "Succeeded"
+        for stage in STAGES:
+            for role, denied, recover in stage:
+                start(role, pod(role, f"DENIED={denied!r}\nRECOVER={recover!r}\n" + code))
+            for role, _, _ in stage:
+                wait(role, succeeded)
         print("NetworkPolicy enforced: ingress and egress denied requests; all controls passed")
     finally:
         failures = []

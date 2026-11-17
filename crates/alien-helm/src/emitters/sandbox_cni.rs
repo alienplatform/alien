@@ -320,7 +320,7 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 300
+  activeDeadlineSeconds: {job_deadline}
   ttlSecondsAfterFinished: 600
   template:
     metadata:
@@ -384,5 +384,15 @@ spec:
 {script}"#,
         repository = PROBE_REPOSITORY,
         digest = PROBE_DIGEST,
+        job_deadline = job_deadline_seconds(),
     )
+}
+
+/// The Job's deadline, read from the probe script's budget (one place states it).
+fn job_deadline_seconds() -> u32 {
+    include_str!("sandbox_cni_probe.py")
+        .lines()
+        .find_map(|line| line.strip_prefix("JOB_DEADLINE_SECONDS = "))
+        .and_then(|value| value.trim().parse().ok())
+        .expect("the probe script states JOB_DEADLINE_SECONDS as a number")
 }

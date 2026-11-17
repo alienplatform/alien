@@ -8434,6 +8434,9 @@ metadata:
   name: {chart_name}
 spec:
   interval: 10m
+  # The chart's setup check runs as a Helm hook that waits up to 11 minutes; Flux's default
+  # Helm timeout is 5 minutes. This applies to install and upgrade.
+  timeout: 15m
   # Without retries Flux marks the release Stalled after one failed install or upgrade and
   # stops until someone forces a reconcile.
   install:
@@ -8617,7 +8620,7 @@ The chart generates nothing at render time. The Operator creates its encryption 
 in its own Secret on first start. Keep credentials and any values file containing them private.
 
 ```bash
-helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
+helm install {chart_name} . --namespace={namespace} --create-namespace --values install-values.yaml --atomic --wait --timeout 15m
 ```
 
 Managed packages can supply the project's resolved management endpoint as a
@@ -8676,7 +8679,9 @@ the Operator installation and its permissions; upgrade the chart to change those
 edit them in the deployment dashboard and retain the original Helm values.
 Preview upgrades with `helm upgrade --dry-run=server` so the chart can compare
 values with the installed Secret. Client-side `helm template --is-upgrade`
-cannot do that.
+cannot do that. Run the upgrade itself with `--atomic --wait --timeout 15m`, the
+same as the install: the setup check that runs before it can take several minutes
+on nodes that start slowly, and Helm's default timeout is 5 minutes.
 
 ## Workload priority
 
