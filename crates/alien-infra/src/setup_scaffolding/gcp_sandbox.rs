@@ -118,6 +118,21 @@ fn management_member(stack_state: &StackState) -> Result<Option<String>> {
 /// the `sandbox/templates` grant on the engine. Read as JSON so this holds whether or not the
 /// controller carries the record yet: a state without it reads as not granted, which asks for the
 /// setup run that places it.
+/// Whether `role` is this stack's custom role for the `sandbox/templates` permission set: the
+/// role id is `role_<namespace>_sandbox_templates`, with an optional `_<suffix>`. Exact, so another
+/// permission set's role that merely mentions templates never counts.
+fn is_templates_role(role: &str, resource_prefix: &str) -> bool {
+    let id = role.rsplit('/').next().unwrap_or(role);
+    let base = format!(
+        "role_{}_sandbox_templates",
+        alien_permissions::generators::custom_role_namespace_for_prefix(resource_prefix)
+    );
+    id == base
+        || id
+            .strip_prefix(&base)
+            .is_some_and(|rest| rest.starts_with('_'))
+}
+
 pub(super) fn templates_grant_recorded(stack_state: &StackState, sandbox_id: &str) -> bool {
     stack_state
         .resources
@@ -129,7 +144,7 @@ pub(super) fn templates_grant_recorded(stack_state: &StackState, sandbox_id: &st
                 grant
                     .get(0)
                     .and_then(|role| role.as_str())
-                    .is_some_and(|role| role.contains("templates"))
+                    .is_some_and(|role| is_templates_role(role, &stack_state.resource_prefix))
             })
         })
 }
@@ -300,6 +315,19 @@ pub(super) async fn teardown(
         )
         .await
     {
+        Ok(existing)
+            if !existing
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get(OWNER_LABEL))
+                .is_some_and(|owner| owner == ctx.resource_prefix) =>
+        {
+            // Someone replaced it after setup made it; it is not ours to delete, by name or not.
+            tracing::warn!(
+                id = %sandbox_id, repository = %image_repository,
+                "the sandbox image repository no longer carries setup's label; leaving it"
+            );
+        }
         Ok(_) => {
             registry
                 .delete_repository(project, region, image_repository.to_string())
@@ -625,6 +653,38 @@ mod tests {
         assert!(records.is_empty());
     }
 
+    /// A repository of the recorded name that no longer carries setup's label was replaced by
+    /// someone else; teardown leaves it and still removes the role.
+    #[tokio::test]
+    async fn teardown_leaves_a_repository_without_setups_label() {
+        let mut registry = MockArtifactRegistryApi::new();
+        registry
+            .expect_get_repository()
+            .returning(|_, _, _| Ok(labelled(None)));
+        registry.expect_delete_repository().never();
+        let mut iam = MockIamApi::new();
+        iam.expect_delete_role()
+            .times(1)
+            .returning(|_| Ok(existing_role()));
+        let provider = provider(registry, iam);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let mut records = BTreeMap::from([(
+            "agents".to_string(),
+            SetupScaffolding::GcpSandbox {
+                image_repository: "acme-agents-img".to_string(),
+                write_role: "acme_agents_image_write".to_string(),
+                writer_granted: true,
+            },
+        )]);
+        let done = super::super::teardown(&ctx, &mut records).await.unwrap();
+        assert_eq!(done, ScaffoldingProgress::Done);
+    }
+
     fn stack_with_image(image: &str) -> alien_core::Stack {
         alien_core::Stack::new("acme".to_string())
             .add(
@@ -672,13 +732,35 @@ mod tests {
             .build();
         resource.internal_state = Some(if granted {
             serde_json::json!({"type": "GcpAgentPlatformTemplateController", "engineSetup": {
-                "engineGrants": [["projects/p/roles/templates_role", MANAGER]]
+                "engineGrants": [[format!("projects/p/roles/role_{}_sandbox_templates_x", PREFIX), MANAGER]]
             }})
         } else {
             serde_json::json!({"type": "GcpAgentPlatformTemplateController"})
         });
         state.resources.insert("agents".to_string(), resource);
+        state.resource_prefix = PREFIX.to_string();
         state
+    }
+
+    #[test]
+    fn only_this_stacks_templates_role_counts_as_the_template_grant() {
+        let ns = PREFIX.replace('-', "_");
+        assert!(is_templates_role(
+            &format!("projects/p/roles/role_{ns}_sandbox_templates"),
+            PREFIX
+        ));
+        assert!(is_templates_role(
+            &format!("projects/p/roles/role_{ns}_sandbox_templates_ab12"),
+            PREFIX
+        ));
+        for other in [
+            format!("projects/p/roles/role_{ns}_sandbox_templates2"),
+            format!("projects/p/roles/role_{ns}_sandbox_execute"),
+            format!("projects/p/roles/role_other_sandbox_templates"),
+            "projects/p/roles/templates_role".to_string(),
+        ] {
+            assert!(!is_templates_role(&other, PREFIX), "{other}");
+        }
     }
 
     fn image_changes(records: &BTreeMap<String, SetupScaffolding>, granted: bool) -> Vec<String> {

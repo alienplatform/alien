@@ -262,7 +262,6 @@ async fn copy_image_into_own_project(
     ctx: &ResourceControllerContext<'_>,
     sandbox_id: &str,
     body: &mut SandboxEnvironmentTemplate,
-    created_repository: &mut Option<String>,
 ) -> Result<()> {
     let Some(spec) = body
         .custom_container_environment
@@ -303,11 +302,7 @@ async fn copy_image_into_own_project(
                     resource_id: Some(sandbox_id.to_string()),
                 })
             })?;
-    // Recorded as soon as it exists, so a teardown removes what this deployment created even
-    // when the copy that follows fails.
-    if ensure_image_repository(ctx, sandbox_id, &repository).await? {
-        *created_repository = Some(repository.clone());
-    }
+    require_image_repository(ctx, sandbox_id, &repository).await?;
 
     let access_token = gcp_config
         .get_bearer_token("https://www.googleapis.com/auth/cloud-platform")
@@ -316,7 +311,17 @@ async fn copy_image_into_own_project(
             message: "Failed to get a Google access token to copy the sandbox image".to_string(),
             resource_id: Some(sandbox_id.to_string()),
         })?;
-    let http = reqwest::Client::new();
+    // No overall timeout: a layer of several GB is legitimate. A stalled stream, though, must not
+    // hold the step forever: each connect and each read gets a bound.
+    let http = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(120))
+        .build()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: "Failed to build the HTTP client to copy the sandbox image".to_string(),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
     // `path` is `<vendor project>/<repository>/<alien project>/<image>`; the proxy serves it by name.
     let source = CopySource {
         base_url: manager_url,
@@ -365,123 +370,68 @@ async fn copy_image_into_own_project(
     Ok(())
 }
 
-/// Create the sandbox's dedicated repository if it is not there; true when this call created it.
-/// Untagged versions are cleaned up
-/// after a week; every copied digest is tagged, so a live template's digest is never cleaned.
-async fn ensure_image_repository(
+/// Check the sandbox's dedicated repository exists and is readable. Setup creates it (direct
+/// setup or the Terraform module), never this controller: at runtime it holds the management
+/// identity, which cannot create repositories. A missing or unreadable repository means the
+/// install was set up before sandbox images were copied into the project, so the answer is
+/// SETUP_RERUN_REQUIRED, before anything is copied or created.
+async fn require_image_repository(
     ctx: &ResourceControllerContext<'_>,
     sandbox_id: &str,
     repository: &str,
-) -> Result<bool> {
-    use alien_gcp_clients::artifactregistry::{
-        CleanupPolicy, CleanupPolicyAction, CleanupPolicyCondition, CleanupPolicyConditionTagState,
-        Repository, RepositoryFormat,
-    };
+) -> Result<()> {
     let gcp_config = ctx.get_gcp_config()?;
     let client = ctx
         .service_provider
         .get_gcp_artifact_registry_client(gcp_config)?;
-    let (project, region) = (gcp_config.project_id.clone(), gcp_config.region.clone());
-    match client
-        .get_repository(project.clone(), region.clone(), repository.to_string())
-        .await
-    {
-        Ok(_) => return Ok(false),
-        Err(e)
-            if matches!(
-                e.error,
-                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-            ) =>
-        {
-            // A direct setup creates the repository and the manager's write access to it with
-            // the deployer's credentials, which this controller never holds at runtime.
-            if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup {
-                return Err(AlienError::new(if ctx.deployment_config.setup_run {
-                    // Setup's scaffolding makes it in this same run.
-                    ErrorData::DependencyNotReady {
-                        resource_id: sandbox_id.to_string(),
-                        dependency_id: repository.to_string(),
-                    }
-                } else {
-                    ErrorData::SetupRerunRequired {
-                        resource_id: sandbox_id.to_string(),
-                        message: format!(
-                            "the sandbox image repository '{repository}' does not exist. Setup \
-                             creates it; run the deployment's setup again. Nothing was copied"
-                        ),
-                    }
-                }));
-            }
-        }
-        Err(e) => {
-            if matches!(
-                e.error,
-                Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
-            ) {
-                return Err(AlienError::new(ErrorData::SetupRerunRequired {
-                    resource_id: sandbox_id.to_string(),
-                    message: format!(
-                        "no access to the sandbox image repository '{repository}'. An install \
-                         set up before sandbox images were copied into the project lacks the \
-                         repository and the manager's write access to it; re-apply the current \
-                         Terraform module. Nothing was created or copied"
-                    ),
-                }));
-            }
-            return Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("Failed to read the sandbox image repository '{repository}': {e}"),
-                resource_id: Some(sandbox_id.to_string()),
-            }));
-        }
-    }
-    let policy = CleanupPolicy {
-        id: Some("delete-untagged".to_string()),
-        action: Some(CleanupPolicyAction::Delete),
-        condition: Some(CleanupPolicyCondition {
-            tag_state: Some(CleanupPolicyConditionTagState::Untagged),
-            tag_prefixes: Vec::new(),
-            version_name_prefixes: Vec::new(),
-            package_name_prefixes: Vec::new(),
-            older_than: Some("604800s".to_string()),
-            newer_than: None,
-        }),
-        most_recent_versions: None,
-    };
-    let body = Repository {
-        format: Some(RepositoryFormat::Docker),
-        description: Some(format!("Image of sandbox '{sandbox_id}'")),
-        cleanup_policies: Some(std::collections::HashMap::from([(
-            "delete-untagged".to_string(),
-            policy,
-        )])),
-        ..Default::default()
-    };
-    client
-        .create_repository(
-            project.clone(),
-            region.clone(),
+    let error = match client
+        .get_repository(
+            gcp_config.project_id.clone(),
+            gcp_config.region.clone(),
             repository.to_string(),
-            body,
         )
         .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to create the sandbox image repository '{repository}'"),
+    {
+        Ok(_) => return Ok(()),
+        Err(e) => e,
+    };
+    let missing = matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+    );
+    let denied = matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
+    );
+    if !missing && !denied {
+        return Err(AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("Failed to read the sandbox image repository '{repository}': {error}"),
             resource_id: Some(sandbox_id.to_string()),
-        })?;
-    // The create is a long-running operation; the repository is readable within seconds.
-    for _ in 0..30 {
-        if client
-            .get_repository(project.clone(), region.clone(), repository.to_string())
-            .await
-            .is_ok()
-        {
-            return Ok(true);
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        }));
     }
-    Err(AlienError::new(ErrorData::CloudPlatformError {
-        message: format!("The sandbox image repository '{repository}' did not appear after create"),
-        resource_id: Some(sandbox_id.to_string()),
+    // A management identity that may read repositories project-wide sees a missing repository as
+    // not found, one that may not sees it as denied. Both mean setup has not made it.
+    if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        && ctx.deployment_config.setup_run
+    {
+        // Setup's scaffolding makes it in this same run.
+        return Err(AlienError::new(ErrorData::DependencyNotReady {
+            resource_id: sandbox_id.to_string(),
+            dependency_id: repository.to_string(),
+        }));
+    }
+    let how = if ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup {
+        "run the deployment's setup again"
+    } else {
+        "update the setup (apply the current setup package)"
+    };
+    Err(AlienError::new(ErrorData::SetupRerunRequired {
+        resource_id: sandbox_id.to_string(),
+        message: format!(
+            "the sandbox image repository '{repository}' is missing or not readable. Setup \
+             creates it and the manager's write access to it; {how}. Nothing was copied or \
+             created"
+        ),
     }))
 }
 
@@ -558,11 +508,6 @@ pub struct GcpAgentPlatformTemplateController {
     /// and carried into the binding so a deployed workload can sign.
     #[serde(default)]
     pub(crate) preview_service_account: Option<String>,
-    /// Image repository this controller created (the direct install path). Setup-created
-    /// repositories (Terraform) are not recorded: their owner removes them. Teardown deletes
-    /// exactly this one, so nothing of ours stays in the customer's project.
-    #[serde(default)]
-    pub(crate) created_image_repository: Option<String>,
 }
 
 #[controller]
@@ -599,13 +544,7 @@ impl GcpAgentPlatformTemplateController {
             .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
         let mut body = build_template_body(config, &display_name, ctx.deployment_config)?;
-        copy_image_into_own_project(
-            ctx,
-            &config.id,
-            &mut body,
-            &mut self.created_image_repository,
-        )
-        .await?;
+        copy_image_into_own_project(ctx, &config.id, &mut body).await?;
 
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
@@ -912,13 +851,7 @@ impl GcpAgentPlatformTemplateController {
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
         let mut body = build_template_body(config, &display_name, ctx.deployment_config)?;
-        copy_image_into_own_project(
-            ctx,
-            &config.id,
-            &mut body,
-            &mut self.created_image_repository,
-        )
-        .await?;
+        copy_image_into_own_project(ctx, &config.id, &mut body).await?;
 
         info!(id=%config.id, "sandbox template body changed; creating a replacement");
         let operation_name = create_template(ctx, &client, &config.id, &engine, body).await?;
@@ -942,9 +875,6 @@ impl GcpAgentPlatformTemplateController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-
-        self.delete_created_image_repository(ctx, &config.id)
-            .await?;
 
         let Some(engine) = self.engine.clone() else {
             // Nothing was ever created — a delete with no parent is already done.
@@ -1052,66 +982,6 @@ fn require_operation_name(name: Option<String>, resource_id: &str) -> Result<Str
 }
 
 impl GcpAgentPlatformTemplateController {
-    /// Delete the image repository this controller created, and only that exact one. Already gone
-    /// is done; any other refusal fails the delete so the leftover is reported, not hidden.
-    async fn delete_created_image_repository(
-        &mut self,
-        ctx: &ResourceControllerContext<'_>,
-        sandbox_id: &str,
-    ) -> Result<()> {
-        let Some(repository) = self.created_image_repository.clone() else {
-            return Ok(());
-        };
-        let expected =
-            alien_core::gar_repository::sandbox_image_repository(ctx.resource_prefix, sandbox_id);
-        if expected.as_deref() != Some(repository.as_str()) {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!("recorded image repository '{repository}' is not this sandbox's"),
-                resource_id: Some(sandbox_id.to_string()),
-            }));
-        }
-        let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx
-            .service_provider
-            .get_gcp_artifact_registry_client(gcp_config)?;
-        let deleted = client
-            .delete_repository(
-                gcp_config.project_id.clone(),
-                gcp_config.region.clone(),
-                repository.clone(),
-            )
-            .await;
-        let gone = matches!(
-            &deleted,
-            Err(e) if matches!(
-                e.error,
-                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
-            )
-        );
-        // The runtime identity of a direct install is not granted delete on the repository; the
-        // delete would be refused on every retry and hold the whole teardown. It is reported,
-        // not retried.
-        if let Err(e) = &deleted {
-            if matches!(
-                e.error,
-                Some(alien_client_core::ErrorData::RemoteAccessDenied { .. })
-            ) {
-                warn!(id = %sandbox_id, repository = %repository, error = %e, "could not delete the sandbox image repository during teardown: access denied; it stays in the project");
-                self.created_image_repository = None;
-                return Ok(());
-            }
-        }
-        if !gone {
-            deleted.map(|_| ()).context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete the sandbox image repository '{repository}'"),
-                resource_id: Some(sandbox_id.to_string()),
-            })?;
-        }
-        info!(id = %sandbox_id, repository = %repository, "Deleted the sandbox image repository");
-        self.created_image_repository = None;
-        Ok(())
-    }
-
     fn clear_state(&mut self) {
         self.engine = None;
         self.template_id = None;
@@ -1167,7 +1037,6 @@ impl GcpAgentPlatformTemplateController {
             allow_egress: None,
             preview_ports: Vec::new(),
             preview_service_account: None,
-            created_image_repository: None,
             _internal_stay_count: None,
         }
     }
@@ -2337,61 +2206,37 @@ mod tests {
             });
         }
 
-        fn provider(
-            client: Arc<MockAgentPlatformApi>,
-            repository_creates: usize,
-        ) -> Arc<MockPlatformServiceProvider> {
-            provider_with(client, repository_creates, false, 0, false)
+        /// The repository setup made exists and is readable.
+        fn provider(client: Arc<MockAgentPlatformApi>) -> Arc<MockPlatformServiceProvider> {
+            provider_reading(client, None)
         }
 
-        /// `exists`: setup already created the repository (the Terraform install).
-        /// `deletes`: how many repository deletes the teardown must make.
-        fn provider_with(
+        /// The repository read fails: `denied` is a refusal, otherwise not found. The controller
+        /// never creates a repository, so a create call fails the test.
+        fn provider_reading(
             client: Arc<MockAgentPlatformApi>,
-            repository_creates: usize,
-            exists: bool,
-            deletes: usize,
-            refused: bool,
+            failure: Option<bool>,
         ) -> Arc<MockPlatformServiceProvider> {
             let mut registry = MockArtifactRegistryApi::new();
             registry
-                .expect_delete_repository()
-                .withf(|project, _, id| project == "test-project-123" && id == "test-agent-sbx-img")
-                .times(deletes)
-                .returning(move |_, _, _| {
-                    if refused {
-                        Err(alien_error::AlienError::new(
-                            alien_client_core::ErrorData::RemoteAccessDenied {
-                                resource_type: "repository".to_string(),
-                                resource_name: "r".to_string(),
-                            },
-                        ))
-                    } else {
-                        Ok(Default::default())
-                    }
-                });
-            // The repository is missing at first and there after its create.
-            let created = Arc::new(Mutex::new(exists));
-            let seen = created.clone();
-            registry.expect_get_repository().returning(move |_, _, _| {
-                if *seen.lock().unwrap() {
-                    Ok(Repository::default())
-                } else {
-                    Err(alien_error::AlienError::new(
+                .expect_get_repository()
+                .returning(move |_, _, _| match failure {
+                    None => Ok(Repository::default()),
+                    Some(true) => Err(alien_error::AlienError::new(
+                        alien_client_core::ErrorData::RemoteAccessDenied {
+                            resource_type: "repository".to_string(),
+                            resource_name: "r".to_string(),
+                        },
+                    )),
+                    Some(false) => Err(alien_error::AlienError::new(
                         alien_client_core::ErrorData::RemoteResourceNotFound {
                             resource_type: "repository".to_string(),
                             resource_name: "r".to_string(),
                         },
-                    ))
-                }
-            });
-            registry
-                .expect_create_repository()
-                .times(repository_creates)
-                .returning(move |_, _, _, _| {
-                    *created.lock().unwrap() = true;
-                    Ok(Default::default())
+                    )),
                 });
+            registry.expect_create_repository().never();
+            registry.expect_delete_repository().never();
             let registry = Arc::new(registry);
             let mut provider = MockPlatformServiceProvider::new();
             provider
@@ -2484,8 +2329,7 @@ mod tests {
                 .returning(|_, id| Ok(active_template(id)));
             m.expect_list_templates()
                 .returning(|_| Ok(vec![active_template("tpl1")]));
-            let mut executor =
-                executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m), 1)).await;
+            let mut executor = executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m))).await;
             executor.run_until_terminal().await.expect("create runs");
             assert_eq!(executor.status(), ResourceStatus::Running);
         }
@@ -2503,46 +2347,6 @@ mod tests {
             m
         }
 
-        /// The direct install creates the repository, so its teardown deletes exactly that one.
-        #[tokio::test]
-        async fn deleting_the_sandbox_deletes_the_repository_it_created() {
-            let (body, _) = manifest();
-            let (source, dest) = (MockServer::start(), MockServer::start());
-            serve_source(&source, &body);
-            serve_destination(&dest);
-            let mut executor = executor(
-                SOURCE_IMAGE,
-                &source,
-                &dest,
-                provider_with(Arc::new(healthy_client()), 1, false, 1, false),
-            )
-            .await;
-            executor.run_until_terminal().await.expect("create runs");
-            executor.delete().expect("delete accepted");
-            executor.run_until_terminal().await.expect("delete runs");
-            assert_eq!(executor.status(), ResourceStatus::Deleted);
-        }
-
-        /// A runtime identity that may not delete the repository must not hold the teardown.
-        #[tokio::test]
-        async fn a_refused_repository_delete_does_not_hold_the_teardown() {
-            let (body, _) = manifest();
-            let (source, dest) = (MockServer::start(), MockServer::start());
-            serve_source(&source, &body);
-            serve_destination(&dest);
-            let mut executor = executor(
-                SOURCE_IMAGE,
-                &source,
-                &dest,
-                provider_with(Arc::new(healthy_client()), 1, false, 1, true),
-            )
-            .await;
-            executor.run_until_terminal().await.expect("create runs");
-            executor.delete().expect("delete accepted");
-            executor.run_until_terminal().await.expect("delete runs");
-            assert_eq!(executor.status(), ResourceStatus::Deleted);
-        }
-
         /// A repository setup created (Terraform) belongs to setup; the controller leaves it.
         #[tokio::test]
         async fn deleting_the_sandbox_leaves_a_repository_setup_created() {
@@ -2554,7 +2358,7 @@ mod tests {
                 SOURCE_IMAGE,
                 &source,
                 &dest,
-                provider_with(Arc::new(healthy_client()), 0, true, 0, false),
+                provider(Arc::new(healthy_client())),
             )
             .await;
             executor.run_until_terminal().await.expect("create runs");
@@ -2585,7 +2389,7 @@ mod tests {
                 .returning(|_, id| Ok(active_template(id)));
             m.expect_list_templates()
                 .returning(|_| Ok(vec![active_template("tpl1")]));
-            let mut executor = executor(own, &source, &dest, provider(Arc::new(m), 0)).await;
+            let mut executor = executor(own, &source, &dest, provider(Arc::new(m))).await;
             executor.run_until_terminal().await.expect("create runs");
             assert_eq!(executor.status(), ResourceStatus::Running);
         }
@@ -2601,8 +2405,7 @@ mod tests {
             });
             let mut m = MockAgentPlatformApi::new();
             m.expect_create_template().never();
-            let mut executor =
-                executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m), 1)).await;
+            let mut executor = executor(SOURCE_IMAGE, &source, &dest, provider(Arc::new(m))).await;
             let first = executor.step().await;
             let error = first.expect_err("a refused source stops the create");
             assert!(error.to_string().contains("403"), "{error}");
@@ -2610,53 +2413,38 @@ mod tests {
                 !error.to_string().contains("test-deployment-token"),
                 "{error}"
             );
-            // The same step runs again: the repository exists now, and the source is refused again.
+            // The same step runs again, and the source is refused again.
             assert!(executor.step().await.is_err());
         }
 
-        /// An install set up before images were copied has no repository and no grant on it. The
-        /// step says to rerun setup, and writes nothing: no repository, no copy, no template.
+        /// An install set up before images were copied has no repository, or none the manager can
+        /// read. Cloud answers 403, or 404 for an identity that may read repositories project-wide;
+        /// both say to rerun setup, and write nothing: no repository, no copy, no template.
         #[tokio::test]
-        async fn a_refused_repository_read_asks_for_the_setup_rerun_and_writes_nothing() {
-            let (source, dest) = (MockServer::start(), MockServer::start());
-            let source_requests = source.mock(|w, t| {
-                w.any_request();
-                t.status(200);
-            });
-            let dest_requests = dest.mock(|w, t| {
-                w.any_request();
-                t.status(200);
-            });
-            let mut m = MockAgentPlatformApi::new();
-            m.expect_create_template().never();
-            let mut registry = MockArtifactRegistryApi::new();
-            registry.expect_get_repository().returning(|_, _, _| {
-                Err(alien_error::AlienError::new(
-                    alien_client_core::ErrorData::RemoteAccessDenied {
-                        resource_type: "repository".to_string(),
-                        resource_name: "r".to_string(),
-                    },
-                ))
-            });
-            registry.expect_create_repository().never();
-            let registry = Arc::new(registry);
-            let client = Arc::new(m);
-            let mut provider = MockPlatformServiceProvider::new();
-            provider
-                .expect_get_gcp_agent_platform_client()
-                .returning(move |_| Ok(client.clone()));
-            provider
-                .expect_get_gcp_artifact_registry_client()
-                .returning(move |_| Ok(registry.clone()));
-            let mut executor = executor(SOURCE_IMAGE, &source, &dest, Arc::new(provider)).await;
-            let error = executor
-                .step()
-                .await
-                .expect_err("a refused read stops the step");
-            assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{error}");
-            assert!(!error.retryable);
-            assert_eq!(source_requests.hits(), 0);
-            assert_eq!(dest_requests.hits(), 0);
+        async fn a_missing_or_refused_repository_asks_for_the_setup_rerun_and_writes_nothing() {
+            for denied in [true, false] {
+                let (source, dest) = (MockServer::start(), MockServer::start());
+                let source_requests = source.mock(|w, t| {
+                    w.any_request();
+                    t.status(200);
+                });
+                let dest_requests = dest.mock(|w, t| {
+                    w.any_request();
+                    t.status(200);
+                });
+                let mut m = MockAgentPlatformApi::new();
+                m.expect_create_template().never();
+                let provider = provider_reading(Arc::new(m), Some(denied));
+                let mut executor = executor(SOURCE_IMAGE, &source, &dest, provider).await;
+                let error = executor
+                    .step()
+                    .await
+                    .expect_err("an unusable repository stops the step");
+                assert_eq!(error.code, "SETUP_RERUN_REQUIRED", "{error}");
+                assert!(!error.retryable);
+                assert_eq!(source_requests.hits(), 0);
+                assert_eq!(dest_requests.hits(), 0);
+            }
         }
 
         /// A direct setup's scaffolding creates the repository and the manager's write access with
@@ -2664,7 +2452,7 @@ mod tests {
         /// the setup run it waits for the scaffolding; afterwards a missing repository says to run
         /// setup again. Neither creates, copies or touches the template.
         #[tokio::test]
-        async fn a_direct_install_never_creates_the_repository() {
+        async fn a_direct_install_waits_for_the_repository_setup_makes() {
             for (setup_run, code) in [
                 (true, "DEPENDENCY_NOT_READY"),
                 (false, "SETUP_RERUN_REQUIRED"),
@@ -2681,7 +2469,7 @@ mod tests {
                 let mut m = MockAgentPlatformApi::new();
                 m.expect_create_template().never();
                 // No repository, and no create call allowed.
-                let provider = provider_with(Arc::new(m), 0, false, 0, false);
+                let provider = provider_reading(Arc::new(m), Some(false));
                 let mut executor = executor_as(
                     alien_core::InitialSetupAuthority::DirectSetup,
                     setup_run,
@@ -2710,7 +2498,7 @@ mod tests {
             serve_source(&source, &body);
             serve_destination(&dest);
             let m = healthy_client();
-            let provider = provider_with(Arc::new(m), 0, true, 0, false);
+            let provider = provider(Arc::new(m));
             let mut executor = executor_as(
                 alien_core::InitialSetupAuthority::DirectSetup,
                 false,
@@ -2721,10 +2509,7 @@ mod tests {
             )
             .await;
             executor.run_until_terminal().await.expect("create runs");
-            let controller = executor
-                .internal_state::<GcpAgentPlatformTemplateController>()
-                .expect("the controller downcasts");
-            assert_eq!(controller.created_image_repository, None);
+            assert_eq!(executor.status(), ResourceStatus::Running);
         }
     }
 }

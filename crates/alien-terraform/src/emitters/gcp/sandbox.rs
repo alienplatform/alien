@@ -19,7 +19,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ErrorData, GcpAgentPlatformEngine, RemoteBindings, RemoteStackManagement,
-    ResourceLifecycle, Result, Sandbox, SandboxEgress,
+    ResourceLifecycle, Result, Sandbox, SandboxEgress, SigningVerifier,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -384,6 +384,36 @@ fn emit_image_repository(
             attr("member", service_account_member_for_label(management_label)),
         ],
     ));
+    // On a protected install the signing verifier creates the template, and Agent Platform checks
+    // that the creating identity can read the image. It reads this one repository and nothing else.
+    if ctx
+        .stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type() == SigningVerifier::RESOURCE_TYPE)
+    {
+        fragment.resource_blocks.push(resource_block(
+            "google_artifact_registry_repository_iam_member",
+            &format!("{label}_verifier_read"),
+            [
+                attr("project", expr::raw("var.gcp_project")),
+                attr(
+                    "location",
+                    expr::traversal(["google_artifact_registry_repository", label.as_str(), "location"]),
+                ),
+                attr(
+                    "repository",
+                    expr::traversal(["google_artifact_registry_repository", label.as_str(), "name"]),
+                ),
+                attr("role", Expression::String("roles/artifactregistry.reader".to_string())),
+                attr(
+                    "member",
+                    expr::template(
+                        "serviceAccount:${google_service_account.signing_verifier.email}",
+                    ),
+                ),
+            ],
+        ));
+    }
     Ok(())
 }
 
@@ -755,7 +785,7 @@ mod tests {
         /// `a_frozen_gcp_sandbox_manager_gets_template_verbs_on_its_engine_only`.
         #[test]
         fn template_management_is_bound_only_when_granted() {
-            let granted = |with_profile: bool| {
+            let granted = |with_profile: bool, with_verifier: bool| {
                 let sandbox = Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
@@ -777,6 +807,12 @@ mod tests {
                         ResourceLifecycle::Frozen,
                     )
                     .add(sandbox, ResourceLifecycle::Frozen);
+                if with_verifier {
+                    builder = builder.add(
+                        alien_core::SigningVerifier::new("verifier".to_string()).build(),
+                        ResourceLifecycle::Frozen,
+                    );
+                }
                 if with_profile {
                     builder =
                         builder.management(alien_core::permissions::ManagementPermissions::Extend(
@@ -802,7 +838,7 @@ mod tests {
                 GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders")
             };
 
-            let fragment = granted(true);
+            let fragment = granted(true, false);
             let members: Vec<_> = fragment
                 .resource_blocks
                 .iter()
@@ -812,7 +848,26 @@ mod tests {
                 })
                 .collect();
             assert_eq!(members.len(), 1, "{fragment:?}");
-            assert!(granted(false).resource_blocks.is_empty());
+            assert!(granted(false, false).resource_blocks.is_empty());
+
+            // On a protected install the verifier creates the template, so it reads the image
+            // repository too: one reader member on that repository, none without a verifier.
+            let protected = granted(true, true);
+            let verifier_reads: Vec<_> = protected
+                .resource_blocks
+                .iter()
+                .filter(|block| {
+                    block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_verifier_read")
+                })
+                .collect();
+            assert_eq!(verifier_reads.len(), 1, "{protected:?}");
+            assert_eq!(
+                attribute(verifier_reads[0], "role"),
+                "\"roles/artifactregistry.reader\""
+            );
+            assert!(!fragment.resource_blocks.iter().any(|block| {
+                block.labels.get(1).map(|l| l.as_str()) == Some("agents_image_verifier_read")
+            }));
 
             // The same grant gives the manager a dedicated image repository to copy into, with a
             // writer role that can upload and tag but never delete.
