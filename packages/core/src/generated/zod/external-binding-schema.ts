@@ -6,7 +6,7 @@
 import * as z from "zod";
 import { ArtifactRegistryBindingSchema } from "./artifact-registry-binding-schema.js";
 import { ContainerAppsEnvironmentBindingSchema } from "./container-apps-environment-binding-schema.js";
-import { ExternalAiBindingSchema } from "./external-ai-binding-schema.js";
+import { ExternalAiSchema } from "./external-ai-schema.js";
 import { KvBindingSchema } from "./kv-binding-schema.js";
 import { PostgresBindingSchema } from "./postgres-binding-schema.js";
 import { QueueBindingSchema } from "./queue-binding-schema.js";
@@ -33,8 +33,8 @@ export const ExternalBindingSchema = z.union([z.lazy(() => StorageBindingSchema)
     "type": z.enum(["postgres"])
     })).describe("Connection details for a Postgres database, one variant per backend."), z.lazy(() => RedisBindingSchema).and(z.object({
     "type": z.enum(["redis"])
-    })).describe("Connection details for a Redis-compatible server, one variant per backend.\n\nService tags are unique across all binding enums (serde dispatches on\n`service` alone), so the key-value store's `redis` tag is not reused."), z.lazy(() => ExternalAiBindingSchema).and(z.object({
+    })).describe("Connection details for a Redis-compatible server, one variant per backend.\n\nService tags are unique across all binding enums (serde dispatches on\n`service` alone), so the key-value store's `redis` tag is not reused."), z.lazy(() => ExternalAiSchema).and(z.object({
     "type": z.enum(["ai"])
-    })).describe("External AI provider binding configuration (BYO-key).\n\nThe operator-supplied secret rides inside the binding via\n`BindingValue<String>`, so it is a literal on cloud platforms and gains\nKubernetes SecretRef resolution for free (`extract_binding_secrets` walks\nthe binding JSON for `secretRef`).")]).describe("Represents a binding to pre-existing infrastructure.\n\nThe binding type must match the resource type it's applied to.\nValidated at runtime by the executor.")
+    })).describe("What an installer supplies for an AI resource with an external binding.\n\nTwo inputs, told apart by whether the JSON carries a `service` tag:\n- `{ \"provider\", \"apiKey\" }` — BYO key (the original input; stored deployments and Helm values\n  carry it, so it parses exactly as before).\n- `{ \"service\": \"bedrock\", \"region\" }` — the cloud's own AI service, called with the workload's\n  ambient identity (for example an EKS pod's IRSA role). No key, no Secret.\n\nUntagged, because the BYO-key input has no tag and must keep parsing unchanged. The two shapes\ncannot overlap: the ambient one requires `service`, the key one requires `provider` and `apiKey`.")]).describe("Represents a binding to pre-existing infrastructure.\n\nThe binding type must match the resource type it's applied to.\nValidated at runtime by the executor.")
 
 export type ExternalBinding = z.infer<typeof ExternalBindingSchema>

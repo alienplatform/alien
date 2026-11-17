@@ -1041,10 +1041,13 @@ mod tests {
         };
         use alien_core::ExternalBinding;
 
-        let external = ExternalBinding::Ai(ExternalAiBinding {
-            provider: "openai".to_string(),
-            api_key: "sk-test".into(),
-        });
+        let external = ExternalBinding::Ai(
+            ExternalAiBinding {
+                provider: "openai".to_string(),
+                api_key: "sk-test".into(),
+            }
+            .into(),
+        );
 
         let value = external
             .to_env_binding_value()

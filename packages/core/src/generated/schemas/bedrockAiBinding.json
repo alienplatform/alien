@@ -1,0 +1,1 @@
+{"type":"object","description":"AWS Bedrock AI binding configuration","required":["region"],"properties":{"region":{"type":"string","description":"The AWS region where Bedrock is accessed"}},"x-readme-ref-name":"BedrockAiBinding"}

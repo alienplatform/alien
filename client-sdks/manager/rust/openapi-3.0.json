@@ -3355,6 +3355,34 @@
           }
         }
       },
+      "AmbientAiBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BedrockAiBinding",
+                "description": "AWS Bedrock, signed with the workload's AWS credential chain."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "bedrock"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS Bedrock, signed with the workload's AWS credential chain."
+          }
+        ],
+        "description": "A managed cloud AI service the workload reaches with its ambient identity. The installer owns\nthe identity and its permissions; Alien grants nothing for it."
+      },
       "ArtifactRegistryBinding": {
         "oneOf": [
           {
@@ -6397,6 +6425,19 @@
         },
         "additionalProperties": true
       },
+      "BedrockAiBinding": {
+        "type": "object",
+        "description": "AWS Bedrock AI binding configuration",
+        "required": [
+          "region"
+        ],
+        "properties": {
+          "region": {
+            "type": "string",
+            "description": "The AWS region where Bedrock is accessed"
+          }
+        }
+      },
       "BindingValue_Option_String": {
         "oneOf": [
           {
@@ -8889,6 +8930,19 @@
           "tcp"
         ]
       },
+      "ExternalAi": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AmbientAiBinding",
+            "description": "A managed cloud AI service reached with the workload's own identity."
+          },
+          {
+            "$ref": "#/components/schemas/ExternalAiBinding",
+            "description": "A provider reached with a key the installer supplies."
+          }
+        ],
+        "description": "What an installer supplies for an AI resource with an external binding.\n\nTwo inputs, told apart by whether the JSON carries a `service` tag:\n- `{ \"provider\", \"apiKey\" }` — BYO key (the original input; stored deployments and Helm values\n  carry it, so it parses exactly as before).\n- `{ \"service\": \"bedrock\", \"region\" }` — the cloud's own AI service, called with the workload's\n  ambient identity (for example an EKS pod's IRSA role). No key, no Secret.\n\nUntagged, because the BYO-key input has no tag and must keep parsing unchanged. The two shapes\ncannot overlap: the ambient one requires `service`, the key one requires `provider` and `apiKey`."
+      },
       "ExternalAiBinding": {
         "type": "object",
         "description": "External AI provider binding configuration (BYO-key).\n\nThe operator-supplied secret rides inside the binding via\n`BindingValue<String>`, so it is a literal on cloud platforms and gains\nKubernetes SecretRef resolution for free (`extract_binding_secrets` walks\nthe binding JSON for `secretRef`).",
@@ -9120,8 +9174,8 @@
           {
             "allOf": [
               {
-                "$ref": "#/components/schemas/ExternalAiBinding",
-                "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
+                "$ref": "#/components/schemas/ExternalAi",
+                "description": "External AI binding: a BYO-key provider (OpenAI/Anthropic, etc.) or a cloud AI service\nreached with the workload's own identity (Bedrock)"
               },
               {
                 "type": "object",
@@ -9138,7 +9192,7 @@
                 }
               }
             ],
-            "description": "External AI provider binding (BYO-key OpenAI/Anthropic, etc.)"
+            "description": "External AI binding: a BYO-key provider (OpenAI/Anthropic, etc.) or a cloud AI service\nreached with the workload's own identity (Bedrock)"
           }
         ],
         "description": "Represents a binding to pre-existing infrastructure.\n\nThe binding type must match the resource type it's applied to.\nValidated at runtime by the executor."
@@ -19723,6 +19777,11 @@
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "requestedUpdateRan": {
+            "type": "string",
+            "description": "The rollout in which an update ran because the controller asked for one while the\nconfig was unchanged. While the controller keeps asking in that same rollout, its\ndependents no longer wait for it, so a check that never settles cannot hold them back\nfor good. A later rollout is a new request and is waited for again. Cleared once the\ncontroller stops asking. State written before this field existed (it was a flag then)\nreads as none.",
+            "nullable": true
           },
           "retryAttempt": {
             "type": "integer",

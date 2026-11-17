@@ -328,6 +328,24 @@ mod tests {
         assert!(gateway_binding("llm", AiBinding::external("openai", "sk-x")).is_none());
     }
 
+    /// An external AI binding that uses the pod's own AWS identity reaches the workload as a
+    /// plain Bedrock binding, and the gateway builds an AWS route from it (signed with the SDK
+    /// default chain, which reads IRSA's web identity token).
+    #[test]
+    fn an_external_ambient_bedrock_binding_becomes_an_aws_route() {
+        let external: alien_core::ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "service": "bedrock", "region": "us-east-1"
+        }))
+        .unwrap();
+        let env_value = external.to_env_binding_value().unwrap().to_string();
+        let env = HashMap::from([("ALIEN_LLM_BINDING".to_string(), env_value)]);
+        let bindings = bindings_from_env_map(&env).unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].name, "llm");
+        assert_eq!(bindings[0].cloud, Platform::Aws);
+        assert_eq!(bindings[0].region.as_deref(), Some("us-east-1"));
+    }
+
     /// An external Postgres binding shares the `ALIEN_*_BINDING` namespace but
     /// tags itself `external` — the gateway must leave it to its own resource
     /// type instead of failing to parse it as an AI binding.

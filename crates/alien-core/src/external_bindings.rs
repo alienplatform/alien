@@ -10,8 +10,8 @@ use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
 use crate::bindings::{
-    ArtifactRegistryBinding, BindingValue, ContainerAppsEnvironmentBinding, ExternalAiBinding,
-    KvBinding, PostgresBinding, QueueBinding, RedisBinding, StorageBinding, VaultBinding,
+    ArtifactRegistryBinding, BindingValue, ContainerAppsEnvironmentBinding, ExternalAi, KvBinding,
+    PostgresBinding, QueueBinding, RedisBinding, StorageBinding, VaultBinding,
 };
 use crate::error::ErrorData;
 use crate::resource::ResourceOutputs;
@@ -42,8 +42,9 @@ pub enum ExternalBinding {
     Postgres(PostgresBinding),
     /// External Redis binding (operator-provided Redis-compatible server)
     Redis(RedisBinding),
-    /// External AI provider binding (BYO-key OpenAI/Anthropic, etc.)
-    Ai(ExternalAiBinding),
+    /// External AI binding: a BYO-key provider (OpenAI/Anthropic, etc.) or a cloud AI service
+    /// reached with the workload's own identity (Bedrock)
+    Ai(ExternalAi),
 }
 
 /// Map from resource ID to external binding.
@@ -150,7 +151,7 @@ impl ExternalBindings {
 
     /// Gets an AI binding for the given resource ID.
     /// Returns an error if the binding exists but is not an Ai type.
-    pub fn get_ai(&self, id: &str) -> crate::error::Result<Option<&ExternalAiBinding>> {
+    pub fn get_ai(&self, id: &str) -> crate::error::Result<Option<&ExternalAi>> {
         match self.0.get(id) {
             Some(ExternalBinding::Ai(b)) => Ok(Some(b)),
             Some(other) => Err(AlienError::new(ErrorData::ExternalBindingTypeMismatch {
@@ -278,9 +279,9 @@ impl ExternalBinding {
     /// Serializes this external binding to the JSON value injected into the worker
     /// environment as `ALIEN_<NAME>_BINDING`, matching the shape the SDK parses.
     ///
-    /// The AI arm wraps the carried `ExternalAiBinding` in `AiBinding::External` so
-    /// the value keeps the `service` tag the SDK's `ai(name)` parser discriminates
-    /// on; a bare `ExternalAiBinding` would lack it. Every other arm serializes the
+    /// The AI arm converts to an `AiBinding` so the value keeps the `service` tag the
+    /// SDK's `ai(name)` parser discriminates on: `external-ai` for a BYO key, `bedrock`
+    /// for ambient credentials. Every other arm serializes the
     /// carried binding directly, like the runtime controllers' `get_binding_params`.
     pub fn to_env_binding_value(&self) -> serde_json::Result<serde_json::Value> {
         match self {
@@ -292,9 +293,7 @@ impl ExternalBinding {
             ExternalBinding::ContainerAppsEnvironment(b) => serde_json::to_value(b),
             ExternalBinding::Postgres(b) => serde_json::to_value(b),
             ExternalBinding::Redis(b) => serde_json::to_value(b),
-            ExternalBinding::Ai(b) => {
-                serde_json::to_value(crate::bindings::AiBinding::External(b.clone()))
-            }
+            ExternalBinding::Ai(b) => serde_json::to_value(b.to_ai_binding()),
         }
     }
 }
@@ -368,16 +367,71 @@ mod tests {
         let mut bindings = ExternalBindings::new();
         bindings.insert(
             "llm",
-            ExternalBinding::Ai(ExternalAiBinding {
-                provider: "openai".to_string(),
-                api_key: "sk-test".into(),
-            }),
+            ExternalBinding::Ai(
+                ExternalAiBinding {
+                    provider: "openai".to_string(),
+                    api_key: "sk-test".into(),
+                }
+                .into(),
+            ),
         );
 
         assert!(bindings.has("llm"));
         assert_eq!(bindings.get("llm").unwrap().binding_type(), "ai");
-        assert_eq!(bindings.get_ai("llm").unwrap().unwrap().provider, "openai");
+        assert!(matches!(
+            bindings.get_ai("llm").unwrap().unwrap(),
+            ExternalAi::ApiKey(b) if b.provider == "openai"
+        ));
         assert!(bindings.get_kv("llm").is_err()); // Wrong type
+    }
+
+    #[test]
+    fn external_ai_bedrock_with_ambient_credentials_parses_and_reaches_the_workload() {
+        let binding: ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "service": "bedrock", "region": "us-east-1"
+        }))
+        .expect("ambient Bedrock external binding should parse");
+
+        // The workload env value is the first-class Bedrock binding: no key, no secret.
+        let value = binding.to_env_binding_value().unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"service": "bedrock", "region": "us-east-1"})
+        );
+        assert_eq!(
+            serde_json::from_value::<crate::bindings::AiBinding>(value).unwrap(),
+            crate::bindings::AiBinding::bedrock("us-east-1")
+        );
+        // Round-trips as stored.
+        let stored = serde_json::to_value(&binding).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ExternalBinding>(stored).unwrap(),
+            binding
+        );
+    }
+
+    #[test]
+    fn external_ai_byo_key_input_still_parses_unchanged() {
+        let binding: ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "provider": "openai", "apiKey": "sk-test"
+        }))
+        .expect("stored BYO-key input must keep parsing");
+        assert_eq!(
+            binding.to_env_binding_value().unwrap(),
+            serde_json::json!({
+                "service": "external-ai", "provider": "openai", "apiKey": "sk-test"
+            })
+        );
+    }
+
+    #[test]
+    fn external_ai_rejects_a_bedrock_binding_without_region() {
+        assert!(
+            serde_json::from_value::<ExternalBinding>(serde_json::json!({
+                "type": "ai", "service": "bedrock"
+            }))
+            .is_err()
+        );
     }
 
     #[test]

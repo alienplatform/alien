@@ -91,6 +91,54 @@ impl std::fmt::Debug for ExternalAiBinding {
     }
 }
 
+/// What an installer supplies for an AI resource with an external binding.
+///
+/// Two inputs, told apart by whether the JSON carries a `service` tag:
+/// - `{ "provider", "apiKey" }` — BYO key (the original input; stored deployments and Helm values
+///   carry it, so it parses exactly as before).
+/// - `{ "service": "bedrock", "region" }` — the cloud's own AI service, called with the workload's
+///   ambient identity (for example an EKS pod's IRSA role). No key, no Secret.
+///
+/// Untagged, because the BYO-key input has no tag and must keep parsing unchanged. The two shapes
+/// cannot overlap: the ambient one requires `service`, the key one requires `provider` and `apiKey`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum ExternalAi {
+    /// A managed cloud AI service reached with the workload's own identity.
+    Ambient(AmbientAiBinding),
+    /// A provider reached with a key the installer supplies.
+    ApiKey(ExternalAiBinding),
+}
+
+/// A managed cloud AI service the workload reaches with its ambient identity. The installer owns
+/// the identity and its permissions; Alien grants nothing for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(tag = "service", rename_all = "lowercase")]
+pub enum AmbientAiBinding {
+    /// AWS Bedrock, signed with the workload's AWS credential chain.
+    Bedrock(BedrockAiBinding),
+}
+
+impl From<ExternalAiBinding> for ExternalAi {
+    fn from(binding: ExternalAiBinding) -> Self {
+        Self::ApiKey(binding)
+    }
+}
+
+impl ExternalAi {
+    /// The binding the workload SDK parses from `ALIEN_<NAME>_BINDING`.
+    pub fn to_ai_binding(&self) -> AiBinding {
+        match self {
+            Self::Ambient(AmbientAiBinding::Bedrock(b)) => AiBinding::Bedrock(b.clone()),
+            Self::ApiKey(b) => AiBinding::External(b.clone()),
+        }
+    }
+}
+
 impl AiBinding {
     /// The env var a developer sets to bring their own provider key on the Local platform.
     /// Shared by the Local controller (provision-time check) and the local bindings
