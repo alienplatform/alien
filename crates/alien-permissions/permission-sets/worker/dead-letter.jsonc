@@ -15,14 +15,14 @@
             "scope": "projects/${projectName}",
             "condition": {
               "title": "StackPushSubscriptions",
-              "expression": "resource.type == \"pubsub.googleapis.com/Subscription\" && resource.name.startsWith(\"projects/${projectName}/subscriptions/${stackPrefix}-\")"
+              "expression": "resource.name.startsWith(\"projects/${projectName}/subscriptions/${stackPrefix}-\")"
             }
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
               "title": "WorkerPushSubscriptions",
-              "expression": "resource.type == \"pubsub.googleapis.com/Subscription\" && resource.name.startsWith(\"projects/${projectName}/subscriptions/${resourceName}-\")"
+              "expression": "resource.name.startsWith(\"projects/${projectName}/subscriptions/${resourceName}-\")"
             }
           }
         }
