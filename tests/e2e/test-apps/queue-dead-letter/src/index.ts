@@ -28,7 +28,8 @@ app.onError(async (error, c) => {
     OperationFailed.create({ operation: `${c.req.method} ${c.req.path}` }),
   )
   console.error(JSON.stringify(failure.toOptions()))
-  return c.json({ code: failure.code, message: failure.message }, 500)
+  // The test harness shows the whole chain so a failing cloud call is diagnosable.
+  return c.json({ code: failure.code, message: failure.message, chain: failure.toOptions() }, 500)
 })
 app.get("/health", c => c.json({ status: "ok" }))
 
