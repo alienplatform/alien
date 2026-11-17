@@ -3626,13 +3626,19 @@ mod direct_setup_tests {
         .await;
         drive(&mut executor).await;
         assert_eq!(
-            executor.internal_state::<AzureSandboxController>().unwrap().state,
+            executor
+                .internal_state::<AzureSandboxController>()
+                .unwrap()
+                .state,
             AzureSandboxState::Ready
         );
         let assigned = assigned.lock().unwrap();
         let group_scope = "/resourceGroups/default-resource-group/providers/Microsoft.App/sandboxGroups/test-prefix-box-one/";
         for (id, _, _) in assigned.iter() {
-            assert!(id.contains(group_scope), "assignment {id} is not on the group");
+            assert!(
+                id.contains(group_scope),
+                "assignment {id} is not on the group"
+            );
         }
         let principals: Vec<&str> = assigned.iter().map(|(_, p, _)| p.as_str()).collect();
         assert!(
@@ -3681,14 +3687,19 @@ mod direct_setup_tests {
             false,
         )
         .await;
-        assert!(executor.needs_update().unwrap(), "a setup rerun reconciles the grants");
+        assert!(
+            executor.needs_update().unwrap(),
+            "a setup rerun reconciles the grants"
+        );
         executor
             .update(sandbox(SandboxEgress::None))
             .expect("update is accepted");
         drive(&mut executor).await;
         let assigned = assigned.lock().unwrap();
         assert!(
-            assigned.iter().any(|(_, principal, _)| principal == "principal-1"),
+            assigned
+                .iter()
+                .any(|(_, principal, _)| principal == "principal-1"),
             "the execute identity gets its assignment: {assigned:?}"
         );
 

@@ -61,6 +61,7 @@ struct Calls {
     deleted_accounts: Vec<String>,
     created_roles: Vec<String>,
     sign_role_permissions: Vec<String>,
+    role_permissions: std::collections::BTreeMap<String, Vec<String>>,
     deleted_roles: Vec<String>,
     signer_policy: Option<IamPolicy>,
     engine_policy: Option<IamPolicy>,
@@ -133,6 +134,9 @@ fn clients_with_signer(
         if id.ends_with("sandbox_preview_sign") {
             calls.sign_role_permissions = request.role.included_permissions.clone();
         }
+        calls
+            .role_permissions
+            .insert(id.clone(), request.role.included_permissions.clone());
         calls.created_roles.push(id);
         drop(calls);
         Ok(alien_gcp_clients::iam::Role::builder().build())
@@ -452,7 +456,10 @@ async fn a_setup_rerun_places_the_grants_a_new_caller_needs() {
     let (iam, platform) = clients(&calls);
     let mut executor = executor_full(iam, platform, true, false, true).await;
     executor.run_until_terminal().await.expect("create runs");
-    assert!(executor.needs_update().unwrap(), "a setup rerun reconciles the grants");
+    assert!(
+        executor.needs_update().unwrap(),
+        "a setup rerun reconciles the grants"
+    );
     // The caller's grant disappears (as if never placed), the rerun puts it back.
     calls.lock().unwrap().engine_policy = Some(IamPolicy::default());
     executor
@@ -468,4 +475,250 @@ async fn a_setup_rerun_places_the_grants_a_new_caller_needs() {
             .any(|b| b.members.contains(&format!("serviceAccount:{CALLER}"))),
         "{on_engine:?}"
     );
+}
+
+/// What each side grants, reduced to who holds which permissions where, so the Terraform package
+/// and a direct setup can be compared without sharing a naming scheme. A role is its permission
+/// list (or its predefined name); a member is the logical identity it stands for.
+mod differential {
+    use super::*;
+    use alien_core::import::EmitContext;
+    use alien_core::permissions::ManagementPermissions;
+    use alien_core::{ResourceLifecycle, SandboxEgress, Stack, StackSettings};
+    use alien_terraform::emitters::gcp::GcpAgentPlatformSandboxEmitter;
+    use alien_terraform::TfEmitter;
+    use hcl::structure::{Block, Structure};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    type Grants = BTreeSet<(String, Vec<String>)>;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Placed {
+        engine: Grants,
+        signer: Grants,
+        signer_accounts: usize,
+    }
+
+    fn attribute(block: &Block, key: &str) -> Option<String> {
+        block.body.iter().find_map(|s| match s {
+            Structure::Attribute(a) if a.key.as_str() == key => Some(a.expr.to_string()),
+            _ => None,
+        })
+    }
+
+    fn perms_of_custom_role(block: &Block) -> Vec<String> {
+        let body = attribute(block, "permissions").expect("a custom role lists permissions");
+        let mut perms: Vec<String> = body
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .map(|p| p.trim().trim_matches('"').to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        perms.sort();
+        perms
+    }
+
+    /// The grants the package renders for the stack: engine-scoped members and the signer's
+    /// account-scoped members, read from the generated blocks.
+    fn rendered(remote: bool) -> Placed {
+        let sandbox = sandbox(
+            if remote { vec![] } else { vec![8080] },
+            if remote {
+                SandboxEgress::Allow
+            } else {
+                SandboxEgress::None
+            },
+        );
+        let builder = Stack::new("acme".to_string())
+            .add(
+                GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("box")).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+        let builder = if remote {
+            builder
+                .add(
+                    alien_core::RemoteBindings::new("access".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+        } else {
+            builder.add(sandbox, ResourceLifecycle::Frozen)
+        };
+        let stack = builder
+            .management(ManagementPermissions::extend(
+                PermissionProfile::new().resource("box", ["sandbox/templates"]),
+            ))
+            .permission(
+                "workload",
+                PermissionProfile::new().global(["sandbox/execute"]),
+            )
+            .build();
+        let names: indexmap::IndexMap<String, String> = [
+            ("box", "box"),
+            (
+                &*GcpAgentPlatformEngine::id_for_sandbox("box"),
+                "box_engine",
+            ),
+            ("management", "management"),
+            ("access", "access"),
+            ("workload-sa", "workload_sa"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let settings = StackSettings::default();
+        let ctx = EmitContext {
+            stack: &stack,
+            resource: stack.resources.get("box").unwrap(),
+            resource_id: "box",
+            platform: Platform::Gcp,
+            targets_kubernetes: false,
+            stack_settings: &settings,
+            names: &names,
+            pins: &alien_core::SetupPins::default(),
+        };
+        let fragment = GcpAgentPlatformSandboxEmitter.emit(&ctx).expect("renders");
+
+        let custom_roles: BTreeMap<String, Vec<String>> = fragment
+            .resource_blocks
+            .iter()
+            .filter(|b| {
+                b.labels.first().map(|l| l.as_str()) == Some("google_project_iam_custom_role")
+            })
+            .map(|b| (b.labels[1].as_str().to_string(), perms_of_custom_role(b)))
+            .collect();
+        let identity = |member: &str| -> String {
+            for (label, who) in [
+                ("google_service_account.workload_sa.", "workload"),
+                ("google_service_account.management.", "management"),
+                ("google_service_account.access.", "caller"),
+                ("google_service_account.box_preview.", "preview-signer"),
+            ] {
+                if member.contains(label) {
+                    return who.to_string();
+                }
+            }
+            panic!("the package grants to an identity this test does not know: {member}");
+        };
+        let role = |expr: &str| -> Vec<String> {
+            let hits: Vec<_> = custom_roles
+                .iter()
+                .filter(|(label, _)| {
+                    expr.contains(&format!(".{label}[")) || expr.contains(&format!(".{label}."))
+                })
+                .collect();
+            match hits.as_slice() {
+                [(_, perms)] => (*perms).clone(),
+                [] => vec![expr.to_string()],
+                _ => panic!("a role expression names several custom roles: {expr}"),
+            }
+        };
+        let collect = |kind: &str| -> Grants {
+            fragment
+                .resource_blocks
+                .iter()
+                .filter(|b| b.labels.first().map(|l| l.as_str()) == Some(kind))
+                .map(|b| {
+                    (
+                        identity(&attribute(b, "member").expect("a member")),
+                        role(&attribute(b, "role").expect("a role")),
+                    )
+                })
+                .collect()
+        };
+        Placed {
+            engine: collect("google_vertex_ai_reasoning_engine_iam_member"),
+            signer: collect("google_service_account_iam_member"),
+            signer_accounts: fragment
+                .resource_blocks
+                .iter()
+                .filter(|b| b.labels.first().map(|l| l.as_str()) == Some("google_service_account"))
+                .count(),
+        }
+    }
+
+    fn placed_directly(calls: &Calls) -> Placed {
+        let signer_email = format!(
+            "{}@{PROJECT}.iam.gserviceaccount.com",
+            preview_signer_account_id("test", "box")
+        );
+        let identity = |member: &str| -> String {
+            let email = member.trim_start_matches("serviceAccount:");
+            match email {
+                e if e == WORKLOAD => "workload",
+                e if e == MANAGER => "management",
+                e if e == CALLER => "caller",
+                e if e == signer_email => "preview-signer",
+                other => panic!("direct setup granted to an unknown identity: {other}"),
+            }
+            .to_string()
+        };
+        let role = |name: &str| -> Vec<String> {
+            let hits: Vec<_> = calls
+                .role_permissions
+                .iter()
+                .filter(|(id, _)| name.ends_with(id.as_str()))
+                .collect();
+            match hits.as_slice() {
+                [(_, perms)] => {
+                    let mut perms = (*perms).clone();
+                    perms.sort();
+                    perms
+                }
+                [] => vec![name.to_string()],
+                _ => panic!("a role name matches several created roles: {name}"),
+            }
+        };
+        let collect = |policy: Option<&IamPolicy>| -> Grants {
+            policy
+                .map(|p| {
+                    p.bindings
+                        .iter()
+                        .flat_map(|b| {
+                            b.members
+                                .iter()
+                                .map(|m| (identity(m), role(&b.role)))
+                                .collect::<Vec<_>>()
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        Placed {
+            engine: collect(calls.engine_policy.as_ref()),
+            signer: collect(calls.signer_policy.as_ref()),
+            signer_accounts: calls.created_accounts.len(),
+        }
+    }
+
+    async fn direct(remote: bool) -> Placed {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let (iam, platform) = clients(&calls);
+        let mut executor = executor_full(iam, platform, true, true, remote).await;
+        executor.run_until_terminal().await.expect("create runs");
+        let calls = calls.lock().unwrap();
+        placed_directly(&calls)
+    }
+
+    /// The package is the reference: whatever it grants on the engine and on the signer, direct
+    /// setup grants the same identities the same permissions, and nothing else.
+    #[tokio::test]
+    async fn direct_setup_grants_what_the_package_renders() {
+        for remote in [false, true] {
+            let package = rendered(remote);
+            assert!(
+                !package.engine.is_empty(),
+                "the comparison is empty (remote={remote}), so it proves nothing"
+            );
+            let direct = direct(remote).await;
+            assert_eq!(
+                direct, package,
+                "direct setup and the package differ (remote={remote})"
+            );
+        }
+    }
 }
