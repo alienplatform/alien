@@ -7,7 +7,7 @@ import unittest
 from loader import probe
 
 RUST = pathlib.Path(__file__).parents[2] / "src" / "emitters" / "sandbox_cni.rs"
-INSTALL_WAIT_SECONDS = 600  # `helm install --timeout 10m`
+INSTALL_WAIT_SECONDS = 900  # `helm install --timeout 15m`
 NEXT_HOOK_SECONDS = 120  # the root boot check's own pod deadline
 
 
@@ -15,15 +15,36 @@ class Budget(unittest.TestCase):
     def test_the_script_budget_is_the_sum_of_its_parts(self):
         start = probe.POD_START_SECONDS
         total = (probe.API_READY_SECONDS + probe.ADMISSION_SECONDS
-                 + start                                              # listener
-                 + start + probe.CLIENT_RUN_SECONDS                   # stage 1
-                 + start + probe.RECOVER_RUN_SECONDS                  # stage 2
-                 + probe.START_BOUND_SECONDS + start                  # one recreate
+                 + start                                                   # listener
+                 + start + start + probe.CONTROL_RUN_SECONDS + probe.LINGER_SECONDS  # stage 1
+                 + start + probe.RECOVER_RUN_SECONDS                       # stage 2
+                 + probe.START_BOUND_SECONDS + start                       # one recreate
                  + probe.CLEANUP_SECONDS)
         self.assertEqual(probe.SCRIPT_BUDGET_SECONDS, total)
+        self.assertEqual(probe.STAGE_ONE_SECONDS + probe.STAGE_TWO_SECONDS,
+                         total - probe.API_READY_SECONDS - probe.ADMISSION_SECONDS - start
+                         - probe.START_BOUND_SECONDS - start - probe.CLEANUP_SECONDS)
 
-    def test_the_stages_the_budget_counts_are_the_stages_that_run(self):
-        self.assertEqual(len(probe.STAGES), 2)
+    def test_the_control_outlasts_the_longest_denied_pod(self):
+        # A denied pod is served at most SERVE_WAIT after the control starts, then counts for a
+        # window and a hold; the control must still be probing the listener until it is done.
+        self.assertGreater(
+            probe.CONTROL_RUN_SECONDS,
+            probe.SERVE_WAIT_SECONDS + probe.ENFORCEMENT_WINDOW_SECONDS + probe.HOLD_SECONDS)
+
+    def test_a_denied_pod_waits_long_enough_for_the_control_to_start_and_reach_it(self):
+        self.assertGreaterEqual(
+            probe.DENIED_SERVED_WAIT_SECONDS, probe.POD_START_SECONDS + probe.SERVE_WAIT_SECONDS)
+
+    def test_a_denied_pod_fits_its_own_pod_deadline(self):
+        self.assertGreater(
+            probe.POD_DEADLINE_SECONDS,
+            probe.DENIED_SERVED_WAIT_SECONDS + probe.ENFORCEMENT_WINDOW_SECONDS
+            + probe.HOLD_SECONDS + probe.LINGER_SECONDS)
+
+    def test_the_install_instructions_wait_as_long_as_this_test_assumes(self):
+        generator = (RUST.parent.parent / "generator.rs").read_text()
+        self.assertIn(f"--timeout {INSTALL_WAIT_SECONDS // 60}m", generator)
 
     def test_the_job_deadline_covers_the_script_the_runner_start_and_a_margin(self):
         self.assertEqual(
@@ -38,7 +59,7 @@ class Budget(unittest.TestCase):
     def test_the_job_leaves_the_next_hook_room_inside_the_install_wait(self):
         self.assertLessEqual(probe.JOB_DEADLINE_SECONDS + NEXT_HOOK_SECONDS, INSTALL_WAIT_SECONDS)
 
-    def test_a_client_pods_own_deadline_covers_its_longest_run(self):
+    def test_a_recovering_control_fits_its_pod_deadline(self):
         self.assertGreaterEqual(
             probe.POD_DEADLINE_SECONDS, probe.POD_START_SECONDS + probe.RECOVER_RUN_SECONDS)
 

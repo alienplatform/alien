@@ -4039,7 +4039,7 @@ The chart generates nothing at render time. The Operator creates its encryption 
 in its own Secret on first start. Keep credentials and any values file containing them private.
 
 ```bash
-helm install pure-fn . --namespace=pure-fn --create-namespace --values install-values.yaml --atomic --wait --timeout 10m
+helm install pure-fn . --namespace=pure-fn --create-namespace --values install-values.yaml --atomic --wait --timeout 15m
 ```
 
 Managed packages can supply the project's resolved management endpoint as a

@@ -45,6 +45,13 @@ pub(crate) fn template(sandbox_class_helper: bool) -> String {
     } else {
         r#""""#
     };
+    // The probe pods run where sandboxes run. A chart with only a container that has egress has no
+    // sandbox helper, and its probe stays in the release namespace.
+    let pod_namespace_value = if sandbox_class_helper {
+        r#"include "deployment.sandboxNamespace" ."#
+    } else {
+        ".Release.Namespace"
+    };
     let script = include_str!("sandbox_cni_probe.py")
         .lines()
         .map(|line| format!("              {line}\n"))
@@ -54,6 +61,24 @@ pub(crate) fn template(sandbox_class_helper: bool) -> String {
         .map(|role| format!("{{{{ printf \"%s-{role}\" $name | quote }}}}"))
         .collect::<Vec<_>>()
         .join(", ");
+    // What the probe may do with its pods and policies, in the namespace they run in.
+    let pod_rules = format!(
+        r#"  # Creation cannot be scoped by name; the admission policy above confines it.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods]
+    resourceNames: [{pod_names}]
+    verbs: [get, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    resourceNames: [{{{{ $name | quote }}}}]
+    verbs: [get, delete]"#
+    );
     let role_list = PROBE_ROLES
         .iter()
         .map(|role| format!("'{role}'"))
@@ -63,6 +88,7 @@ pub(crate) fn template(sandbox_class_helper: bool) -> String {
         r#"{{{{- $name := printf "%s-sandbox-cni" (include "deployment.fullname" . | trunc 51 | trimSuffix "-") -}}}}
 {{{{- $probeImage := include "deployment.image" (dict "root" . "repository" "{repository}" "digest" "{digest}") -}}}}
 {{{{- with dig "cniProbeImage" "" (default dict .Values.sandbox) }}}}{{{{ $probeImage = include "deployment.mirroredImage" (dict "root" $ "image" .) }}}}{{{{ end -}}}}
+{{{{- $podNamespace := {pod_namespace_value} -}}}}
 {{{{- $cluster := printf "%s-%s" $name (sha256sum (printf "%s/%s" .Release.Namespace .Release.Name) | trunc 8) -}}}}
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -123,7 +149,7 @@ spec:
   matchResources:
     namespaceSelector:
       matchLabels:
-        kubernetes.io/metadata.name: {{{{ .Release.Namespace }}}}
+        kubernetes.io/metadata.name: {{{{ $podNamespace }}}}
 ---
 # NetworkPolicy creation cannot be scoped by RBAC either. Policies are additive, so an
 # allow rule selecting sandbox or gateway pods would outlive the hook: admit only the
@@ -169,7 +195,7 @@ spec:
   matchResources:
     namespaceSelector:
       matchLabels:
-        kubernetes.io/metadata.name: {{{{ .Release.Namespace }}}}
+        kubernetes.io/metadata.name: {{{{ $podNamespace }}}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -190,22 +216,9 @@ metadata:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-10"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
-rules:
-  # Creation cannot be scoped by name; the admission policy above confines it.
-  - apiGroups: [""]
-    resources: [pods]
-    verbs: [create]
-  - apiGroups: [""]
-    resources: [pods]
-    resourceNames: [{pod_names}]
-    verbs: [get, delete]
-  - apiGroups: [networking.k8s.io]
-    resources: [networkpolicies]
-    verbs: [create]
-  - apiGroups: [networking.k8s.io]
-    resources: [networkpolicies]
-    resourceNames: [{{{{ $name | quote }}}}]
-    verbs: [get, delete]
+rules:{{{{- if eq $podNamespace .Release.Namespace }}}}
+{pod_rules}
+{{{{- end }}}}
   - apiGroups: [batch]
     resources: [jobs]
     resourceNames: [{{{{ $name | quote }}}}]
@@ -228,6 +241,40 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{{{ $name }}}}
+{{{{- if ne $podNamespace .Release.Namespace }}}}
+---
+# Sandboxes run in their own namespace: the probe's pods and policies are made there, and its
+# account has these rights in that namespace and no others.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{{{ $name }}}}
+  namespace: {{{{ $podNamespace }}}}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+{pod_rules}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{{{ $name }}}}
+  namespace: {{{{ $podNamespace }}}}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{{{ $name }}}}
+    namespace: {{{{ .Release.Namespace }}}}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{{{ $name }}}}
+{{{{- end }}}}
 ---
 # Clusters that deny pod traffic by default (EKS Auto Mode strict network policy) leave
 # every pod without a policy with no network at all, so the probe's own traffic is
@@ -266,7 +313,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{{{ $name }}}}-egress
-  namespace: {{{{ .Release.Namespace }}}}
+  namespace: {{{{ $podNamespace }}}}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-9"
@@ -294,7 +341,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{{{ $name }}}}-listener
-  namespace: {{{{ .Release.Namespace }}}}
+  namespace: {{{{ $podNamespace }}}}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-9"
@@ -314,6 +361,66 @@ spec:
               - key: alien.dev/cni-role
                 operator: In
                 values: [control, control-after, ingress-control-after, denied]
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{{{ $name }}}}-control
+  namespace: {{{{ $podNamespace }}}}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  podSelector:
+    matchLabels:
+      alien.dev/cni-probe: {{{{ $name }}}}
+      alien.dev/cni-role: control
+  policyTypes: [Egress]
+  egress:
+    # The control also reaches the two denied pods, to prove their own network is up. It is
+    # the only pod with this rule; the denied pods themselves gain no egress.
+    - to:
+        - podSelector:
+            matchLabels:
+              alien.dev/cni-probe: {{{{ $name }}}}
+            matchExpressions:
+              - key: alien.dev/cni-role
+                operator: In
+                values: [denied, ingress-denied]
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{{{ $name }}}}-denied-ingress
+  namespace: {{{{ $podNamespace }}}}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  # Ingress only: the denied pods serve the control, and their egress stays whatever the probe's
+  # deny-all policy (or the cluster's default) makes it.
+  podSelector:
+    matchLabels:
+      alien.dev/cni-probe: {{{{ $name }}}}
+    matchExpressions:
+      - key: alien.dev/cni-role
+        operator: In
+        values: [denied, ingress-denied]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              alien.dev/cni-probe: {{{{ $name }}}}
+              alien.dev/cni-role: control
       ports:
         - protocol: TCP
           port: 8080
@@ -371,6 +478,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: PROBE_POD_NAMESPACE
+              value: {{{{ $podNamespace | quote }}}}
             - name: PROBE_JOB
               value: {{{{ $name | quote }}}}
             - name: PROBE_IMAGE
@@ -392,6 +501,7 @@ spec:
             - |
 {script}"#,
         job_deadline = probe_constant("JOB_DEADLINE_SECONDS"),
+        pod_namespace_value = pod_namespace_value,
         repository = PROBE_REPOSITORY,
         digest = PROBE_DIGEST,
     )

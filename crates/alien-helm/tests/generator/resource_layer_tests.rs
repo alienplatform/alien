@@ -1758,6 +1758,180 @@ fn an_unset_sandbox_namespace_keeps_every_sandbox_object_in_the_release_namespac
     );
 }
 
+fn probe_documents(sandbox_values: &str) -> Vec<serde_yaml::Value> {
+    let stack = Stack::new("probe-namespace".to_string())
+        .add(
+            Sandbox::new("agent".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu:24.04".to_string(),
+                    bundled_from: None,
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let chart = render(&stack, StackSettings::default());
+    let values = format!("sandbox:\n  clusterDNS:\n    - 10.100.0.10\n{sandbox_values}");
+    let rendered = super::test_utils::helm_template(&chart.files, Some(&values));
+    rendered.assert_ok("probe namespace render");
+    rendered_documents(&rendered)
+}
+
+fn probe_objects<'a>(
+    documents: &'a [serde_yaml::Value],
+    kind: &str,
+) -> Vec<&'a serde_yaml::Value> {
+    documents
+        .iter()
+        .filter(|document| {
+            document["kind"] == kind
+                && document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.contains("-sandbox-cni"))
+        })
+        .collect()
+}
+
+fn probe_env(documents: &[serde_yaml::Value], name: &str) -> serde_yaml::Value {
+    probe_objects(documents, "Job")[0]["spec"]["template"]["spec"]["containers"][0]["env"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|variable| variable["name"] == name)
+        .unwrap_or_else(|| panic!("the probe is given {name}"))
+        .clone()
+}
+
+/// Unset, the probe runs where it always has: one Role in the release namespace, every probe
+/// object there.
+#[test]
+fn the_probe_runs_in_the_release_namespace_without_a_sandbox_namespace() {
+    let documents = probe_documents("");
+    let release = probe_objects(&documents, "Job")[0]["metadata"]["namespace"].clone();
+    assert_eq!(probe_env(&documents, "PROBE_POD_NAMESPACE")["value"], release);
+    let roles = probe_objects(&documents, "Role");
+    assert_eq!(roles.len(), 1, "{roles:?}");
+    assert_eq!(roles[0]["metadata"]["namespace"], release);
+    assert_eq!(probe_objects(&documents, "RoleBinding").len(), 1);
+    for policy in probe_objects(&documents, "NetworkPolicy") {
+        assert_eq!(policy["metadata"]["namespace"], release, "{policy:?}");
+    }
+    for binding in probe_objects(&documents, "ValidatingAdmissionPolicyBinding") {
+        assert_eq!(
+            binding["spec"]["matchResources"]["namespaceSelector"]["matchLabels"]
+                ["kubernetes.io/metadata.name"],
+            release
+        );
+    }
+}
+
+/// Set, the probe's pods and policies run in the sandbox namespace, where sandboxes run. The
+/// runner keeps one read in the release namespace; its rights to pods and policies exist in the
+/// sandbox namespace only, and the admission policies are bound there.
+#[test]
+fn the_probe_runs_in_the_sandbox_namespace_with_the_narrowest_grant() {
+    let documents = probe_documents("  namespace: acme-sandboxes\n");
+    let release = probe_objects(&documents, "Job")[0]["metadata"]["namespace"].clone();
+    assert_ne!(release, "acme-sandboxes");
+    assert_eq!(
+        probe_env(&documents, "PROBE_POD_NAMESPACE")["value"],
+        "acme-sandboxes"
+    );
+    assert_eq!(
+        probe_env(&documents, "PROBE_NAMESPACE")["valueFrom"]["fieldRef"]["fieldPath"],
+        "metadata.namespace"
+    );
+    let rights = |namespace: &str| -> Vec<String> {
+        probe_objects(&documents, "Role")
+            .into_iter()
+            .filter(|role| role["metadata"]["namespace"] == namespace)
+            .flat_map(|role| role["rules"].as_sequence().unwrap().clone())
+            .map(|rule| {
+                format!(
+                    "{}:{}:{}",
+                    rule["resources"][0].as_str().unwrap(),
+                    rule["verbs"]
+                        .as_sequence()
+                        .unwrap()
+                        .iter()
+                        .map(|verb| verb.as_str().unwrap())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    rule["resourceNames"].as_sequence().map_or(0, |names| names.len()),
+                )
+            })
+            .collect()
+    };
+    let release_name = release.as_str().unwrap().to_string();
+    assert_eq!(rights(&release_name), vec!["jobs:get:1"]);
+    let sandbox_rights = rights("acme-sandboxes");
+    assert_eq!(
+        sandbox_rights
+            .iter()
+            .map(|right| right.split(':').take(2).collect::<Vec<_>>().join(":"))
+            .collect::<Vec<_>>(),
+        vec!["pods:create", "pods:get,delete", "networkpolicies:create", "networkpolicies:get,delete"]
+    );
+    let bindings = probe_objects(&documents, "RoleBinding");
+    assert_eq!(bindings.len(), 2);
+    for binding in bindings {
+        assert_eq!(binding["subjects"][0]["namespace"], release);
+    }
+    // Policies for the probe's pods live next to them; the runner's own policy stays with the runner.
+    for policy in probe_objects(&documents, "NetworkPolicy") {
+        let name = policy["metadata"]["name"].as_str().unwrap();
+        let expected = if name.ends_with("-runner") { release.as_str().unwrap() } else { "acme-sandboxes" };
+        assert_eq!(policy["metadata"]["namespace"], expected, "{name}");
+    }
+    for binding in probe_objects(&documents, "ValidatingAdmissionPolicyBinding") {
+        assert_eq!(
+            binding["spec"]["matchResources"]["namespaceSelector"]["matchLabels"]
+                ["kubernetes.io/metadata.name"],
+            "acme-sandboxes"
+        );
+    }
+    assert!(probe_objects(&documents, "ClusterRole").is_empty());
+}
+
+/// The denied pods serve the control, so under default-deny networking they admit ingress from
+/// the control alone, and only the control gains egress to them.
+#[test]
+fn only_the_control_reaches_the_denied_pods() {
+    let documents = probe_documents("");
+    let policy = |suffix: &str| {
+        probe_objects(&documents, "NetworkPolicy")
+            .into_iter()
+            .find(|policy| policy["metadata"]["name"].as_str().unwrap().ends_with(suffix))
+            .unwrap_or_else(|| panic!("{suffix}"))
+            .clone()
+    };
+    let ingress = policy("-denied-ingress");
+    assert_eq!(ingress["spec"]["policyTypes"], serde_yaml::from_str::<serde_yaml::Value>("[Ingress]").unwrap());
+    assert_eq!(
+        ingress["spec"]["ingress"][0]["from"][0]["podSelector"]["matchLabels"]["alien.dev/cni-role"],
+        "control"
+    );
+    let control = policy("-control");
+    assert_eq!(control["spec"]["policyTypes"], serde_yaml::from_str::<serde_yaml::Value>("[Egress]").unwrap());
+    assert_eq!(control["spec"]["podSelector"]["matchLabels"]["alien.dev/cni-role"], "control");
+    // No policy other than the deny-all one gives the denied pods any egress.
+    for other in probe_objects(&documents, "NetworkPolicy") {
+        let selects_denied = other["spec"]["podSelector"]["matchExpressions"]
+            .as_sequence()
+            .is_some_and(|expressions| {
+                expressions.iter().any(|e| e["operator"] == "In" && e["values"].as_sequence().is_some_and(|v| v.iter().any(|x| x == "denied")))
+            });
+        if selects_denied {
+            assert_eq!(other["spec"]["policyTypes"], serde_yaml::from_str::<serde_yaml::Value>("[Ingress]").unwrap());
+        }
+    }
+}
+
 /// Set, sandbox pods, their policy and the operator's rights to them live in the administrator's
 /// namespace; callers are still selected in the release namespace; the chart creates no
 /// Namespace and no ClusterRole for it.
@@ -1784,7 +1958,11 @@ fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
     let role = documents
         .iter()
         .find(|document| {
-            document["kind"] == "Role" && document["metadata"]["namespace"] == "acme-sandboxes"
+            document["kind"] == "Role"
+                && document["metadata"]["namespace"] == "acme-sandboxes"
+                && document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox"))
         })
         .expect("a Role in the sandbox namespace");
     for rule in role["rules"].as_sequence().unwrap() {
@@ -1821,6 +1999,9 @@ fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
         .find(|document| {
             document["kind"] == "RoleBinding"
                 && document["metadata"]["namespace"] == "acme-sandboxes"
+                && document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.ends_with("-sandbox"))
         })
         .expect("a RoleBinding in the sandbox namespace");
     assert_eq!(binding["subjects"][0]["namespace"], "default");
