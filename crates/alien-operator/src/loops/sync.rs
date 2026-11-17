@@ -581,6 +581,7 @@ async fn sync_with_manager(
             if let Some(mut local_state) = state.db.get_deployment_state().await? {
                 if apply_manager_control_signals(&mut local_state, &manager_state) {
                     state.db.set_deployment_state(&local_state).await?;
+                    state.db.request_deployment();
                     state_hydrated = true;
                     info!("Applied deployment control signals from manager");
                 }
@@ -590,11 +591,13 @@ async fn sync_with_manager(
             .is_none_or(is_uninitialized_deployment_state)
         {
             state.db.set_deployment_state(&manager_state).await?;
+            state.db.request_deployment();
             state_hydrated = true;
             info!("Hydrated deployment state from manager");
         } else if let Some(mut local_state) = local_state {
             if apply_manager_control_state(&mut local_state, &manager_state) {
                 state.db.set_deployment_state(&local_state).await?;
+                state.db.request_deployment();
                 state_hydrated = true;
                 info!("Applied deployment control state from manager");
             } else {
@@ -1031,6 +1034,8 @@ pub(crate) async fn accept_target(
         .db
         .set_deployment_config(&target_deployment.config)
         .await?;
+    // Written last: the loop reads the config together with the target.
+    state.db.request_deployment();
 
     // Handle deployment approval if required. A refresh changes nothing that
     // was not already approved.
@@ -2449,6 +2454,88 @@ mod tests {
             DeploymentStatus::DeletePending
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_held_deployment_still_reports_its_status_to_the_manager() {
+        for status in [
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::RetentionRequired,
+            DeploymentStatus::Retained,
+            DeploymentStatus::TeardownFailed,
+        ] {
+            let data_dir = tempfile::tempdir().unwrap();
+            let db = Arc::new(
+                OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                    .await
+                    .unwrap(),
+            );
+            db.set_deployment_id("dep_held").await.unwrap();
+            db.set_deployment_state(&DeploymentState {
+                platform: Platform::Local,
+                status,
+                current_release: None,
+                target_release: None,
+                stack_state: None,
+                runtime_metadata: None,
+                error: None,
+                environment_info: None,
+                retry_requested: false,
+                protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            })
+            .await
+            .unwrap();
+            let captured = Arc::new(Mutex::new(None));
+            let request_capture = captured.clone();
+            let app = Router::new().route(
+                "/v1/sync",
+                post(move |Json(body): Json<Value>| {
+                    *request_capture.lock().unwrap() = Some(body);
+                    async move { Json(json!({})) }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await });
+            let state = OperatorState {
+                config: OperatorConfig::builder()
+                    .platform(Platform::Local)
+                    .data_dir(data_dir.path().to_str().unwrap())
+                    .encryption_key(TEST_ENCRYPTION_KEY)
+                    .build(),
+                db,
+                service_provider: None,
+                operations_sync_handler: None,
+                pod_log_collection: false,
+                cancel: CancellationToken::new(),
+            };
+            // The deployment loop holds in this status; the sync loop reports it.
+            super::super::deployment::run_deployment_continuously(&state)
+                .await
+                .unwrap();
+            sync_with_manager(
+                &state,
+                &create_authenticated_client("fake-token").unwrap(),
+                &url,
+                false,
+                None,
+            )
+            .await
+            .unwrap();
+            let request = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("manager was contacted");
+            assert_eq!(
+                request["currentState"]["status"],
+                serde_json::to_value(status).unwrap(),
+                "{status:?}"
+            );
+            server.abort();
+        }
     }
 
     struct SyncFixture {

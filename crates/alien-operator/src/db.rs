@@ -152,6 +152,9 @@ pub struct Approval {
 pub struct OperatorDb {
     conn: Arc<Mutex<Connection>>,
     sync_requested: tokio::sync::Notify,
+    /// Wakes the deployment loop when something other than that loop changed
+    /// what it has to do.
+    deployment_requested: tokio::sync::Notify,
     pub(crate) daily_identity_operation: Arc<Mutex<()>>,
     pub(crate) published_runtime_credentials:
         Mutex<std::collections::HashMap<String, crate::daily_identity::PublishedCapability>>,
@@ -366,6 +369,7 @@ impl OperatorDb {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             sync_requested: tokio::sync::Notify::new(),
+            deployment_requested: tokio::sync::Notify::new(),
             daily_identity_operation: Arc::new(Mutex::new(())),
             published_runtime_credentials: Mutex::new(std::collections::HashMap::new()),
             runtime_credentials: Mutex::new(std::collections::HashMap::new()),
@@ -589,6 +593,16 @@ impl OperatorDb {
 
     pub(crate) async fn wait_for_sync(&self) {
         self.sync_requested.notified().await;
+    }
+
+    /// Wake the deployment loop: a target, an approval decision or a retry
+    /// request arrived, so it must not wait out its hold interval.
+    pub(crate) fn request_deployment(&self) {
+        self.deployment_requested.notify_one();
+    }
+
+    pub(crate) async fn wait_for_deployment(&self) {
+        self.deployment_requested.notified().await;
     }
 
     /// Save an observation only if no deployment step changed its source state.
@@ -1431,6 +1445,8 @@ impl OperatorDb {
         .context(ErrorData::DatabaseError {
             message: "Failed to update approval".to_string(),
         })?;
+        drop(conn);
+        self.request_deployment();
 
         Ok(())
     }

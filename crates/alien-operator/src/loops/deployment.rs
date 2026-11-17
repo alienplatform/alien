@@ -208,6 +208,15 @@ fn bind_setup_authorization(
 /// 4. OperatorTransport persists state and re-reads config after each step
 /// 5. Sync loop will pick up changes and report to manager
 pub async fn run_deployment_loop(state: Arc<OperatorState>) {
+    run_deployment_loop_observed(state, |_| {}).await
+}
+
+/// [`run_deployment_loop`], calling `after_pass` with the wait it chose after
+/// every pass.
+async fn run_deployment_loop_observed(
+    state: Arc<OperatorState>,
+    mut after_pass: impl FnMut(Duration),
+) {
     let interval = Duration::from_secs(state.config.deployment_interval_seconds);
 
     info!(
@@ -215,16 +224,59 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
         "Starting deployment loop"
     );
 
+    let mut hold = HoldBackoff::default();
     loop {
-        let delay = run_deployment_pass(&state, interval).await;
+        let delay = run_deployment_pass(&state, interval, &mut hold).await;
+        after_pass(delay);
 
         tokio::select! {
             _ = tokio::time::sleep(delay) => {},
+            // A target, an approval decision or a retry request is a reason to
+            // act now, whatever the hold interval.
+            _ = state.db.wait_for_deployment() => hold.reset(),
             _ = state.cancel.cancelled() => {
                 info!("Deployment loop shutting down");
                 return;
             }
         }
+    }
+}
+
+/// First wait of a deployment that holds in a status with nothing to do.
+const HOLD_FLOOR: Duration = Duration::from_secs(5);
+/// Longest wait of a held deployment.
+const HOLD_CAP: Duration = Duration::from_secs(60);
+
+/// Statuses where the Operator has nothing left to do: the deployment waits for
+/// something outside this loop (the manager's setup teardown, a retry request, a
+/// new target). The Delete operation ends the pass in each at once, without a
+/// step (`classify_status`), or with the status's no-op handler.
+fn is_hold_status(status: DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::TeardownRequired
+            | DeploymentStatus::RetentionRequired
+            | DeploymentStatus::Retained
+            | DeploymentStatus::TeardownFailed
+    )
+}
+
+/// How long the loop waits between passes while the deployment holds: 5 s,
+/// doubling to 60 s, back to 5 s after a wake.
+#[derive(Debug, Default)]
+pub(crate) struct HoldBackoff {
+    next: Option<Duration>,
+}
+
+impl HoldBackoff {
+    fn next_delay(&mut self) -> Duration {
+        let delay = self.next.unwrap_or(HOLD_FLOOR);
+        self.next = Some((delay * 2).min(HOLD_CAP));
+        delay
+    }
+
+    fn reset(&mut self) {
+        self.next = None;
     }
 }
 
@@ -246,8 +298,12 @@ fn outcome_changed(outcome: &str) -> bool {
 
 /// One pass of the deployment loop. Returns how long the loop waits before the
 /// next pass: the step's requested delay, never less than `interval`.
-async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Duration {
-    match run_deployment_continuously(state).await {
+async fn run_deployment_pass(
+    state: &OperatorState,
+    interval: Duration,
+    hold: &mut HoldBackoff,
+) -> Duration {
+    let delay = match run_deployment_continuously(state).await {
         Ok((steps, suggested_delay)) => {
             if steps > 0 {
                 // A running deployment takes a health step every pass; the
@@ -259,6 +315,13 @@ async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Durat
         Err(e) => {
             error!(error = %e, "Deployment failed");
             interval
+        }
+    };
+    match state.db.get_deployment_state().await {
+        Ok(Some(current)) if is_hold_status(current.status) => delay.max(hold.next_delay()),
+        _ => {
+            hold.reset();
+            delay
         }
     }
 }
@@ -322,12 +385,16 @@ pub(crate) async fn run_deployment_continuously(
         "Found target release to deploy"
     );
 
+    // The delete-side statuses run the Delete operation, which ends the pass at
+    // once in the four hold statuses (see `is_hold_status`): as Deploy they are
+    // not terminal and the step loop would spin on them.
     let operation = if matches!(
         current.status,
         alien_core::DeploymentStatus::DeletePending
             | alien_core::DeploymentStatus::Deleting
             | alien_core::DeploymentStatus::DeleteFailed
-    ) {
+    ) || is_hold_status(current.status)
+    {
         LoopOperation::Delete
     } else {
         LoopOperation::Deploy
@@ -1165,6 +1232,118 @@ mod tests {
         StackSettings, StorageBinding,
     };
     use std::collections::HashMap;
+
+    fn held_state(status: DeploymentStatus) -> DeploymentState {
+        let release = alien_core::ReleaseInfo {
+            release_id: Some("rel_held".into()),
+            version: None,
+            description: None,
+            stack: alien_core::Stack::new("held".into()).build(),
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        DeploymentState {
+            platform: Platform::Local,
+            status,
+            current_release: Some(release.clone()),
+            target_release: Some(release),
+            stack_state: None,
+            runtime_metadata: None,
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    async fn held_operator(status: DeploymentStatus) -> (tempfile::TempDir, Arc<OperatorState>) {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(
+                directory.path().to_str().unwrap(),
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .await
+            .unwrap(),
+        );
+        db.set_deployment_id("dep_held").await.unwrap();
+        db.set_deployment_state(&held_state(status)).await.unwrap();
+        db.set_deployment_config(&test_deployment_config())
+            .await
+            .unwrap();
+        let state = Arc::new(OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(directory.path().to_str().unwrap())
+                .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+                .build(),
+            db,
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        });
+        (directory, state)
+    }
+
+    const HOLD_STATUSES: [DeploymentStatus; 4] = [
+        DeploymentStatus::TeardownRequired,
+        DeploymentStatus::RetentionRequired,
+        DeploymentStatus::Retained,
+        DeploymentStatus::TeardownFailed,
+    ];
+
+    #[tokio::test]
+    async fn a_hold_status_pass_runs_no_step_and_changes_nothing() {
+        for status in HOLD_STATUSES {
+            let (_directory, state) = held_operator(status).await;
+            let before = state.db.get_deployment_state().await.unwrap().unwrap();
+            let (steps, _) = run_deployment_continuously(&state).await.unwrap();
+            assert_eq!(steps, 0, "{status:?} must not step");
+            let after = state.db.get_deployment_state().await.unwrap().unwrap();
+            assert_eq!(
+                serde_json::to_value(&before).unwrap(),
+                serde_json::to_value(&after).unwrap(),
+                "{status:?} must not change"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_held_deployment_backs_off_for_ten_minutes_and_a_wake_ends_the_wait() {
+        for status in HOLD_STATUSES {
+            let (_directory, state) = held_operator(status).await;
+            let waits = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+            let observed = Arc::clone(&waits);
+            let task = tokio::spawn(run_deployment_loop_observed(
+                Arc::clone(&state),
+                move |delay| observed.lock().unwrap().push(delay),
+            ));
+
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            let passes = waits.lock().unwrap().len();
+            // 5, 10, 20, 40 s then 60 s: about 13 passes in ten minutes (a 1 s
+            // interval ran 600, each with up to 100 steps).
+            assert!(
+                (10..=15).contains(&passes),
+                "{status:?}: {passes} passes in ten simulated minutes"
+            );
+            assert_eq!(
+                waits.lock().unwrap()[..5],
+                [5, 10, 20, 40, 60].map(Duration::from_secs),
+                "{status:?}"
+            );
+
+            // A wake is handled at once, and the wait starts again at 5 s.
+            state.db.request_deployment();
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            let waits = waits.lock().unwrap();
+            assert_eq!(waits.len(), passes + 1, "{status:?}: wake runs a pass");
+            assert_eq!(*waits.last().unwrap(), Duration::from_secs(5), "{status:?}");
+            state.cancel.cancel();
+            task.await.unwrap();
+        }
+    }
 
     fn test_deployment_config() -> DeploymentConfig {
         DeploymentConfig {
@@ -2609,6 +2788,7 @@ mod tests {
             "the loop interval must be shorter than the poll delay for this test to mean anything"
         );
 
+        let mut hold = HoldBackoff::default();
         let mut waited = Duration::ZERO;
         let mut passes = 0;
         let failed = loop {
@@ -2621,7 +2801,7 @@ mod tests {
                 "deployment never failed; status {:?} after {passes} passes",
                 current.status
             );
-            waited += run_deployment_pass(&state, interval).await;
+            waited += run_deployment_pass(&state, interval, &mut hold).await;
             passes += 1;
         };
 
