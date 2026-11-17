@@ -68,6 +68,29 @@ pub fn gateway_image_serves_admin_protocol(image: &str) -> bool {
     !is_pinned_to(image, NO_ADMIN_PROTOCOL_GATEWAY_DIGESTS)
 }
 
+/// The gateway image this release installs for an internet sandbox.
+pub const SANDBOX_EGRESS_GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
+
+/// The refusal for an Azure internet sandbox while the installed gateway image predates the
+/// admin protocol. Build, template and deployment checks all give this text.
+pub const AZURE_INTERNET_SANDBOX_UNAVAILABLE: &str = "Azure internet sandboxes are not available in this release. Use egress none or deny, or deploy the sandbox on another cloud.";
+
+/// The gateway image this release installs for the stack: the image on the stack's gateway
+/// Container when preparation has already added it, otherwise the one the gateway mutation
+/// will install. Build-time checks see the stack before the mutation ran, so they read the
+/// constant; deployment-time checks read the Container. Both name the same value.
+pub fn planned_gateway_image(stack: &Stack) -> &str {
+    stack
+        .resources
+        .get(SANDBOX_EGRESS_GATEWAY_ID)
+        .and_then(|entry| entry.config.downcast_ref::<crate::Container>())
+        .and_then(|gateway| match &gateway.code {
+            crate::ContainerCode::Image { image } => Some(image.as_str()),
+            _ => None,
+        })
+        .unwrap_or(SANDBOX_EGRESS_GATEWAY_IMAGE)
+}
+
 /// Whether preflight installed the managed gateway for this deployment.
 pub fn has_sandbox_gateway(stack: &Stack) -> bool {
     stack

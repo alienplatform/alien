@@ -259,19 +259,16 @@ impl DeploymentPrerequisiteCheck for AzureInternetSandboxGatewayProtocolCheck {
         _state: &StackState,
         _config: &DeploymentConfig,
     ) -> Result<CheckResult> {
-        let image = stack
-            .resources
-            .get(alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_ID)
-            .and_then(|entry| entry.config.downcast_ref::<Container>())
-            .and_then(|gateway| match &gateway.code {
-                alien_core::ContainerCode::Image { image } => Some(image.as_str()),
-                _ => None,
-            });
-        match image {
-            Some(image) if !alien_core::sandbox_egress::gateway_image_serves_admin_protocol(image) => {
-                Ok(CheckResult::failed(vec!["Azure internet sandboxes are not available in this release. Use egress none or deny, or deploy the sandbox on another cloud.".into()]))
-            }
-            _ => Ok(CheckResult::success()),
+        // The gateway mutation always installs this Container for an Azure internet sandbox, so
+        // the planned image is the one setup will run. If the Container were missing, the
+        // image this release installs is the fallback: the check never passes unread.
+        let image = alien_core::sandbox_egress::planned_gateway_image(stack);
+        if alien_core::sandbox_egress::gateway_image_serves_admin_protocol(image) {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(vec![
+                alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE.into(),
+            ]))
         }
     }
 }
