@@ -216,7 +216,7 @@ async fn application_gateway_reports_a_real_healthy_backend(
     });
     ctx.gateway_name = Some(gateway_name.clone());
     ctx.gateway
-        .create_or_update_application_gateway(&ctx.resource_group, &gateway_name, &gateway)
+        .create_or_update_application_gateway(&ctx.resource_group, &gateway_name, &gateway, None)
         .await?
         .wait_for_operation_completion(&ctx.operations, "CreateApplicationGateway", &gateway_name)
         .await?;

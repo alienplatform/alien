@@ -42,7 +42,7 @@ fn network_left_to_runtime<'a>(ctx: &EmitContext<'a>) -> Option<&'a Network> {
     (!alien_core::emits_package_scaffolding(
         entry,
         ctx.stack_settings.setup_management,
-        Platform::Aws,
+        alien_core::SetupTarget::from_cloud(Platform::Aws, ctx.targets_kubernetes),
     ))
     .then(|| entry.config.downcast_ref::<Network>())
     .flatten()

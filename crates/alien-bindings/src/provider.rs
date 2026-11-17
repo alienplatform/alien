@@ -2017,7 +2017,10 @@ impl BindingsProviderApi for BindingsProvider {
         let binding: SandboxBinding = self.parse_binding(binding_name, "sandbox")?;
 
         let gateway = binding.egress().and_then(|value| value.gateway());
+        // Google Cloud's `internet` is the platform's own open outbound, with no gateway of ours;
+        // AWS and Azure declare it only together with a gateway.
         if gateway.is_none()
+            && !matches!(binding, SandboxBinding::GcpAgentPlatform(_))
             && binding
                 .egress()
                 .is_some_and(|egress| *egress.declaration() == alien_core::SandboxEgress::Internet)
@@ -2699,6 +2702,56 @@ mod tests {
                 .await
                 .expect("legacy boolean binding loads without a gateway");
         }
+    }
+
+    /// The controller and the Terraform emitter write `egress: Policy(Internet)` with no gateway
+    /// for a Google Cloud sandbox. The binding must load, and a runtime allowlist must be refused
+    /// with its own code, not the gateway-outage one.
+    #[cfg(feature = "gcp")]
+    #[tokio::test]
+    async fn a_gcp_internet_binding_without_a_gateway_loads() {
+        let mut binding = alien_core::SandboxBinding::gcp_agent_platform(
+            "projects/example/locations/us-central1/reasoningEngines/1",
+            "projects/example/locations/us-central1/sandboxEnvironmentTemplates/1",
+            "us-central1",
+            None,
+            true,
+        );
+        let alien_core::SandboxBinding::GcpAgentPlatform(inner) = &mut binding else {
+            unreachable!()
+        };
+        inner.egress = Some(alien_core::SandboxEgress::Internet.into());
+        let provider = BindingsProvider::new(
+            alien_core::ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+                project_id: "example".into(),
+                region: "us-central1".into(),
+                credentials: alien_core::GcpCredentials::AccessToken {
+                    token: "test-token".into(),
+                },
+                service_overrides: None,
+                project_number: None,
+            })),
+            HashMap::from([("box".into(), serde_json::to_value(binding).unwrap())]),
+        )
+        .unwrap();
+        let sandbox = provider
+            .load_sandbox("box")
+            .await
+            .expect("an internet-declared Google Cloud binding loads");
+        let error = sandbox
+            .update_egress(
+                "existing",
+                alien_core::EgressPolicy::Allow {
+                    allow: vec!["api.example.com".into()],
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "SANDBOX_EGRESS_ALLOWLIST_UNSUPPORTED");
+        sandbox
+            .update_egress("existing", alien_core::EgressPolicy::Internet)
+            .await
+            .expect("internet equals the declaration");
     }
 
     /// The image in the binding has to be the image the provider uses.

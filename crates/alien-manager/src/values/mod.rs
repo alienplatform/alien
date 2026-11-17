@@ -34,7 +34,8 @@ pub use limiter::VerifyLimiter;
 pub use standalone::StandaloneValueAccess;
 pub use state::HeldValues;
 pub use types::{
-    ScopeKind, SlotSelection, StoredValue, ValueKind, ValueMeta, ValueScope, ValueSlot, MAX_VALUE_BYTES,
+    ScopeKind, SlotSelection, StoredValue, ValueKind, ValueMeta, ValueScope, ValueSlot,
+    MAX_VALUE_BYTES,
 };
 
 use std::collections::HashMap;
@@ -461,7 +462,9 @@ fn transfer_key(from: &ValueScope, to: &ValueScope, claim_id: &str) -> String {
 /// It is a separate hash, so it is not under the transfer's marker prefix.
 fn set_complete_key(transfer: &str) -> String {
     use sha2::{Digest, Sha256};
-    hex::encode(Sha256::digest(format!("{transfer}|markers-complete").as_bytes()))
+    hex::encode(Sha256::digest(
+        format!("{transfer}|markers-complete").as_bytes(),
+    ))
 }
 
 /// Names the marker of one slot of a finished transfer.
@@ -579,7 +582,12 @@ mod tests {
         let (_dir, store) = kv_store().await;
         let (link, dep) = (scope("link:lnk_1"), scope("dep:dep_1"));
         store
-            .put(&link, &slot("input:key"), ValueKind::Secret, "\"s3\"".into())
+            .put(
+                &link,
+                &slot("input:key"),
+                ValueKind::Secret,
+                "\"s3\"".into(),
+            )
             .await
             .unwrap();
         store
@@ -588,7 +596,12 @@ mod tests {
             .unwrap();
         // Another link's values are not touched.
         store
-            .put(&scope("link:lnk_2"), &slot("env:A"), ValueKind::Plain, "other".into())
+            .put(
+                &scope("link:lnk_2"),
+                &slot("env:A"),
+                ValueKind::Plain,
+                "other".into(),
+            )
             .await
             .unwrap();
 
@@ -608,12 +621,20 @@ mod tests {
         let (_dir, store) = kv_store().await;
         let link = scope("link:lnk_1");
         store
-            .put(&link, &slot("input:key"), ValueKind::Secret, "\"s3\"".into())
+            .put(
+                &link,
+                &slot("input:key"),
+                ValueKind::Secret,
+                "\"s3\"".into(),
+            )
             .await
             .unwrap();
         for dep in ["dep:dep_1", "dep:dep_2"] {
             let dep = scope(dep);
-            let copied = store.copy_scope(&link, &dep, &format!("c-{dep}")).await.unwrap();
+            let copied = store
+                .copy_scope(&link, &dep, &format!("c-{dep}"))
+                .await
+                .unwrap();
             assert_eq!(copied.len(), 1);
             let held = store.list(&dep).await.unwrap();
             assert_eq!(held[0].value, "\"s3\"");
@@ -628,7 +649,12 @@ mod tests {
         let (_dir, store) = kv_store().await;
         let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
         store
-            .put(&reg, &slot("env:A"), ValueKind::Plain, "from-registration".into())
+            .put(
+                &reg,
+                &slot("env:A"),
+                ValueKind::Plain,
+                "from-registration".into(),
+            )
             .await
             .unwrap();
         store.move_scope(&reg, &dep, "c1").await.unwrap();
@@ -646,7 +672,12 @@ mod tests {
             .unwrap();
         store.move_scope(&reg, &dep, "c2").await.unwrap();
         assert_eq!(
-            store.get(&dep, &slot("env:A")).await.unwrap().unwrap().value,
+            store
+                .get(&dep, &slot("env:A"))
+                .await
+                .unwrap()
+                .unwrap()
+                .value,
             "edited"
         );
         assert!(store.list(&reg).await.unwrap().is_empty());
@@ -758,10 +789,14 @@ mod tests {
         }
     }
 
-    async fn crashing_store(allowed: usize) -> (tempfile::TempDir, Arc<CrashingDeletes>, ValueStore) {
+    async fn crashing_store(
+        allowed: usize,
+    ) -> (tempfile::TempDir, Arc<CrashingDeletes>, ValueStore) {
         alien_deployment::set_ephemeral_secrets_digest_key();
         let dir = tempfile::tempdir().unwrap();
-        let kv = LocalKv::single_process(dir.path().join("kv")).await.unwrap();
+        let kv = LocalKv::single_process(dir.path().join("kv"))
+            .await
+            .unwrap();
         let backend = Arc::new(CrashingDeletes {
             inner: sealed_backend(Arc::new(kv)).1,
             allowed: std::sync::atomic::AtomicUsize::new(allowed),
@@ -826,7 +861,12 @@ mod tests {
         assert_eq!(kept.value, "new");
         assert!(store.get(&reg, &slot("env:B")).await.unwrap().is_none());
         assert_eq!(
-            store.get(&dep, &slot("env:B")).await.unwrap().unwrap().value,
+            store
+                .get(&dep, &slot("env:B"))
+                .await
+                .unwrap()
+                .unwrap()
+                .value,
             "old"
         );
     }
@@ -853,7 +893,10 @@ mod tests {
         assert_eq!(names, ["env:A", "env:B"]);
         assert!(store.list(&reg).await.unwrap().is_empty());
         // A further retry still reports both.
-        assert_eq!(store.move_scope(&reg, &dep, "claim").await.unwrap().len(), 2);
+        assert_eq!(
+            store.move_scope(&reg, &dep, "claim").await.unwrap().len(),
+            2
+        );
     }
 
     /// A backend whose prefix reads are eventually consistent while `stale` is
@@ -895,7 +938,9 @@ mod tests {
         use std::sync::atomic::Ordering;
         alien_deployment::set_ephemeral_secrets_digest_key();
         let dir = tempfile::tempdir().unwrap();
-        let kv = LocalKv::single_process(dir.path().join("kv")).await.unwrap();
+        let kv = LocalKv::single_process(dir.path().join("kv"))
+            .await
+            .unwrap();
         let backend = Arc::new(StalePrefixReads {
             inner: sealed_backend(Arc::new(kv)).1,
             stale: std::sync::atomic::AtomicBool::new(true),
@@ -912,12 +957,18 @@ mod tests {
         assert_eq!(held.len(), 3);
         // Every slot was copied before the source was emptied.
         for name in ["env:A", "env:B", "env:C"] {
-            assert!(store.get(&dep, &slot(name)).await.unwrap().is_some(), "{name}");
+            assert!(
+                store.get(&dep, &slot(name)).await.unwrap().is_some(),
+                "{name}"
+            );
         }
         assert!(store.list(&reg).await.unwrap().is_empty());
         // A retry reads the markers consistently and never deletes an uncopied source.
         backend.stale.store(false, Ordering::SeqCst);
-        assert_eq!(store.move_scope(&reg, &dep, "claim").await.unwrap().len(), 3);
+        assert_eq!(
+            store.move_scope(&reg, &dep, "claim").await.unwrap().len(),
+            3
+        );
     }
 
     #[tokio::test]
@@ -947,7 +998,12 @@ mod tests {
         let (reg, dep) = (scope("reg:reg_1"), scope("dep:dep_1"));
         for i in 0..200 {
             store
-                .put(&reg, &slot(&format!("env:V{i}")), ValueKind::Plain, "old".into())
+                .put(
+                    &reg,
+                    &slot(&format!("env:V{i}")),
+                    ValueKind::Plain,
+                    "old".into(),
+                )
                 .await
                 .unwrap();
         }
@@ -957,7 +1013,12 @@ mod tests {
             tokio::spawn(async move {
                 for i in 0..200 {
                     store
-                        .put(&reg, &slot(&format!("env:V{i}")), ValueKind::Plain, "new".into())
+                        .put(
+                            &reg,
+                            &slot(&format!("env:V{i}")),
+                            ValueKind::Plain,
+                            "new".into(),
+                        )
                         .await
                         .unwrap();
                     tokio::task::yield_now().await;
@@ -976,7 +1037,11 @@ mod tests {
             assert!(in_reg.is_some() || in_dep.is_some(), "slot {i} was lost");
             if in_reg.is_none() {
                 // Moved out whole: the write came first and was carried over.
-                assert_eq!(in_dep.as_deref(), Some("new"), "slot {i} lost its newer value");
+                assert_eq!(
+                    in_dep.as_deref(),
+                    Some("new"),
+                    "slot {i} lost its newer value"
+                );
             }
         }
     }
