@@ -60,8 +60,10 @@ SCRIPT_BUDGET_SECONDS = 595
 RUNNER_START_SECONDS = 30
 BUDGET_MARGIN_SECONDS = 30
 JOB_DEADLINE_SECONDS = 655
-# Each client pod's own deadline, counted by the kubelet from the pod's start.
-POD_DEADLINE_SECONDS = 240
+# Every probe pod's own deadline (counted by the kubelet from the pod's start). The listener must
+# outlive every later control, so each pod gets the whole run's budget: the script's own deadline
+# ends the run, never a pod's.
+POD_DEADLINE_SECONDS = SCRIPT_BUDGET_SECONDS
 
 
 def client_code(url, marker):
@@ -199,9 +201,14 @@ def replace_object(request, path, resource, deadline, now=time.monotonic, sleep=
 
 
 def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hint,
-                 now=time.monotonic, sleep=time.sleep, out=print):
-    """Wait for a pod to satisfy `predicate`, recreating it once if the runtime failed to start it."""
-    first_seen = now()
+                 now=time.monotonic, sleep=time.sleep, out=print, created_at=None):
+    """Wait for a pod to satisfy `predicate`, recreating it once if the runtime failed to start it.
+
+    `created_at` is the time the pod was created (same clock as `now`). Pods of a stage are
+    created together and waited for one by one, so a pod's stuck time counts from its creation,
+    not from when this wait began.
+    """
+    first_seen = now() if created_at is None else created_at
     recreated = False
     current = {}
     while now() < deadline:
@@ -302,6 +309,8 @@ def main():
         "HTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
     )
 
+    created_at = {}
+
     def create(path, resource):
         resource["metadata"]["ownerReferences"] = owner_ref
         name = resource["metadata"]["name"]
@@ -313,6 +322,7 @@ def main():
                 raise
             # A previous run's object with the same fixed name; replace it.
             result = replace_object(request, path, resource, deadline)
+        created_at[name] = time.monotonic()
         track(path + "/" + result["metadata"]["name"])
         return result
 
@@ -323,6 +333,7 @@ def main():
     def recreate(role):
         resource = specs[prefix + "-" + role]
         result = replace_object(request, pods, resource, deadline)
+        created_at[prefix + "-" + role] = time.monotonic()
         track(pods + "/" + result["metadata"]["name"])
         return result
 
@@ -364,7 +375,7 @@ def main():
 
     def wait(role, predicate):
         return wait_for_pod(request, pods, prefix, role, predicate, deadline,
-                            recreate, FIX_HINT)
+                            recreate, FIX_HINT, created_at=created_at.get(prefix + "-" + role))
 
     # Pod and NetworkPolicy creation are confined by admission policies for this account.
     # Refuse to run unless each one rejects a request it must reject, with its own message.

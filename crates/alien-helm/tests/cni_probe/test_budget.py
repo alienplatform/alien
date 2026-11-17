@@ -44,6 +44,11 @@ class Budget(unittest.TestCase):
         self.assertGreaterEqual(
             probe.POD_DEADLINE_SECONDS, probe.POD_START_SECONDS + probe.RECOVER_RUN_SECONDS)
 
+    def test_every_probe_pod_outlives_the_whole_run(self):
+        # The listener serves every later control; a pod deadline below the script's would let
+        # the kubelet end it while controls still run.
+        self.assertGreaterEqual(probe.POD_DEADLINE_SECONDS, probe.SCRIPT_BUDGET_SECONDS)
+
     def test_a_pod_stuck_on_a_runtime_error_is_recreated_within_the_budgeted_bound(self):
         self.assertLessEqual(probe.START_BOUND_SECONDS, 45)
 
