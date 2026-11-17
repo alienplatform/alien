@@ -1,11 +1,13 @@
 //! Render every setup template of a protected stack, the way a signed release records them.
 //!
-//! `alien release` signs the digest of each template in
-//! [`alien_signing::release::SETUP_TEMPLATES`] together with the parameters a customer may
-//! choose, and the service that hosts the templates renders them again for installs. Both
-//! must produce the same bytes, so [`render_setup_templates`] depends only on its inputs: the
-//! stack, its signing settings, the emitter registries and the hosting options, rendered by
-//! the alien version that is running. It reads no environment, clock, or cloud.
+//! The service that hosts the templates renders them for installs, and `verify` renders them
+//! again from the signed stack to check what an install holds. Both must produce the same
+//! bytes, so [`render_setup_templates`] depends only on its inputs: the stack, its signing
+//! settings, the emitter registries, the hosting options and the renderer version, rendered
+//! by the alien version that is running. It reads no environment, clock, or cloud.
+//!
+//! Every protected template records the renderer version and the hosting inputs it was
+//! rendered with ([`SetupRecord`]), where `verify` can read them from the install.
 
 use std::collections::BTreeMap;
 
@@ -23,11 +25,10 @@ use alien_core::{
 use alien_error::{AlienError, AlienErrorData, Context, IntoAlienError};
 use alien_helm::{HelmOptions, HelmRegistry};
 use alien_preflights::compile_time::stack_requires_network;
-use alien_signing::release::{SetupTemplate, SETUP_TEMPLATES};
+use alien_signing::release::SETUP_TEMPLATES;
 use alien_terraform::{TerraformOptions, TerraformSetupIdentity, TerraformTarget, TfRegistry};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 /// Errors from rendering setup templates.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
@@ -75,6 +76,95 @@ pub struct SetupHostingOptions {
     pub supported_aws_regions: Vec<String>,
 }
 
+/// The version of the renderer in this build: the alien version.
+pub const RENDERER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Metadata key of a protected CloudFormation template that holds its [`SetupRecord`].
+pub const CLOUDFORMATION_RECORD_KEY: &str = "Setup";
+
+/// File of a protected Terraform module or Helm chart that holds its [`SetupRecord`].
+pub const RECORD_FILE: &str = "setup-render.json";
+
+/// What a protected template says about how it was rendered, so a customer can render it
+/// again: the renderer version and the hosting inputs. It is part of the template's bytes, so
+/// a record that lies renders other bytes and the comparison fails.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetupRecord {
+    /// Alien version that rendered the template.
+    pub renderer: String,
+    /// The hosting inputs it was rendered with.
+    pub hosting: SetupHostingOptions,
+}
+
+impl SetupRecord {
+    /// The record as JSON with every object's keys sorted, so the same record is the same
+    /// bytes whatever order its inputs were built in.
+    pub fn to_value(&self) -> serde_json::Value {
+        sort_keys(serde_json::to_value(self).expect("a record is JSON"))
+    }
+
+    /// The record as the file a Terraform module or Helm chart holds.
+    pub fn to_file(&self) -> String {
+        let mut text = serde_json::to_string_pretty(&self.to_value()).expect("a record is JSON");
+        text.push('\n');
+        text
+    }
+
+    /// The record of a protected CloudFormation template, from its YAML.
+    pub fn from_cloudformation(template: &str) -> Result<Self> {
+        let value: serde_json::Value = serde_yaml::from_str(template)
+            .into_alien_error()
+            .context(step("cloudformation", "read the template as YAML"))?;
+        let record = value
+            .get("Metadata")
+            .and_then(|metadata| metadata.get(CLOUDFORMATION_RECORD_KEY))
+            .ok_or_else(|| {
+                render_failed(
+                    "cloudformation",
+                    "the template has no Metadata.Setup: it was not rendered by a setup renderer",
+                )
+            })?;
+        Self::from_value("cloudformation", record.clone())
+    }
+
+    /// The record of a protected Terraform module or Helm chart, from its files.
+    pub fn from_files(name: &str, files: &BTreeMap<String, String>) -> Result<Self> {
+        let text = files.get(RECORD_FILE).ok_or_else(|| {
+            render_failed(
+                name,
+                format!("there is no {RECORD_FILE}: it was not rendered by a setup renderer"),
+            )
+        })?;
+        let value = serde_json::from_str(text)
+            .into_alien_error()
+            .context(step(name, "read the render record as JSON"))?;
+        Self::from_value(name, value)
+    }
+
+    fn from_value(name: &str, value: serde_json::Value) -> Result<Self> {
+        serde_json::from_value(value)
+            .into_alien_error()
+            .context(step(name, "read the render record"))
+    }
+}
+
+fn sort_keys(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let sorted: BTreeMap<String, serde_json::Value> = map
+                .into_iter()
+                .map(|(key, value)| (key, sort_keys(value)))
+                .collect();
+            serde_json::Value::Object(sorted.into_iter().collect())
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sort_keys).collect())
+        }
+        other => other,
+    }
+}
+
 /// Everything a setup template depends on besides the stack.
 #[derive(Builder)]
 pub struct SetupRenderOptions<'a> {
@@ -85,10 +175,15 @@ pub struct SetupRenderOptions<'a> {
     pub helm_registry: &'a HelmRegistry,
     /// What the hosting service renders with.
     pub hosting: SetupHostingOptions,
-    /// Machine-image publisher and verifier image. Leave the default, this build's own, except
-    /// in tests: a release records templates rendered with it.
+    /// Machine-image publisher, verifier image and Operator image. Leave the default, this
+    /// build's own, except in tests: they come with the renderer build, so `verify` computes
+    /// them again by rendering with the version a template records.
     #[builder(default = SetupPins::compiled_in())]
     pub pins: SetupPins,
+    /// The renderer version a protected template records. Leave the default, this build's
+    /// own, except in tests.
+    #[builder(default = RENDERER_VERSION.to_string())]
+    pub renderer: String,
 }
 
 /// One rendered setup template.
@@ -98,19 +193,11 @@ pub struct RenderedSetupTemplate {
     /// charts are several files; their bytes are the JSON object of file path to contents,
     /// keys sorted, so a reader can recompute the digest from the files.
     pub bytes: Vec<u8>,
+    /// The files of a Terraform module or Helm chart; none for CloudFormation.
+    pub files: Option<BTreeMap<String, String>>,
     /// CloudFormation parameters, Terraform variables or top-level Helm values the customer
     /// may choose. Everything else keeps the template's pinned value.
     pub allowed: Vec<String>,
-}
-
-impl RenderedSetupTemplate {
-    /// The digest and allow-list a signed release records for this template.
-    pub fn setup_template(&self) -> SetupTemplate {
-        SetupTemplate {
-            sha256: format!("sha256:{}", hex::encode(Sha256::digest(&self.bytes))),
-            allowed: self.allowed.clone(),
-        }
-    }
 }
 
 /// The stack settings the setup package of `stack` for template `name` is rendered with, before
@@ -258,7 +345,7 @@ pub async fn render_setup_template(
 
     match name {
         "cloudformation" => {
-            let template = alien_cloudformation::generate_cloudformation_template(
+            let mut template = alien_cloudformation::generate_cloudformation_template(
                 &stack,
                 CloudFormationOptions {
                     pins: options.pins.clone(),
@@ -288,10 +375,29 @@ pub async fn render_setup_template(
                 })
                 .cloned()
                 .collect();
+            if settings.signing.is_some() {
+                template.metadata.insert(
+                    CLOUDFORMATION_RECORD_KEY.to_string(),
+                    record(options).to_value(),
+                );
+                // The registration runs again on every setup update, so its revision covers
+                // the record: a new renderer version is a new revision.
+                if let Some(registration) = template
+                    .resources
+                    .get_mut(alien_cloudformation::REGISTRATION_RESOURCE)
+                {
+                    registration
+                        .properties
+                        .shift_remove(alien_cloudformation::SETUP_REVISION);
+                }
+                alien_cloudformation::add_setup_revision(&mut template)
+                    .context(step(name, "revise the registration"))?;
+            }
             let yaml = alien_cloudformation::to_yaml(&template)
                 .context(step(name, "write the template as YAML"))?;
             Ok(RenderedSetupTemplate {
                 bytes: yaml.into_bytes(),
+                files: None,
                 allowed,
             })
         }
@@ -323,9 +429,13 @@ pub async fn render_setup_template(
                     .context(step(name, "list the values customers may set"))?,
                 None => Vec::new(),
             };
-            let files: BTreeMap<String, String> = chart.files.into_iter().collect();
+            let mut files: BTreeMap<String, String> = chart.files.into_iter().collect();
+            if settings.signing.is_some() {
+                files.insert(RECORD_FILE.to_string(), record(options).to_file());
+            }
             Ok(RenderedSetupTemplate {
                 bytes: file_map_bytes(&files),
+                files: Some(files),
                 allowed,
             })
         }
@@ -362,15 +472,26 @@ pub async fn render_setup_template(
                 .into_iter()
                 .filter(|variable| variable != alien_terraform::SIGNING_FINGERPRINT_VARIABLE)
                 .collect();
-            let files: BTreeMap<String, String> = module
+            let mut files: BTreeMap<String, String> = module
                 .iter()
                 .map(|(path, contents)| (path.to_string(), contents.to_string()))
                 .collect();
+            if settings.signing.is_some() {
+                files.insert(RECORD_FILE.to_string(), record(options).to_file());
+            }
             Ok(RenderedSetupTemplate {
                 bytes: file_map_bytes(&files),
+                files: Some(files),
                 allowed,
             })
         }
+    }
+}
+
+fn record(options: &SetupRenderOptions<'_>) -> SetupRecord {
+    SetupRecord {
+        renderer: options.renderer.clone(),
+        hosting: options.hosting.clone(),
     }
 }
 

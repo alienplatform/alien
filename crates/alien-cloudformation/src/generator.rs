@@ -775,7 +775,7 @@ pub fn generate_cloudformation_template_with_profile(
 /// setup update can change only what the install runs (a new verifier image). So the resource
 /// carries `SetupRevision`, the digest of the rest of the template: any other change to the
 /// template changes it, and the service hears of the update when it runs.
-fn add_setup_revision(template: &mut CfTemplate) -> Result<()> {
+pub fn add_setup_revision(template: &mut CfTemplate) -> Result<()> {
     if !template.resources.contains_key(REGISTRATION_RESOURCE) {
         return Ok(());
     }

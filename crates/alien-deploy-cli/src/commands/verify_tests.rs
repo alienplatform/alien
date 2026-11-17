@@ -2,7 +2,13 @@
 //! and against what a tampered stack or a lying control plane return.
 
 use super::*;
-use alien_signing::{Envelope, Role, SecretKey, SetupTemplate, Signer, SignerListBody};
+use alien_cli_common::setup_templates::{
+    render_setup_template, RenderedSetupTemplate, SetupHostingOptions, SetupRenderOptions,
+    RENDERER_VERSION,
+};
+use alien_signing::{
+    Envelope, Role, SecretKey, SetupRenderer, SetupTemplate, Signer, SignerListBody,
+};
 use chrono::Duration;
 
 const PREFIX: &str = "acme-prod";
@@ -101,71 +107,151 @@ pub(crate) fn fingerprint() -> String {
     alien_signing::fingerprint(&genesis().open().unwrap().digest)
 }
 
+/// A stack with a function, so its protected template has a verifier.
+pub(crate) fn fixture_stack() -> alien_core::Stack {
+    serde_json::from_value(serde_json::json!({
+        "id": "minimal",
+        "resources": {
+            "assets": {
+                "config": {
+                    "corsAllowedOrigins": [], "id": "assets", "lifecycleRules": [],
+                    "publicRead": false, "type": "storage", "versioning": false
+                },
+                "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+            },
+            "api": {
+                "config": {
+                    "code": {
+                        "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/app/api@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "type": "image"
+                    },
+                    "id": "api", "memoryMb": 512, "permissions": "execution",
+                    "timeoutSeconds": 180, "type": "worker", "links": [], "triggers": [],
+                    "environment": {}, "commandsEnabled": false
+                },
+                "lifecycle": "live", "dependencies": [], "remoteAccess": false
+            }
+        },
+        "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+    }))
+    .unwrap()
+}
+
+/// What the hosting service renders with.
+pub(crate) fn hosting() -> SetupHostingOptions {
+    serde_json::from_value(serde_json::json!({
+        "registration": { "mode": "outputsFallback" },
+        "managementTrust": {
+            "requireExternalId": true,
+            "allowedManagingRoleArns": ["arn:aws:iam::999988887777:role/vendor-manager"]
+        }
+    }))
+    .unwrap()
+}
+
+/// Render setup template `name` of [`fixture_stack`] for the `production` channel with this
+/// renderer version (or `renderer`), the way the hosting service does.
+pub(crate) fn render_fixture(
+    name: &'static str,
+    channel: &'static str,
+    renderer: Option<&'static str>,
+) -> RenderedSetupTemplate {
+    // A runtime of its own on its own thread: callers may already be inside one.
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let stack = fixture_stack();
+                let signing = alien_core::StackSigning {
+                    fingerprint: fingerprint(),
+                    channel: channel.to_string(),
+                };
+                let cloudformation = alien_cloudformation::CfRegistry::built_in();
+                let terraform = alien_terraform::TfRegistry::built_in();
+                let helm = alien_helm::HelmRegistry::built_in();
+                let settings = alien_cli_common::setup_templates::protected_stack_settings(
+                    name, &stack, &signing,
+                )
+                .unwrap();
+                let mut options = SetupRenderOptions::builder()
+                    .signing(&signing)
+                    .cloudformation_registry(&cloudformation)
+                    .terraform_registry(&terraform)
+                    .helm_registry(&helm)
+                    .hosting(hosting())
+                    .pins(crate::commands::verify_render::test_pins())
+                    .build();
+                if let Some(renderer) = renderer {
+                    options.renderer = renderer.to_string();
+                }
+                render_setup_template(name, &stack, &settings, &options)
+                    .await
+                    .unwrap()
+            })
+    })
+    .join()
+    .unwrap()
+}
+
 /// The setup template as CloudFormation returns it for the stack.
-fn template() -> String {
-    format!(
-        r#"Description: >-
-  Acme data plane. Runs only software and configuration signed with Acme's keys.
-Parameters:
-  SigningFingerprint:
-    Type: String
-    AllowedValues: ["{fingerprint}"]
-    Default: "{fingerprint}"
-  VpcId:
-    Type: String
-  SubnetIds:
-    Type: CommaDelimitedList
-Resources:
-  SigningFingerprintParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub "/signed/${{AWS::StackName}}/fingerprint"
-      Type: String
-      Value: !Sub '{{"fingerprint":"${{SigningFingerprint}}","prefix":"${{AWS::StackName}}","channel":"production"}}'
-  SigningStateParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: !Sub "/signed/${{AWS::StackName}}/state"
-      Type: String
-      Tier: Advanced
-      Value: !Sub '{{"prefix":"${{AWS::StackName}}","created":true}}'
-"#,
-        fingerprint = fingerprint()
-    )
+pub(crate) fn template() -> String {
+    String::from_utf8(render_fixture(CLOUDFORMATION, "production", None).bytes).unwrap()
 }
 
 fn sha256(text: &str) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(text.as_bytes())))
 }
 
-fn release(channel: &str, sequence: u64, template: &str, by: (&str, u8)) -> SignedStatement {
+/// A release of the fixture stack on `channel`, whose setup may be rendered by `min` or newer.
+pub(crate) fn release_with_minimum(
+    channel: &str,
+    sequence: u64,
+    min: &str,
+    by: (&str, u8),
+) -> SignedStatement {
     signed(
         Kind::Release,
         sequence,
         1,
         None,
-        ReleaseBody {
-            platform: "aws".to_string(),
-            channel: channel.to_string(),
-            workloads: Vec::new(),
-            configurable: Default::default(),
-            components: Default::default(),
-            setup: BTreeMap::from([(
-                CLOUDFORMATION.to_string(),
-                SetupTemplate {
-                    sha256: sha256(template),
-                    allowed: vec![
-                        "ManagementExternalId".to_string(),
-                        "ManagingRoleArn".to_string(),
-                        "SubnetIds".to_string(),
-                        "VpcId".to_string(),
-                    ],
-                },
-            )]),
-            stack: None,
-        },
+        release_body(channel, min),
         &[by],
     )
+}
+
+pub(crate) fn release_body(channel: &str, min: &str) -> ReleaseBody {
+    ReleaseBody {
+        platform: "aws".to_string(),
+        channel: channel.to_string(),
+        workloads: alien_core::release_statement::release_body(
+            alien_core::Platform::Aws,
+            &fixture_stack(),
+            &alien_core::release_statement::ReleaseOptions {
+                channel: channel.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .workloads,
+        configurable: Default::default(),
+        components: Default::default(),
+        setup: BTreeMap::from([(
+            CLOUDFORMATION.to_string(),
+            SetupTemplate {
+                allowed: render_fixture(CLOUDFORMATION, "production", None).allowed,
+            },
+        )]),
+        setup_renderer: Some(SetupRenderer {
+            min: min.to_string(),
+        }),
+        stack: Some(serde_json::to_value(fixture_stack()).unwrap()),
+    }
+}
+
+fn release(channel: &str, sequence: u64, by: (&str, u8)) -> SignedStatement {
+    release_with_minimum(channel, sequence, RENDERER_VERSION, by)
 }
 
 fn ledger(running: Option<&SignedStatement>) -> Vec<u8> {
@@ -182,7 +268,7 @@ fn ledger(running: Option<&SignedStatement>) -> Vec<u8> {
 
 /// A protected stack that runs the CI-signed release 2026-11-04.3.
 fn observed() -> Observed {
-    let running = release("production", 20, &template(), ("github-acme-app", 2));
+    let running = release("production", 20, ("github-acme-app", 2));
     Observed {
         stack_id: STACK_ID.to_string(),
         stack_name: PREFIX.to_string(),
@@ -193,8 +279,6 @@ fn observed() -> Observed {
                 "arn:aws:iam::999988887777:role/vendor-manager".to_string(),
             ),
             ("ManagementExternalId".to_string(), "ext-1".to_string()),
-            ("SubnetIds".to_string(), "subnet-1,subnet-2".to_string()),
-            ("VpcId".to_string(), "vpc-1".to_string()),
         ]),
         template: template(),
         settings: Some((
@@ -211,7 +295,7 @@ fn observed() -> Observed {
             ("2026-11-04.3".to_string(), running),
             (
                 "2026-11-04.2".to_string(),
-                release("dev", 19, "Resources: {}\n", ("alice-mbp", 1)),
+                release("dev", 19, ("alice-mbp", 1)),
             ),
         ],
         signing_from_change_set: false,
@@ -237,8 +321,8 @@ fn signing_from_change_set() -> Observed {
 /// A CREATE change set has no signing parameters in SSM yet. Verify checks it before anything
 /// runs: the template against the signed releases, the pinned fingerprint and the other
 /// parameters, and the settings and ledger its template writes.
-#[test]
-fn a_create_change_set_is_checked_before_anything_runs() {
+#[tokio::test]
+async fn a_create_change_set_is_checked_before_anything_runs() {
     let pending = signing_from_change_set();
     assert_eq!(
         pending.settings.as_ref().unwrap().0,
@@ -248,12 +332,16 @@ fn a_create_change_set_is_checked_before_anything_runs() {
         )
         .into_bytes()
     );
-    let lines = check(&pending, now()).unwrap();
+    let lines = check(&pending, now()).await.unwrap();
     assert_eq!(
         marks(&lines),
         [
             ("Install", Mark::Info),
             ("Signing fingerprint", Mark::Info),
+            ("Renderer", Mark::Pass),
+            ("Registration", Mark::Info),
+            ("Managing principals", Mark::Info),
+            ("External id", Mark::Info),
             ("Template", Mark::Pass),
             ("Parameters", Mark::Pass),
             ("Managed by", Mark::Info),
@@ -274,7 +362,7 @@ fn a_create_change_set_is_checked_before_anything_runs() {
     overridden.settings = Some((settings, None));
     overridden.ledger = Some(ledger);
     overridden.signing_from_change_set = true;
-    let error = check(&overridden, now()).expect_err("the overridden pin is refused");
+    let error = check(&overridden, now()).await.expect_err("the overridden pin is refused");
     assert!(
         error.message.contains("don't verify from fingerprint"),
         "{}",
@@ -307,14 +395,21 @@ fn a_create_change_set_is_checked_before_anything_runs() {
     );
 }
 
+fn find<'a>(lines: &'a [Line], label: &str) -> &'a Line {
+    lines
+        .iter()
+        .find(|line| line.label == label)
+        .unwrap_or_else(|| panic!("no {label} line in {}", render(lines)))
+}
+
 fn marks(lines: &[Line]) -> Vec<(&'static str, Mark)> {
     lines.iter().map(|line| (line.label, line.mark)).collect()
 }
 
-#[test]
-fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
+#[tokio::test]
+async fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
     let observed = observed();
-    let lines = check(&observed, now()).unwrap();
+    let lines = check(&observed, now()).await.unwrap();
     let display = display_fingerprint(&fingerprint());
     let digest = observed.releases[0].1.open().unwrap().digest;
     let template = sha256(&template());
@@ -323,96 +418,112 @@ fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
         format!(
             "Install              aws:111122223333:us-east-1:acme-prod\n\
              Signing fingerprint  {display}   (set by setup, 2026-11-04)\n\
-             Template             matches release 2026-11-04.3 · production · {template}  ✓\n\
-             Parameters           fingerprint pinned · 4 customer choices allowed  ✓\n\
+             Renderer             alien {RENDERER_VERSION} (this build)  ✓\n\
+             Registration         stack outputs\n\
+             Managing principals  arn:aws:iam::999988887777:role/vendor-manager\n\
+             External id          required\n\
+             Template             rendered again from release 2026-11-04.3 · production · {template}  ✓\n\
+             Parameters           fingerprint pinned · 2 customer choices allowed  ✓\n\
              Managed by           arn:aws:iam::999988887777:role/vendor-manager · with an external id\n\
-             Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n"
+             Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n",
         )
     );
 }
 
-#[test]
-fn a_tampered_template_fails() {
+#[tokio::test]
+async fn a_tampered_template_fails() {
     let mut observed = observed();
     observed.template = observed
         .template
-        .replace("Tier: Advanced", "Tier: Standard");
-    let lines = check(&observed, now()).unwrap();
-    assert_eq!(marks(&lines)[2], ("Template", Mark::Fail));
-    assert!(lines[2]
-        .text
-        .contains("is not the cloudformation template of any release signed for production"));
+        .replace("Type: String", "Type: Number");
+    assert_ne!(observed.template, template());
+    let lines = check(&observed, now()).await.unwrap();
+    assert_eq!(find(&lines, "Template").mark, Mark::Fail);
+    assert!(
+        find(&lines, "Template")
+            .text
+            .contains("is not what any release signed for production renders to"),
+        "{}",
+        find(&lines, "Template").text
+    );
     // With no signed template there is no allow-list: the parameters can't be checked against a
     // release, so they aren't each reported as refused. The pinned fingerprint still is checked.
-    assert_eq!(marks(&lines)[3], ("Parameters", Mark::Info));
+    assert_eq!(find(&lines, "Parameters").mark, Mark::Info);
     assert_eq!(
-        lines[3].text,
-        "fingerprint pinned · the other 4 can't be checked against a release: the template belongs to none"
+        find(&lines, "Parameters").text,
+        "fingerprint pinned · the other 2 can't be checked against a release: the template belongs to none"
     );
     observed
         .parameters
         .insert("SigningFingerprint".to_string(), "SHA256:other".to_string());
-    let lines = check(&observed, now()).unwrap();
-    assert_eq!(marks(&lines)[3], ("Parameters", Mark::Fail));
+    let lines = check(&observed, now()).await.unwrap();
+    assert_eq!(find(&lines, "Parameters").mark, Mark::Fail);
     assert_eq!(
-        lines[3].text,
+        find(&lines, "Parameters").text,
         "SigningFingerprint is SHA256:other, not the pinned fingerprint"
     );
 }
 
-#[test]
-fn a_parameter_that_overrides_the_pin_or_isnt_allowed_fails() {
+#[tokio::test]
+async fn a_parameter_that_overrides_the_pin_or_isnt_allowed_fails() {
     let mut overriding = observed();
     overriding.parameters.insert(
         "SigningFingerprint".to_string(),
         format!("SHA256:{}", "0".repeat(64)),
     );
-    let lines = check(&overriding, now()).unwrap();
-    assert_eq!(marks(&lines)[3], ("Parameters", Mark::Fail));
+    let lines = check(&overriding, now()).await.unwrap();
+    assert_eq!(find(&lines, "Parameters").mark, Mark::Fail);
     assert!(
-        lines[3].text.contains("not the pinned fingerprint"),
+        find(&lines, "Parameters")
+            .text
+            .contains("not the pinned fingerprint"),
         "{}",
-        lines[3].text
+        find(&lines, "Parameters").text
     );
 
     let mut extra = observed();
     extra
         .parameters
         .insert("VerifierImage".to_string(), "attacker/image".to_string());
-    let lines = check(&extra, now()).unwrap();
-    assert_eq!(marks(&lines)[3], ("Parameters", Mark::Fail));
+    let lines = check(&extra, now()).await.unwrap();
+    assert_eq!(find(&lines, "Parameters").mark, Mark::Fail);
     assert!(
-        lines[3]
+        find(&lines, "Parameters")
             .text
             .contains("VerifierImage is not a choice the signed release allows"),
         "{}",
-        lines[3].text
+        find(&lines, "Parameters").text
     );
 }
 
-#[test]
-fn a_template_signed_only_for_another_channel_fails() {
+#[tokio::test]
+async fn a_template_signed_only_for_another_channel_fails() {
     let mut observed = observed();
-    observed.template = "Resources: {}\n".to_string();
-    let lines = check(&observed, now()).unwrap();
+    // The same stack and settings, signed only for the `dev` channel: the install follows
+    // `production`, so the dev release isn't one it can match.
+    observed.releases = vec![(
+        "2026-11-04.2".to_string(),
+        release("dev", 19, ("alice-mbp", 1)),
+    )];
+    let lines = check(&observed, now()).await.unwrap();
     assert_eq!(
-        marks(&lines)[2],
-        ("Template", Mark::Fail),
+        find(&lines, "Template").mark,
+        Mark::Fail,
         "the dev release doesn't count"
     );
 }
 
-#[test]
-fn a_control_plane_that_signs_its_own_release_or_list_is_not_believed() {
+#[tokio::test]
+async fn a_control_plane_that_signs_its_own_release_or_list_is_not_believed() {
     // A release signed by a key that isn't on the list matches the template,
     // but doesn't count.
     let mut forged_release = observed();
     forged_release.releases = vec![(
         "2026-11-04.3".to_string(),
-        release("production", 20, &template(), ("github-acme-app", 9)),
+        release("production", 20, ("github-acme-app", 9)),
     )];
-    let lines = check(&forged_release, now()).unwrap();
-    assert_eq!(marks(&lines)[2], ("Template", Mark::Fail));
+    let lines = check(&forged_release, now()).await.unwrap();
+    assert_eq!(find(&lines, "Template").mark, Mark::Fail);
 
     // A list of the control plane's own making doesn't verify from the pin.
     let mut forged_list = observed();
@@ -432,7 +543,7 @@ fn a_control_plane_that_signs_its_own_release_or_list_is_not_believed() {
         body,
         &[("alice-mbp", 9)],
     )];
-    let error = check(&forged_list, now()).unwrap_err();
+    let error = check(&forged_list, now()).await.unwrap_err();
     assert!(
         error.message.contains("don't verify from fingerprint"),
         "{}",
@@ -440,11 +551,11 @@ fn a_control_plane_that_signs_its_own_release_or_list_is_not_believed() {
     );
 }
 
-#[test]
-fn a_stack_without_settings_or_ledger_is_not_reported_as_protected() {
+#[tokio::test]
+async fn a_stack_without_settings_or_ledger_is_not_reported_as_protected() {
     let mut unprotected = observed();
     unprotected.settings = None;
-    let error = check(&unprotected, now()).unwrap_err();
+    let error = check(&unprotected, now()).await.unwrap_err();
     assert!(
         error.message.contains("this install is not protected"),
         "{}",
@@ -453,7 +564,7 @@ fn a_stack_without_settings_or_ledger_is_not_reported_as_protected() {
 
     let mut no_ledger = observed();
     no_ledger.ledger = None;
-    let error = check(&no_ledger, now()).unwrap_err();
+    let error = check(&no_ledger, now()).await.unwrap_err();
     assert!(
         error.message.contains("/signed/acme-prod/state is missing"),
         "{}",
@@ -470,11 +581,11 @@ fn a_stack_without_settings_or_ledger_is_not_reported_as_protected() {
         .into_bytes(),
         None,
     ));
-    check(&neighbor, now()).expect_err("settings for another prefix are refused");
+    check(&neighbor, now()).await.expect_err("settings for another prefix are refused");
 }
 
-#[test]
-fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
+#[tokio::test]
+async fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
     let mut observed = observed();
     let mut body: SignerListBody = genesis().open().unwrap().body().unwrap();
     body.previous = Some(genesis().open().unwrap().digest);
@@ -487,7 +598,7 @@ fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
         body,
         &[("alice-mbp", 1)],
     ));
-    let lines = check(&observed, now()).unwrap();
+    let lines = check(&observed, now()).await.unwrap();
     // The installed template came with that release: it is still the signed
     // one, and the screen says who signed it.
     let template = lines.iter().find(|line| line.label == "Template").unwrap();
@@ -538,8 +649,8 @@ fn locking_keeps_the_existing_policy_and_adds_one_deny() {
 /// change set, or the update that protects an unprotected stack) is checked against what it
 /// writes; a stack that has settings is checked against its own, whatever the change set says;
 /// and without a change set, a stack with no settings is reported unprotected.
-#[test]
-fn a_change_set_that_adds_protection_is_checked_against_what_it_writes() {
+#[tokio::test]
+async fn a_change_set_that_adds_protection_is_checked_against_what_it_writes() {
     let observed = observed();
     let unprotected = Signing {
         settings: None,
@@ -590,7 +701,7 @@ fn a_change_set_that_adds_protection_is_checked_against_what_it_writes() {
     );
     let mut without = observed.clone();
     without.settings = None;
-    assert!(check(&without, now())
+    assert!(check(&without, now()).await
         .unwrap_err()
         .message
         .contains("this install is not protected"));
@@ -756,7 +867,7 @@ async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
     let cloudformation = aws_sdk_cloudformation::Client::new(&aws);
 
     let control_plane = httpmock::MockServer::start_async().await;
-    let signed = release("production", 20, &template(), ("github-acme-app", 2));
+    let signed = release("production", 20, ("github-acme-app", 2));
     control_plane
         .mock_async(|when, then| {
             when.method(httpmock::Method::GET).path("/v1/releases");
@@ -785,7 +896,7 @@ async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
             let observed = observe(&stack, None, &aws, &cloudformation, &url, None)
                 .await
                 .unwrap();
-            let lines = check(&observed, Utc::now()).unwrap();
+            let lines = check(&observed, Utc::now()).await.unwrap();
             let screen = render(&lines);
             println!("{screen}");
             assert!(lines.iter().all(|line| line.mark != Mark::Fail), "{screen}");
@@ -806,7 +917,7 @@ async fn verify_reads_a_real_stack_and_catches_a_changed_template() {
             let observed = observe(&stack, None, &aws, &cloudformation, &url, None)
                 .await
                 .unwrap();
-            let lines = check(&observed, Utc::now()).unwrap();
+            let lines = check(&observed, Utc::now()).await.unwrap();
             let screen = render(&lines);
             println!("{screen}");
             let template_line = lines.iter().find(|line| line.label == "Template").unwrap();
@@ -894,4 +1005,133 @@ async fn releases_from_before_signing_are_skipped() {
             .collect::<Vec<_>>(),
         vec!["rel_signed"]
     );
+}
+
+/// One changed byte of a protected template, in what matters (a widened IAM statement, another
+/// verifier image, another fingerprint), is a template no signed release renders to: `verify`
+/// renders it again and the bytes differ.
+#[tokio::test]
+async fn a_template_with_one_changed_byte_fails() {
+    let original = template();
+    let verifier = format!("verifier@sha256:{}", "5d".repeat(32));
+    assert!(original.contains(&verifier), "the fixture has a verifier");
+    let widened = original
+        .replacen("sts:AssumeRole", "sts:*", 1)
+        .replacen("Action: s3:GetObject", "Action: s3:*", 1);
+    for (what, changed) in [
+        (
+            "another verifier image digest",
+            original.replace(&verifier, &format!("verifier@sha256:{}", "ab".repeat(32))),
+        ),
+        (
+            "another fingerprint",
+            original.replace(&fingerprint(), &alien_signing::fingerprint(&"c".repeat(64))),
+        ),
+        ("a widened statement", widened),
+        ("one more character", format!("{original}#")),
+    ] {
+        assert_ne!(changed, original, "{what} changes the template");
+        let mut observed = observed();
+        observed.template = changed;
+        let lines = check(&observed, now()).await.unwrap();
+        let template_line = find(&lines, "Template");
+        assert_eq!(template_line.mark, Mark::Fail, "{what}: {}", render(&lines));
+        assert!(
+            template_line.text.contains("renders to"),
+            "{what}: {}",
+            template_line.text
+        );
+    }
+}
+
+/// A renderer version below the release's minimum is refused, even for a template that is
+/// exactly what that older renderer made: no downgrade.
+#[tokio::test]
+async fn a_renderer_older_than_the_signed_minimum_is_refused() {
+    let mut observed = observed();
+    observed.template =
+        String::from_utf8(render_fixture(CLOUDFORMATION, "production", Some("0.0.1")).bytes)
+            .unwrap();
+    let lines = check(&observed, now()).await.unwrap();
+    let renderer = find(&lines, "Renderer");
+    assert_eq!(renderer.mark, Mark::Fail, "{}", render(&lines));
+    assert!(
+        renderer.text.contains("0.0.1 is older than")
+            && renderer.text.contains(RENDERER_VERSION),
+        "{}",
+        renderer.text
+    );
+    assert!(lines.iter().all(|line| line.label != "Template"));
+}
+
+/// A template another renderer version made is not checked with this one: `verify` names the
+/// exact version to run, with a command that downloads and checks it, and does not guess.
+#[tokio::test]
+async fn a_template_from_another_renderer_version_names_the_version_to_run() {
+    let mut observed = observed();
+    let minimum = release_with_minimum("production", 20, "0.0.1", ("github-acme-app", 2));
+    observed.releases = vec![("2026-11-04.3".to_string(), minimum)];
+    observed.template =
+        String::from_utf8(render_fixture(CLOUDFORMATION, "production", Some("0.0.2")).bytes)
+            .unwrap();
+    let lines = check(&observed, now()).await.unwrap();
+    let renderer = find(&lines, "Renderer");
+    assert_eq!(renderer.mark, Mark::Fail, "{}", render(&lines));
+    assert!(
+        renderer.text.contains("rendered by alien 0.0.2")
+            && renderer.text.contains("gh release download v0.0.2")
+            && renderer.text.contains("gh release verify-asset v0.0.2"),
+        "{}",
+        renderer.text
+    );
+    assert!(lines.iter().all(|line| line.label != "Template"));
+}
+
+/// A template that records no renderer can't be rendered again.
+#[tokio::test]
+async fn a_template_without_a_render_record_fails() {
+    let mut observed = observed();
+    let value: serde_yaml::Value = serde_yaml::from_str(&observed.template).unwrap();
+    let mut value = value;
+    value["Metadata"]
+        .as_mapping_mut()
+        .unwrap()
+        .remove("Setup");
+    observed.template = serde_yaml::to_string(&value).unwrap();
+    let lines = check(&observed, now()).await.unwrap();
+    assert_eq!(find(&lines, "Renderer").mark, Mark::Fail);
+}
+
+/// The hosting inputs a template records are shown, since a hacked control plane picks them:
+/// a template rendered for another managing principal is a consistent template, and `verify`
+/// shows that principal so the customer can see whom it lets in. An edit that doesn't also
+/// change the record is caught by the byte comparison.
+#[tokio::test]
+async fn a_recorded_managing_principal_is_shown_and_an_unrecorded_edit_fails() {
+    let mut observed = observed();
+    observed.template = observed
+        .template
+        .replace("role/vendor-manager", "role/someone-else");
+    let lines = check(&observed, now()).await.unwrap();
+    assert!(
+        find(&lines, "Managing principals")
+            .text
+            .contains("role/someone-else"),
+        "{}",
+        render(&lines)
+    );
+    assert_eq!(find(&lines, "External id").text, "required");
+
+    // Only the trust policy's copy of the principal changed, not the record.
+    let mut edited = self::observed();
+    let template = edited.template.clone();
+    let first = template.find("role/vendor-manager").unwrap();
+    let second = first + 1 + template[first + 1..].find("role/vendor-manager").unwrap();
+    edited.template = format!(
+        "{}role/someone-else{}",
+        &template[..second],
+        &template[second + "role/vendor-manager".len()..]
+    );
+    let lines = check(&edited, now()).await.unwrap();
+    assert_eq!(find(&lines, "Template").mark, Mark::Fail, "{}", render(&lines));
 }

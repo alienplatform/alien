@@ -44,7 +44,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             project_id: "default".into(),
             channel: None,
             signed_stacks: Default::default(),
-            setup_templates: Default::default(),
         })
         .send()
         .await?

@@ -2654,7 +2654,6 @@ mod tests {
                         (Platform::Aws, signed_aws.clone()),
                         (Platform::Gcp, signed_gcp),
                     ]),
-                    setup_templates: HashMap::new(),
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
@@ -2946,7 +2945,6 @@ mod tests {
                     git_commit_ref: None,
                     git_commit_message: None,
                     signed_stacks: Default::default(),
-                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -3093,7 +3091,6 @@ mod tests {
                         git_commit_ref: None,
                         git_commit_message: None,
                         signed_stacks: Default::default(),
-                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -3582,7 +3579,6 @@ mod tests {
                             git_commit_ref: None,
                             git_commit_message: None,
                             signed_stacks: Default::default(),
-                            setup_templates: Default::default(),
                         },
                     )
                     .await
@@ -4674,7 +4670,6 @@ mod tests {
                             git_commit_ref: None,
                             git_commit_message: None,
                             signed_stacks: HashMap::from([(Platform::Local, signed.clone())]),
-                            setup_templates: Default::default(),
                         },
                     )
                     .await
@@ -5906,7 +5901,6 @@ mod tests {
                             git_commit_ref: None,
                             git_commit_message: None,
                             signed_stacks: Default::default(),
-                            setup_templates: Default::default(),
                         },
                     )
                     .await

@@ -45,8 +45,8 @@ pub use key::{PublicKey, SecretKey, PUBLIC_KEY_PREFIX};
 pub use ledger::{Entry, Ledger};
 pub use recovery::RecoveryCode;
 pub use release::{
-    build_workload, BuiltWorkload, LocalValues, ReleaseBody, SetupTemplate, Workload,
-    WorkloadRequest,
+    build_workload, BuiltWorkload, LocalValues, ReleaseBody, SetupRenderer, SetupTemplate,
+    Workload, WorkloadRequest,
 };
 pub use settings::{candidate_prefixes, discover, InstallId, Lookup, SigningSettings};
 pub use signer_list::{

@@ -1,6 +1,5 @@
 //! Signer lists, pending changes and signed deployment config.
 //!
-//! - `GET /v1/projects/{project}/signing`
 //! - `GET/POST /v1/projects/{project}/signer-lists`
 //! - `GET/POST /v1/projects/{project}/pending-changes`
 //! - `GET /v1/pending-changes/{id}`, `POST /v1/pending-changes/{id}/resolution`
@@ -14,7 +13,6 @@
 
 use std::sync::Arc;
 
-use alien_cli_common::setup_templates::SetupHostingOptions;
 use alien_cloudformation::{ManagementTrustOptions, RegistrationMode};
 use alien_core::SignedStatement;
 use alien_error::AlienError;
@@ -40,7 +38,6 @@ use crate::{
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/projects/{project}/signing", get(project_signing))
         .route(
             "/v1/projects/{project}/signer-lists",
             get(list_signer_lists).post(add_signer_list),
@@ -232,51 +229,6 @@ fn signing_already_on(project: &str, first: &SignerListRecord) -> Response {
         "enabledAt": enabled_at,
     }));
     error.into_response()
-}
-
-/// What a release of the project needs to know to sign its setup templates.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectSigningResponse {
-    /// What this manager renders setup templates with, so the digests a
-    /// release signs are of the templates installs get.
-    #[cfg_attr(feature = "openapi", schema(value_type = std::collections::HashMap<String, serde_json::Value>))]
-    pub setup_hosting: SetupHostingOptions,
-}
-
-/// The setup hosting of this manager. It hosts no templates itself: vendors
-/// render them with `alien render`, which registers through stack outputs.
-fn manager_setup_hosting() -> SetupHostingOptions {
-    SetupHostingOptions {
-        registration: Some(RegistrationMode::OutputsFallback),
-        description: None,
-        management_trust: ManagementTrustOptions::default(),
-        supported_aws_regions: Vec::new(),
-    }
-}
-
-#[cfg_attr(feature = "openapi", utoipa::path(
-    get,
-    path = "/v1/projects/{project}/signing",
-    operation_id = "get_project_signing",
-    tag = "signing",
-    params(("project" = String, Path, description = "Project id")),
-    responses((status = 200, description = "Setup hosting for signed releases", body = ProjectSigningResponse)),
-    security(("bearer" = []))
-))]
-async fn project_signing(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(project): Path<String>,
-) -> Response {
-    if let Err(response) = setup(&state, &headers, &project).await {
-        return response;
-    }
-    Json(ProjectSigningResponse {
-        setup_hosting: manager_setup_hosting(),
-    })
-    .into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(

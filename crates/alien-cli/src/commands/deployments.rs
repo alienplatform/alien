@@ -4785,6 +4785,7 @@ mod tests {
             },
             components: Default::default(),
             setup: Default::default(),
+            setup_renderer: None,
             stack: None,
         };
         body.check(&release)

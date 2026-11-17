@@ -133,9 +133,8 @@ async fn renders_every_setup_template_the_same_way_twice() {
     let other = render(&FINGERPRINT.replace("9f2c", "0000")).await;
     for name in SETUP_TEMPLATES {
         assert_ne!(
-            first[*name].setup_template().sha256,
-            other[*name].setup_template().sha256,
-            "{name}: the digest covers the fingerprint"
+            first[*name].bytes, other[*name].bytes,
+            "{name}: the bytes cover the fingerprint"
         );
     }
 }
@@ -933,4 +932,117 @@ async fn a_protected_stack_without_functions_or_machines_gets_no_verifier() {
         );
         assert!(files.contains_key("signing.tf"), "{name}");
     }
+}
+
+/// The rendering of every protected template, as one JSON text: template name to its bytes, as
+/// UTF-8 text, plus the allow-lists.
+async fn rendered_text() -> String {
+    let rendered = render(FINGERPRINT).await;
+    let out: std::collections::BTreeMap<String, serde_json::Value> = rendered
+        .into_iter()
+        .map(|(name, template)| {
+            (
+                name,
+                serde_json::json!({
+                    "bytes": String::from_utf8(template.bytes).expect("templates are UTF-8"),
+                    "allowed": template.allowed,
+                }),
+            )
+        })
+        .collect();
+    serde_json::to_string(&out).expect("renders as JSON")
+}
+
+/// Run by [`rendering_is_identical_across_processes`] in a fresh process: writes the rendering
+/// to the file named by `SETUP_RENDER_PROCESS_OUT`.
+#[tokio::test]
+#[ignore = "run by rendering_is_identical_across_processes in a child process"]
+async fn render_in_a_child_process() {
+    let path = std::env::var("SETUP_RENDER_PROCESS_OUT").expect("SETUP_RENDER_PROCESS_OUT is set");
+    std::fs::write(path, rendered_text().await).expect("write the rendering");
+}
+
+/// The same renderer, stack, signing settings, hosting inputs and pins give the same bytes in
+/// any process: hash seeds, thread timing and the environment don't reach the output.
+#[test]
+fn rendering_is_identical_across_processes() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let mut outputs = Vec::new();
+    for run in 0..2 {
+        let path = dir.path().join(format!("render-{run}.json"));
+        let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", "render_in_a_child_process", "--ignored"])
+            .env("SETUP_RENDER_PROCESS_OUT", &path)
+            // A different environment and hash seed in each process.
+            .env("TZ", if run == 0 { "UTC" } else { "Asia/Tokyo" })
+            .env("LC_ALL", if run == 0 { "C" } else { "en_US.UTF-8" })
+            .env("HOME", dir.path().join(format!("home-{run}")))
+            .status()
+            .expect("run the child test");
+        assert!(status.success(), "the child process failed");
+        outputs.push(std::fs::read(&path).expect("the child wrote the rendering"));
+    }
+    assert!(!outputs[0].is_empty());
+    assert_eq!(
+        outputs[0], outputs[1],
+        "the two processes rendered different bytes"
+    );
+}
+
+#[tokio::test]
+async fn a_protected_template_records_its_renderer_and_hosting_inputs() {
+    use alien_cli_common::setup_templates::{SetupRecord, RENDERER_VERSION};
+    let rendered = render(FINGERPRINT).await;
+    let expected = SetupRecord {
+        renderer: RENDERER_VERSION.to_string(),
+        hosting: hosting(),
+    };
+    let yaml = String::from_utf8(rendered["cloudformation"].bytes.clone()).unwrap();
+    assert_eq!(SetupRecord::from_cloudformation(&yaml).unwrap(), expected);
+    for name in ["terraform-aws", "terraform-gcp", "terraform-azure", "helm"] {
+        let files = rendered[name].files.as_ref().unwrap();
+        assert_eq!(
+            SetupRecord::from_files(name, files).unwrap(),
+            expected,
+            "{name}"
+        );
+    }
+    // Another renderer version is another template, and so is another hosting input.
+    let signing = StackSigning {
+        fingerprint: FINGERPRINT.to_string(),
+        channel: "production".to_string(),
+    };
+    let cloudformation = CfRegistry::built_in();
+    let terraform = TfRegistry::built_in();
+    let helm = HelmRegistry::built_in();
+    let stack = stack_with_function();
+    let settings = alien_cli_common::setup_templates::protected_stack_settings(
+        "terraform-aws",
+        &stack,
+        &signing,
+    )
+    .unwrap();
+    let older = render_setup_template(
+        "terraform-aws",
+        &stack,
+        &settings,
+        &SetupRenderOptions::builder()
+            .signing(&signing)
+            .cloudformation_registry(&cloudformation)
+            .terraform_registry(&terraform)
+            .helm_registry(&helm)
+            .hosting(hosting())
+            .pins(pins())
+            .renderer("0.0.1".to_string())
+            .build(),
+    )
+    .await
+    .unwrap();
+    assert_ne!(older.bytes, rendered["terraform-aws"].bytes);
+    assert_eq!(
+        SetupRecord::from_files("terraform-aws", older.files.as_ref().unwrap())
+            .unwrap()
+            .renderer,
+        "0.0.1"
+    );
 }

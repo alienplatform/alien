@@ -969,10 +969,8 @@ async fn release_task_core(
 
     let signed = sign_release(ctx, &project_link.project_id, &mut signing, pushed_stacks).await?;
     let mut signed_stacks = HashMap::new();
-    let mut setup_templates = HashMap::new();
-    for (platform, statement, setup) in signed {
+    for (platform, statement) in signed {
         signed_stacks.insert(platform.as_str().to_string(), manager_statement(&statement));
-        setup_templates.insert(platform.as_str().to_string(), setup);
     }
 
     // Create release
@@ -991,7 +989,6 @@ async fn release_task_core(
             &project_link.project_id,
             stack_by_platform,
             signed_stacks,
-            setup_templates,
             sdk_git_metadata,
             &args.channel,
         )
@@ -1007,7 +1004,6 @@ async fn release_task_core(
                 workspace_query.as_deref(),
                 stack_by_platform,
                 signed_stacks,
-                setup_templates,
                 git_metadata,
                 (!args.no_promote).then_some(args.channel.as_str()),
                 args.title.as_deref(),
@@ -1043,9 +1039,6 @@ async fn release_task_core(
     })
 }
 
-/// Setup template bytes (base64) by template name, as the release uploads them.
-type SetupUpload = HashMap<String, String>;
-
 /// Sign every platform's pushed stack, or say in one line why the release
 /// goes out unsigned. Enforcer builds that changed since the release now on
 /// the channel are listed before the signature is asked for. Each statement
@@ -1055,12 +1048,11 @@ async fn sign_release(
     project_id: &str,
     signing: &mut SigningState,
     pushed: Vec<(Platform, Stack)>,
-) -> Result<Vec<(Platform, alien_core::SignedStatement, SetupUpload)>> {
+) -> Result<Vec<(Platform, alien_core::SignedStatement)>> {
     // What's signed and the touch or PIN prompt stay on screen while the
     // device waits.
     let _progress = crate::ui::pause_progress();
     let mut bodies = Vec::new();
-    let mut uploads: HashMap<Platform, SetupUpload> = HashMap::new();
     if let Some(signer) = signing.signing() {
         let fingerprint = signer
             .chain
@@ -1077,40 +1069,11 @@ async fn sign_release(
         };
         let components = signing::release::enforcer_digests()?;
         let mut refused = None;
-        let api = signing::api::SigningApi::from_context(ctx).await?;
-        let hosting = match api.setup_hosting(project_id).await {
-            Ok(hosting) => {
-                signing.say(&format!(
-                    "  {}",
-                    signing::release::hosting_summary(&hosting)
-                ));
-                Some(hosting)
-            }
-            Err(error) => {
-                refused = Some(error_reason(&error));
-                None
-            }
-        };
         for (platform, stack) in pushed {
-            let Some(hosting) = &hosting else { break };
-            let built = match signing::release::setup_templates(
-                &stack,
-                platform,
-                &settings,
-                hosting,
-                alien_core::SetupPins::compiled_in(),
-            )
-            .await
+            let built = match signing::release::setup_allow_lists(&stack, platform, &settings).await
             {
-                Ok(rendered) => {
-                    uploads.insert(platform, signing::release::setup_upload(&rendered));
-                    signing::release::body(
-                        platform,
-                        &stack,
-                        &signing.channel,
-                        &components,
-                        signing::release::signed_setup(&rendered),
-                    )
+                Ok(setup) => {
+                    signing::release::body(platform, &stack, &signing.channel, &components, setup)
                 }
                 Err(error) => Err(error),
             };
@@ -1182,17 +1145,7 @@ async fn sign_release(
     if signer.signer.gesture().is_some() {
         signing.say("✓");
     }
-    statements
-        .into_iter()
-        .map(|(platform, statement)| {
-            let setup = uploads.remove(&platform).ok_or_else(|| {
-                AlienError::new(ErrorData::SigningFailed {
-                    message: format!("The {} setup templates went missing", platform.as_str()),
-                })
-            })?;
-            Ok((platform, statement, setup))
-        })
-        .collect()
+    Ok(statements)
 }
 
 /// The manager SDK's copy of a signed statement. Both are the same two
@@ -1251,7 +1204,6 @@ async fn create_manager_release(
     project_id: &str,
     stack: ManagerStackByPlatform,
     signed_stacks: HashMap<String, alien_manager_api::types::SignedStatement>,
-    setup_templates: HashMap<String, SetupUpload>,
     git_metadata: Option<alien_manager_api::types::GitMetadata>,
     channel: &str,
 ) -> Result<String> {
@@ -1266,7 +1218,6 @@ async fn create_manager_release(
             project_id: project_id.to_string(),
             channel: Some(channel.to_string()),
             signed_stacks,
-            setup_templates,
         })
         .send()
         .await
@@ -1297,7 +1248,6 @@ async fn create_platform_release(
     workspace: Option<&str>,
     stack: ManagerStackByPlatform,
     signed_stacks: HashMap<String, alien_manager_api::types::SignedStatement>,
-    setup_templates: HashMap<String, SetupUpload>,
     git_metadata: Option<GitMetadata>,
     channel: Option<&str>,
     title: Option<&str>,
@@ -1377,12 +1327,6 @@ async fn create_platform_release(
             .into_alien_error()
             .context(ErrorData::ApiRequestFailed {
                 message: "Failed to carry the signed statements".to_string(),
-                url: None,
-            })?;
-        json["setupTemplates"] = serde_json::to_value(&setup_templates)
-            .into_alien_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: "Failed to carry the setup templates".to_string(),
                 url: None,
             })?;
         let url = format!("{}/v1/releases", http.base_url.trim_end_matches('/'));

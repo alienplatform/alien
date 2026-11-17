@@ -12,6 +12,7 @@ openapi = ["dep:utoipa"]
 
 [dependencies]
 alien-error = { workspace = true }
+semver = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 p256 = { workspace = true }

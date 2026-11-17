@@ -39,6 +39,17 @@ fn resolve_target(target_image: &str, image_registry: Option<&str>) -> String {
     }
 }
 
+/// Whether a protected Operator may move to `target_image`: only to the image digest the newest
+/// accepted release signed as `components.operator`. The chart a setup installs starts the
+/// Operator from the digest of the renderer's build, which a signed release need not name; the
+/// Operator then moves to the signed one, and to nothing else.
+fn signed_target(signed: Option<&str>, target_image: &str) -> bool {
+    match (signed, alien_core::release_statement::image_digest(target_image)) {
+        (Some(signed), Some(target)) => signed == target,
+        _ => false,
+    }
+}
+
 /// Move the Operator's own Deployment to `target_image` if it runs another.
 pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
     let Some(deployment_name) = state.config.self_update_deployment.as_deref() else {
@@ -89,8 +100,7 @@ pub async fn apply(state: &OperatorState, target_image: &str) -> Result<()> {
             .get_signing_trust()
             .await?
             .and_then(|stored| stored.operator_digest);
-        let target_digest = alien_core::release_statement::image_digest(target_image);
-        if signed.is_none() || signed.as_deref() != target_digest {
+        if !signed_target(signed.as_deref(), target_image) {
             warn!(
                 image = target_image,
                 signed = signed.as_deref().unwrap_or("none"),
@@ -333,6 +343,29 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    #[test]
+    fn a_protected_operator_moves_only_to_the_signed_digest() {
+        let signed = format!("sha256:{}", "b".repeat(64));
+        let started = format!("registry.example/operator@sha256:{}", "a".repeat(64));
+        let signed_image = format!("registry.example/operator@{signed}");
+        let other = format!("registry.example/operator@sha256:{}", "c".repeat(64));
+        // The chart started the Operator from the renderer's build; the signed release names
+        // another digest: it moves to that one.
+        assert_ne!(started, signed_image);
+        assert!(signed_target(Some(&signed), &signed_image));
+        // A mirrored copy of the signed digest is the same digest.
+        assert!(signed_target(
+            Some(&signed),
+            &format!("mirror.example/operator@{signed}")
+        ));
+        // Anything else is refused, as is any image when no release named one or the target
+        // has no digest.
+        assert!(!signed_target(Some(&signed), &started));
+        assert!(!signed_target(Some(&signed), &other));
+        assert!(!signed_target(Some(&signed), "registry.example/operator:latest"));
+        assert!(!signed_target(None, &signed_image));
+    }
 
     #[test]
     fn mirrored_install_pulls_the_target_from_its_mirror() {

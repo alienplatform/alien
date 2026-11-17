@@ -9,7 +9,7 @@ use alien_cli_common::setup_templates::{
     protected_stack_settings, render_setup_template, RenderedSetupTemplate, SetupHostingOptions,
     SetupRenderOptions,
 };
-use alien_core::{SetupPins, Stack, StackSigning};
+use alien_core::{Stack, StackSigning};
 use alien_signing::{Kind, ReleaseBody, SignedStatement};
 
 const PREFIX: &str = "acme-prod";
@@ -50,19 +50,7 @@ pub(crate) async fn module(cloud: ModuleCloud) -> RenderedSetupTemplate {
         .terraform_registry(&terraform)
         .helm_registry(&helm)
         .hosting(hosting)
-        .pins(SetupPins {
-            aws_publisher: Some("111122223333".to_string()),
-            aws_verifier_image: Some(format!("verifier@sha256:{}", "5d".repeat(32))),
-            gcp_verifier_image: Some(format!(
-                "us-docker.pkg.dev/publisher/verifier/verifier@sha256:{}",
-                "5d".repeat(32)
-            )),
-            azure_verifier_image: Some(format!(
-                "publisher.azurecr.io/verifier@sha256:{}",
-                "5d".repeat(32)
-            )),
-            operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
-        })
+        .pins(super::super::verify_render::test_pins())
         .build();
     render_setup_template(cloud.template(), &stack(), &settings, &options)
         .await
@@ -116,8 +104,16 @@ fn module_release(
             workloads: Vec::new(),
             configurable: Default::default(),
             components: Default::default(),
-            setup: BTreeMap::from([(cloud.template().to_string(), module.setup_template())]),
-            stack: None,
+            setup: BTreeMap::from([(
+                cloud.template().to_string(),
+                alien_signing::SetupTemplate {
+                    allowed: module.allowed.clone(),
+                },
+            )]),
+            setup_renderer: Some(alien_signing::SetupRenderer {
+                min: alien_cli_common::setup_templates::RENDERER_VERSION.to_string(),
+            }),
+            stack: Some(serde_json::to_value(stack()).unwrap()),
         },
         &[("github-acme-app", 2)],
     )
@@ -159,7 +155,10 @@ async fn a_gcp_module_from_the_served_archive_matches_its_signed_release() {
     let rendered = module(ModuleCloud::Gcp).await;
     let extracted = extract(&reproducible_archive(&rendered));
     let installed = installed_module(extracted.path(), ModuleCloud::Gcp).unwrap();
-    assert_eq!(installed.digest, rendered.setup_template().sha256);
+    assert_eq!(
+        installed.content.digest(),
+        format!("sha256:{}", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&rendered.bytes)))
+    );
 
     // Parameter Manager lists two versions of the settings; the newest counts.
     let settings_name = names::gcp_settings(PREFIX);
@@ -189,17 +188,19 @@ async fn a_gcp_module_from_the_served_archive_matches_its_signed_release() {
         )],
         platform: "gcp",
     };
-    let lines = check_signed(&signed, &installed, Vec::new(), now()).unwrap();
+    let lines = check_signed(&signed, &installed, Vec::new(), now()).await.unwrap();
     assert_eq!(
         render(&lines),
         format!(
             "Install              gcp:acme-data:acme-prod\n\
              Signing fingerprint  {}   (set by setup, 2026-11-02)\n\
-             Template             matches release rel_30 · production · {}  ✓\n\
+             Renderer             alien {} (this build)  ✓\n\
+             Template             rendered again from release rel_30 · production · {}  ✓\n\
              Variables            {VARIABLES}\n\
              Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n",
             alien_signing::display_fingerprint(&fingerprint()),
-            installed.digest
+            alien_cli_common::setup_templates::RENDERER_VERSION,
+            installed.content.digest()
         )
     );
 
@@ -214,12 +215,14 @@ async fn a_gcp_module_from_the_served_archive_matches_its_signed_release() {
     text.push_str("\nresource \"null_resource\" \"extra\" {}\n");
     std::fs::write(&main, text).unwrap();
     let changed = installed_module(tampered.path(), ModuleCloud::Gcp).unwrap();
-    let lines = check_signed(&signed, &changed, Vec::new(), now()).unwrap();
+    let lines = check_signed(&signed, &changed, Vec::new(), now())
+        .await
+        .unwrap();
     assert_eq!(template_line(&lines).mark, Mark::Fail);
     assert!(
         template_line(&lines)
             .text
-            .contains("is not the terraform-gcp template of any release signed for production"),
+            .contains("is not what any release signed for production renders to"),
         "{}",
         template_line(&lines).text
     );
@@ -232,6 +235,7 @@ async fn a_gcp_module_from_the_served_archive_matches_its_signed_release() {
         Vec::new(),
         now(),
     )
+    .await
     .unwrap();
     assert_eq!(template_line(&lines).mark, Mark::Fail);
 
@@ -242,7 +246,9 @@ async fn a_gcp_module_from_the_served_archive_matches_its_signed_release() {
         "rel_30".to_string(),
         module_release("aws", ModuleCloud::Aws, &aws),
     )];
-    let lines = check_signed(&other, &installed, Vec::new(), now()).unwrap();
+    let lines = check_signed(&other, &installed, Vec::new(), now())
+        .await
+        .unwrap();
     assert_eq!(template_line(&lines).mark, Mark::Fail);
 }
 
@@ -289,7 +295,7 @@ async fn an_azure_module_reads_its_settings_from_the_group_tag_and_its_ledger_fr
         )],
         platform: "azure",
     };
-    let lines = check_signed(&signed, &installed, Vec::new(), now()).unwrap();
+    let lines = check_signed(&signed, &installed, Vec::new(), now()).await.unwrap();
     assert!(
         lines.iter().all(|line| line.mark != Mark::Fail),
         "{}",
@@ -301,7 +307,9 @@ async fn an_azure_module_reads_its_settings_from_the_group_tag_and_its_ledger_fr
     let untagged = serde_json::json!({ "name": "acme-prod-rg", "tags": { "owner": "platform" } });
     let mut unprotected = signed.clone();
     unprotected.settings = resource_group_settings(&untagged).map(|bytes| (bytes, None));
-    let error = check_signed(&unprotected, &installed, Vec::new(), now()).unwrap_err();
+    let error = check_signed(&unprotected, &installed, Vec::new(), now())
+        .await
+        .unwrap_err();
     assert!(
         error.message.contains("is not protected"),
         "{}",

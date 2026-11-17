@@ -1866,42 +1866,6 @@
         ]
       }
     },
-    "/v1/projects/{project}/signing": {
-      "get": {
-        "tags": [
-          "signing"
-        ],
-        "operationId": "get_project_signing",
-        "parameters": [
-          {
-            "name": "project",
-            "in": "path",
-            "description": "Project id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Setup hosting for signed releases",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectSigningResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
     "/v1/release-channels": {
       "get": {
         "tags": [
@@ -7915,16 +7879,6 @@
           "projectId": {
             "type": "string",
             "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`.\n\nThe OSS CLI sends this field as `project` on `alien release`\n(see `alien-cli` release flow); the underlying alien-managerx\nrelease endpoint accepts both forms. Accept both here too so\n`alien release` against an OSS standalone manager doesn't fail\nat the schema layer with a confusing\n`unknown field \"project\", expected \"projectId\"`."
-          },
-          "setupTemplates": {
-            "type": "object",
-            "description": "Setup template bytes (base64) keyed by platform and template name, as\nthe release signed them. Required for every template a signed\nstatement names, and refused unless each hashes to its signed digest.",
-            "additionalProperties": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            }
           },
           "signedStacks": {
             "type": "object",
@@ -15647,20 +15601,6 @@
         ],
         "description": "Storage backend representation for different presigned request types"
       },
-      "ProjectSigningResponse": {
-        "type": "object",
-        "description": "What a release of the project needs to know to sign its setup templates.",
-        "required": [
-          "setupHosting"
-        ],
-        "properties": {
-          "setupHosting": {
-            "type": "object",
-            "description": "What this manager renders setup templates with, so the digests a\nrelease signs are of the templates installs get.",
-            "additionalProperties": {}
-          }
-        }
-      },
       "PromoteReleaseRequest": {
         "type": "object",
         "description": "Body of `POST /v1/releases/{id}/promote`.",
@@ -16705,16 +16645,6 @@
             "type": "object",
             "description": "Setup-step fingerprints — used by `alien release` to short-circuit\nre-pushing artifacts that haven't changed across releases. The\nplatform-API client requires this field to be present (even if\nempty). The OSS standalone manager doesn't track per-setup-step\nfingerprints, so we return an empty map.",
             "additionalProperties": {}
-          },
-          "setupTemplates": {
-            "type": "object",
-            "description": "Setup template bytes (base64) keyed by platform and template name,\nexactly as the release uploaded them; each hashes to its signed digest.",
-            "additionalProperties": {
-              "type": "object",
-              "additionalProperties": {
-                "type": "string"
-              }
-            }
           },
           "signedStacks": {
             "type": "object",
@@ -19723,6 +19653,11 @@
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "requestedUpdateRan": {
+            "type": "string",
+            "description": "The rollout in which an update ran because the controller asked for one while the\nconfig was unchanged. While the controller keeps asking in that same rollout, its\ndependents no longer wait for it, so a check that never settles cannot hold them back\nfor good. A later rollout is a new request and is waited for again. Cleared once the\ncontroller stops asking. State written before this field existed (it was a flag then)\nreads as none.",
+            "nullable": true
           },
           "retryAttempt": {
             "type": "integer",

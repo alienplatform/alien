@@ -12,7 +12,6 @@ use std::path::Path;
 
 use alien_azure_clients::azure::token_cache::AzureTokenCache;
 use alien_azure_clients::{AzureClientConfig, AzureClientConfigExt};
-use alien_cli_common::setup_templates::file_map_bytes;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt};
 use alien_signing::{settings::names, InstallId};
@@ -21,7 +20,7 @@ use chrono::{DateTime, Utc};
 use clap::ValueEnum;
 use serde_json::Value;
 
-use super::verify::{sha256_digest, Choices, Installed, Signed};
+use super::verify::{Choices, Content, Installed, Signed};
 use crate::error::{ErrorData, Result};
 
 /// What `verify` says about Terraform variables: they are set in the
@@ -134,7 +133,7 @@ pub fn directory_files(dir: &Path) -> Result<BTreeMap<String, String>> {
 pub fn installed_module(dir: &Path, cloud: ModuleCloud) -> Result<Installed> {
     Ok(Installed {
         template: cloud.template(),
-        digest: sha256_digest(&file_map_bytes(&directory_files(dir)?)),
+        content: Content::Files(directory_files(dir)?),
         choices: Choices::NotRead(VARIABLES),
     })
 }

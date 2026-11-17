@@ -250,6 +250,7 @@ pub fn release_body() -> ReleaseBody {
         },
         components: BTreeMap::new(),
         setup: BTreeMap::new(),
+        setup_renderer: None,
         stack: None,
     }
 }

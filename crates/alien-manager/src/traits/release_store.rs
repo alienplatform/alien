@@ -9,7 +9,6 @@ use alien_signing::{Kind, ReleaseBody};
 
 /// Setup template bytes by template name (`cloudformation`, `helm`, ...),
 /// base64-encoded.
-pub type SetupTemplateBytes = BTreeMap<String, String>;
 
 /// A release record. Contains stacks for one or more platforms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,10 +27,6 @@ pub struct ReleaseRecord {
     /// Per-platform signed statements, stored exactly as received.
     #[serde(default)]
     pub signed_stacks: HashMap<Platform, SignedStatement>,
-    /// Per-platform setup template bytes the signed statements digest, by
-    /// template name (base64), stored exactly as received.
-    #[serde(default)]
-    pub setup_templates: HashMap<Platform, SetupTemplateBytes>,
     pub git_commit_sha: Option<String>,
     pub git_commit_ref: Option<String>,
     pub git_commit_message: Option<String>,
@@ -50,8 +45,6 @@ pub struct CreateReleaseParams {
     pub stacks: HashMap<Platform, Stack>,
     /// Per-platform signed statements, stored exactly as received.
     pub signed_stacks: HashMap<Platform, SignedStatement>,
-    /// Per-platform setup template bytes, checked against the signed digests.
-    pub setup_templates: HashMap<Platform, SetupTemplateBytes>,
     pub git_commit_sha: Option<String>,
     pub git_commit_ref: Option<String>,
     pub git_commit_message: Option<String>,

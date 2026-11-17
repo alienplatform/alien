@@ -104,7 +104,6 @@ async fn start_with_channel_on(channel_release: usize) -> Server {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
-                        setup_templates: Default::default(),
                         signed_stacks: Default::default(),
                     },
                 )
