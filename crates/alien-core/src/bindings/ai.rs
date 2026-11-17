@@ -101,7 +101,9 @@ impl std::fmt::Debug for ExternalAiBinding {
 ///
 /// Untagged, because the BYO-key input has no tag and must keep parsing unchanged. The two shapes
 /// cannot overlap: the ambient one requires `service`, the key one requires `provider` and `apiKey`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// `Deserialize` is hand-written (see below) so a typo gets an error naming both accepted forms, and
+/// so an ambient input carrying an unused key such as `apiKey` is refused instead of dropped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
@@ -110,6 +112,35 @@ pub enum ExternalAi {
     Ambient(AmbientAiBinding),
     /// A provider reached with a key the installer supplies.
     ApiKey(ExternalAiBinding),
+}
+
+impl<'de> Deserialize<'de> for ExternalAi {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        const FORMS: &str = "expected either {\"service\": \"bedrock\", \"region\": \"<region>\"} \
+            (the pod's cloud identity, no key) or {\"provider\": \"<name>\", \"apiKey\": \"<key>\"} (your own key)";
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let Some(object) = value.as_object() else {
+            return Err(D::Error::custom(format!(
+                "invalid external AI binding: {FORMS}"
+            )));
+        };
+        if object.contains_key("service") {
+            if let Some(extra) = object.keys().find(|k| *k != "service" && *k != "region") {
+                return Err(D::Error::custom(format!(
+                    "invalid external AI binding: field `{extra}` is not allowed with `service` \
+                     (it uses the workload's cloud identity and takes only `region`); {FORMS}"
+                )));
+            }
+            serde_json::from_value(value)
+                .map(Self::Ambient)
+                .map_err(|e| D::Error::custom(format!("invalid external AI binding: {e}; {FORMS}")))
+        } else {
+            serde_json::from_value(value)
+                .map(Self::ApiKey)
+                .map_err(|e| D::Error::custom(format!("invalid external AI binding: {e}; {FORMS}")))
+        }
+    }
 }
 
 /// A managed cloud AI service the workload reaches with its ambient identity. The installer owns
@@ -241,5 +272,31 @@ mod tests {
         let deserialized: AiBinding =
             serde_json::from_value(json).expect("external binding should round-trip");
         assert_eq!(binding, deserialized);
+    }
+
+    #[test]
+    fn test_external_ai_rejects_typos_and_unused_keys_with_clear_errors() {
+        for bad in [
+            serde_json::json!({"service": "bedrok", "region": "us-east-1"}),
+            serde_json::json!({"service": "bedrock"}),
+            serde_json::json!({"service": "bedrock", "region": "us-east-1", "apiKey": "sk-x"}),
+            serde_json::json!({"provider": "openai"}),
+            serde_json::json!("bedrock"),
+        ] {
+            let err = serde_json::from_value::<ExternalAi>(bad.clone())
+                .expect_err(&format!("{bad} must be refused"))
+                .to_string();
+            assert!(
+                err.contains("invalid external AI binding") && err.contains("\"apiKey\""),
+                "unclear error for {bad}: {err}"
+            );
+            assert!(!err.contains("sk-x"), "error must not echo the key: {err}");
+        }
+        let err = serde_json::from_value::<ExternalAi>(
+            serde_json::json!({"service": "bedrock", "region": "us-east-1", "apiKey": "sk-x"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("`apiKey` is not allowed"), "{err}");
     }
 }
