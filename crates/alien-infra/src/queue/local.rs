@@ -51,6 +51,8 @@ impl LocalQueueController {
             },
         )?;
 
+        set_dead_letter(&queue_manager, &config).await?;
+
         info!(
             queue_id=%config.id,
             path=%queue_path.display(),
@@ -88,6 +90,9 @@ impl LocalQueueController {
                     service_name: "queue_manager".to_string(),
                 })
             })?;
+
+        // Idempotent: also relinks the target after a restart or a target that was recreated.
+        set_dead_letter(&queue_manager, &config).await?;
 
         queue_manager
             .check_health(&config.id)
@@ -245,4 +250,25 @@ fn emit_local_queue_heartbeat(
         })),
         raw: vec![],
     });
+}
+
+/// Tells the queue manager where this queue moves messages that fail `max_attempts` deliveries,
+/// or that it moves none.
+async fn set_dead_letter(
+    queue_manager: &alien_local::LocalQueueManager,
+    config: &Queue,
+) -> Result<()> {
+    queue_manager
+        .set_dead_letter(
+            &config.id,
+            config
+                .dead_letter
+                .as_ref()
+                .map(|dead_letter| (dead_letter.queue.id.as_str(), dead_letter.max_attempts)),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to set the dead-letter queue of '{}'", config.id),
+            resource_id: Some(config.id.clone()),
+        })
 }

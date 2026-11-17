@@ -32,11 +32,62 @@ pub struct LocalQueueManager {
 #[derive(Debug)]
 pub struct ManagedQueue {
     queue: Mutex<Option<LocalQueue>>,
+    /// Where messages that failed `max_attempts` deliveries move, when the queue has a
+    /// dead-letter setting.
+    dead_letter: RwLock<Option<DeadLetterTarget>>,
+}
+
+#[derive(Debug, Clone)]
+struct DeadLetterTarget {
+    queue: Arc<ManagedQueue>,
+    max_attempts: u32,
+}
+
+/// The dead-letter setting persisted beside the queue data, so a restart keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct DeadLetterFile {
+    queue: String,
+    max_attempts: u32,
 }
 fn unavailable() -> alien_bindings::error::ErrorData {
     alien_bindings::error::ErrorData::config_invalid("queue", "Queue has been deleted")
 }
 impl ManagedQueue {
+    /// Moves messages that were delivered `max_attempts` times to the dead-letter target, before
+    /// the next delivery. A failure leaves them in place to be retried on the next receive.
+    async fn move_dead_letters(&self) {
+        let Some(target) = self
+            .dead_letter
+            .read()
+            .expect("dead-letter setting poisoned")
+            .clone()
+        else {
+            return;
+        };
+        let source = self.queue.lock().await;
+        let Some(source) = source.as_ref() else {
+            return;
+        };
+        let destination = target.queue.queue.lock().await;
+        let Some(destination) = destination.as_ref() else {
+            tracing::warn!("dead-letter target queue is unavailable; messages stay in place");
+            return;
+        };
+        loop {
+            match source
+                .move_dead_letters(destination, target.max_attempts, 100)
+                .await
+            {
+                Ok(100) => continue,
+                Ok(_) => break,
+                Err(error) => {
+                    tracing::warn!(%error, "moving dead letters failed; retrying on the next receive");
+                    break;
+                }
+            }
+        }
+    }
+
     pub async fn stats(&self) -> alien_bindings::error::Result<QueueStats> {
         self.queue
             .lock()
@@ -77,6 +128,7 @@ impl Queue for ManagedQueue {
         name: &str,
         max: usize,
     ) -> alien_bindings::error::Result<Vec<QueueMessage>> {
+        self.move_dead_letters().await;
         self.queue
             .lock()
             .await
@@ -245,9 +297,106 @@ impl LocalQueueManager {
                     .await
                     .context(queue_error(id, "Open exclusively owned queue"))?,
             )),
+            dead_letter: RwLock::new(None),
         });
         queues.insert(id.into(), queue.clone());
+        // A restart keeps the setting: it was persisted when the controller set it.
+        if let Some(setting) = self.read_dead_letter(id).await? {
+            self.link_dead_letter(id, &setting, queues).await?;
+        }
         Ok(queue)
+    }
+
+    fn dead_letter_path(&self, id: &str) -> PathBuf {
+        self.state_dir
+            .join("queue-dead-letter")
+            .join(format!("{id}.json"))
+    }
+
+    async fn read_dead_letter(&self, id: &str) -> Result<Option<DeadLetterFile>> {
+        match tokio::fs::read(self.dead_letter_path(id)).await {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .into_alien_error()
+                .context(queue_error(id, "Read the dead-letter setting"))
+                .map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(AlienError::new(queue_error(
+                id,
+                format!("Read the dead-letter setting: {error}"),
+            ))),
+        }
+    }
+
+    fn link_dead_letter<'a>(
+        &'a self,
+        id: &'a str,
+        setting: &'a DeadLetterFile,
+        queues: &'a mut HashMap<String, Arc<ManagedQueue>>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let target = self.load_locked(&setting.queue, queues).await?;
+            if let Some(source) = queues.get(id) {
+                *source
+                    .dead_letter
+                    .write()
+                    .expect("dead-letter setting poisoned") = Some(DeadLetterTarget {
+                    queue: target,
+                    max_attempts: setting.max_attempts,
+                });
+            }
+            Ok(())
+        })
+    }
+
+    /// Sets or clears where queue `id` moves messages that failed `max_attempts` deliveries. The
+    /// setting is persisted, so it holds across restarts, and takes effect on the next receive.
+    pub async fn set_dead_letter(&self, id: &str, target: Option<(&str, u32)>) -> Result<()> {
+        let mut queues = self.queues.lock().await;
+        let setting = target.map(|(queue, max_attempts)| DeadLetterFile {
+            queue: queue.to_string(),
+            max_attempts,
+        });
+        let path = self.dead_letter_path(id);
+        let unchanged = self.read_dead_letter(id).await? == setting;
+        match &setting {
+            _ if unchanged => {}
+            Some(setting) => {
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .into_alien_error()
+                        .context(queue_error(id, "Create the dead-letter directory"))?;
+                }
+                let bytes = serde_json::to_vec(setting)
+                    .into_alien_error()
+                    .context(queue_error(id, "Encode the dead-letter setting"))?;
+                tokio::fs::write(&path, bytes)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(id, "Persist the dead-letter setting"))?;
+            }
+            None => match tokio::fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AlienError::new(queue_error(
+                        id,
+                        format!("Remove the dead-letter setting: {error}"),
+                    )))
+                }
+            },
+        }
+        let source = self.load_locked(id, &mut queues).await?;
+        match setting {
+            Some(setting) => self.link_dead_letter(id, &setting, &mut queues).await?,
+            None => {
+                *source
+                    .dead_letter
+                    .write()
+                    .expect("dead-letter setting poisoned") = None;
+            }
+        }
+        Ok(())
     }
 
     /// Revoke outstanding handles without deleting durable data.
@@ -274,6 +423,7 @@ impl LocalQueueManager {
                 .into_alien_error()
                 .context(queue_error(id, "Delete queue directory"))?;
         }
+        let _ = tokio::fs::remove_file(self.dead_letter_path(id)).await;
         // Explicit resource deletion also removes unmigrated data, after dependents stop.
         let legacy = self.state_dir.join("queue").join(id);
         if legacy.exists() {
@@ -400,6 +550,66 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    /// A message that keeps failing moves to the dead-letter queue with its payload, and the
+    /// setting and the failed deliveries survive a restart of the owner.
+    #[tokio::test]
+    async fn exhausted_messages_move_to_the_dead_letter_queue_across_a_restart() {
+        use alien_bindings::traits::MessagePayload;
+        let directory = tempfile::tempdir().unwrap();
+        let text = |message: &QueueMessage| match &message.payload {
+            MessagePayload::Text(text) => text.clone(),
+            MessagePayload::Json(value) => value.to_string(),
+        };
+        {
+            let manager = LocalQueueManager::new(directory.path().to_owned());
+            manager.create_queue("tasks").await.unwrap();
+            manager.create_queue("failed").await.unwrap();
+            manager
+                .set_dead_letter("tasks", Some(("failed", 5)))
+                .await
+                .unwrap();
+            let tasks = manager.load_queue("tasks").await.unwrap();
+            tasks
+                .send("tasks", MessagePayload::Text("poison".into()))
+                .await
+                .unwrap();
+            // Four failed deliveries: nack returns the message at once.
+            for expected in 1..=4 {
+                let got = tasks.receive("tasks", 1).await.unwrap();
+                assert_eq!(got[0].attempt, expected);
+                tasks.nack("tasks", &got[0].receipt_handle).await.unwrap();
+            }
+            manager.close().await;
+        }
+
+        // A new owner over the same directory: the setting is read back from disk.
+        let manager = LocalQueueManager::new(directory.path().to_owned());
+        let tasks = manager.load_queue("tasks").await.unwrap();
+        let failed = manager.load_queue("failed").await.unwrap();
+        let fifth = tasks.receive("tasks", 1).await.unwrap();
+        assert_eq!(fifth[0].attempt, 5, "five deliveries are allowed");
+        tasks.nack("tasks", &fifth[0].receipt_handle).await.unwrap();
+
+        // The sixth would be past maxAttempts: it moves instead, payload intact.
+        assert!(tasks.receive("tasks", 1).await.unwrap().is_empty());
+        let moved = failed.receive("failed", 10).await.unwrap();
+        assert_eq!(moved.len(), 1);
+        assert_eq!(text(&moved[0]), "poison");
+        assert_eq!(tasks.stats().await.unwrap().total, 0, "tasks ends empty");
+
+        // Removing the setting stops the move.
+        manager.set_dead_letter("tasks", None).await.unwrap();
+        tasks
+            .send("tasks", MessagePayload::Text("again".into()))
+            .await
+            .unwrap();
+        for _ in 0..7 {
+            let got = tasks.receive("tasks", 1).await.unwrap();
+            tasks.nack("tasks", &got[0].receipt_handle).await.unwrap();
+        }
+        assert_eq!(tasks.stats().await.unwrap().total, 1);
+    }
 
     #[tokio::test]
     async fn waiting_open_cannot_recreate_a_deleted_queue() {
