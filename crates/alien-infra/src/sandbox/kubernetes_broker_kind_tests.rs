@@ -1113,6 +1113,12 @@ spec:
             "mkdir -p /tmp/sbx; sleep 3600".into(),
         ]);
         let env = container.env.get_or_insert_default();
+        // This test is about the readiness canary. The startup gate (which the pod also carries)
+        // always requires the Kubernetes API server address to be dropped, and on Kind that
+        // address is the control-plane node itself: kindnet drops pod-to-pod traffic but does
+        // not drop traffic to the node, so the gate can never be satisfied here. The gate is
+        // exercised by the root-boot Kind test, which expects exactly that refusal.
+        env.retain(|var| var.name != "ALIEN_SANDBOX_STARTUP_EGRESS_GATE");
         let mut add = |name: &str, value: String| {
             env.retain(|var| var.name != name);
             env.push(k8s_openapi::api::core::v1::EnvVar {
