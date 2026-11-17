@@ -211,12 +211,22 @@ pub async fn check_pull(deployment: &TestDeployment, prefix: &str) -> BTreeMap<S
     )
     .await;
     assert_eq!(sent["sent"], GOOD + POISON);
+    await_pull(&client, url, prefix, GOOD).await
+}
 
+/// Consumes `pulled` until `good` good messages were seen and every poison message of `prefix`
+/// ended in `pulled-failed`, then checks payloads, attempts and that `pulled` is empty.
+async fn await_pull(
+    client: &Client,
+    url: &str,
+    prefix: &str,
+    good: usize,
+) -> BTreeMap<String, u64> {
     let started = Instant::now();
     let mut failed: BTreeMap<String, Value> = BTreeMap::new();
     let mut attempts: BTreeMap<String, u64> = BTreeMap::new();
     let mut good_seen = BTreeSet::new();
-    while !(failed.len() == POISON && good_seen.len() == GOOD) {
+    while !(failed.len() == POISON && good_seen.len() == good) {
         assert!(
             started.elapsed() < Duration::from_secs(30 * 60),
             "the pull path did not finish: failed={failed:?} good_seen={}",
@@ -266,6 +276,52 @@ pub async fn check_pull(deployment: &TestDeployment, prefix: &str) -> BTreeMap<S
         "pull path: highest attempt reported per poison message"
     );
     attempts
+}
+
+/// The upgrade path, for a deployment installed from a stack without the setting (run with
+/// `DLQ_E2E_NO_DEAD_LETTER=1 DLQ_E2E_UPGRADE=1`): poison messages wait in `pulled`, then a release
+/// adds the setting (refused until setup is rerun), and the messages sent before the rerun must
+/// still be there and end in `pulled-failed`. Then the attempts change and the setting is removed.
+pub async fn check_upgrade(ctx: &mut alien_test::TestContext) {
+    let url = super::bindings::deployment_url(&ctx.deployment)
+        .unwrap()
+        .to_string();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .unwrap();
+    warm_up(&client, &url).await;
+    let sent = json_request(
+        &client,
+        client
+            .post(format!("{url}/pull/send"))
+            .json(&json!({"good": 2, "poison": POISON, "prefix": "up"})),
+    )
+    .await;
+    assert_eq!(sent["sent"], 2 + POISON);
+
+    alien_test::distribution::verify_dead_letter_update(
+        ctx,
+        alien_test::distribution::DeadLetterChange::Set(5),
+    )
+    .await
+    .expect("adding a dead-letter setting must require and recover through setup");
+    // The queues were updated in place: the messages sent before the rerun are still there.
+    await_pull(&client, &url, "up", 2).await;
+    check_dead_letter(&ctx.deployment, "after", false).await;
+
+    alien_test::distribution::verify_dead_letter_update(
+        ctx,
+        alien_test::distribution::DeadLetterChange::Set(7),
+    )
+    .await
+    .expect("changing the attempts must require and recover through setup");
+    alien_test::distribution::verify_dead_letter_update(
+        ctx,
+        alien_test::distribution::DeadLetterChange::Remove,
+    )
+    .await
+    .expect("removing the setting must require and recover through setup");
 }
 
 /// The dead-letter check on the trigger path and on the pull path, or the same run without the

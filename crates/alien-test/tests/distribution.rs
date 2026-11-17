@@ -81,6 +81,9 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("remote AI checks failed: {error:#}");
             }
         }
+        TestApp::QueueDeadLetter if std::env::var("DLQ_E2E_UPGRADE").as_deref() == Ok("1") => {
+            common::queue_dead_letter::check_upgrade(ctx).await;
+        }
         TestApp::QueueDeadLetter => {
             common::queue_dead_letter::check(
                 &ctx.deployment,
@@ -1388,5 +1391,53 @@ distribution_test_context!(
 #[test_context(TerraformAzureNotifications)]
 #[tokio::test]
 async fn terraform_azure_push_storage_notifications(ctx: &mut TerraformAzureNotifications) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    CloudFormationAwsQueueDeadLetter,
+    DistributionFlow::CloudFormationAwsPush,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(CloudFormationAwsQueueDeadLetter)]
+#[tokio::test]
+async fn cloudformation_aws_push_queue_dead_letter(ctx: &mut CloudFormationAwsQueueDeadLetter) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAwsQueueDeadLetter,
+    DistributionFlow::TerraformAwsPush,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(TerraformAwsQueueDeadLetter)]
+#[tokio::test]
+async fn terraform_aws_push_queue_dead_letter(ctx: &mut TerraformAwsQueueDeadLetter) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformGcpQueueDeadLetter,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(TerraformGcpQueueDeadLetter)]
+#[tokio::test]
+async fn terraform_gcp_push_queue_dead_letter(ctx: &mut TerraformGcpQueueDeadLetter) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAzureQueueDeadLetter,
+    DistributionFlow::TerraformAzurePush,
+    TestApp::QueueDeadLetter
+);
+
+#[test_context(TerraformAzureQueueDeadLetter)]
+#[tokio::test]
+async fn terraform_azure_push_queue_dead_letter(ctx: &mut TerraformAzureQueueDeadLetter) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
