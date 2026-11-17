@@ -59,7 +59,8 @@ pub struct KubernetesWorkerController {
     #[serde(default)]
     pub(crate) recovery_checks: u32,
     /// Set only while RefreshFailed runs the health check; a recovery needs a finished rollout.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    /// Set only while the RefreshFailed handler runs its health check; never stored.
+    #[serde(skip)]
     pub(crate) recovering: bool,
     /// When the last healthy check counted towards recovery.
     #[serde(default)]
