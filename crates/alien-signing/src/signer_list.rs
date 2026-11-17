@@ -6,15 +6,12 @@
 //! `adminThreshold` admin keys of the one before. Whoever carries the chain can
 //! withhold a version, but can't change one or add one.
 //!
-//! Every version expires at most [`MAX_LIST_LIFETIME_DAYS`] after it is
-//! signed. An expired list still links to the next version, so admins can
-//! always refresh it, but no statement verifies against it: a withheld
-//! revocation stops counting once the list it was withheld from expires.
+//! A list never expires. An enforcer holds the highest version it accepted
+//! (the install's ledger records it), so an older version can't come back.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use alien_error::AlienError;
-use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::envelope::{Kind, Opened, Role, SignedStatement};
@@ -24,22 +21,43 @@ use crate::key::PublicKey;
 /// Most signers one list may hold.
 pub const MAX_SIGNERS: usize = 256;
 
-/// Longest a signer list version may stay valid.
-pub const MAX_LIST_LIFETIME_DAYS: i64 = 90;
-
-/// Clock difference tolerated between the signer and the enforcer.
-const CLOCK_SKEW_HOURS: i64 = 24;
-
 /// Where a signer's key lives. It is shown to admins and gives no authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SignerKind {
     /// A CI key, in a CI secret or a cloud KMS.
     Ci,
-    /// A key in a laptop's secure hardware.
+    /// A key on a person's machine: in secure hardware or, when there is
+    /// none, a software key in the signing home.
     Device,
     /// The key the recovery code derives.
     Recovery,
+}
+
+/// Where a device key is held. It is shown to admins and gives no authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyBackend {
+    /// Apple Secure Enclave.
+    SecureEnclave,
+    /// A TPM.
+    Tpm,
+    /// A YubiKey.
+    Yubikey,
+    /// A file: anyone who can read it can sign.
+    Software,
+}
+
+impl KeyBackend {
+    /// The name in JSON and on screen.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SecureEnclave => "secure-enclave",
+            Self::Tpm => "tpm",
+            Self::Yubikey => "yubikey",
+            Self::Software => "software",
+        }
+    }
 }
 
 /// One key on the list.
@@ -52,6 +70,9 @@ pub struct Signer {
     pub key: String,
     /// Where the key lives.
     pub kind: SignerKind,
+    /// Where the key is held, when the signer who added it said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<KeyBackend>,
     /// What the key may sign.
     pub roles: Vec<Role>,
     /// Display label, such as the engineer's email.
@@ -85,8 +106,6 @@ pub struct TrustedList {
     pub version: u64,
     /// Digest of the version's payload.
     pub digest: String,
-    /// When the list stops being valid.
-    pub not_after: DateTime<Utc>,
     /// The body.
     pub body: SignerListBody,
     keys: BTreeMap<String, (PublicKey, BTreeSet<Role>)>,
@@ -96,11 +115,6 @@ impl TrustedList {
     /// The key and roles of signer `id`.
     pub fn signer(&self, id: &str) -> Option<(&PublicKey, &BTreeSet<Role>)> {
         self.keys.get(id).map(|(key, roles)| (key, roles))
-    }
-
-    /// Whether the list has expired at `now`.
-    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
-        now > self.not_after
     }
 
     /// Kind of signer `id`.
@@ -168,7 +182,8 @@ pub struct SignerChain {
     project: String,
     statements: Vec<SignedStatement>,
     digests: Vec<String>,
-    current: TrustedList,
+    /// Every trusted version, oldest first; the last is the current one.
+    lists: Vec<TrustedList>,
 }
 
 impl SignerChain {
@@ -177,7 +192,6 @@ impl SignerChain {
     pub fn genesis(
         fingerprint: &str,
         statement: &SignedStatement,
-        now: DateTime<Utc>,
     ) -> Result<Self> {
         let opened = statement.open()?;
         let version = opened.sequence;
@@ -192,7 +206,7 @@ impl SignerChain {
                 ),
             ));
         }
-        let list = parse_list(&project, &opened, 1, now)?;
+        let list = parse_list(&project, &opened, 1)?;
         if list.body.previous.is_some() {
             return Err(list_refused(1, "version 1 names a previous version"));
         }
@@ -214,7 +228,7 @@ impl SignerChain {
             project,
             statements: vec![statement.clone()],
             digests: vec![opened.digest],
-            current: list,
+            lists: vec![list],
         })
     }
 
@@ -222,7 +236,6 @@ impl SignerChain {
     pub fn from_statements(
         fingerprint: &str,
         statements: &[SignedStatement],
-        now: DateTime<Utc>,
     ) -> Result<Self> {
         let mut opened = statements
             .iter()
@@ -232,12 +245,12 @@ impl SignerChain {
         let ((_, first), rest) = opened
             .split_first()
             .ok_or_else(|| list_refused(1, "the chain is empty"))?;
-        let mut chain = Self::genesis(fingerprint, first, now)?;
+        let mut chain = Self::genesis(fingerprint, first)?;
         let rest: Vec<SignedStatement> = rest
             .iter()
             .map(|(_, statement)| (*statement).clone())
             .collect();
-        chain.extend(&rest, now)?;
+        chain.extend(&rest)?;
         Ok(chain)
     }
 
@@ -251,7 +264,14 @@ impl SignerChain {
 
     /// The highest trusted version.
     pub fn current(&self) -> &TrustedList {
-        &self.current
+        self.lists.last().expect("a chain holds version 1")
+    }
+
+    /// Trusted version `version`, if the chain holds it.
+    pub fn version(&self, version: u64) -> Option<&TrustedList> {
+        version
+            .checked_sub(1)
+            .and_then(|index| self.lists.get(index as usize))
     }
 
     /// The project the chain belongs to.
@@ -270,13 +290,13 @@ impl SignerChain {
     /// when they don't, so a second, different version N is reported as a
     /// fork rather than ignored. The rest must follow on in order. Returns
     /// whether the chain grew.
-    pub fn extend(&mut self, statements: &[SignedStatement], now: DateTime<Utc>) -> Result<bool> {
+    pub fn extend(&mut self, statements: &[SignedStatement]) -> Result<bool> {
         let mut opened = statements
             .iter()
             .map(|statement| statement.open().map(|opened| (opened, statement)))
             .collect::<Result<Vec<_>>>()?;
         opened.sort_by_key(|(opened, _)| opened.sequence);
-        let before = self.current.version;
+        let before = self.current().version;
         for (opened, statement) in opened {
             if opened.kind != Kind::SignerList {
                 return Err(list_refused(
@@ -285,7 +305,7 @@ impl SignerChain {
                 ));
             }
             let version = opened.sequence;
-            if version <= self.current.version {
+            if version <= self.current().version {
                 if self.digest_of(version) != Some(opened.digest.as_str()) {
                     return Err(list_refused(
                         version,
@@ -294,50 +314,49 @@ impl SignerChain {
                 }
                 continue;
             }
-            self.advance(&opened, statement, now)?;
+            self.advance(&opened, statement)?;
         }
-        Ok(self.current.version > before)
+        Ok(self.current().version > before)
     }
 
     fn advance(
         &mut self,
         opened: &Opened,
         statement: &SignedStatement,
-        now: DateTime<Utc>,
     ) -> Result<()> {
         let version = opened.sequence;
-        if version != self.current.version + 1 {
+        if version != self.current().version + 1 {
             return Err(list_refused(
                 version,
                 format!(
                     "version {} is missing; the chain is at version {}",
-                    self.current.version + 1,
-                    self.current.version
+                    self.current().version + 1,
+                    self.current().version
                 ),
             ));
         }
-        let next = parse_list(&self.project, opened, self.current.version, now)?;
-        if next.body.previous.as_deref() != Some(self.current.digest.as_str()) {
+        let next = parse_list(&self.project, opened, self.current().version)?;
+        if next.body.previous.as_deref() != Some(self.current().digest.as_str()) {
             return Err(list_refused(
                 version,
-                format!("it does not name version {}'s digest", self.current.version),
+                format!("it does not name version {}'s digest", self.current().version),
             ));
         }
-        let signers = self.current.check_signatures(opened, Role::Admin)?;
-        let threshold = self.current.body.admin_threshold as usize;
+        let signers = self.current().check_signatures(opened, Role::Admin)?;
+        let threshold = self.current().body.admin_threshold as usize;
         if signers.len() < threshold {
             return Err(list_refused(
                 version,
                 format!(
                     "signed by {} admins of version {}, below its threshold of {threshold}",
                     signers.len(),
-                    self.current.version
+                    self.current().version
                 ),
             ));
         }
         let by_recovery = signers
             .iter()
-            .any(|signer| self.current.signer_kind(signer) == Some(SignerKind::Recovery));
+            .any(|signer| self.current().signer_kind(signer) == Some(SignerKind::Recovery));
         if by_recovery != next.body.recovered {
             return Err(list_refused(
                 version,
@@ -350,7 +369,7 @@ impl SignerChain {
         }
         self.statements.push(statement.clone());
         self.digests.push(opened.digest.clone());
-        self.current = next;
+        self.lists.push(next);
         Ok(())
     }
 }
@@ -402,7 +421,6 @@ fn parse_list(
     project: &str,
     opened: &Opened,
     authorizing_version: u64,
-    now: DateTime<Utc>,
 ) -> Result<TrustedList> {
     let version = opened.sequence;
     if opened.kind != Kind::SignerList {
@@ -420,18 +438,8 @@ fn parse_list(
     if opened.install.is_some() {
         return Err(list_refused(version, "a signer list names no install"));
     }
-    let not_after = opened
-        .not_after
-        .ok_or_else(|| list_refused(version, "it has no expiry"))?;
-    let latest = now + Duration::days(MAX_LIST_LIFETIME_DAYS) + Duration::hours(CLOCK_SKEW_HOURS);
-    if not_after > latest {
-        return Err(list_refused(
-            version,
-            format!(
-                "it expires at {}, more than {MAX_LIST_LIFETIME_DAYS} days from now",
-                not_after.to_rfc3339()
-            ),
-        ));
+    if opened.not_after.is_some() {
+        return Err(list_refused(version, "a signer list has no expiry"));
     }
     if version == 0 {
         return Err(list_refused(version, "versions start at 1"));
@@ -490,7 +498,6 @@ fn parse_list(
     let list = TrustedList {
         version,
         digest: opened.digest.clone(),
-        not_after,
         body,
         keys,
     };

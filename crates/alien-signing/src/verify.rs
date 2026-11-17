@@ -25,6 +25,9 @@ pub struct Verified<B> {
     pub digest: String,
     /// Expiry.
     pub not_after: Option<DateTime<Utc>>,
+    /// Whether the install had accepted this statement before, so it was
+    /// checked against the signer list version it names, not the current one.
+    pub kept: bool,
     /// Signer ids whose signatures counted.
     pub signers: BTreeSet<String>,
     /// The body.
@@ -38,6 +41,7 @@ pub struct Trust {
     settings: SigningSettings,
     install: InstallId,
     chain: SignerChain,
+    accepted: BTreeSet<String>,
 }
 
 impl Trust {
@@ -48,17 +52,17 @@ impl Trust {
         install: InstallId,
         chain: &[SignedStatement],
         ledger: &Ledger,
-        now: DateTime<Utc>,
     ) -> Result<Self> {
         settings.validate()?;
         install.validate()?;
         ledger.check_root(Some(&settings.fingerprint), &install)?;
-        let chain = SignerChain::from_statements(&settings.fingerprint, chain, now)?;
+        let chain = SignerChain::from_statements(&settings.fingerprint, chain)?;
         ledger.check_chain(&chain)?;
         Ok(Self {
             settings,
             install,
             chain,
+            accepted: ledger.accepted.iter().cloned().collect(),
         })
     }
 
@@ -83,27 +87,32 @@ impl Trust {
     }
 
     /// Accept newer signer list versions. Returns whether the chain grew.
-    pub fn extend_chain(
-        &mut self,
-        statements: &[SignedStatement],
-        now: DateTime<Utc>,
-    ) -> Result<bool> {
-        self.chain.extend(statements, now)
+    pub fn extend_chain(&mut self, statements: &[SignedStatement]) -> Result<bool> {
+        self.chain.extend(statements)
     }
 
-    /// Record this trust in `ledger`: the trust root and the chain's version.
-    pub fn record(&self, ledger: &mut Ledger) -> Result<()> {
+    /// Record this trust in `ledger`: the trust root, the chain's version and
+    /// the digests of the statements the install now accepts.
+    pub fn record(&self, ledger: &mut Ledger, accepted: &[&str]) -> Result<()> {
         ledger.check_root(Some(&self.settings.fingerprint), &self.install)?;
         ledger.check_chain(&self.chain)?;
         ledger.adopt_root(&self.settings.fingerprint, &self.install);
         ledger.record_chain(&self.chain);
+        for digest in accepted {
+            ledger.accept(digest);
+        }
         Ok(())
     }
 
     /// Run the checks for a statement of `kind` and parse its body: project
-    /// and install, expiry, the signer list's expiry and deny-list, and
-    /// signatures by keys on the current list that hold the kind's role. The
-    /// caller checks the ledger floor.
+    /// and install, the statement's own expiry, the deny-list and signatures
+    /// by keys that hold the kind's role.
+    ///
+    /// A new statement is checked against the current signer list. One the
+    /// install already accepted (the ledger holds its digest) is checked
+    /// against the list version it names, so removing its signer later
+    /// doesn't stop it; only the deny-list does. Every enforcer applies this
+    /// one rule.
     pub fn verify<B: DeserializeOwned>(
         &self,
         statement: &SignedStatement,
@@ -118,29 +127,28 @@ impl Trust {
         }
         let opened = statement.open()?;
         self.check_header(&opened, kind, now)?;
-        let list = self.chain.current();
-        if list.is_expired(now) {
-            return Err(AlienError::new(ErrorData::SignerListRefused {
-                version: list.version,
-                reason: format!(
-                    "it expired at {}; an admin must approve the refreshed list",
-                    list.not_after.to_rfc3339()
-                ),
-            }));
-        }
-        if opened.signer_list_version > list.version {
+        let current = self.chain.current();
+        let kept = self.accepted.contains(&opened.digest);
+        let list = if kept {
+            self.chain.version(opened.signer_list_version)
+        } else {
+            None
+        };
+        if opened.signer_list_version > current.version || (kept && list.is_none()) {
             return Err(AlienError::new(ErrorData::SignerListMissing {
                 needed: opened.signer_list_version,
-                current: list.version,
+                current: current.version,
             }));
         }
-        if list.denies(&opened.digest) {
+        if current.denies(&opened.digest) {
             return Err(AlienError::new(ErrorData::Denied {
                 digest: opened.digest,
             }));
         }
-        let signers = list.check_signatures(&opened, kind.role())?;
-        finish(opened, signers)
+        let signers = list
+            .unwrap_or(current)
+            .check_signatures(&opened, kind.role())?;
+        finish(opened, signers, kept)
     }
 
     /// Verify a release for this install's channel and check its rules.
@@ -173,17 +181,6 @@ impl Trust {
         Ok(verified)
     }
 
-    /// Whether a statement accepted earlier may keep running. Removing its
-    /// signer from the list doesn't stop it; only the deny-list does.
-    pub fn keeps(&self, digest: &str) -> Result<()> {
-        if self.chain.current().denies(digest) {
-            return Err(AlienError::new(ErrorData::Denied {
-                digest: digest.to_string(),
-            }));
-        }
-        Ok(())
-    }
-
     fn check_header(&self, opened: &Opened, kind: Kind, now: DateTime<Utc>) -> Result<()> {
         if opened.kind != kind {
             return Err(AlienError::new(ErrorData::WrongKind {
@@ -214,13 +211,18 @@ impl Trust {
     }
 }
 
-fn finish<B: DeserializeOwned>(opened: Opened, signers: BTreeSet<String>) -> Result<Verified<B>> {
+fn finish<B: DeserializeOwned>(
+    opened: Opened,
+    signers: BTreeSet<String>,
+    kept: bool,
+) -> Result<Verified<B>> {
     let body = opened.body()?;
     Ok(Verified {
         kind: opened.kind,
         sequence: opened.sequence,
         digest: opened.digest,
         not_after: opened.not_after,
+        kept,
         signers,
         body,
     })

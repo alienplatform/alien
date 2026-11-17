@@ -65,8 +65,8 @@ fn cases() -> Vec<(&'static str, Case)> {
         .sign_with("ci", &keys.outsider)
         .unwrap();
     let unsigned = statement("release/v2", PROJECT, None, 20, 1, release_body());
-    let by_removed_role = statement("release/v2", PROJECT, None, 20, 1, release_body())
-        .sign_with("bob-laptop", &keys.operator)
+    let by_admin_only = statement("release/v2", PROJECT, None, 20, 1, release_body())
+        .sign_with("carol-laptop", &keys.second_admin)
         .unwrap();
 
     let mut extra_field = serde_json::to_value(Envelope {
@@ -200,7 +200,7 @@ fn cases() -> Vec<(&'static str, Case)> {
             case(
                 "a release signed by a key without the release role",
                 "SIGNING_SIGNATURE_REFUSED",
-                by_removed_role,
+                by_admin_only,
             ),
         ),
         (
@@ -275,7 +275,6 @@ fn run(case: &Case) -> String {
         install(),
         &[genesis(&keys), version_2(&keys)],
         &ledger,
-        now(),
     )
     .unwrap();
     let opened = match case.statement.open() {
@@ -284,7 +283,7 @@ fn run(case: &Case) -> String {
     };
     let result = if opened.kind == Kind::SignerList {
         trust
-            .extend_chain(std::slice::from_ref(&case.statement), now())
+            .extend_chain(std::slice::from_ref(&case.statement))
             .map(|_| ())
     } else {
         trust.verify_release(&case.statement, now()).map(|_| ())

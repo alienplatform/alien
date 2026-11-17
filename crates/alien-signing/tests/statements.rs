@@ -51,7 +51,6 @@ fn trust(keys: &Keys, chain: &[SignedStatement]) -> Trust {
         install(),
         chain,
         &Ledger::new(PREFIX),
-        now(),
     )
     .expect("the chain is valid")
 }
@@ -349,13 +348,13 @@ fn the_chain_grows_only_by_admin_signed_links() {
     let keys = keys();
     let mut trust = trust(&keys, &[genesis(&keys)]);
     assert!(trust
-        .extend_chain(&[genesis(&keys), version_2(&keys), version_3(&keys)], now())
+        .extend_chain(&[genesis(&keys), version_2(&keys), version_3(&keys)])
         .unwrap());
     assert_eq!(trust.chain().current().version, 3);
     assert_eq!(trust.chain().statements().len(), 3);
     // Delivering the same chain again changes nothing.
     assert!(!trust
-        .extend_chain(&[version_2(&keys), version_3(&keys)], now())
+        .extend_chain(&[version_2(&keys), version_3(&keys)])
         .unwrap());
 
     // A stored chain rebuilds to the same version.
@@ -364,7 +363,6 @@ fn the_chain_grows_only_by_admin_signed_links() {
         install(),
         trust.chain().statements(),
         &Ledger::new(PREFIX),
-        now(),
     )
     .unwrap();
     assert_eq!(
@@ -383,7 +381,7 @@ fn chain_attacks_are_refused() {
         .sign_with("alice-laptop", &keys.outsider)
         .unwrap();
     assert_eq!(
-        code(fresh().extend_chain(&[by_outsider], now())),
+        code(fresh().extend_chain(&[by_outsider])),
         "SIGNING_SIGNATURE_REFUSED"
     );
 
@@ -392,7 +390,7 @@ fn chain_attacks_are_refused() {
         .sign_with("ci", &keys.ci)
         .unwrap();
     assert_eq!(
-        code(fresh().extend_chain(&[by_ci], now())),
+        code(fresh().extend_chain(&[by_ci])),
         "SIGNING_SIGNATURE_REFUSED"
     );
 
@@ -403,24 +401,24 @@ fn chain_attacks_are_refused() {
         .sign_with("alice-laptop", &keys.admin)
         .unwrap();
     assert_eq!(
-        code(fresh().extend_chain(&[unlinked], now())),
+        code(fresh().extend_chain(&[unlinked])),
         "SIGNING_SIGNER_LIST_REFUSED"
     );
 
     // A gap: version 3 without version 2.
     assert_eq!(
-        code(fresh().extend_chain(&[version_3(&keys)], now())),
+        code(fresh().extend_chain(&[version_3(&keys)])),
         "SIGNING_SIGNER_LIST_REFUSED"
     );
 
     // Below threshold: version 2 needs two admins for version 3.
     let mut at_two = fresh();
-    at_two.extend_chain(&[version_2(&keys)], now()).unwrap();
+    at_two.extend_chain(&[version_2(&keys)]).unwrap();
     let one_admin = list(PROJECT, 3, 2, version_3_body(&keys))
         .sign_with("alice-laptop", &keys.admin)
         .unwrap();
     assert_eq!(
-        code(at_two.extend_chain(&[one_admin], now())),
+        code(at_two.extend_chain(&[one_admin])),
         "SIGNING_SIGNER_LIST_REFUSED"
     );
 
@@ -434,13 +432,13 @@ fn chain_attacks_are_refused() {
         .sign_with("alice-laptop", &keys.admin)
         .unwrap();
     assert_eq!(
-        code(at_two.extend_chain(&[fork], now())),
+        code(at_two.extend_chain(&[fork])),
         "SIGNING_SIGNER_LIST_REFUSED"
     );
     assert_eq!(at_two.chain().current().version, 2);
 
     // An older list sent alone after a newer one is trusted changes nothing.
-    assert!(!at_two.extend_chain(&[genesis(&keys)], now()).unwrap());
+    assert!(!at_two.extend_chain(&[genesis(&keys)]).unwrap());
     assert_eq!(at_two.chain().current().version, 2);
 
     // A list for another project.
@@ -448,7 +446,7 @@ fn chain_attacks_are_refused() {
         .sign_with("alice-laptop", &keys.admin)
         .unwrap();
     assert_eq!(
-        code(fresh().extend_chain(&[other], now())),
+        code(fresh().extend_chain(&[other])),
         "SIGNING_WRONG_PROJECT"
     );
 
@@ -466,8 +464,7 @@ fn chain_attacks_are_refused() {
             settings(&keys),
             install(),
             &[other_genesis],
-            &Ledger::new(PREFIX),
-            now()
+            &Ledger::new(PREFIX)
         )),
         "SIGNING_SIGNER_LIST_REFUSED"
     );
@@ -481,7 +478,7 @@ fn signer_lists_with_bad_keys_or_rules_are_refused() {
         let next = list(PROJECT, 2, 1, body)
             .sign_with("alice-laptop", &keys.admin)
             .unwrap();
-        base.clone().extend_chain(&[next], now())
+        base.clone().extend_chain(&[next])
     };
 
     // An invalid curve point: the uncompressed point's last byte changed.
@@ -539,7 +536,7 @@ fn a_removed_device_can_no_longer_sign() {
     trust
         .verify::<SessionBody>(&session(1), Kind::Session, now())
         .unwrap();
-    trust.extend_chain(&[version_3(&keys)], now()).unwrap();
+    trust.extend_chain(&[version_3(&keys)]).unwrap();
     assert_eq!(
         code(trust.verify::<SessionBody>(&session(2), Kind::Session, now())),
         "SIGNING_SIGNATURE_REFUSED"
@@ -596,28 +593,6 @@ fn denied_and_expired_statements_are_refused() {
     trust
         .verify::<ReleaseBody>(&expired, Kind::Release, now() - Duration::seconds(2))
         .unwrap();
-}
-
-#[test]
-fn an_expired_signer_list_refuses_everything() {
-    let keys = keys();
-    let envelope = Envelope {
-        kind: "signer-list/v1".to_string(),
-        project: PROJECT.to_string(),
-        install: None,
-        sequence: 2,
-        not_after: Some(now() - Duration::days(1)),
-        signer_list_version: 1,
-        body: version_2_body(&keys),
-    };
-    let next = SignedStatement::new(&envelope.to_payload().unwrap())
-        .sign_with("alice-laptop", &keys.admin)
-        .unwrap();
-    let trust = trust(&keys, &[genesis(&keys), next]);
-    assert_eq!(
-        code(trust.verify::<ReleaseBody>(&release(&keys, 10), Kind::Release, now())),
-        "SIGNING_SIGNER_LIST_REFUSED"
-    );
 }
 
 #[test]
@@ -928,16 +903,24 @@ fn session_body() -> SessionBody {
 }
 
 #[test]
-fn sessions_need_the_operate_role_and_the_enforcers_own_nonce() {
+fn sessions_need_the_release_role_and_the_enforcers_own_nonce() {
     let keys = keys();
     let trust = trust(&keys, &[genesis(&keys)]);
+    // The recovery key holds only the admin role, so it signs no session.
+    let by_recovery = statement("session/v1", PROJECT, Some(INSTALL), 1, 1, session_body())
+        .sign_with("recovery", &keys.recovery)
+        .unwrap();
+    assert_eq!(
+        code(trust.verify::<SessionBody>(&by_recovery, Kind::Session, now())),
+        "SIGNING_SIGNATURE_REFUSED"
+    );
+    // A release-role key does, CI's included.
     let by_ci = statement("session/v1", PROJECT, Some(INSTALL), 1, 1, session_body())
         .sign_with("ci", &keys.ci)
         .unwrap();
-    assert_eq!(
-        code(trust.verify::<SessionBody>(&by_ci, Kind::Session, now())),
-        "SIGNING_SIGNATURE_REFUSED"
-    );
+    trust
+        .verify::<SessionBody>(&by_ci, Kind::Session, now())
+        .expect("a release-role key signs a session");
 
     let by_alice = statement("session/v1", PROJECT, Some(INSTALL), 1, 1, session_body())
         .sign_with("alice-laptop", &keys.admin)

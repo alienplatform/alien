@@ -21,58 +21,94 @@ fn code<T: std::fmt::Debug>(result: alien_signing::Result<T>) -> String {
 }
 
 fn fresh_trust(keys: &Keys, chain: &[alien_signing::SignedStatement], ledger: &Ledger) -> Trust {
-    Trust::new(settings(keys), install(), chain, ledger, now()).expect("the chain is valid")
+    Trust::new(settings(keys), install(), chain, ledger).expect("the chain is valid")
 }
 
 /// Accept a release the way an enforcer does: verify it, then record the chain.
 fn accept(trust: &Trust, ledger: &mut Ledger, sequence: u64) -> alien_signing::Result<()> {
     let keys = keys();
     let verified = trust.verify_release(&release(&keys, sequence), now())?;
-    let _ = verified;
-    trust.record(ledger)
+    trust.record(ledger, &[&verified.digest])
+}
+
+/// A list that drops CI, signed by both admins of version 2.
+fn without_ci(keys: &Keys, trust: &Trust, deny: &[String]) -> alien_signing::SignedStatement {
+    let current = trust.chain().current();
+    let mut body = version_2_body(keys);
+    body.previous = Some(current.digest.clone());
+    body.signers.retain(|signer| signer.id != "ci");
+    body.deny.extend(deny.iter().cloned());
+    list(PROJECT, current.version + 1, current.version, body)
+        .sign_with("alice-laptop", &keys.admin)
+        .unwrap()
+        .sign_with("carol-laptop", &keys.second_admin)
+        .unwrap()
 }
 
 #[test]
 fn a_removed_signer_keeps_what_it_signed_but_signs_nothing_new() {
     let keys = keys();
     let mut ledger = Ledger::new(PREFIX);
-    let mut trust = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &ledger);
+    let trust = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &ledger);
     let by_ci = release(&keys, 10);
     accept(&trust, &mut ledger, 10).unwrap();
 
-    // Version 3 drops CI.
-    let mut body = version_2_body(&keys);
-    body.previous = Some(version_2(&keys).open().unwrap().digest);
-    body.signers.retain(|signer| signer.id != "ci");
-    let without_ci = list(PROJECT, 3, 2, body)
-        .sign_with("alice-laptop", &keys.admin)
-        .unwrap()
-        .sign_with("carol-laptop", &keys.second_admin)
-        .unwrap();
-    trust.extend_chain(&[without_ci], now()).unwrap();
-
-    let digest = by_ci.open().unwrap().digest;
-    trust
-        .keeps(&digest)
-        .expect("what CI signed before its removal keeps running");
+    // Version 3 drops CI. The install is restarted from its ledger.
+    let dropped = without_ci(&keys, &trust, &[]);
+    let chain = [genesis(&keys), version_2(&keys), dropped];
+    let trust = fresh_trust(&keys, &chain, &ledger);
+    let verified = trust
+        .verify_release(&by_ci, now())
+        .expect("what CI signed and the install accepted keeps running");
+    assert!(verified.kept);
     assert_eq!(
         code(trust.verify_release(&release(&keys, 11), now())),
         "SIGNING_SIGNATURE_REFUSED",
         "CI can't sign a new release"
     );
 
+    // A removed signer's release the install never accepted is a new statement.
+    let fresh = fresh_trust(&keys, &chain, &Ledger::new(PREFIX));
+    assert_eq!(
+        code(fresh.verify_release(&by_ci, now())),
+        "SIGNING_SIGNATURE_REFUSED"
+    );
+
     // Only the deny-list stops a running release.
-    let mut body = version_2_body(&keys);
-    body.previous = Some(trust.chain().current().digest.clone());
-    body.signers.retain(|signer| signer.id != "ci");
-    body.deny.push(digest.clone());
-    let denying = list(PROJECT, 4, 3, body)
-        .sign_with("alice-laptop", &keys.admin)
-        .unwrap()
-        .sign_with("carol-laptop", &keys.second_admin)
+    let digest = by_ci.open().unwrap().digest;
+    let denying = without_ci(&keys, &trust, &[digest]);
+    let chain = [genesis(&keys), version_2(&keys), chain[2].clone(), denying];
+    let trust = fresh_trust(&keys, &chain, &ledger);
+    assert_eq!(
+        code(trust.verify_release(&by_ci, now())),
+        "SIGNING_DENIED"
+    );
+}
+
+#[test]
+fn a_kept_statement_still_needs_a_signature_from_the_list_it_names() {
+    let keys = keys();
+    // A ledger that names a digest nobody signed makes nothing run.
+    let mut ledger = Ledger::new(PREFIX);
+    let unsigned = alien_signing::SignedStatement {
+        signatures: Vec::new(),
+        ..release(&keys, 10)
+    };
+    let forged_by_ci = statement("release/v2", PROJECT, None, 10, 1, release_body())
+        .sign_with("ci", &keys.operator)
         .unwrap();
-    trust.extend_chain(&[denying], now()).unwrap();
-    assert_eq!(code(trust.keeps(&digest)), "SIGNING_DENIED");
+    for forged in [&unsigned, &forged_by_ci] {
+        ledger.accept(&forged.open().unwrap().digest);
+    }
+    let trust = Trust::new(settings(&keys), install(), &[genesis(&keys)], &ledger).unwrap();
+    assert_eq!(
+        code(trust.verify_release(&unsigned, now())),
+        "SIGNING_UNSIGNED"
+    );
+    assert_eq!(
+        code(trust.verify_release(&forged_by_ci, now())),
+        "SIGNING_SIGNATURE_REFUSED"
+    );
 }
 
 #[test]
@@ -105,8 +141,7 @@ fn a_new_machine_starts_from_the_install_ledger() {
             settings(&keys),
             install(),
             &chain[..2],
-            &seeded,
-            now()
+            &seeded
         )),
         "SIGNING_SIGNER_LIST_MISSING"
     );
@@ -176,86 +211,30 @@ fn config_for_another_customers_install_is_refused() {
 }
 
 #[test]
-fn an_expired_list_blocks_new_releases_until_an_admin_refreshes_it() {
+fn a_list_never_expires_and_one_with_an_expiry_is_refused() {
     let keys = keys();
-    let later = now() + Duration::days(61);
-    let trust = Trust::new(
-        settings(&keys),
-        install(),
-        &[genesis(&keys)],
-        &Ledger::new(PREFIX),
-        later,
-    )
-    .unwrap();
-    assert_eq!(
-        code(trust.verify_release(&release(&keys, 10), later)),
-        "SIGNING_SIGNER_LIST_REFUSED"
-    );
-    // What already runs is not affected.
+    let trust = fresh_trust(&keys, &[genesis(&keys)], &Ledger::new(PREFIX));
+    // 90 days and more later, the list still verifies new releases.
+    let later = now() + Duration::days(400);
     trust
-        .keeps(&release(&keys, 9).open().unwrap().digest)
-        .unwrap();
+        .verify_release(&release(&keys, 10), later)
+        .expect("a signer list has no lifetime");
 
-    // The admin's refresh links from the expired list.
     let mut body = genesis_body(&keys);
     body.previous = Some(genesis(&keys).open().unwrap().digest);
-    let refresh = statement_until(
+    let expiring = statement_until(
         "signer-list/v1",
         PROJECT,
         None,
         2,
         1,
-        Some(later + Duration::days(90)),
-        body.clone(),
-    )
-    .sign_with("alice-laptop", &keys.admin)
-    .unwrap();
-    let mut refreshed = trust.clone();
-    refreshed.extend_chain(&[refresh], later).unwrap();
-    refreshed
-        .verify_release(&release(&keys, 10), later)
-        .expect("releases verify again after the refresh");
-
-    // CI can't refresh it: it holds no admin role.
-    let by_ci = statement_until(
-        "signer-list/v1",
-        PROJECT,
-        None,
-        2,
-        1,
-        Some(later + Duration::days(90)),
-        body.clone(),
-    )
-    .sign_with("ci", &keys.ci)
-    .unwrap();
-    assert_eq!(
-        code(trust.clone().extend_chain(&[by_ci], later)),
-        "SIGNING_SIGNATURE_REFUSED"
-    );
-
-    // A list valid for longer than the limit is refused.
-    let too_long = statement_until(
-        "signer-list/v1",
-        PROJECT,
-        None,
-        2,
-        1,
-        Some(later + Duration::days(200)),
-        body.clone(),
+        Some(now() + Duration::days(30)),
+        body,
     )
     .sign_with("alice-laptop", &keys.admin)
     .unwrap();
     assert_eq!(
-        code(trust.clone().extend_chain(&[too_long], later)),
-        "SIGNING_SIGNER_LIST_REFUSED"
-    );
-
-    // And a list that never expires is refused too.
-    let forever = statement("signer-list/v1", PROJECT, None, 2, 1, body)
-        .sign_with("alice-laptop", &keys.admin)
-        .unwrap();
-    assert_eq!(
-        code(trust.clone().extend_chain(&[forever], later)),
+        code(trust.clone().extend_chain(&[expiring])),
         "SIGNING_SIGNER_LIST_REFUSED"
     );
 }
@@ -273,13 +252,14 @@ fn a_list_the_recovery_key_signs_says_so() {
         key: keys.second_admin.public_key().as_str().to_string(),
         kind: SignerKind::Device,
         roles: vec![Role::Release, Role::Admin],
+        backend: None,
         label: None,
     });
     let unmarked = list(PROJECT, 2, 1, body.clone())
         .sign_with("recovery", &keys.recovery)
         .unwrap();
     assert_eq!(
-        code(trust.clone().extend_chain(&[unmarked], now())),
+        code(trust.clone().extend_chain(&[unmarked])),
         "SIGNING_SIGNER_LIST_REFUSED"
     );
     body.recovered = true;
@@ -287,7 +267,7 @@ fn a_list_the_recovery_key_signs_says_so() {
         .sign_with("recovery", &keys.recovery)
         .unwrap();
     let mut recovered = trust.clone();
-    recovered.extend_chain(&[marked], now()).unwrap();
+    recovered.extend_chain(&[marked]).unwrap();
     assert!(recovered.chain().current().body.recovered);
 
     // An admin can't claim a recovery happened.
@@ -295,7 +275,7 @@ fn a_list_the_recovery_key_signs_says_so() {
         .sign_with("alice-laptop", &keys.admin)
         .unwrap();
     assert_eq!(
-        code(trust.clone().extend_chain(&[claimed], now())),
+        code(trust.clone().extend_chain(&[claimed])),
         "SIGNING_SIGNER_LIST_REFUSED"
     );
 }
@@ -333,8 +313,7 @@ fn protection_is_sticky() {
             other,
             install(),
             &[genesis(&keys)],
-            &ledger,
-            now()
+            &ledger
         )),
         "SIGNING_TRUST_ROOT_CHANGED"
     );
@@ -345,8 +324,7 @@ fn protection_is_sticky() {
             settings(&keys),
             moved,
             &[genesis(&keys)],
-            &ledger,
-            now()
+            &ledger
         )),
         "SIGNING_TRUST_ROOT_CHANGED"
     );

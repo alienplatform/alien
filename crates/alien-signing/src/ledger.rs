@@ -1,7 +1,8 @@
 //! What an install has already accepted.
 //!
 //! Every enforcer of an install keeps the same small record: the trust root
-//! it accepted state under and the highest signer list version. Setup creates the install's copy in the
+//! it accepted state under, the highest signer list version and the digests of
+//! the releases and configs it accepted. Setup creates the install's copy in the
 //! customer's cloud non-empty, so a missing ledger is an error and never a
 //! fresh start. Enforcers load it at start, take the maximum of it and their
 //! own copy, and write the result back. Values only rise. An older signed
@@ -29,6 +30,9 @@ pub struct Entry {
     pub digest: String,
 }
 
+/// How many accepted digests a ledger keeps; the oldest go first.
+pub const MAX_ACCEPTED: usize = 32;
+
 /// The ledger of one install.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -46,6 +50,12 @@ pub struct Ledger {
     /// Highest signer list version accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_list: Option<Entry>,
+    /// Digests of the releases and configs the install accepted, oldest
+    /// first. One in this list keeps running after its signer leaves the
+    /// list, unless the deny-list names it. It is still checked against the
+    /// signer list version it was signed under.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted: Vec<String>,
 }
 
 impl Ledger {
@@ -57,6 +67,7 @@ impl Ledger {
             fingerprint: None,
             install: None,
             signer_list: None,
+            accepted: Vec::new(),
         }
     }
 
@@ -86,6 +97,14 @@ impl Ledger {
                 return Err(refused(format!("'{}' is not a digest", entry.digest)));
             }
         }
+        if ledger.accepted.len() > MAX_ACCEPTED {
+            return Err(refused("it lists too many accepted statements"));
+        }
+        for digest in &ledger.accepted {
+            if !is_sha256_digest(digest) {
+                return Err(refused(format!("'{digest}' is not a digest")));
+            }
+        }
         Ok(ledger)
     }
 
@@ -107,6 +126,9 @@ impl Ledger {
         merge_root(&mut self.fingerprint, &other.fingerprint)?;
         merge_root(&mut self.install, &other.install)?;
         merge_entry(&mut self.signer_list, &other.signer_list)?;
+        for digest in &other.accepted {
+            self.accept(digest);
+        }
         Ok(())
     }
 
@@ -135,6 +157,22 @@ impl Ledger {
             }
         }
         Ok(())
+    }
+
+    /// Whether the install accepted the statement with this digest.
+    pub fn accepted(&self, digest: &str) -> bool {
+        self.accepted.iter().any(|held| held == digest)
+    }
+
+    /// Record an accepted statement's digest.
+    pub fn accept(&mut self, digest: &str) {
+        if self.accepted(digest) {
+            return;
+        }
+        self.accepted.push(digest.to_string());
+        if self.accepted.len() > MAX_ACCEPTED {
+            self.accepted.remove(0);
+        }
     }
 
     /// Whether the install ever accepted signed state.
