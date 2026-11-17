@@ -336,6 +336,8 @@ impl KubernetesSandboxController {
             }));
         }
 
+        super::kubernetes_egress::release_gateway_service_policy(ctx, config, &namespace).await?;
+
         // The capability key outlives its pods otherwise, and a signing key nobody can use is
         // still a signing key sitting in the cluster. Best effort: one already gone is the
         // desired end state, and it must not strand the rest of the teardown.
@@ -792,11 +794,28 @@ pub(crate) async fn replenish_warm_pool(
     )
     .await?
     else {
-        return Ok(WarmPool {
-            idle: without_terminating(idle.items).len(),
-            created,
-        });
+        // The gateway is not up, so no pod can be built for this sandbox yet, and an idle pod
+        // made earlier (for another egress mode, or for a gateway address that is gone) cannot
+        // serve it. Take them out of the pool rather than leave them to be claimed.
+        retire_stale_idle_pods(
+            &client,
+            namespace,
+            &sandbox.id,
+            without_terminating(idle.items),
+        )
+        .await;
+        return Ok(WarmPool { idle: 0, created });
     };
+    // A session's only route to the internet is the gateway Service's ClusterIP, which the
+    // chart's policy cannot name (see `gateway_service_policy`), so the Operator admits it.
+    // A sandbox that no longer uses the gateway loses the policy it had.
+    let gateway = egress_environment
+        .iter()
+        .find(|variable| variable.name == "ALIEN_SANDBOX_EGRESS_GATEWAY")
+        .and_then(|variable| variable.value.as_deref())
+        .and_then(|value| value.rsplit_once(':'))
+        .and_then(|(address, _)| address.parse::<std::net::Ipv4Addr>().ok());
+    super::kubernetes_egress::sync_gateway_service_policy(ctx, sandbox, namespace, gateway).await?;
 
     let mut pod = idle_pool_pod_with_labels(
         sandbox,

@@ -1791,10 +1791,31 @@ fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
         for resource in rule["resources"].as_sequence().unwrap() {
             assert!(matches!(
                 resource.as_str(),
-                Some("pods" | "secrets" | "events")
+                Some("pods" | "secrets" | "events" | "networkpolicies")
             ));
         }
     }
+    // The Operator writes the gateway Service policy of an internet sandbox next to its pods, so
+    // it needs those verbs on NetworkPolicies there (list for the uninstall cleanup), and no watch or patch.
+    let policy_rules: Vec<_> = role["rules"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .filter(|rule| {
+            rule["resources"]
+                .as_sequence()
+                .is_some_and(|resources| resources.iter().any(|x| x == "networkpolicies"))
+        })
+        .collect();
+    assert_eq!(policy_rules.len(), 1, "{role:?}");
+    assert_eq!(
+        policy_rules[0]["apiGroups"],
+        serde_yaml::from_str::<serde_yaml::Value>("[networking.k8s.io]").unwrap()
+    );
+    assert_eq!(
+        policy_rules[0]["verbs"],
+        serde_yaml::from_str::<serde_yaml::Value>("[get, list, create, update, delete]").unwrap()
+    );
     let binding = documents
         .iter()
         .find(|document| {
@@ -1816,6 +1837,85 @@ fn a_sandbox_namespace_moves_the_policy_and_adds_a_namespaced_role_only() {
                 })
             })
     }));
+}
+
+/// Uninstall removes the policies the Operator wrote in a separate sandbox namespace, with the
+/// Role's NetworkPolicy rights there as the only permission added; the default install's cleanup
+/// Job does not mention a sandbox namespace.
+#[test]
+fn uninstall_cleans_the_policies_in_a_separate_sandbox_namespace() {
+    let cleanup_script = |values: &str| -> String {
+        let documents = sandbox_namespace_documents(values);
+        let job = documents
+            .iter()
+            .find(|document| {
+                document["kind"] == "Job"
+                    && document["metadata"]["annotations"]["helm.sh/hook"] == "pre-delete"
+            })
+            .expect("the cleanup Job");
+        job["spec"]["template"]["spec"]["containers"][0]["command"][2]
+            .as_str()
+            .expect("the cleanup script")
+            .to_string()
+    };
+    let separate = cleanup_script(
+        "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: acme-sandboxes\n",
+    );
+    assert!(
+        separate.contains(
+            "sandbox_namespace=\"acme-sandboxes\"\n"
+        ) && separate.contains(
+            "kubectl -n \"$sandbox_namespace\" delete networkpolicies.networking.k8s.io -l \"$cleanup_selector\" --ignore-not-found=true --wait=false"
+        ),
+        "{separate}"
+    );
+    let default = cleanup_script("management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n");
+    assert!(!default.contains("sandbox_namespace"), "{default}");
+    let same = cleanup_script(
+        "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: default\n",
+    );
+    assert!(!same.contains("sandbox_namespace"), "{same}");
+}
+
+/// An install made before the Role carried NetworkPolicy verbs gets them on `helm upgrade`: the
+/// Role is an ordinary template (no hook, no install-only guard), so the upgrade render of an
+/// install with a separate sandbox namespace contains the verbs the Operator needs there.
+#[test]
+fn an_upgrade_of_a_separate_sandbox_namespace_install_renders_the_policy_verbs() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template_as_upgrade(
+        &chart.files,
+        Some("management:\n  name: acme-install\nlogCollector:\n  scope:\n    deploymentLabelValue: acme-install\nsandbox:\n  runtimeClassName: gvisor\n  namespace: acme-sandboxes\n"),
+    );
+    rendered.assert_ok("sandbox namespace upgrade render");
+    let documents = rendered_documents(&rendered);
+    let role = documents
+        .iter()
+        .find(|document| {
+            document["kind"] == "Role" && document["metadata"]["namespace"] == "acme-sandboxes"
+        })
+        .expect("the upgrade render has the Role in the sandbox namespace");
+    let policy_rule = role["rules"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|rule| {
+            rule["resources"]
+                .as_sequence()
+                .is_some_and(|resources| resources.iter().any(|x| x == "networkpolicies"))
+        })
+        .expect("the Role allows NetworkPolicies in the sandbox namespace");
+    assert_eq!(
+        policy_rule["verbs"],
+        serde_yaml::from_str::<serde_yaml::Value>("[get, list, create, update, delete]").unwrap()
+    );
+    assert!(
+        role["metadata"]
+            .get("annotations")
+            .and_then(|annotations| annotations.get("helm.sh/hook"))
+            .is_none(),
+        "{role:?}"
+    );
 }
 
 fn root_boot_check_documents(image_user: Option<u32>, values: &str) -> Vec<serde_yaml::Value> {
