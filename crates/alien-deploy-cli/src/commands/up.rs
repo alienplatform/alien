@@ -3172,6 +3172,73 @@ platform = "aws"
         }
     }
 
+    /// A Kubernetes or Local install is pull: its initialize request must declare no
+    /// capabilities, whatever the stack holds.
+    #[tokio::test]
+    async fn initialize_declares_no_setup_capabilities_for_pull_platforms() {
+        for platform in ["kubernetes", "local"] {
+            let server = MockServer::start_async().await;
+            let base_url = server.base_url();
+            let _resolve = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::GET).path("/v1/resolve");
+                    then.status(200)
+                        .json_body(serde_json::json!({"managerUrl": base_url}));
+                })
+                .await;
+            let initialize = server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST)
+                        .path("/v1/initialize")
+                        .json_body_partial(r#"{"name":"subdomain-app"}"#)
+                        .matches(|req| {
+                            let body: serde_json::Value = serde_json::from_slice(
+                                req.body.as_deref().unwrap_or_default(),
+                            )
+                            .unwrap_or_default();
+                            body.get("setupCapabilities")
+                                .and_then(|v| v.as_array())
+                                .map_or(true, |v| v.is_empty())
+                        });
+                    then.status(409).json_body(serde_json::json!({
+                        "code": "STOP_AFTER_INITIALIZE",
+                        "message": "stop after initialize",
+                        "retryable": false,
+                        "internal": false
+                    }));
+                })
+                .await;
+            let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+            writeln!(
+                file,
+                r#"
+name = "subdomain-app"
+platform = "{platform}"
+"#
+            )
+            .expect("config should be written");
+            let args = UpArgs::parse_from([
+                "deploy",
+                "--config",
+                file.path().to_str().expect("temp path should be UTF-8"),
+                "--base-url",
+                &base_url,
+                "--manager-url",
+                &base_url,
+                "--token",
+                "test-capabilities-token",
+            ]);
+            let error = up_command(args, None)
+                .await
+                .expect_err("the mock stops the command after initialize");
+            assert!(
+                error.to_string().contains("stop after initialize"),
+                "{platform}: {error:?}"
+            );
+            initialize.assert_async().await;
+        }
+    }
+
     async fn initialize_declares_the_setup_capabilities(platform: &str) {
         let server = MockServer::start_async().await;
         let base_url = server.base_url();
@@ -3240,10 +3307,17 @@ platform = "{platform}"
             ..Default::default()
         };
         assert_eq!(
-            setup_capabilities_for(&settings(DeploymentModel::Push)),
+            setup_capabilities_for(Platform::Gcp, &settings(DeploymentModel::Push)),
             vec!["create-keys".to_string()]
         );
-        assert!(setup_capabilities_for(&settings(DeploymentModel::Pull)).is_empty());
+        assert!(setup_capabilities_for(Platform::Gcp, &settings(DeploymentModel::Pull)).is_empty());
+        // Settings default to push, but the manager makes these pull.
+        for platform in [Platform::Kubernetes, Platform::Local] {
+            assert!(
+                setup_capabilities_for(platform, &settings(DeploymentModel::Push)).is_empty(),
+                "{platform}"
+            );
+        }
     }
 
     /// The rendered install holds the one-use code, and no deployment token
@@ -7249,10 +7323,15 @@ fn kubernetes_resource_prefix(token: &str, name: &str) -> String {
     format!("k{}", hex::encode(&hash.finalize()[..12]))
 }
 
-/// What this run's setup can do. A pull-model install only starts a local Operator, which does
-/// not create keys, so it declares nothing and a platform keeps refusing a stack with keys.
-fn setup_capabilities_for(stack_settings: &StackSettings) -> Vec<String> {
-    if stack_settings.deployment_model != DeploymentModel::Push {
+/// What this run's setup can do. A pull-model install only starts an Operator (Helm for
+/// Kubernetes, a local process for Local), which does not create keys, so it declares nothing
+/// and a platform keeps refusing a stack with keys. The platform decides first: the manager
+/// makes Kubernetes pull whatever the settings say, and the settings alone say push for a
+/// Kubernetes run before this CLI forces pull later.
+fn setup_capabilities_for(platform: Platform, stack_settings: &StackSettings) -> Vec<String> {
+    if matches!(platform, Platform::Kubernetes | Platform::Local)
+        || stack_settings.deployment_model != DeploymentModel::Push
+    {
         return Vec::new();
     }
     alien_cli_common::SETUP_CAPABILITIES
@@ -7297,7 +7376,7 @@ async fn initialize_deployment(
         setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
         // Without this a platform refuses a stack with encryption keys. Only a run that
         // performs the setup itself (push) can create them.
-        setup_capabilities: setup_capabilities_for(stack_settings),
+        setup_capabilities: setup_capabilities_for(platform, stack_settings),
         // Lets the manager show the exact `helm uninstall` command at teardown.
         helm_release,
     };
