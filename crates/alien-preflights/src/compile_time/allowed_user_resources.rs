@@ -58,14 +58,6 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             "experimental/aws-opensearch",
         ]);
         let mut errors = Vec::new();
-        // This version of Alien does not run extensions: a stack that lists one is refused at
-        // build, release, setup and deployment, before anything the extension declares is used.
-        for extension in &stack.extensions {
-            errors.push(format!(
-                "Extension '{}' can't be used: this version of Alien does not run extensions. Remove it from the stack",
-                extension.name
-            ));
-        }
         if has_internet_sandbox(stack)
             && stack
                 .permissions
@@ -380,51 +372,6 @@ mod tests {
         RemoteStackManagement, ResourceEntry, ResourceLifecycle, Storage, Worker, WorkerCode,
     };
     use indexmap::IndexMap;
-
-    /// A stack that lists an extension is refused, naming the extension, by the checks a release
-    /// and a deployment run, while Alien does not run extensions.
-    #[tokio::test]
-    async fn a_stack_that_lists_an_extension_is_refused_naming_it() {
-        let mut stack = Stack::new("app".to_string()).build();
-        stack.extensions = vec![serde_json::from_value(serde_json::json!({
-            "name": "acme", "version": "1.0.0", "digest": "sha256:0", "resourceTypes": {}
-        }))
-        .unwrap()];
-
-        let result = AllowedUserResourcesCheck
-            .check(&stack, Platform::Aws)
-            .await
-            .unwrap();
-        assert!(!result.success);
-        assert_eq!(
-            result.errors,
-            ["Extension 'acme' can't be used: this version of Alien does not run extensions. Remove it from the stack"]
-        );
-
-        let runner = crate::runner::PreflightRunner::new();
-        let release = runner
-            .run_prebuilt_release_checks(&stack, Platform::Aws)
-            .await
-            .expect_err("a release that lists an extension is refused");
-        assert!(
-            format!("{release:?}").contains("Extension 'acme' can't be used"),
-            "{release:?}"
-        );
-        let deployment = runner
-            .run_compile_time_checks(&stack, Platform::Aws)
-            .await
-            .unwrap();
-        assert!(!deployment.success);
-
-        let without = Stack::new("app".to_string()).build();
-        assert!(
-            AllowedUserResourcesCheck
-                .check(&without, Platform::Aws)
-                .await
-                .unwrap()
-                .success
-        );
-    }
 
     #[tokio::test]
     async fn test_allowed_user_resources_success() {

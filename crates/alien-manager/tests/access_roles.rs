@@ -317,6 +317,72 @@ async fn store_bundle(state: &mut AppState, directory: &tempfile::TempDir, bundl
     state.extension_bundles = Some(Arc::new(ExtensionBundles::new(store)));
 }
 
+/// The chart the manager serves runs the release's Helm modifiers: a modifier whose module answers
+/// nothing a chart can use fails the pull with the extension named, and the chart of a stack
+/// without extensions is served.
+#[tokio::test]
+async fn a_served_chart_runs_the_stack_s_helm_modifiers() {
+    let (mut state, _, directory) = state().await;
+    state.charts = Some(Arc::new(alien_manager::routes::charts::ChartSettings::new(
+        None, false,
+    )));
+    let bundle = TestBundle::with_hooks(
+        "acme",
+        "1.0.0",
+        r#"[{"name":"labels","kind":"helmModifier"}]"#,
+        &[],
+    );
+    store_bundle(&mut state, &directory, &bundle).await;
+    let plain = Stack::new("plain-chart".to_string()).build();
+    let mut extended = Stack::new("extended-chart".to_string()).build();
+    extended.extensions = vec![bundle.manifest.clone()];
+    for stack in [plain, extended] {
+        state
+            .release_store
+            .create_release(
+                &Subject::system(),
+                CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: HashMap::from([(Platform::Kubernetes, stack)]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+        // Chart versions follow release order.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+
+    let (status, body) = pull(
+        &state,
+        Role::ProjectDeveloper,
+        &format!(
+            "charts/plain-chart/manifests/{}",
+            served_version(&state, "plain-chart").await
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = pull(
+        &state,
+        Role::ProjectDeveloper,
+        &format!(
+            "charts/extended-chart/manifests/{}",
+            served_version(&state, "extended-chart").await
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body.contains("the Helm modifier `labels` of extension 'acme' failed"),
+        "{body}"
+    );
+}
+
 /// Before it enrolls, an operator pulls its own image from the manager with
 /// its one-hour code, the only credential its chart holds. The code pulls the
 /// Operator image and nothing else, and stops working when it expires.
@@ -421,6 +487,81 @@ impl CredentialResolver for LocalVaultCredentials {
             state_directory: self.0.clone(),
         })
     }
+}
+
+/// A served chart renders the stack's custom type through the extension's Helm emitter: with a
+/// module that answers nothing a chart can use, the render fails naming the extension's hook,
+/// not a missing registration in Alien's built-in registry.
+#[tokio::test]
+async fn a_served_chart_renders_a_custom_type_through_the_extension() {
+    let (mut state, _, directory) = state().await;
+    let bundle = TestBundle::with_hooks(
+        "acme",
+        "1.0.0",
+        r#"[{"name":"zone","kind":"helmEmitter","resourceType":"acme/dns-zone","platform":"kubernetes"}]"#,
+        &[],
+    );
+    store_bundle(&mut state, &directory, &bundle).await;
+    state.charts = Some(Arc::new(alien_manager::routes::charts::ChartSettings::new(
+        None, false,
+    )));
+    let stack: Stack = serde_json::from_value(json!({
+        "id": "acme-chart",
+        "resources": {
+            "zone": {
+                "config": { "type": "acme/dns-zone", "id": "zone", "domain": "internal.acme.dev" },
+                "lifecycle": "frozen",
+                "dependencies": []
+            }
+        },
+        "extensions": [{
+            "name": "acme",
+            "version": "1.0.0",
+            "digest": bundle.manifest.digest,
+            "resourceTypes": {
+                "acme/dns-zone": {
+                    "lifecycles": ["frozen"],
+                    "holdsData": false,
+                    "setup": { "cloudformation": ["aws"], "terraform": ["aws"], "helm": ["kubernetes"], "importers": ["aws"] },
+                    "controllerPlatforms": [],
+                    "permissionSets": [],
+                    "link": { "permissionSets": [] },
+                    "schemas": { "config": {}, "outputs": {} }
+                }
+            }
+        }]
+    }))
+    .unwrap();
+    state
+        .release_store
+        .create_release(
+            &Subject::system(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(Platform::Kubernetes, stack)]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+                signed_stacks: Default::default(),
+                setup_templates: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+    let (status, body) = pull(
+        &state,
+        Role::ProjectDeveloper,
+        &format!(
+            "charts/acme-chart/manifests/{}",
+            served_version(&state, "acme-chart").await
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body.contains("the Helm emitter of extension 'acme'"),
+        "{body}"
+    );
 }
 
 #[tokio::test]

@@ -3,6 +3,9 @@
 //! credentials minted for the extension's identity.
 
 use super::*;
+use crate::config::OperatorConfig;
+use crate::db::OperatorDb;
+use crate::OperatorState;
 use alien_core::{
     AwsClientConfig, AwsCredentials, AwsServiceOverrides, DeploymentConfig, DeploymentStatus,
     EnvironmentVariablesSnapshot, InitialSetupAuthority, Platform, ReleaseInfo, ResourceStatus,
@@ -12,7 +15,9 @@ use alien_infra::extension_bundle::host_target;
 use alien_infra::extension_bundle::testing::{controller_guest, TestBundle};
 use axum::{extract::State, http::HeaderMap, routing::post, Router};
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
+const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const IDENTITY_ROLE: &str = "arn:aws:iam::210987654321:role/test-acme-ext";
 
 /// The custom type of the test's controller module: each step runs the resource's `probe` with
@@ -146,6 +151,135 @@ fn zone_progress(state: &DeploymentState) -> String {
         .to_string()
 }
 
+/// The step the module was last sent for the zone, which the `echo` probe returns.
+fn zone_step(state: &DeploymentState) -> Value {
+    serde_json::from_str(&zone_progress(state)).expect("the module echoed its step")
+}
+
+/// Runs the Operator's deployment loop until the deployment reaches one of `statuses`.
+async fn run_until(state: &OperatorState, statuses: &[DeploymentStatus]) -> DeploymentState {
+    // The secrets digest key the Operator installs at startup.
+    alien_deployment::set_ephemeral_secrets_digest_key();
+    for _ in 0..40 {
+        crate::loops::deployment::run_deployment_continuously(state)
+            .await
+            .unwrap_or_else(|e| panic!("the deployment loop failed: {e:#?}"));
+        let current = state.db.get_deployment_state().await.unwrap().unwrap();
+        if statuses.contains(&current.status) {
+            return current;
+        }
+    }
+    let current = state.db.get_deployment_state().await.unwrap().unwrap();
+    panic!(
+        "never reached {statuses:?}; last {:?}: {:#?}",
+        current.status, current.error
+    );
+}
+
+/// Stages `target` for the deployment loop, as the sync loop does when it accepts a release.
+async fn stage(state: &OperatorState, status: DeploymentStatus, target: ReleaseInfo) {
+    let mut current = state.db.get_deployment_state().await.unwrap().unwrap();
+    current.status = status;
+    current.target_release = Some(target);
+    state.db.set_deployment_state(&current).await.unwrap();
+    state.db.set_deployment_config(&config()).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_operator_creates_updates_and_deletes_a_custom_resource_through_its_controller_module()
+{
+    let vault = tempfile::tempdir().unwrap();
+    std::env::set_var("TEST_VAULT_DATA_DIR", vault.path());
+    let data_dir = tempfile::tempdir().unwrap();
+    let bundle = bundle();
+    cache_bundle(data_dir.path(), &bundle);
+    let db = OperatorDb::new(data_dir.path().to_str().unwrap(), KEY)
+        .await
+        .unwrap();
+    db.set_deployment_id("dep_pull").await.unwrap();
+    db.set_deployment_state(&initial_setup(
+        Platform::Test,
+        stack(&bundle, "test", echo("a"), json!({})),
+        StackState::new(Platform::Test),
+        InitialSetupAuthority::DirectSetup,
+    ))
+    .await
+    .unwrap();
+    db.set_deployment_config(&config()).await.unwrap();
+    let state = OperatorState {
+        config: OperatorConfig::builder()
+            .platform(Platform::Test)
+            .data_dir(data_dir.path().to_str().unwrap())
+            .encryption_key(KEY)
+            .build(),
+        db: Arc::new(db),
+        service_provider: None,
+        operations_sync_handler: None,
+        pod_log_collection: false,
+        cancel: CancellationToken::new(),
+    };
+
+    let created = run_until(
+        &state,
+        &[
+            DeploymentStatus::Running,
+            DeploymentStatus::ProvisioningFailed,
+        ],
+    )
+    .await;
+    assert_eq!(
+        created.status,
+        DeploymentStatus::Running,
+        "{:#?}",
+        created.error
+    );
+    let step = zone_step(&created);
+    assert_eq!(step["deploymentId"], "dep_pull");
+    assert_eq!(step["resource"]["arg"], "a");
+
+    stage(
+        &state,
+        DeploymentStatus::UpdatePending,
+        release("rel_2", stack(&bundle, "test", echo("b"), json!({}))),
+    )
+    .await;
+    let updated = run_until(
+        &state,
+        &[DeploymentStatus::Running, DeploymentStatus::UpdateFailed],
+    )
+    .await;
+    assert_eq!(
+        updated.status,
+        DeploymentStatus::Running,
+        "{:#?}",
+        updated.error
+    );
+    assert_eq!(zone_step(&updated)["resource"]["arg"], "b");
+
+    let installed = updated.current_release.clone().unwrap();
+    stage(&state, DeploymentStatus::DeletePending, installed).await;
+    let deleted = run_until(
+        &state,
+        &[DeploymentStatus::Deleted, DeploymentStatus::DeleteFailed],
+    )
+    .await;
+    assert_eq!(
+        deleted.status,
+        DeploymentStatus::Deleted,
+        "{:#?}",
+        deleted.error
+    );
+    let zone = &deleted.stack_state.as_ref().unwrap().resources["zone"];
+    assert_eq!(zone.status, ResourceStatus::Deleted);
+    assert_eq!(
+        zone.internal_state.as_ref().unwrap()["remote"]["state"],
+        json!({ "deleted": true }),
+        "the module ran the delete"
+    );
+}
+
+/// A bundle with a controller binary for this machine and no controller module gets no
+/// controller: the deployment refuses to step, naming the extension.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_extension_without_a_controller_module_has_no_controller() {
     alien_deployment::set_ephemeral_secrets_digest_key();

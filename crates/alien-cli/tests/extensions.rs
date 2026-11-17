@@ -518,6 +518,79 @@ fn output_text(output: &Output) -> String {
     )
 }
 
+fn assert_listing(output: &Output, lines: &[&str]) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let expected = format!(
+        "Changed by extensions, in the order the stack lists them:\n{}",
+        lines
+            .iter()
+            .map(|line| format!("  {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    assert!(stderr.contains(&expected), "{expected}\n---\n{stderr}");
+}
+
+// The docs' layout: each extension built in its own folder beside alien.ts, and `alien render`
+// run from the app's folder with no flag. Render finds each bundle beside the module alien.ts
+// imports and runs every extension's modifiers, in the stack's order, on every format. Backups
+// and tags change no bucket, so each extension lists no changes.
+#[cfg(unix)]
+#[test]
+fn render_reads_each_bundle_beside_the_module_alien_ts_imports() {
+    let app = app(&[
+        ("backups", "./backups/generated"),
+        ("tags", "./extensions/tags/generated"),
+    ]);
+    build_extension_in(app.path(), "postgres-backup-retention", "backups");
+    build_extension_in(app.path(), "resource-tags", "extensions/tags");
+    for format in FORMATS {
+        let output = succeeds(render(app.path(), format));
+        assert_listing(&output, &["backups: no changes", "tags: no changes"]);
+    }
+}
+
+// An installed extension: a package that carries the generated module and the bundle, copied into
+// node_modules as npm installs it, or linked there as pnpm does.
+#[cfg(unix)]
+#[test]
+fn render_reads_the_bundle_of_an_extension_installed_as_a_package() {
+    let app = app(&[("backups", "@acme/backups"), ("tags", "@acme/tags")]);
+    let built = tempfile::tempdir().unwrap();
+    for (example, package) in [
+        ("postgres-backup-retention", "backups"),
+        ("resource-tags", "tags"),
+    ] {
+        let root = build_extension_in(built.path(), example, package);
+        std::fs::write(
+            root.join("package.json"),
+            format!(r#"{{"name": "@acme/{package}", "main": "generated/index.ts"}}"#),
+        )
+        .unwrap();
+    }
+    let scope = app.path().join("node_modules/@acme");
+    std::fs::create_dir_all(&scope).unwrap();
+    copy_built(&built.path().join("backups"), &scope.join("backups"));
+    std::os::unix::fs::symlink(built.path().join("tags"), scope.join("tags")).unwrap();
+
+    for format in FORMATS {
+        let output = succeeds(render(app.path(), format));
+        assert_listing(&output, &["backups: no changes", "tags: no changes"]);
+    }
+}
+
+/// Copies a built extension as a package carries it: its manifest, generated module and bundle.
+fn copy_built(from: &Path, to: &Path) {
+    for path in [
+        "package.json",
+        "generated/index.ts",
+        "target/alien-extension/backups-core.zip",
+    ] {
+        std::fs::create_dir_all(to.join(path).parent().unwrap()).unwrap();
+        std::fs::copy(from.join(path), to.join(path)).unwrap();
+    }
+}
+
 /// Fails the render and writes no template.
 fn refused(app: &Path) -> String {
     let output = alien(
@@ -664,6 +737,20 @@ fn render_without_extensions_reads_no_bundle() {
             "{format:?}"
         );
     }
+}
+
+// The module's URL percent-encodes its path, so a folder whose name has a space, a non-ASCII
+// letter, a literal `%20` and a `#` must still lead render to the bundle beside it.
+#[cfg(unix)]
+#[test]
+fn render_reads_a_bundle_from_a_folder_whose_name_needs_escaping() {
+    let parent = tempfile::tempdir().unwrap();
+    let app = parent.path().join("my app \u{fc}%20 #x");
+    std::fs::create_dir_all(&app).unwrap();
+    app_at(&app, &[("backups", "./backups/generated")]);
+    build_extension_in(&app, "postgres-backup-retention", "backups");
+    let output = succeeds(render(&app, FORMATS[0]));
+    assert_listing(&output, &["backups: no changes"]);
 }
 
 // Loading a configuration reads only well-formed extension-module entries, so a stack that lists
@@ -1023,4 +1110,424 @@ fn release_of_a_stack_without_extensions_builds_no_workspace() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("Building the extension"), "{stderr}");
     assert!(!project.path().join("budget/generated").exists());
+}
+
+// A fresh checkout releases: the extension builds before alien.ts is evaluated, and the release
+// pins the bundle the build wrote. A `--prebuilt` release then checks the importers the bundle
+// ships, with no cargo on the machine: an edit to the hooks crate changes nothing, and an edit
+// to a fixture the shipped importer can't read is refused.
+#[cfg(unix)]
+#[test]
+fn release_builds_each_extension_first_and_checks_the_module_it_ships() {
+    let project = release_project();
+    // An extension workspace alien.ts doesn't list, already built once: the release never builds
+    // it, and this one doesn't build.
+    let tags = project.path().join("tags");
+    std::fs::create_dir_all(tags.join("generated")).unwrap();
+    std::fs::write(
+        tags.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"hooks\"]\n\n[workspace.metadata.alien-extension]\nhooks = \"hooks\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tags.join("generated/index.ts"),
+        "const extension: ExtensionManifest = { \"name\": \"tags\" }\n\nexport default extension\n",
+    )
+    .unwrap();
+    let server = httpmock::MockServer::start();
+    let manager = manager(&server, r#""name":"budget""#);
+    let created = &manager.created;
+
+    let output = succeeds(release(
+        project.path(),
+        &server.base_url(),
+        &["--platforms", "aws"],
+        None,
+    ));
+    created.assert_hits(1);
+    let built_tags = |output: &Output| {
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .any(|line| line.contains("Building the extension in") && line.ends_with("/tags"))
+    };
+    assert!(!built_tags(&output));
+    // alien.ts is read twice: once before the fallback built budget, once after. Budget is the
+    // only listed extension and is built, so it isn't read a third time.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr
+            .lines()
+            .filter(|line| line.contains("alien_cli::config: Loading configuration from:"))
+            .count(),
+        2,
+        "{stderr}"
+    );
+    let zip = std::fs::read(
+        project
+            .path()
+            .join("budget/target/alien-extension/budget-core.zip"),
+    )
+    .unwrap();
+    let built: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project.path().join(".alien/build/aws/stack.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        built["extensions"][0]["digest"],
+        format!("sha256:{}", hex::encode(Sha256::digest(&zip)))
+    );
+
+    // alien.ts now evaluates, and lists the extension: the release builds it again, and the
+    // stack pins the new bundle.
+    let hooks = project.path().join("budget/hooks/src/lib.rs");
+    let source = std::fs::read_to_string(&hooks).unwrap();
+    assert!(source.contains(r#""Threshold": 80"#), "the emitter moved");
+    std::fs::write(
+        &hooks,
+        source.replace(r#""Threshold": 80"#, r#""Threshold": 90"#),
+    )
+    .unwrap();
+    let output = succeeds(release(
+        project.path(),
+        &server.base_url(),
+        &["--platforms", "aws"],
+        None,
+    ));
+    created.assert_hits(2);
+    assert!(!built_tags(&output));
+    let rebuilt = std::fs::read(
+        project
+            .path()
+            .join("budget/target/alien-extension/budget-core.zip"),
+    )
+    .unwrap();
+    assert_ne!(rebuilt, zip);
+    let built: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project.path().join(".alien/build/aws/stack.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        built["extensions"][0]["digest"],
+        format!("sha256:{}", hex::encode(Sha256::digest(&rebuilt)))
+    );
+
+    // No cargo on PATH, and a hooks crate that no longer builds: `--prebuilt` checks the module
+    // that ships.
+    let source = std::fs::read_to_string(&hooks).unwrap();
+    std::fs::write(&hooks, source.replace("ctx.ready(", "does_not_compile(")).unwrap();
+    let output = succeeds(release(
+        project.path(),
+        &server.base_url(),
+        &["--prebuilt", "--platforms", "aws"],
+        Some("/usr/bin:/bin"),
+    ));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("The extension `budget`'s shipped importers pass on 1 fixtures"),
+        "{stderr}"
+    );
+    created.assert_hits(3);
+
+    // A fixture the shipped importer can't read.
+    let fixture = project
+        .path()
+        .join("budget/tests/import/budget/alert/aws/basic.json");
+    let text = std::fs::read_to_string(&fixture).unwrap();
+    std::fs::write(&fixture, text.replace("budgetName", "name")).unwrap();
+    let output = release(
+        project.path(),
+        &server.base_url(),
+        &["--prebuilt", "--platforms", "aws"],
+        Some("/usr/bin:/bin"),
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("tests/import/budget/alert/aws/basic.json: the importer failed"),
+        "{stderr}"
+    );
+    created.assert_hits(3);
+    // Budget's bundle has no controller: each release uploads its core zip.
+    assert!(manager.cores.hits() >= 1);
+}
+
+// alien.ts may import an extension from a folder beside the project: the release ships the bundle
+// beside the module alien.ts imports, and reads no bundle of an extension the stack doesn't list.
+#[cfg(unix)]
+#[test]
+fn release_ships_an_extension_imported_from_beside_the_project() {
+    let parent = tempfile::tempdir().unwrap();
+    let parent = parent.path().canonicalize().unwrap();
+    let budget = parent.join("budget");
+    copy_example("budget-alert", &budget);
+    succeeds(alien(&budget, &["extensions", "build"]));
+    std::fs::create_dir_all(parent.join("node_modules/@alienplatform")).unwrap();
+    std::os::unix::fs::symlink(
+        repository().join("packages/core"),
+        parent.join("node_modules/@alienplatform/core"),
+    )
+    .unwrap();
+    let project = parent.join("app");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(
+        project.join("alien.ts"),
+        "import * as alien from \"@alienplatform/core\"\nimport budget from \"../budget/generated\"\n\nexport default new alien.Stack(\"my-app\").extensions([budget]).build()\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("package.json"),
+        r#"{ "name": "my-app", "private": true, "type": "module" }"#,
+    )
+    .unwrap();
+    let tags = project.join("tags");
+    std::fs::create_dir_all(tags.join("generated")).unwrap();
+    std::fs::write(
+        tags.join("generated/index.ts"),
+        "const extension: ExtensionManifest = { \"name\": \"tags\" }\n\nexport default extension\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(tags.join("target/alien-extension")).unwrap();
+    std::fs::write(
+        tags.join("target/alien-extension/tags-core.zip"),
+        "not a zip",
+    )
+    .unwrap();
+    let server = httpmock::MockServer::start();
+    let manager = manager(&server, r#""name":"budget""#);
+
+    succeeds(release(
+        &project,
+        &server.base_url(),
+        &["--platforms", "aws"],
+        None,
+    ));
+    manager.created.assert_hits(1);
+    let zip = std::fs::read(budget.join("target/alien-extension/budget-core.zip")).unwrap();
+    let built: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project.join(".alien/build/aws/stack.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        built["extensions"][0]["digest"],
+        format!("sha256:{}", hex::encode(Sha256::digest(&zip)))
+    );
+    assert!(manager.cores.hits() >= 1);
+}
+
+/// The core zip with `manifest` in place of its own and `extra` added.
+#[cfg(unix)]
+fn doctored(zip: &[u8], manifest: &serde_json::Value, extra: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write as _;
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip)).unwrap();
+    let mut doctored = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if name == "manifest.json" {
+            bytes = serde_json::to_vec(manifest).unwrap();
+        }
+        doctored.start_file(name, options).unwrap();
+        doctored.write_all(&bytes).unwrap();
+    }
+    for (name, bytes) in extra {
+        doctored.start_file(*name, options).unwrap();
+        doctored.write_all(bytes).unwrap();
+    }
+    doctored.finish().unwrap().into_inner()
+}
+
+// The release checks the controller module a bundle ships before anything runs it. Each bundle
+// here is budget's, changed after its build, with the stack pinned to the changed zip so the
+// release gets as far as the module: one whose `controller.wasm` is not the module its manifest
+// lists, and one that registers a controller on AWS with no module to run it.
+#[cfg(unix)]
+#[test]
+fn release_refuses_a_controller_module_that_is_not_the_one_the_bundle_lists() {
+    let project = release_project();
+    let server = httpmock::MockServer::start();
+    let manager = manager(&server, r#""name":"budget""#);
+    succeeds(release(
+        project.path(),
+        &server.base_url(),
+        &["--platforms", "aws"],
+        None,
+    ));
+    manager.created.assert_hits(1);
+
+    let zip_path = project
+        .path()
+        .join("budget/target/alien-extension/budget-core.zip");
+    let built = std::fs::read(&zip_path).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&zip_entry(&built, "manifest.json")).unwrap();
+    let stack_path = project.path().join(".alien/build/aws/stack.json");
+    let release_pinned_to = |zip: &[u8], manifest: &serde_json::Value| {
+        std::fs::write(&zip_path, zip).unwrap();
+        let mut stack: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&stack_path).unwrap()).unwrap();
+        stack["extensions"][0]["digest"] =
+            serde_json::json!(format!("sha256:{}", hex::encode(Sha256::digest(zip))));
+        stack["extensions"][0]["resourceTypes"] = manifest["resourceTypes"].clone();
+        std::fs::write(&stack_path, serde_json::to_vec(&stack).unwrap()).unwrap();
+        let output = release(
+            project.path(),
+            &server.base_url(),
+            &["--prebuilt", "--platforms", "aws"],
+            None,
+        );
+        assert!(!output.status.success(), "the release passed");
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+
+    let mut swapped = manifest.clone();
+    swapped["protocol"]["controller"] = serde_json::json!(1);
+    swapped["controllerModuleSha256"] =
+        serde_json::json!(hex::encode(Sha256::digest(b"the module the build made")));
+    let stderr = release_pinned_to(
+        &doctored(&built, &swapped, &[("controller.wasm", b"another module")]),
+        &swapped,
+    );
+    assert!(
+        stderr.contains(
+            "the extension `budget`'s controller.wasm is not the module its manifest lists"
+        ),
+        "{stderr}"
+    );
+
+    let mut no_module = manifest.clone();
+    no_module["protocol"]["controller"] = serde_json::json!(1);
+    no_module["resourceTypes"]["budget/alert"]["controllerPlatforms"] = serde_json::json!(["aws"]);
+    let stderr = release_pinned_to(&doctored(&built, &no_module, &[]), &no_module);
+    assert!(
+        stderr.contains(
+            "registers a controller for `budget/alert` on aws, and its bundle has no controller module to run it"
+        ),
+        "{stderr}"
+    );
+    // Neither release reached the manager.
+    manager.created.assert_hits(1);
+}
+
+/// `alien dev` on the docs' DNS zone: alien.ts lists the acme extension and adds a zone. The
+/// extension builds first, its bundle goes to the local manager, and the manager runs the
+/// extension's controller for the local platform as a process, which creates the zone.
+#[cfg(unix)]
+#[test]
+fn dev_runs_the_zone_with_the_extensions_local_controller_as_a_process() {
+    use std::time::{Duration, Instant};
+
+    let project = tempfile::Builder::new().prefix("dev").tempdir().unwrap();
+    let acme = example("dns-zone");
+    copy_dir(acme.path(), &project.path().join("acme"));
+    std::fs::write(
+        project.path().join("alien.ts"),
+        "import * as alien from \"@alienplatform/core\"\nimport acme, { DnsZone } from \"./acme/generated\"\n\nconst zone = new DnsZone(\"zone\").domain(\"internal.acme.dev\").build()\n\nexport default new alien.Stack(\"my-app\").add(zone, \"live\").extensions([acme]).build()\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.path().join("package.json"),
+        r#"{ "name": "my-app", "private": true, "type": "module" }"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(project.path().join("node_modules/@alienplatform")).unwrap();
+    std::os::unix::fs::symlink(
+        repository().join("packages/core"),
+        project.path().join("node_modules/@alienplatform/core"),
+    )
+    .unwrap();
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let status_file = project.path().join("status.json");
+    let log_path = project.path().join("dev.log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    struct Dev(std::process::Child);
+    impl Drop for Dev {
+        fn drop(&mut self) {
+            if self.0.try_wait().unwrap().is_none() {
+                self.0.kill().unwrap();
+            }
+            self.0.wait().unwrap();
+        }
+    }
+    let mut dev = Dev(command(project.path(), &["dev", "--status-file"])
+        .arg(&status_file)
+        .args(["--port", &port.to_string()])
+        .args([
+            "--workspace",
+            "example",
+            "--project",
+            "example",
+            "--no-browser",
+        ])
+        .env_remove("ALIEN_API_KEY")
+        .stdout(log.try_clone().unwrap())
+        .stderr(log)
+        .spawn()
+        .unwrap());
+
+    let deadline = Instant::now() + Duration::from_secs(1200);
+    let deployment_id = loop {
+        let status = std::fs::read(&status_file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let agent = status
+            .as_ref()
+            .and_then(|status| status["agents"].as_object())
+            .and_then(|agents| agents.values().next().cloned());
+        if let Some(agent) = &agent {
+            assert_ne!(
+                agent["status"],
+                "provisioning-failed",
+                "{agent}\n{}",
+                std::fs::read_to_string(&log_path).unwrap()
+            );
+            if agent["status"] == "running" {
+                break agent["id"].as_str().unwrap().to_string();
+            }
+        }
+        assert!(
+            dev.0.try_wait().unwrap().is_none(),
+            "alien dev exited: {}",
+            std::fs::read_to_string(&log_path).unwrap()
+        );
+        assert!(
+            Instant::now() < deadline,
+            "the zone did not deploy: {}",
+            std::fs::read_to_string(&log_path).unwrap()
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+
+    let deployment: serde_json::Value = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        reqwest::get(format!(
+            "http://127.0.0.1:{port}/v1/deployments/{deployment_id}"
+        ))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
+    });
+    let zone = &deployment["stackState"]["resources"]["zone"];
+    assert_eq!(zone["status"], "running", "{deployment:#}");
+    // Only the extension's controller for the local platform writes this id, and Alien reaches
+    // it only as a process.
+    let prefix = deployment["stackState"]["resourcePrefix"].as_str().unwrap();
+    assert_eq!(
+        zone["outputs"]["zoneId"],
+        format!("{prefix}-zone"),
+        "{zone:#}"
+    );
+    // The release kept the controller it uploaded, so a rebuild can't take it from a deployment
+    // that still runs this release.
+    let kept = std::fs::read_dir(project.path().join(".alien/released-controllers"))
+        .map(|entries| entries.count())
+        .unwrap_or(0);
+    assert!(kept > 0, "the dev release kept no controller");
 }
