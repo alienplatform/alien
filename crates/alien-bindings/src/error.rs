@@ -478,6 +478,23 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A file in a sandbox changed while it was being read in pages.
+    ///
+    /// Nothing is wrong with the sandbox: the read could not return one consistent version of the
+    /// file, and reading it again can. Distinct from `SandboxUnreachable`, which callers read as
+    /// "the sandbox is down". The path is a name the caller supplied, so it is not sensitive.
+    #[error(
+        code = "SANDBOX_FILE_CHANGED",
+        message = "File '{path}' changed while it was being read; read it again",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SandboxFileChanged {
+        /// Path of the file, as the caller gave it
+        path: String,
+    },
+
     /// Feature is not enabled in the compiled binary.
     #[error(
         code = "FEATURE_NOT_ENABLED",

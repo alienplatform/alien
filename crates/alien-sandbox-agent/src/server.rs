@@ -191,6 +191,13 @@ pub struct HealthQuery {
 pub struct FileQuery {
     /// Path inside the session
     pub path: String,
+    /// First byte to return; absent reads from the start
+    #[serde(default)]
+    pub offset: Option<u64>,
+    /// Most bytes to return; absent reads to the end of the file. A caller whose transport limits
+    /// one reply pages a large file with this and `offset`.
+    #[serde(default)]
+    pub length: Option<u64>,
 }
 
 /// File contents on the way out.
@@ -199,6 +206,12 @@ pub struct FileQuery {
 pub struct ReadFileResponse {
     /// Contents, base64 because a file is arbitrary bytes
     pub contents_base64: String,
+    /// The file's size, so a caller paging it knows when it has all of it. Absent from agents
+    /// that predate paging, which return the whole file.
+    pub total_bytes: u64,
+    /// Identity of the file as opened (inode, modification time, size). A caller paging a file
+    /// compares it between pages and starts over when it changes. Absent from older agents.
+    pub version: String,
 }
 
 /// A file on the way in.
@@ -228,14 +241,23 @@ pub struct JobPollBody {
     /// Return frames strictly after this sequence; absent returns from the first frame
     #[serde(default)]
     pub since_seq: Option<u64>,
+    /// Encoded reply bytes each stream's frames may add to this reply; the rest is returned by
+    /// later polls. Absent returns everything after `sinceSeq` in one reply.
+    #[serde(default)]
+    pub reply_budget: Option<usize>,
 }
 
 /// A job's output so far, and how it ended once it has.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobPollResponse {
-    /// Whether the command is still running
+    /// Whether the caller must keep polling: the command is still running, or it has ended and
+    /// `more` output is waiting. Older callers stop at `false`, so a paged drain stays `true`.
     pub running: bool,
+    /// The command has ended, whatever `running` says. The outcome fields below are final; only
+    /// buffered output is left to read. Absent from replies of agents that predate it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
     /// Output frames after the polled sequence
     pub frames: Vec<Frame>,
     /// Exit code, present once a job has exited on its own
@@ -261,28 +283,22 @@ pub struct JobErrorBody {
 
 impl From<JobSnapshot> for JobPollResponse {
     fn from(snapshot: JobSnapshot) -> Self {
-        match snapshot.outcome {
-            None => Self {
-                running: true,
-                frames: snapshot.frames,
-                exit_code: None,
-                truncated: None,
-                error: None,
-            },
-            Some(JobOutcome::Exited { code, truncated }) => Self {
-                running: false,
-                frames: snapshot.frames,
-                exit_code: Some(code),
-                truncated: Some(truncated),
-                error: None,
-            },
-            Some(JobOutcome::Failed { code, message }) => Self {
-                running: false,
-                frames: snapshot.frames,
-                exit_code: None,
-                truncated: None,
-                error: Some(JobErrorBody { code, message }),
-            },
+        let running = snapshot.outcome.is_none() || snapshot.more;
+        let finished = snapshot.outcome.is_some();
+        let (exit_code, truncated, error) = match snapshot.outcome {
+            None => (None, None, None),
+            Some(JobOutcome::Exited { code, truncated }) => (Some(code), Some(truncated), None),
+            Some(JobOutcome::Failed { code, message }) => {
+                (None, None, Some(JobErrorBody { code, message }))
+            }
+        };
+        Self {
+            running,
+            finished,
+            frames: snapshot.frames,
+            exit_code,
+            truncated,
+            error,
         }
     }
 }
@@ -734,6 +750,7 @@ async fn interactive_start(
                     // fast as the caller takes it.
                     usize::MAX,
                     alien_core::sandbox_process::Framing::Chunks,
+                    None,
                     sender,
                     // The group is forgotten and the id freed once the command exits and before
                     // it is reaped, not when the terminal frame is delivered, which a slow reader
@@ -834,10 +851,18 @@ async fn read_file(
 ) -> std::result::Result<Json<ReadFileResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute).await?;
 
-    let contents = files::read(&state.session_root, &query.path).await?;
+    let range = files::read_range(
+        &state.session_root,
+        &query.path,
+        query.offset.unwrap_or(0),
+        query.length,
+    )
+    .await?;
 
     Ok(Json(ReadFileResponse {
-        contents_base64: BASE64.encode(contents),
+        contents_base64: BASE64.encode(range.contents),
+        total_bytes: range.total_bytes,
+        version: range.version,
     }))
 }
 
@@ -905,7 +930,7 @@ async fn job_poll(
 
     let snapshot = state
         .jobs
-        .poll(&body.job_id, body.since_seq)
+        .poll_within(&body.job_id, body.since_seq, body.reply_budget)
         .ok_or_else(|| {
             ApiError::from(AlienError::new(ErrorData::JobNotFound {
                 job_id: body.job_id.clone(),

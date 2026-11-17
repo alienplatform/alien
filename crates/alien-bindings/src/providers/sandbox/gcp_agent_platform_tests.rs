@@ -3109,3 +3109,475 @@ async fn get_by_key_skips_a_sandbox_that_stopped_after_the_list() {
         .expect("the live one answers");
     assert_eq!(found.sandbox_id, newer_id);
 }
+
+// ---- output cap and oversized replies ---------------------------------------------------------
+
+/// The refusal Agent Platform returns for a reply above its size limit, as the client reports it:
+/// HTTP 400 `FAILED_PRECONDITION` becomes a conflict carrying Google's message.
+fn reply_too_large_error() -> AlienError<AgentPlatformErrorData> {
+    AlienError::new(alien_client_core::ErrorData::RemoteResourceConflict {
+        resource_type: "sandbox".to_string(),
+        resource_name: "s1".to_string(),
+        message: "Response size too large. Received at least 2000341 bytes.".to_string(),
+    })
+    .context(AgentPlatformErrorData::ExecuteFailed {
+        sandbox: "s1".to_string(),
+        message: "the API rejected or cut short the request".to_string(),
+    })
+}
+
+fn short_command() -> RunCommandRequest {
+    RunCommandRequest {
+        command: "/bin/echo".to_string(),
+        args: vec![],
+        cwd: None,
+        env: BTreeMap::new(),
+        timeout: Duration::from_secs(5),
+    }
+}
+
+/// The synchronous envelope carries the per-stream reply budget, so the agent cuts the output to
+/// fit; the job envelope does not (a job keeps all of it), and every poll carries it so each reply
+/// fits. Mutation check: send the budget on `jobStart` and the job half fails.
+#[tokio::test]
+async fn the_reply_budget_cuts_exec_and_pages_job_polls() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(3).returning(|_, _, input| {
+        let body: serde_json::Value = serde_json::from_slice(input).expect("json");
+        let budget = &body["replyBudget"];
+        match body["op"].as_str().unwrap() {
+            "exec" => {
+                assert_eq!(budget, &serde_json::json!(GCP_STREAM_REPLY_BUDGET));
+                Ok(ndjson(&[exit_frame(0)]))
+            }
+            "jobStart" => {
+                assert!(budget.is_null(), "a job is not cut: {body}");
+                Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap())
+            }
+            "jobPoll" => {
+                assert_eq!(budget, &serde_json::json!(GCP_STREAM_REPLY_BUDGET));
+                Ok(
+                    serde_json::to_vec(&serde_json::json!({"running": false, "exitCode": 0}))
+                        .unwrap(),
+                )
+            }
+            other => panic!("unexpected op {other}"),
+        }
+    });
+    let sandbox = provider(client);
+    let _: Vec<_> = sandbox
+        .run_command("s1", short_command())
+        .await
+        .expect("runs")
+        .collect()
+        .await;
+    let job = sandbox
+        .start_job("s1", short_command())
+        .await
+        .expect("job starts");
+    sandbox
+        .poll_job("s1", &job.job_id, None)
+        .await
+        .expect("polls");
+}
+
+/// The worst reply the agent can build under the budget: both streams spent to the byte on
+/// frames of the given size, each charged as the agent charges it (its JSON and a separator,
+/// base64-encoded once more). Returns the sync reply and a job poll reply holding every frame.
+fn worst_replies(data_bytes_per_frame: usize) -> (usize, usize) {
+    let mut frames = Vec::new();
+    let mut seq = 0u64;
+    for name in ["stdout", "stderr"] {
+        let mut remaining = GCP_STREAM_REPLY_BUDGET;
+        loop {
+            let frame = serde_json::json!({
+                "t": name,
+                "seq": seq,
+                "data": BASE64.encode(vec![0xffu8; data_bytes_per_frame]),
+            });
+            // The agent's own charge, so this cannot drift from what it enforces.
+            let agent_frame = alien_sandbox_agent::exec::Frame::Stdout {
+                seq,
+                data: BASE64.encode(vec![0xffu8; data_bytes_per_frame]),
+            };
+            let agent_frame = if name == "stderr" {
+                alien_sandbox_agent::exec::Frame::Stderr {
+                    seq,
+                    data: BASE64.encode(vec![0xffu8; data_bytes_per_frame]),
+                }
+            } else {
+                agent_frame
+            };
+            let cost = alien_sandbox_agent::exec::frame_wire_cost(&agent_frame);
+            if cost > remaining {
+                break;
+            }
+            remaining -= cost;
+            seq += 1;
+            frames.push(frame);
+        }
+    }
+    frames.push(exit_frame(0));
+
+    let sync = serde_json::to_vec(&serde_json::json!({
+        "outputs": [{ "mimeType": "application/json", "data": BASE64.encode(ndjson(&frames)) }]
+    }))
+    .unwrap()
+    .len();
+    let poll = serde_json::to_vec(&serde_json::json!({
+        "outputs": [{ "mimeType": "application/json", "data": BASE64.encode(serde_json::to_vec(
+            &serde_json::json!({ "running": false, "frames": frames, "exitCode": 0, "truncated": true })
+        ).unwrap()) }]
+    }))
+    .unwrap()
+    .len();
+    (sync, poll)
+}
+
+/// The budget exists so the worst reply stays under the proxy's limit, on `exec` and on a single
+/// `jobPoll` that returns every frame, for frames of any size (one byte per line up to the
+/// agent's 64 KiB reads). Mutation check: raise `GCP_STREAM_REPLY_BUDGET` to 1.1 MB and this fails.
+#[test]
+fn the_worst_reply_under_the_budget_fits_the_proxy_limit_with_margin() {
+    for data in [1, 16, 256, 4096, 65_536] {
+        let (sync, poll) = worst_replies(data);
+        for (path, size) in [("exec", sync), ("jobPoll", poll)] {
+            assert!(
+                size * 10 < GCP_REPLY_LIMIT_BYTES * 9,
+                "{path} with {data}-byte frames: reply is {size} bytes, limit {GCP_REPLY_LIMIT_BYTES}"
+            );
+        }
+    }
+}
+
+/// A reply the proxy could not return is a clear, non-retryable failure, never an unknown outcome.
+#[tokio::test]
+async fn an_oversized_exec_reply_is_not_an_unknown_outcome() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(reply_too_large_error()));
+    let error = match provider(client).run_command("s1", short_command()).await {
+        Err(error) => error,
+        Ok(_) => panic!("the oversized reply must fail"),
+    };
+    assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+    assert!(!error.retryable, "{error}");
+    assert!(error.to_string().contains("too large"), "{error}");
+}
+
+/// The same on the job path, where it used to read "the job is no longer watched".
+#[tokio::test(start_paused = true)]
+async fn an_oversized_job_poll_is_not_an_unknown_outcome() {
+    let polls = AtomicUsize::new(0);
+    let (client, _cancels) = cancel_watching_client_answering(move || {
+        if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(serde_json::to_vec(&serde_json::json!({"running": true, "frames": []})).unwrap())
+        } else {
+            Err(reply_too_large_error())
+        }
+    });
+    let sandbox = provider(client);
+    let frames: Vec<_> = sandbox
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    let Some(Err(error)) = frames.last() else {
+        panic!("the failed poll reaches the caller: {frames:?}");
+    };
+    assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+    assert!(!error.retryable, "{error}");
+}
+
+/// A job whose output the agent returns in several budgeted replies, drained by a reader that
+/// takes four seconds per frame, ran for its whole timeout and exited 0. The drain outlasts the
+/// poll deadline's grace, and the command must still report its exit, not a timeout. Mutation
+/// check: drop the deadline extension in `job_poll_step` and this reports `timeoutExceeded`.
+#[tokio::test(start_paused = true)]
+async fn a_job_still_draining_buffered_output_is_not_timed_out() {
+    let polls = AtomicUsize::new(0);
+    let (client, _cancels) = cancel_watching_client_answering(move || {
+        let n = polls.fetch_add(1, Ordering::SeqCst);
+        let body = if n < 20 {
+            serde_json::json!({"running": true, "frames": [stdout_frame(n as u64, b"x")]})
+        } else {
+            serde_json::json!({"running": false, "frames": [], "exitCode": 0})
+        };
+        Ok(serde_json::to_vec(&body).unwrap())
+    });
+    let sandbox = provider(client);
+    let mut request = long_command();
+    request.timeout = Duration::from_secs(31);
+    let mut frames = sandbox
+        .run_command("s1", request)
+        .await
+        .expect("the job starts");
+    let mut seen = Vec::new();
+    while let Some(item) = frames.next().await {
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        seen.push(item);
+    }
+    assert!(
+        matches!(seen.last(), Some(Ok(CommandOutput::Exit { code: 0, .. }))),
+        "{seen:?}"
+    );
+    assert_eq!(seen.len(), 21);
+}
+
+/// An agent that has reported the command finished (with its exit code) while pages of output
+/// remain is only waiting to be read. A reader slower than the deadline must still get every page
+/// and the real exit code, and the job is never cancelled. Mutation check: drop the `draining`
+/// guard in `job_poll_step` and this reports `timeoutExceeded`.
+#[tokio::test(start_paused = true)]
+async fn a_finished_job_with_pages_left_is_drained_past_the_deadline() {
+    let polls = AtomicUsize::new(0);
+    let (client, mut cancels) = cancel_watching_client_answering(move || {
+        let n = polls.fetch_add(1, Ordering::SeqCst);
+        let body = if n < 5 {
+            serde_json::json!({
+                "running": true, "finished": true, "exitCode": 7,
+                "frames": [stdout_frame(n as u64, b"x")]
+            })
+        } else {
+            serde_json::json!({"running": false, "finished": true, "frames": [], "exitCode": 7})
+        };
+        Ok(serde_json::to_vec(&body).unwrap())
+    });
+    let sandbox = provider(client);
+    let mut request = long_command();
+    request.timeout = Duration::from_secs(31);
+    let mut frames = sandbox
+        .run_command("s1", request)
+        .await
+        .expect("the job starts");
+    let mut seen = Vec::new();
+    while let Some(item) = frames.next().await {
+        // Far past the deadline plus grace, per page.
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        seen.push(item);
+    }
+    assert!(
+        matches!(seen.last(), Some(Ok(CommandOutput::Exit { code: 7, .. }))),
+        "{seen:?}"
+    );
+    assert_eq!(seen.len(), 6, "{seen:?}");
+    drop(frames);
+    assert!(
+        cancels.try_recv().is_err(),
+        "a finished job is never cancelled"
+    );
+}
+
+/// The agent reports a finished job's outcome while pages remain, but the public poll hands it out
+/// only with the last page, so a caller that stops at the first `exit` or `error` misses nothing.
+/// Mutation check: drop the `settled` filter in `poll_job` and the first poll carries the exit.
+#[tokio::test]
+async fn a_public_poll_reports_the_outcome_only_when_no_pages_remain() {
+    let polls = AtomicUsize::new(0);
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(3).returning(move |_, _, _| {
+        let body = match polls.fetch_add(1, Ordering::SeqCst) {
+            n @ 0..=1 => serde_json::json!({
+                "running": true, "finished": true, "exitCode": 7, "truncated": true,
+                "frames": [stdout_frame(n as u64, b"x")]
+            }),
+            _ => serde_json::json!({
+                "running": false, "finished": true, "exitCode": 7, "truncated": true,
+                "frames": [stdout_frame(2, b"x")]
+            }),
+        };
+        Ok(serde_json::to_vec(&body).unwrap())
+    });
+    let sandbox = provider(client);
+    let mut seq = None;
+    for _ in 0..2 {
+        let poll = sandbox.poll_job("s1", "j1", seq).await.expect("polls");
+        assert!(
+            poll.running && poll.exit.is_none() && poll.error.is_none(),
+            "{poll:?}"
+        );
+        assert_eq!(poll.frames.len(), 1);
+        seq = Some(seq.map_or(0, |s| s + 1));
+    }
+    let last = sandbox.poll_job("s1", "j1", seq).await.expect("polls");
+    assert!(!last.running);
+    assert_eq!(last.frames.len(), 1);
+    assert!(
+        matches!(
+            last.exit,
+            Some(JobExit {
+                code: 7,
+                truncated: true
+            })
+        ),
+        "{last:?}"
+    );
+}
+
+/// A file larger than one reply is read in pages and joined, and an agent without paging, which
+/// answers with the whole file and no size, still reads.
+#[tokio::test]
+async fn read_file_pages_a_large_file() {
+    let file: Vec<u8> = (0..(GCP_READ_PAGE_BYTES * 2 + 17))
+        .map(|i| (i % 251) as u8)
+        .collect();
+    let served = file.clone();
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().returning(move |_, _, input| {
+        let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+        assert_eq!(body["op"], "readFile");
+        let offset = body["offset"].as_u64().unwrap() as usize;
+        let length = body["length"].as_u64().unwrap() as usize;
+        let end = (offset + length).min(served.len());
+        Ok(serde_json::to_vec(&serde_json::json!({
+            "contentsBase64": BASE64.encode(&served[offset..end]),
+            "totalBytes": served.len(),
+            "version": "1-1.000000000-stable",
+        }))
+        .unwrap())
+    });
+    let read = provider(client)
+        .read_file("s1", "big")
+        .await
+        .expect("reads");
+    assert_eq!(read, file);
+}
+
+/// What a mock agent serves for one `readFile` call: the file's bytes and its identity.
+type FileVersion = (Vec<u8>, &'static str);
+
+/// A client whose agent serves `versions[n]` to the n-th call (the last one repeats), answering
+/// each page from that version's bytes at the asked offset. Returns the client and the offsets
+/// asked for.
+fn paging_client(
+    versions: Vec<FileVersion>,
+) -> (
+    MockAgentPlatformApi,
+    std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+) {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = asked.clone();
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().returning(move |_, _, input| {
+        let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+        let offset = body["offset"].as_u64().unwrap() as usize;
+        let length = body["length"].as_u64().unwrap() as usize;
+        let mut log = log.lock().unwrap();
+        let (file, version) = &versions[log.len().min(versions.len() - 1)];
+        log.push(offset);
+        let start = offset.min(file.len());
+        let end = (offset + length).min(file.len());
+        Ok(serde_json::to_vec(&serde_json::json!({
+            "contentsBase64": BASE64.encode(&file[start..end]),
+            "totalBytes": file.len(),
+            "version": version,
+        }))
+        .unwrap())
+    });
+    (client, asked)
+}
+
+fn big_file(fill: u8) -> Vec<u8> {
+    vec![fill; GCP_READ_PAGE_BYTES * 2 + 5]
+}
+
+/// A file replaced by rename between pages is read again from the start, so the result is one
+/// version and never page one of the old file joined to the rest of the new one.
+#[tokio::test]
+async fn read_file_restarts_once_when_the_file_is_replaced_between_pages() {
+    let (client, asked) = paging_client(vec![(big_file(1), "old"), (big_file(2), "new")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, big_file(2));
+    assert_eq!(
+        *asked.lock().unwrap(),
+        vec![
+            0,
+            GCP_READ_PAGE_BYTES,
+            0,
+            GCP_READ_PAGE_BYTES,
+            GCP_READ_PAGE_BYTES * 2
+        ]
+    );
+}
+
+/// A file that shrinks below the offset between pages is not returned as an old prefix: the
+/// read restarts and returns the smaller file whole.
+#[tokio::test]
+async fn read_file_restarts_when_the_file_shrinks_below_the_offset() {
+    let small = vec![9u8; 10];
+    let (client, _) = paging_client(vec![(big_file(1), "old"), (small.clone(), "new")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, small);
+}
+
+/// A file that keeps changing fails with a retryable error after the one restart.
+#[tokio::test]
+async fn read_file_fails_retryably_when_the_file_keeps_changing() {
+    let (client, _) = paging_client(vec![
+        (big_file(1), "a"),
+        (big_file(2), "b"),
+        (big_file(3), "c"),
+        (big_file(4), "d"),
+    ]);
+    let error = provider(client)
+        .read_file("s1", "f")
+        .await
+        .expect_err("changing file");
+    assert!(error.retryable, "{error:?}");
+    assert_eq!(error.code, "SANDBOX_FILE_CHANGED", "{error}");
+    assert!(error.to_string().contains("'f'"), "{error}");
+}
+
+/// A file that does not change is read in one pass, one call per page, with no restart.
+#[tokio::test]
+async fn read_file_of_a_stable_file_does_not_restart() {
+    let (client, asked) = paging_client(vec![(big_file(7), "same")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, big_file(7));
+    assert_eq!(asked.lock().unwrap().len(), 3);
+}
+
+/// The page size is what keeps a page's reply under the proxy's limit: raw bytes are base64-encoded
+/// in the agent's JSON and again in the reply, 16/9 of the raw size, and the page must leave at
+/// least a 20% margin under `GCP_REPLY_LIMIT_BYTES`. Changing the constant must change this test.
+#[test]
+fn read_page_size_leaves_a_margin_under_the_reply_limit() {
+    assert_eq!(GCP_READ_PAGE_BYTES, 900_000);
+    let on_the_wire = GCP_READ_PAGE_BYTES.div_ceil(3) * 4;
+    let on_the_wire = on_the_wire.div_ceil(3) * 4;
+    assert!(
+        on_the_wire * 12 <= GCP_REPLY_LIMIT_BYTES * 10,
+        "{on_the_wire} bytes on the wire leaves under a 20% margin below {GCP_REPLY_LIMIT_BYTES}"
+    );
+}
+
+#[tokio::test]
+async fn read_file_from_an_agent_without_paging_takes_the_whole_reply() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(1).returning(|_, _, _| {
+        Ok(
+            serde_json::to_vec(&serde_json::json!({ "contentsBase64": BASE64.encode(b"all") }))
+                .unwrap(),
+        )
+    });
+    assert_eq!(provider(client).read_file("s1", "f").await.unwrap(), b"all");
+}
+
+/// A file read that the proxy refuses for size names the file and the paged-read cause, not the
+/// output budget, which has nothing to do with it.
+#[tokio::test]
+async fn an_oversized_file_reply_names_paged_reads_not_the_output_budget() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(reply_too_large_error()));
+    let error = provider(client)
+        .read_file("s1", "big")
+        .await
+        .expect_err("refused");
+    let text = error.to_string();
+    assert!(text.contains("paged reads"), "{text}");
+    assert!(!text.contains("output budget"), "{text}");
+}

@@ -2677,3 +2677,244 @@ async fn an_interactive_command_that_is_silent_until_written_to_still_answers_at
     let (terminal, _, _) = run.finish().await;
     assert_eq!(terminal["t"], "exit");
 }
+
+/// Prints 40 KB, in 100-byte lines, on stdout.
+const FORTY_KB: &str = "i=0; while [ $i -lt 400 ]; do printf '%099d\\n' $i; i=$((i+1)); done";
+
+/// What a frame costs in a reply: its JSON and a separator, base64-encoded by the transport.
+fn wire_cost(frame: &serde_json::Value) -> usize {
+    (serde_json::to_vec(frame).expect("json").len() + 1).div_ceil(3) * 4
+}
+
+/// The kept data frames of one stream, their total wire cost, and the terminal frame.
+fn stdout_cost(frames: &[serde_json::Value]) -> (usize, usize) {
+    let data: Vec<&serde_json::Value> = frames.iter().filter(|f| f["t"] == "stdout").collect();
+    (data.len(), data.iter().map(|f| wire_cost(f)).sum())
+}
+
+/// A caller whose transport limits one reply sets a per-stream budget of encoded bytes, and the
+/// output is cut at it and marked truncated.
+#[tokio::test]
+async fn a_request_can_set_a_reply_budget_on_exec() {
+    let agent = Agent::start().await;
+
+    let text = reqwest::Client::new()
+        .post(format!("{}/v1/exec", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({
+            "command": ["/bin/sh", "-c", FORTY_KB],
+            "timeoutMs": 10_000,
+            "replyBudget": 2000
+        }))
+        .send()
+        .await
+        .expect("responds")
+        .text()
+        .await
+        .expect("body");
+
+    let frames: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("ndjson"))
+        .collect();
+    let (count, cost) = stdout_cost(&frames);
+    assert!(count > 0 && cost <= 2000, "{count} frames cost {cost}");
+    assert_eq!(frames.last().expect("a terminal frame")["truncated"], true);
+}
+
+/// Short lines are charged their framing, not only their data: a million one-byte lines would
+/// otherwise stay under any byte cap and still build a reply far past the limit.
+#[tokio::test]
+async fn short_lines_are_charged_for_their_framing() {
+    let agent = Agent::start().await;
+
+    let text = reqwest::Client::new()
+        .post(format!("{}/v1/exec", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({
+            "command": ["/bin/sh", "-c", "i=0; while [ $i -lt 2000 ]; do echo x; i=$((i+1)); done"],
+            "timeoutMs": 10_000,
+            "replyBudget": 5000
+        }))
+        .send()
+        .await
+        .expect("responds")
+        .text()
+        .await
+        .expect("body");
+
+    let frames: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("ndjson"))
+        .collect();
+    let (count, cost) = stdout_cost(&frames);
+    assert!(
+        count > 10 && count < 200 && cost <= 5000,
+        "{count} frames cost {cost}"
+    );
+    assert_eq!(frames.last().expect("a terminal frame")["truncated"], true);
+}
+
+/// Each stream has its own allowance, so a stream that floods cannot crowd the other out.
+#[tokio::test]
+async fn a_flooding_stream_does_not_crowd_out_the_other() {
+    let agent = Agent::start().await;
+
+    let text = reqwest::Client::new()
+        .post(format!("{}/v1/exec", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({
+            "command": ["/bin/sh", "-c", format!("{FORTY_KB}; echo oops >&2")],
+            "timeoutMs": 10_000,
+            "replyBudget": 2000
+        }))
+        .send()
+        .await
+        .expect("responds")
+        .text()
+        .await
+        .expect("body");
+
+    let stderr: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("ndjson"))
+        .filter(|f| f["t"] == "stderr")
+        .collect();
+    assert_eq!(stderr.len(), 1, "the stderr line arrived: {text}");
+}
+
+/// A job keeps all of its output and returns it across polls: each poll carries at most the
+/// budget, the rest stays for the next, and the job reads as running until the last frame has been
+/// returned. Nothing is dropped and nothing is marked truncated.
+#[tokio::test]
+async fn a_job_poll_with_a_reply_budget_pages_the_whole_output() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+
+    let started = client
+        .post(format!("{}/", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({
+            "v": 1,
+            "op": "jobStart",
+            "command": ["/bin/sh", "-c", FORTY_KB],
+            "timeoutMs": 10_000
+        }))
+        .send()
+        .await
+        .expect("responds")
+        .json::<serde_json::Value>()
+        .await
+        .expect("json");
+    let job_id = started["jobId"].as_str().expect("a job id").to_string();
+
+    let mut since: Option<u64> = None;
+    let mut lines = Vec::new();
+    let mut polls = 0;
+    for _ in 0..400 {
+        let body = client
+            .post(format!("{}/", agent.base_url))
+            .bearer_auth(agent.capability())
+            .json(&json!({"v": 1, "op": "jobPoll", "jobId": job_id, "sinceSeq": since, "replyBudget": 2000}))
+            .send()
+            .await
+            .expect("responds")
+            .json::<serde_json::Value>()
+            .await
+            .expect("json");
+        polls += 1;
+        let frames: Vec<serde_json::Value> = body["frames"].as_array().expect("frames").clone();
+        let (_, cost) = stdout_cost(&frames);
+        assert!(cost <= 2000, "a poll carried {cost} encoded bytes");
+        for frame in &frames {
+            since = since.max(frame["seq"].as_u64());
+            lines.push(
+                String::from_utf8(BASE64.decode(frame["data"].as_str().unwrap()).unwrap()).unwrap(),
+            );
+        }
+        if !body["running"].as_bool().expect("bool") {
+            assert_eq!(body["exitCode"], 0);
+            assert_eq!(body["truncated"], false, "a job drops nothing");
+            assert!(polls > 5, "the output needed several polls: {polls}");
+            let expected: Vec<String> = (0..400).map(|i| format!("{i:099}\n")).collect();
+            assert_eq!(lines, expected, "every line, in order, exactly once");
+            return;
+        }
+        if frames.is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+    panic!("the job did not finish");
+}
+
+/// `readFile` with `offset` and `length` returns that page and the file's size, so a caller whose
+/// transport limits one reply can page a large file; without them it returns the whole file.
+#[tokio::test]
+async fn read_file_pages_by_offset_and_length() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+    let contents: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+    let put = client
+        .put(format!("{}/v1/files", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"path": "/work/page.bin", "contentsBase64": BASE64.encode(&contents)}))
+        .send()
+        .await
+        .expect("write");
+    assert!(put.status().is_success());
+
+    let page = |offset: u64, length: u64| {
+        let client = client.clone();
+        let url = format!("{}/v1/files", agent.base_url);
+        let token = agent.capability();
+        async move {
+            let reply: serde_json::Value = client
+                .get(url)
+                .bearer_auth(token)
+                .query(&[
+                    ("path", "/work/page.bin".to_string()),
+                    ("offset", offset.to_string()),
+                    ("length", length.to_string()),
+                ])
+                .send()
+                .await
+                .expect("read")
+                .json()
+                .await
+                .expect("json");
+            reply
+        }
+    };
+    let second = page(300, 200).await;
+    assert_eq!(second["totalBytes"], 1000);
+    assert_eq!(
+        BASE64
+            .decode(second["contentsBase64"].as_str().unwrap())
+            .unwrap(),
+        &contents[300..500]
+    );
+    let tail = page(900, 500).await;
+    assert_eq!(
+        BASE64
+            .decode(tail["contentsBase64"].as_str().unwrap())
+            .unwrap(),
+        &contents[900..]
+    );
+    let past = page(2000, 10).await;
+    assert_eq!(past["contentsBase64"], "");
+
+    // Every page of an unchanged file carries the same identity; rewriting the file with the
+    // same size changes it, so a caller can tell two versions apart.
+    assert!(second["version"].as_str().is_some_and(|v| !v.is_empty()));
+    assert_eq!(second["version"], tail["version"]);
+    let rewritten: Vec<u8> = contents.iter().map(|b| b ^ 0xff).collect();
+    let put = client
+        .put(format!("{}/v1/files", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"path": "/work/page.bin", "contentsBase64": BASE64.encode(&rewritten)}))
+        .send()
+        .await
+        .expect("rewrite");
+    assert!(put.status().is_success());
+    assert_ne!(page(300, 200).await["version"], second["version"]);
+}
