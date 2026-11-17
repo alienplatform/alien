@@ -98,6 +98,8 @@ pub struct ResourceManagerClient {
     base: GcpClientBase,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(ResourceManagerClient);
+
 impl ResourceManagerClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         Self {

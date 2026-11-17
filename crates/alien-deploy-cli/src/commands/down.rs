@@ -387,7 +387,16 @@ async fn down_command_with(
                 )?;
             }
 
-            push_deletion(&client, &deployment_id, platform, client_config, args.erase_data).await
+            push_deletion(
+                &client,
+                &deployment_id,
+                platform,
+                client_config,
+                args.erase_data,
+                &manager_url,
+                &token,
+            )
+            .await
         },
     )
     .await?;

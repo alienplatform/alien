@@ -105,6 +105,8 @@ pub struct ArtifactRegistryClient {
     base: GcpClientBase,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(ArtifactRegistryClient);
+
 impl ArtifactRegistryClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         Self {

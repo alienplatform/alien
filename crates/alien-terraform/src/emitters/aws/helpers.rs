@@ -473,6 +473,67 @@ pub fn emit_workload_resource_grants(
     Ok(())
 }
 
+/// Grants each service account the sets it holds on this custom resource: a workload that links
+/// the resource gets the sets its type links.
+///
+/// A built-in resource's emitter writes these for its own type. A custom type's emitter comes
+/// from an extension, so the generator writes them after it, in the resource's fragment, where
+/// they share the resource's gate.
+pub fn emit_custom_resource_grants(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+    // A resource the runtime creates has no block in the module, and so no label.
+    let resource_label = ctx
+        .name_for(ctx.resource_id)
+        .map(str::to_owned)
+        .unwrap_or_else(|| ctx.resource_id.replace('-', "_"));
+    let context = stack_permission_context(ctx)
+        .with_resource_name(format!("${{local.resource_prefix}}-{}", ctx.resource_id));
+    for (account_id, entry) in ctx.stack.resources() {
+        let Some(sets) = entry
+            .config
+            .downcast_ref::<ServiceAccount>()
+            .and_then(|account| account.resource_permission_sets.get(ctx.resource_id))
+        else {
+            continue;
+        };
+        // Under automatic setup the runtime creates the role, and nothing after setup grants a
+        // custom resource's sets, so the grant has no role to go on.
+        if !alien_core::emits_package_scaffolding(
+            entry,
+            ctx.stack_settings.setup_management,
+            alien_core::SetupTarget::from_cloud(alien_core::Platform::Aws, ctx.targets_kubernetes),
+        ) {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("terraform emit the grants on '{}'", ctx.resource_id),
+                reason: format!(
+                    "service account '{account_id}' holds permission sets on the custom resource '{}', which automatic setup management can't grant; use manual setup management",
+                    ctx.resource_id
+                ),
+            }));
+        }
+        let role_label = ctx.name_for(account_id).ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("terraform emit the grants on '{}'", ctx.resource_id),
+                reason: format!("service account '{account_id}' has no label in this module"),
+            })
+        })?;
+        for set in sets {
+            emit_iam_role_policy_for_target_with_label(
+                fragment,
+                role_label,
+                set,
+                &format!(
+                    "{role_label}_{resource_label}_{}",
+                    set.id.replace(['/', '-'], "_")
+                ),
+                &aws_resource_policy_name(ctx.resource_id, &set.id),
+                &context,
+                BindingTarget::Resource,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Drops the sets of `refs` that the stack-level policy of `profile_name`'s service account
 /// already grants on the resource being emitted, resolved with `context`. Sets the resource
 /// names itself stay. The runtime writer selects a resource's policies with the same rule.

@@ -192,6 +192,12 @@ pub(crate) const AMBIENT_AI_BINDING: Feature = feature(
     Action::Refuse,
     "older Operators read an external AI binding only as a provider and an API key, so one without them fails to parse and they reject the whole target",
 );
+pub(crate) const EXTENSIONS: Feature = feature(
+    "extensions",
+    "3.3.70",
+    Action::Refuse,
+    "older Operators cannot load an extension or parse the resource types it adds",
+);
 pub(crate) const CUSTOM_BASE_DOMAIN: Feature = feature(
     "custom base domains for Kubernetes endpoints",
     "3.3.44",
@@ -222,6 +228,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &AZURE_SANDBOX_INTERNET,
     &AMBIENT_AI_BINDING,
     &CUSTOM_BASE_DOMAIN,
+    &EXTENSIONS,
 ];
 
 /// The Operator version a sync reported.
@@ -284,6 +291,9 @@ pub(crate) fn apply(
             refused.push(feature);
         }
     };
+    if !stack.extensions.is_empty() {
+        refuse(&EXTENSIONS);
+    }
     let has_choices = stack.resources().any(|(_, entry)| {
         entry
             .config
@@ -556,6 +566,31 @@ mod tests {
         for version in [None, Some("3.3.31"), Some("3.3.62"), Some("dev")] {
             assert!(refused_for(&stack, version).is_empty());
         }
+    }
+
+    #[test]
+    fn a_release_that_lists_an_extension_needs_the_operator_that_loads_extensions() {
+        let mut stack = stack_with(container(), daemon(None));
+        stack.extensions.push(alien_core::ExtensionManifest {
+            name: "acme".to_string(),
+            version: "1.0.0".to_string(),
+            digest: "sha256:0".to_string(),
+            resource_types: Default::default(),
+            egress: Vec::new(),
+        });
+        for version in [
+            None,
+            Some("3.3.31"),
+            Some("3.3.62"),
+            Some("3.3.65"),
+            Some("3.3.67"),
+            Some("3.3.68"),
+            Some("3.3.69"),
+        ] {
+            assert_eq!(refused_for(&stack, version), ["extensions"]);
+        }
+        assert!(refused_for(&stack, Some(NEXT_RELEASE)).is_empty());
+        assert!(refused_for(&stack, Some("dev")).is_empty());
     }
 
     #[test]

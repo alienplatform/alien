@@ -417,7 +417,7 @@ mod created_keys {
     use super::*;
     use crate::key::KeyOrigin;
     use crate::{
-        core::controller_test::SingleControllerExecutor,
+        core::{controller_test::SingleControllerExecutor, PlatformServiceProvider},
         remote_stack_management::AwsRemoteStackManagementController,
     };
     use alien_aws_clients::iam::MockIamApi;
@@ -489,6 +489,7 @@ mod created_keys {
         provider
             .expect_get_aws_iam_client()
             .returning(move |_| Ok(iam.clone()));
+        provider.expect_without_interceptors().returning(|| None);
         provider
     }
 
@@ -647,6 +648,53 @@ mod created_keys {
         let controller = executor.internal_state::<AwsKeyController>().unwrap();
         assert_eq!(controller.key_arn.as_deref(), Some(NEW_ARN));
         assert_eq!(controller.origin, KeyOrigin::Created);
+    }
+
+    /// The lookup decides which key gets this deployment's policy and grants, so it reads
+    /// through clients no interceptor can rewrite a response of.
+    #[tokio::test]
+    async fn the_adoption_lookup_reads_without_interceptors() {
+        let mut plain_kms = MockKmsApi::new();
+        plain_kms
+            .expect_describe_key()
+            .returning(|arn| Ok(metadata(arn, "SYMMETRIC_DEFAULT", "AWS_KMS", "Enabled")));
+        let plain_kms = Arc::new(plain_kms);
+        let plain_tagging = Arc::new(tagged(&[NEW_ARN]));
+        let mut plain = MockPlatformServiceProvider::new();
+        plain
+            .expect_get_aws_kms_client()
+            .returning(move |_| Ok(plain_kms.clone() as Arc<dyn KmsApi>));
+        plain
+            .expect_get_aws_resource_groups_tagging_client()
+            .returning(move |_| Ok(plain_tagging.clone()));
+        let plain: Arc<dyn PlatformServiceProvider> = Arc::new(plain);
+
+        let mut kms = MockKmsApi::new();
+        kms.expect_create_key().never();
+        kms.expect_describe_key().never();
+        kms.expect_put_key_policy()
+            .times(1)
+            .withf(|key, _| key == NEW_ARN)
+            .returning(|_, _| Ok(()));
+        let mut tagging = MockResourceGroupsTaggingApi::new();
+        tagging.expect_get_resources().never();
+        let mut provider = MockPlatformServiceProvider::new();
+        let kms = Arc::new(kms);
+        provider
+            .expect_get_aws_kms_client()
+            .returning(move |_| Ok(kms.clone() as Arc<dyn KmsApi>));
+        let tagging = Arc::new(tagging);
+        provider
+            .expect_get_aws_resource_groups_tagging_client()
+            .returning(move |_| Ok(tagging.clone()));
+        provider
+            .expect_without_interceptors()
+            .returning(move || Some(plain.clone()));
+
+        let mut executor = executor(provider, crashed_controller(), true).await;
+        executor.step().await.unwrap();
+        let controller = executor.internal_state::<AwsKeyController>().unwrap();
+        assert_eq!(controller.key_arn.as_deref(), Some(NEW_ARN));
     }
 
     #[tokio::test]

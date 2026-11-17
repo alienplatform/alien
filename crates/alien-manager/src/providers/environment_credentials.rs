@@ -1,6 +1,6 @@
 use crate::traits::credential_resolver::CredentialResolver;
 use crate::traits::deployment_store::DeploymentRecord;
-use alien_core::{ClientConfig, Platform};
+use alien_core::{ClientConfig, ManagementExternalId, Platform};
 use alien_error::{AlienError, Context, GenericError};
 use alien_infra::ClientConfigExt;
 use async_trait::async_trait;
@@ -99,6 +99,14 @@ impl EnvironmentCredentialResolver {
 
 #[async_trait]
 impl CredentialResolver for EnvironmentCredentialResolver {
+    /// A manager on its own credentials has no control plane to issue an ExternalId.
+    async fn management_external_id(
+        &self,
+        _deployment: &DeploymentRecord,
+    ) -> Result<Option<ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         // Read platform-specific environment credentials:
         // AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, etc.

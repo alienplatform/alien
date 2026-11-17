@@ -29,6 +29,7 @@ pub mod key;
 pub mod ledger;
 pub mod recovery;
 pub mod release;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod session;
 pub mod settings;
 pub mod signer_list;

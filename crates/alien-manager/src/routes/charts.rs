@@ -30,6 +30,7 @@
 use std::sync::Arc;
 
 use alien_core::{DeploymentModel, Platform, Stack, StackSettings};
+use alien_error::{AlienError, AlienErrorData};
 use alien_helm::{
     apply_package_defaults, generate_helm_chart, package_chart, HelmOptions, HelmRegistry,
     LogCollectorDefault, OperatorImageDefault, PackageDefaults, SetupDefault,
@@ -451,7 +452,7 @@ async fn chart_version(
     if let Some(chart) = kept.into_iter().find(|chart| chart.version == version) {
         return Ok(chart);
     }
-    let rendered = render(state, settings, release, version).await?;
+    let rendered = render(state, subject, settings, release, version).await?;
     state
         .release_store
         .store_chart_if_absent(subject, rendered)
@@ -474,7 +475,13 @@ async fn prepare_stack(
         .allow_frozen_changes(false)
         .external_bindings(alien_core::ExternalBindings::default())
         .build();
-    alien_preflights::runner::PreflightRunner::new()
+    let runner = alien_preflights::runner::PreflightRunner::new();
+    // Before the extensions load: rendering the chart runs their hooks, which may run only on a
+    // stack the preflights accept.
+    runner
+        .run_template_preflights(stack, Platform::Kubernetes)
+        .await?;
+    runner
         .apply_mutations(
             stack.clone(),
             &alien_core::StackState::new(Platform::Kubernetes),
@@ -507,18 +514,21 @@ fn preparation_refused(
             .and_then(|code| StatusCode::from_u16(code).ok())
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
     };
-    oci_error(status, error.code, message)
+    oci_error(
+        status,
+        error.code,
+        alien_preflights::escape_for_display(&message),
+    )
 }
 
 /// Render a release's chart.
 async fn render(
     state: &AppState,
+    subject: &Subject,
     settings: &ChartSettings,
     release: &ReleaseRecord,
     version: &str,
 ) -> Result<StoredChart, Response> {
-    let render_failed =
-        |message: String| oci_error(StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN", message);
     let stack = release
         .stacks
         .get(&Platform::Kubernetes)
@@ -535,15 +545,28 @@ async fn render(
         .await
         .map_err(preparation_refused)?;
     let stack = &prepared;
-    let chart = generate_helm_chart(
-        stack,
-        HelmOptions {
-            registry: &HelmRegistry::built_in(),
-            stack_settings,
-            chart_name: stack.id().to_string(),
-        },
-    )
-    .map_err(|e| render_failed(format!("failed to generate chart: {e}")))?;
+    let registries = state
+        .registries(subject, &release.project_id, stack)
+        .await
+        .map_err(|e| render_failed("failed to load the release's extensions", e))?;
+    // A hook blocks its thread until it returns or reaches its deadline, and this manager
+    // serves other deployments meanwhile.
+    let chart = alien_infra::run_hooks({
+        let stack = stack.clone();
+        move || {
+            generate_helm_chart(
+                &stack,
+                HelmOptions {
+                    registry: &registries.helm,
+                    stack_settings,
+                    chart_name: stack.id().to_string(),
+                },
+            )
+            .map_err(|e| render_failed("failed to generate chart", e))
+        }
+    })
+    .await
+    .map_err(|e| render_failed("failed to run the chart's hooks", e))??;
 
     let management_url = state.config.base_url();
     let registry_host = alien_core::image_rewrite::strip_url_scheme(&management_url).to_string();
@@ -578,9 +601,8 @@ async fn render(
             }),
         },
     )
-    .map_err(|e| render_failed(format!("failed to apply chart defaults: {e}")))?;
-    let archive = package_chart(&chart)
-        .map_err(|e| render_failed(format!("failed to package chart: {e}")))?;
+    .map_err(|e| render_failed("failed to apply chart defaults", e))?;
+    let archive = package_chart(&chart).map_err(|e| render_failed("failed to package chart", e))?;
 
     let config = serde_json::json!({
         "apiVersion": "v2",
@@ -673,6 +695,31 @@ fn split_image(image: &str) -> (&str, &str) {
         Some(i) => (&image[..name_start + i], &image[name_start + i + 1..]),
         None => (image, "latest"),
     }
+}
+
+/// The OCI error for a chart render that failed at `step`, with the status the error carries: a
+/// refusal is a denied pull, a missing object an unknown manifest, anything else the manager's
+/// own failure. An internal error says only the step: its text, which can carry whatever a hook
+/// panicked with or the address of a service the manager calls, goes to the server's log, since
+/// one manager serves many projects. Any other error says its own message, not its causes.
+fn render_failed<E>(step: &str, error: AlienError<E>) -> Response
+where
+    E: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    let (status, code) = match error.http_status_code {
+        Some(403) => (StatusCode::FORBIDDEN, "DENIED"),
+        Some(404) => (StatusCode::NOT_FOUND, "MANIFEST_UNKNOWN"),
+        Some(422) => (StatusCode::UNPROCESSABLE_ENTITY, "UNKNOWN"),
+        Some(503) => (StatusCode::SERVICE_UNAVAILABLE, "UNKNOWN"),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "UNKNOWN"),
+    };
+    let message = if error.internal {
+        tracing::error!(error = %error, step, "A chart render failed");
+        step.to_string()
+    } else {
+        format!("{step}: {}", error.into_external().message)
+    };
+    oci_error(status, code, message)
 }
 
 fn oci_error(status: StatusCode, code: impl Into<String>, message: impl Into<String>) -> Response {

@@ -186,6 +186,7 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        management_external_id: None,
         image_registry: None,
         image_pull_secrets: Vec::new(),
         runtime_identity_audience: None,
@@ -795,6 +796,7 @@ mod tests {
                 }
 
                 let config = DeploymentConfig {
+                    management_external_id: None,
                     image_registry: None,
                     image_pull_secrets: Vec::new(),
                     runtime_identity_audience: None,

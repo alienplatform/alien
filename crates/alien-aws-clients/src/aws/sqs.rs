@@ -1,6 +1,5 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::request_utils::RequestBuilderExt;
 use alien_client_core::{ErrorData, Result};
 
 use alien_error::ContextError;
@@ -118,6 +117,7 @@ impl SqsClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 

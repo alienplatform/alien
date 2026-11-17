@@ -609,6 +609,8 @@ pub async fn teardown_target(
         target_config,
         // The harness's delete request (TestDeployment::destroy) asks for erase.
         true,
+        &manager.url,
+        &manager.admin_token,
     )
     .await
     .map_err(|e| anyhow::anyhow!("push_deletion failed: {}", e))?;

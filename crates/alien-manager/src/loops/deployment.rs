@@ -239,6 +239,9 @@ pub struct DeploymentLoop {
     /// Deployments whose last machine-list refresh failed, so a failure that repeats every
     /// minute is logged once and its recovery once.
     membership_failing: Mutex<std::collections::HashSet<String>>,
+    /// The bundles of the extensions deployments' releases list. `None` for a manager that
+    /// stores none, which can't run a stack with extensions.
+    extension_bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
     /// Holds the values of deployments whose config carries `valueSlots`.
     values: Option<Arc<crate::values::ValueStore>>,
     /// Where the commands key of command receivers built before capability
@@ -341,10 +344,20 @@ impl DeploymentLoop {
             settled_stack_cache: Mutex::new(HashMap::new()),
             deferred: Mutex::new(HashMap::new()),
             membership_failing: Mutex::new(std::collections::HashSet::new()),
+            extension_bundles: None,
             values: None,
             commands_keys: None,
             release_channels: None,
         }
+    }
+
+    /// Load the extensions of deployments' releases from `bundles`.
+    pub fn with_extension_bundles(
+        mut self,
+        bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
+    ) -> Self {
+        self.extension_bundles = bundles;
+        self
     }
 
     /// Use `signing` for the signer lists and signed configs of protected deployments.
@@ -1342,7 +1355,12 @@ impl DeploymentLoop {
                     },
                 ),
         }
-        .deployment_config(&held, deployment_stack.as_ref(), management_config)
+        .deployment_config(
+            &held,
+            deployment_stack.as_ref(),
+            management_config,
+            !alien_infra::extension_bundle::release_extensions(&state).is_empty(),
+        )
         .await?;
         drop(held);
         self.add_signed_statements(&deployment, &mut state, &mut config)
@@ -1427,8 +1445,32 @@ impl DeploymentLoop {
                 ),
             ));
         }
-        let service_provider: Arc<dyn alien_infra::PlatformServiceProvider> =
-            Arc::new(service_provider);
+        let service_provider: Arc<dyn alien_infra::PlatformServiceProvider> = match self
+            .with_extensions(service_provider, &deployment, &state)
+            .await
+        {
+            Ok(provider) => Arc::new(provider),
+            Err(error) => {
+                warn!(
+                    deployment_id = %deployment_id,
+                    error = %error,
+                    "Extension bundles could not be loaded"
+                );
+                return self
+                    .checkpoint_phase_failure(PhaseFailure {
+                        deployment: &deployment,
+                        status,
+                        deployment_stack: deployment_stack.as_ref(),
+                        target_release_id,
+                        current_release,
+                        had_credential_retry,
+                        error,
+                        session,
+                        execution_claim,
+                    })
+                    .await;
+            }
+        };
 
         // 7. Step loop — use the shared runner with ManagerTransport for
         //    per-step reconciliation (state persistence + registry access).
@@ -1581,6 +1623,39 @@ impl DeploymentLoop {
 
         // Propagate step loop errors to the caller (which logs and releases the lock).
         runner_result.map(|_| None).map_err(|e| e.into_generic())
+    }
+
+    /// `provider` with the extensions of the releases `state` names, from this manager's bundles,
+    /// each stepping its controller for `deployment`.
+    async fn with_extensions(
+        &self,
+        provider: DefaultPlatformServiceProvider,
+        deployment: &DeploymentRecord,
+        state: &DeploymentState,
+    ) -> Result<DefaultPlatformServiceProvider, AlienError> {
+        if alien_infra::extension_bundle::release_extensions(state).is_empty() {
+            return Ok(provider);
+        }
+        let bundles = self.extension_bundles.as_ref().ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: "The deployment's releases use extensions, and this manager stores no extension bundles".to_string(),
+            })
+        })?;
+        bundles
+            .provider_for(
+                provider,
+                &deployment.project_id,
+                &deployment.id,
+                state,
+                |extension| {
+                    Some(crate::extension_controllers::identity_credentials(
+                        self.credential_resolver.clone(),
+                        deployment,
+                        extension,
+                    ))
+                },
+            )
+            .await
     }
 
     /// Saves `failure` as the deployment's error in its phase's failed status and backs off
@@ -1922,12 +1997,15 @@ impl RunnerConfigSources<'_> {
     /// `deployment_stack` is the target release's stack; `None` when the
     /// deployment has none yet, so no resource receives command variables.
     /// `management_config` comes from [`resolve_deployment_management_config`] for
-    /// [`ManagementRenderer::Runner`].
+    /// [`ManagementRenderer::Runner`]. `releases_list_extensions` says whether the
+    /// deployment's current or target release lists an extension, whose identity's trust
+    /// needs the management ExternalId.
     pub(crate) async fn deployment_config(
         &self,
         deployment: &DeploymentRecord,
         deployment_stack: Option<&Stack>,
         management_config: Option<ManagementConfig>,
+        releases_list_extensions: bool,
     ) -> Result<DeploymentConfig, AlienError> {
         // A command receiver built before capability files cannot read the
         // capability file, so it starts only with `ALIEN_COMMANDS_TOKEN`. It
@@ -1965,7 +2043,23 @@ impl RunnerConfigSources<'_> {
         let gcp_federation_scope = (deployment.base_platform.unwrap_or(deployment.platform)
             == alien_core::Platform::Gcp)
             .then(|| deployment.gcp_federation_scope());
+        // Never stored or serialized; a lookup failure fails the step rather than create an
+        // extension identity whose trust lacks the ExternalId.
+        let management_external_id = if releases_list_extensions {
+            self.credential_resolver
+                .management_external_id(deployment)
+                .await
+                .context(GenericError {
+                    message: format!(
+                        "Failed to look up the management ExternalId of deployment {}, which its extensions' identities trust",
+                        deployment.id
+                    ),
+                })?
+        } else {
+            None
+        };
         let config = if let Some(mut config) = deployment.deployment_config.clone() {
+            config.management_external_id = management_external_id;
             // Stored installer configuration cannot choose the broker's authorization namespace.
             config.gcp_federation_scope = gcp_federation_scope;
             config.environment_variables = environment_variables;
@@ -2003,6 +2097,7 @@ impl RunnerConfigSources<'_> {
             })?;
 
             DeploymentConfig {
+                management_external_id,
                 image_registry: None,
                 image_pull_secrets: Vec::new(),
                 gcp_federation_scope,
@@ -2667,6 +2762,13 @@ mod tests {
 
     #[async_trait]
     impl CredentialResolver for RuntimeOnlyCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -3561,6 +3663,13 @@ mod tests {
 
         #[async_trait]
         impl CredentialResolver for Credentials {
+            async fn management_external_id(
+                &self,
+                _: &DeploymentRecord,
+            ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+                Ok(None)
+            }
+
             async fn resolve(
                 &self,
                 _: &DeploymentRecord,
@@ -6080,6 +6189,13 @@ mod tests {
     #[cfg(feature = "sqlite")]
     #[async_trait::async_trait]
     impl crate::traits::CredentialResolver for NoRuntimeCredentials {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -6594,6 +6710,13 @@ mod tests {
 
     #[async_trait]
     impl CredentialResolver for UnresolvableManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -6611,10 +6734,145 @@ mod tests {
         }
     }
 
+    struct IssuesExternalId;
+
+    #[async_trait]
+    impl CredentialResolver for IssuesExternalId {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(Some(
+                alien_core::ManagementExternalId::new("0123456789abcdef0123456789ABCDEF").unwrap(),
+            ))
+        }
+    }
+
+    /// A setup the manager runs, as in automatic setup, creates the extension identities, so it
+    /// writes the ExternalId the control plane issued into their trust, as a setup the installer
+    /// runs does. The value stays off the config any other runner gets.
+    #[tokio::test]
+    async fn the_runner_config_carries_the_issued_external_id_and_never_serializes_it() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
+        };
+        let mut deployment = deployment_record(DeploymentStatus::Pending, None);
+        deployment.stack_settings = Some(StackSettings::default());
+        for supplied in [false, true] {
+            if supplied {
+                deployment.deployment_config = Some(
+                    DeploymentConfig::builder()
+                        .stack_settings(StackSettings::default())
+                        .environment_variables(EnvironmentVariablesSnapshot {
+                            variables: vec![],
+                            hash: "h".to_string(),
+                            created_at: "2026-01-01T00:00:00Z".to_string(),
+                        })
+                        .allow_frozen_changes(false)
+                        .external_bindings(Default::default())
+                        .build(),
+                );
+            }
+            let config = RunnerConfigSources {
+                config: &manager_config,
+                credential_resolver: &IssuesExternalId,
+                bindings_provider: &None,
+                target_bindings_providers: &HashMap::new(),
+                commands_keys: None,
+            }
+            .deployment_config(&deployment, None, None, true)
+            .await
+            .expect("runner config");
+            assert_eq!(
+                config.management_external_id.as_ref().map(|id| id.expose()),
+                Some("0123456789abcdef0123456789ABCDEF"),
+                "supplied config: {supplied}"
+            );
+            assert!(!serde_json::to_string(&config)
+                .unwrap()
+                .contains("0123456789abcdef0123456789ABCDEF"));
+        }
+    }
+
+    struct ExternalIdLookupFails;
+
+    #[async_trait]
+    impl CredentialResolver for ExternalIdLookupFails {
+        async fn resolve(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<alien_core::ClientConfig, AlienError> {
+            Ok(alien_core::ClientConfig::Test)
+        }
+
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Err(AlienError::new(GenericError {
+                message: "the control plane did not answer".to_string(),
+            }))
+        }
+    }
+
+    /// Only a deployment whose releases list an extension looks up the ExternalId: a plain
+    /// stack's config still builds when the lookup would fail, and an extension's fails
+    /// naming the lookup.
+    #[tokio::test]
+    async fn only_a_deployment_with_extensions_looks_up_the_external_id() {
+        alien_deployment::set_ephemeral_secrets_digest_key();
+        let manager_config = crate::config::ManagerConfig {
+            base_url: Some("https://manager.example.test".to_string()),
+            ..Default::default()
+        };
+        let mut deployment = deployment_record(DeploymentStatus::Pending, None);
+        deployment.stack_settings = Some(StackSettings::default());
+        let sources = RunnerConfigSources {
+            config: &manager_config,
+            credential_resolver: &ExternalIdLookupFails,
+            bindings_provider: &None,
+            target_bindings_providers: &HashMap::new(),
+            commands_keys: None,
+        };
+        let stack = Stack::new("plain".to_string()).build();
+
+        let plain = sources
+            .deployment_config(&deployment, Some(&stack), None, false)
+            .await
+            .expect("a plain stack's config");
+        assert!(plain.management_external_id.is_none());
+
+        let error = sources
+            .deployment_config(&deployment, Some(&stack), None, true)
+            .await
+            .expect_err("the lookup fails");
+        assert!(error.message.contains("ExternalId"), "{}", error.message);
+        assert_eq!(
+            error.source.as_ref().map(|cause| cause.message.as_str()),
+            Some("the control plane did not answer")
+        );
+    }
+
     struct ResolvedManagementIdentity;
 
     #[async_trait]
     impl CredentialResolver for ResolvedManagementIdentity {
+        async fn management_external_id(
+            &self,
+            _: &DeploymentRecord,
+        ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+            Ok(None)
+        }
+
         async fn resolve(
             &self,
             _: &DeploymentRecord,
@@ -6847,7 +7105,7 @@ mod tests {
         .await
         .expect("the supplied identity needs no resolver");
         let config = sources
-            .deployment_config(&deployment, None, management_config)
+            .deployment_config(&deployment, None, management_config, false)
             .await
             .expect("runner config");
         assert_eq!(
@@ -6898,7 +7156,7 @@ mod tests {
         .await
         .expect("no resolver call");
         let config = sources
-            .deployment_config(&deployment, None, management_config)
+            .deployment_config(&deployment, None, management_config, false)
             .await
             .expect("runner config");
         assert_eq!(
@@ -7153,7 +7411,7 @@ mod tests {
                 log_buffer: &log_buffer,
             }),
         }
-        .deployment_config(&deployment, Some(&stack), None)
+        .deployment_config(&deployment, Some(&stack), None, false)
         .await
         .expect("runner config");
         // The daemon was built before capability files: it gets the commands
@@ -7321,7 +7579,7 @@ mod tests {
         };
 
         let config = sources
-            .deployment_config(&deployment, Some(&stack), None)
+            .deployment_config(&deployment, Some(&stack), None, false)
             .await
             .expect("runner config");
         let api = environment_of(&config, "api");
@@ -7369,7 +7627,7 @@ mod tests {
         // files. Its Container gets the commands key or commands stop for it.
         deployment.platform = Platform::Azure;
         let azure = sources
-            .deployment_config(&deployment, Some(&stack), None)
+            .deployment_config(&deployment, Some(&stack), None, false)
             .await
             .expect("azure runner config");
         let azure_api = environment_of(&azure, "api");
@@ -7381,7 +7639,7 @@ mod tests {
         // `alien dev` follows the same rule: a commands key, never the token.
         deployment.platform = Platform::Local;
         let local = sources
-            .deployment_config(&deployment, Some(&stack), None)
+            .deployment_config(&deployment, Some(&stack), None, false)
             .await
             .expect("local runner config");
         assert!(environment_of(&local, "api")
@@ -7475,7 +7733,7 @@ mod tests {
                 log_buffer: &log_buffer,
             }),
         }
-        .deployment_config(&deployment, Some(&stack), None)
+        .deployment_config(&deployment, Some(&stack), None, false)
         .await;
         (config, token_store, dir)
     }
@@ -7708,3 +7966,7 @@ fn parse_status(status: &str) -> DeploymentStatus {
         }
     }
 }
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "deployment_parity_tests.rs"]
+mod parity_tests;

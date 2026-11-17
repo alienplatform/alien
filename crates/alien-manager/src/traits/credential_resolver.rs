@@ -1,7 +1,8 @@
 use async_trait::async_trait;
 
 use alien_core::{ClientConfig, ManagementConfig, ManagementExternalId, Platform};
-use alien_error::AlienError;
+use alien_error::{AlienError, GenericError};
+use alien_infra::step_protocol::protocol::Credentials;
 
 use super::deployment_store::DeploymentRecord;
 
@@ -31,6 +32,19 @@ impl std::fmt::Debug for RemoteStorageCredentialSource {
                 .finish(),
         }
     }
+}
+
+/// The identity initial setup created for an extension in a deployment, which its controller
+/// runs as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionIdentity {
+    /// The extension's name, such as "acme".
+    pub extension: String,
+    /// The identity's resource id in the stack, such as "acme-ext", which setup names it after.
+    pub id: String,
+    /// The identity: a role ARN on AWS, a service account email on GCP, a managed identity's
+    /// client id on Azure.
+    pub identity: String,
 }
 
 /// Resolves cloud credentials for push-model deployments.
@@ -90,6 +104,37 @@ pub trait CredentialResolver: Send + Sync {
         _platform: Platform,
     ) -> Result<Option<ManagementConfig>, AlienError> {
         Ok(None)
+    }
+
+    /// The `sts:ExternalId` `deployment`'s management roles trust, as
+    /// [`ManagementExternalIdSource`] gives it. A setup the manager runs, as in automatic setup,
+    /// writes it into the trust of the extension identities it creates. `None` when the control
+    /// plane issues none.
+    ///
+    /// No default: a resolver that wraps another and forgot to forward this would create those
+    /// identities with a trust that lacks the ExternalId.
+    async fn management_external_id(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<Option<ManagementExternalId>, AlienError>;
+
+    /// Short-lived credentials for `identity`, an extension's identity in `deployment`, for one
+    /// step of its controller. They are minted from the manager's own principal, which the
+    /// identity trusts, and never come from the deployment's management identity.
+    ///
+    /// A resolver that can't mint them refuses, so the step fails instead of running with
+    /// credentials of another identity.
+    async fn resolve_extension_credentials(
+        &self,
+        deployment: &DeploymentRecord,
+        identity: &ExtensionIdentity,
+    ) -> Result<Credentials, AlienError> {
+        Err(AlienError::new(GenericError {
+            message: format!(
+                "This manager can't mint credentials for extension '{}' on {} deployment {}",
+                identity.extension, deployment.platform, deployment.id
+            ),
+        }))
     }
 }
 

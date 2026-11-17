@@ -32,6 +32,7 @@ pub struct AlienManager {
     pub(crate) log_buffer: Arc<LogBuffer>,
     pub(crate) token_store: Arc<dyn crate::traits::TokenStore>,
     pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
+    pub(crate) extension_bundles: Option<Arc<crate::extension_bundles::ExtensionBundles>>,
     pub(crate) signing: Option<Arc<dyn crate::traits::SigningStore>>,
     pub(crate) values: Option<Arc<crate::values::ValueStore>>,
     pub(crate) release_channels: Option<Arc<dyn ReleaseChannelStore>>,
@@ -117,6 +118,7 @@ impl AlienManager {
                         self.server_bindings.clone(),
                         self.dev_status_tx,
                     )
+                    .with_extension_bundles(self.extension_bundles.clone())
                     .with_runtime_credentials(self.runtime_credentials.clone())
                     .with_commands_keys(self.token_store.clone(), self.log_buffer.clone())
                     .with_signing(self.signing.clone())
@@ -481,6 +483,121 @@ mod tests {
         TcpListener::bind(addr)
             .await
             .expect("manager port must be released");
+    }
+
+    /// Alien's storage emitter, replaced by one that panics.
+    struct PanickingEmitter;
+
+    impl alien_helm::HelmEmitter for PanickingEmitter {
+        fn emit(
+            &self,
+            _: &alien_core::import::EmitContext<'_>,
+        ) -> alien_core::Result<alien_helm::HelmFragment> {
+            panic!("the storage emitter fell over")
+        }
+    }
+
+    fn panicking_storage(registry: &mut alien_helm::HelmRegistry) {
+        registry.register("storage", Platform::Kubernetes, PanickingEmitter);
+    }
+
+    /// A hook that panics while the manager renders a chart fails that one pull with a 500; the
+    /// manager keeps serving the requests after it.
+    #[tokio::test]
+    async fn a_panic_while_rendering_a_chart_answers_500_and_the_manager_keeps_serving() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::stores::sqlite::SqliteDatabase::new(
+                &directory.path().join("manager.db").to_string_lossy(),
+            )
+            .await
+            .unwrap(),
+        );
+        let release_store = Arc::new(crate::stores::sqlite::SqliteReleaseStore::new(db.clone()));
+        let mut state = crate::routes::sync::tests::test_app_state(
+            directory.path(),
+            Arc::new(crate::stores::sqlite::SqliteDeploymentStore::new(
+                db.clone(),
+            )),
+            release_store.clone(),
+            Arc::new(
+                crate::providers::local_credentials::LocalCredentialResolver::new(
+                    directory.path().to_path_buf(),
+                ),
+            ),
+            db,
+        )
+        .await;
+        state.charts = Some(Arc::new(crate::routes::charts::ChartSettings::new(
+            None, false,
+        )));
+        state.host_registrations = alien_infra::HostRegistrations {
+            helm: panicking_storage,
+            ..alien_infra::HostRegistrations::NONE
+        };
+        let stack = alien_core::Stack::new("panic-chart".to_string())
+            .add(
+                alien_core::Storage::new("data".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        release_store
+            .create_release(
+                &crate::auth::Subject::system(),
+                crate::traits::CreateReleaseParams {
+                    project_id: "default".to_string(),
+                    stacks: std::collections::HashMap::from([(Platform::Kubernetes, stack)]),
+                    git_commit_sha: None,
+                    git_commit_ref: None,
+                    git_commit_message: None,
+                    signed_stacks: Default::default(),
+                    setup_templates: Default::default(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let router = crate::routes::registry_proxy::router()
+            .route("/health", get(|| async { "ok" }))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let served = tokio::spawn(serve(listener, router, Duration::from_secs(30)));
+        let client = reqwest::Client::new();
+
+        let tags: serde_json::Value = client
+            .get(format!("http://{addr}/v2/charts/panic-chart/tags/list"))
+            .bearer_auth("any-token")
+            .send()
+            .await
+            .expect("the manager lists the chart's versions")
+            .json()
+            .await
+            .unwrap();
+        let version = tags["tags"][0].as_str().expect("the chart has a version");
+        let pull = client
+            .get(format!(
+                "http://{addr}/v2/charts/panic-chart/manifests/{version}"
+            ))
+            .bearer_auth("any-token")
+            .send()
+            .await
+            .expect("the manager answers the pull");
+        assert_eq!(pull.status().as_u16(), 500);
+        // The panic's text is internal: it stays in the server's log.
+        let body = pull.text().await.unwrap();
+        assert!(body.contains("failed to run the chart's hooks"), "{body}");
+        assert!(!body.contains("storage emitter"), "{body}");
+        assert!(!body.contains("HOOKS_STOPPED"), "{body}");
+
+        let health = client
+            .get(format!("http://{addr}/health"))
+            .send()
+            .await
+            .expect("the manager keeps serving");
+        assert_eq!(health.status().as_u16(), 200);
+        assert!(!served.is_finished(), "serve returned: {:?}", served.await);
+        served.abort();
     }
 
     #[tokio::test]

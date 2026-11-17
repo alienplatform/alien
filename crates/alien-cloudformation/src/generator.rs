@@ -25,11 +25,11 @@ use alien_core::{
     CapacityGroup, CapacityGroupScalePolicy, ComputeCluster, ComputePoolSelection, Container,
     Daemon, DeploymentModel, DomainSettings, ErrorData, ExposeProtocol, HeartbeatsMode, Key,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
-    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackSettings, Storage,
-    TelemetryMode, UpdatesMode, Worker, WorkerCode, MANAGEMENT_EXTERNAL_ID_MAX_LENGTH,
-    MANAGEMENT_EXTERNAL_ID_MIN_LENGTH, MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN,
-    MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN,
+    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, SetupFormat, Stack,
+    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackSettings, Storage, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    MANAGEMENT_EXTERNAL_ID_MAX_LENGTH, MANAGEMENT_EXTERNAL_ID_MIN_LENGTH,
+    MANAGEMENT_EXTERNAL_ID_PARAMETER_PATTERN, MANAGEMENT_EXTERNAL_ID_REQUIRED_PARAMETER_PATTERN,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -461,6 +461,35 @@ pub fn generate_cloudformation_template_with_profile(
         );
     }
 
+    if !stack.extensions.is_empty() {
+        template.metadata.insert(
+            "Extensions".to_string(),
+            json!(stack
+                .extensions
+                .iter()
+                .map(|extension| {
+                    let mut metadata = json!({
+                        "name": extension.name,
+                        "version": extension.version,
+                        "egress": extension.egress,
+                    });
+                    let identity = stack.resources().find(|(_, entry)| {
+                        entry
+                            .config
+                            .downcast_ref::<alien_core::ServiceAccount>()
+                            .is_some_and(|account| {
+                                account.extension.as_deref() == Some(&extension.name)
+                            })
+                    });
+                    if let Some((identity_id, _)) = identity {
+                        metadata["identity"] = json!(identity_id);
+                    }
+                    metadata
+                })
+                .collect::<Vec<_>>()),
+        );
+    }
+
     // CloudFormation exposes one DomainName/CertificateArn pair and registers it under the
     // selected public resource. Reject settings it cannot represent instead of moving a
     // configured hostname onto a different workload.
@@ -557,10 +586,14 @@ pub fn generate_cloudformation_template_with_profile(
                     alien_core::SetupTarget::from_cloud(Platform::Aws, true),
                 ) && options
                     .registry
-                    .emitter(&entry.config.resource_type(), options.target.cloud_platform())
+                    .emitter(
+                        &entry.config.resource_type(),
+                        options.target.cloud_platform(),
+                    )
                     .is_some()
             },
         )?;
+        alien_core::refuse_declinable_network_extensions(stack, &stack_settings)?;
     }
 
     for (resource_id, resource) in stack.resources() {
@@ -570,8 +603,46 @@ pub fn generate_cloudformation_template_with_profile(
             stack_settings.setup_management,
             alien_core::SetupTarget::from_cloud(Platform::Aws, options.target.is_kubernetes()),
         ) {
+            // The runtime creates this resource after setup, when no one may widen a
+            // workload's role, so setup still writes the grants profiles hold on it.
+            if resource
+                .config
+                .downcast_ref::<alien_core::CustomResource>()
+                .is_some()
+            {
+                let ctx = EmitContext {
+                    stack,
+                    resource,
+                    resource_id,
+                    platform: options.target.cloud_platform(),
+                    targets_kubernetes: options.target.is_kubernetes(),
+                    stack_settings: &stack_settings,
+                    names: &names,
+                    pins: &options.pins,
+                };
+                let grants = crate::emitters::aws::service_account::custom_resource_grants(&ctx)?;
+                let condition = match resource.enabled_when.as_deref() {
+                    Some(input_id) if !grants.is_empty() => Some(declare_enabled_condition(
+                        &mut template,
+                        &stack_inputs,
+                        input_id,
+                        resource_id,
+                    )?),
+                    _ => None,
+                };
+                for mut grant in grants {
+                    grant.condition = condition.clone();
+                    insert_resource(&mut template, grant)?;
+                }
+            }
             continue;
         }
+        stack.check_setup_format(
+            resource_id,
+            &resource_type,
+            SetupFormat::CloudFormation,
+            options.target.cloud_platform(),
+        )?;
         let emitter = options
             .registry
             .require(&resource_type, options.target.cloud_platform())?;
@@ -613,6 +684,14 @@ pub fn generate_cloudformation_template_with_profile(
         };
 
         let mut emitted_resources = emitter.emit_resources_with_registry(&ctx, options.registry)?;
+        if resource
+            .config
+            .downcast_ref::<alien_core::CustomResource>()
+            .is_some()
+        {
+            emitted_resources
+                .extend(crate::emitters::aws::service_account::custom_resource_grants(&ctx)?);
+        }
         if resource.display_name.is_some() || resource.description.is_some() {
             for emitted in &mut emitted_resources {
                 let mut metadata = json!({

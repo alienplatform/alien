@@ -853,6 +853,16 @@ fn an_explicit_id_is_rejected_because_the_table_name_is_the_id() {
 }
 
 #[test]
+fn an_extension_on_a_service_account_is_refused_where_it_is_written() {
+    let error = reject("name = \"acme\"\n\n[service-account.api]\nextension = \"dns\"\n");
+    assert_eq!((error.line, error.column), (4, 1));
+    assert_eq!(
+        error.message,
+        "`extension` is not written in alien.toml: only the identity Alien creates for an extension has it"
+    );
+}
+
+#[test]
 fn permission_keys_that_are_resource_ids_are_not_settings() {
     for id in ["image", "memory", "cpu"] {
         let text = format!(

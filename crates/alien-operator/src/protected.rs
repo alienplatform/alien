@@ -512,6 +512,22 @@ impl ReleaseSigning {
             verified.signers.into_iter().collect::<Vec<_>>(),
         );
         let stack = signed_stack(&body, platform)?;
+        // An extension's code runs outside what a release signs, so a protected installation
+        // takes no release that lists one, however it was signed.
+        if !stack.extensions.is_empty() {
+            let names: Vec<&str> = stack
+                .extensions
+                .iter()
+                .map(|extension| extension.name.as_str())
+                .collect();
+            return Err(Refusal::Release {
+                code: "SIGNED_RELEASE_LISTS_EXTENSIONS".to_string(),
+                message: format!(
+                    "signed releases don't support extensions yet, and this one lists {}",
+                    names.join(", ")
+                ),
+            });
+        }
         if relocate_images(&stack, &release.stack) != release.stack {
             return Err(Refusal::StackChanged);
         }
@@ -810,6 +826,7 @@ fn protect_config(
         // Identities, endpoints and registries a manager would choose. A
         // protected installation runs without them.
         management_config: None,
+        management_external_id: None,
         gcp_federation_scope: None,
         deployment_id: None,
         compute_backend: None,
@@ -1189,6 +1206,24 @@ pub(crate) mod tests {
             accept(&fresh(), &target(changed, vec![])).unwrap_err(),
             Refusal::StackChanged
         );
+    }
+
+    #[test]
+    fn a_signed_release_that_lists_an_extension_is_refused() {
+        let mut listed = stack(&pinned());
+        listed.extensions.push(alien_core::ExtensionManifest {
+            name: "acme".to_string(),
+            version: "1.0.0".to_string(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            resource_types: Default::default(),
+            egress: Vec::new(),
+        });
+        let release = signed_release(5, &listed);
+        assert!(release.signed.is_some());
+        assert!(matches!(
+            accept(&fresh(), &target(release, vec![])).unwrap_err(),
+            Refusal::Release { code, .. } if code == "SIGNED_RELEASE_LISTS_EXTENSIONS"
+        ));
     }
 
     #[test]

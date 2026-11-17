@@ -91,6 +91,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             built_architectures: Default::default(),
             id: "test-stack".to_string(),
@@ -143,6 +144,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             built_architectures: Default::default(),
             id: "test-stack".to_string(),
@@ -192,6 +194,7 @@ mod tests {
         let stack = Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             built_architectures: Default::default(),
             id: "test-stack".to_string(),

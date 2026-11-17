@@ -6,7 +6,7 @@
 //!
 //! `compute-cluster` is intentionally absent — that controller lives in
 //! `alien-platform-controllers` (per the OSS / platform split) and is added
-//! by `register_platform_importers` at boot.
+//! by `register_host_importers` at boot.
 
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesCluster;

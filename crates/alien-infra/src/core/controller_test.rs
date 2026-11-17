@@ -344,6 +344,7 @@ pub struct SingleControllerExecutor {
     setup_run_id: Option<String>,
     // Platform management configuration
     management_config: Option<ManagementConfig>,
+    management_external_id: Option<alien_core::ManagementExternalId>,
     gcp_federation_scope: Option<alien_core::GcpFederationScope>,
     // Compute backend configuration for managed containers
     compute_backend: Option<ComputeBackend>,
@@ -426,6 +427,7 @@ impl SingleControllerExecutor {
                 .maybe_setup_run_id(self.setup_run_id.clone())
                 .deployment_id(TEST_DEPLOYMENT_ID.to_string())
                 .maybe_management_config(self.management_config.clone())
+                .maybe_management_external_id(self.management_external_id.clone())
                 .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
                 .maybe_compute_backend(self.compute_backend.clone())
                 .environment_variables(self.environment_variables.clone())
@@ -687,6 +689,7 @@ impl SingleControllerExecutor {
             .maybe_setup_run_id(self.setup_run_id.clone())
             .deployment_id(TEST_DEPLOYMENT_ID.to_string())
             .maybe_management_config(self.management_config.clone())
+            .maybe_management_external_id(self.management_external_id.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
@@ -758,6 +761,11 @@ impl SingleControllerExecutor {
     /// Whether the controller asks for an update with an unchanged config.
     pub fn needs_update(&self) -> Result<bool> {
         self.with_context(|ctx| self.controller.needs_update(ctx))
+    }
+
+    /// Sets the ExternalId the next steps' deployment config carries.
+    pub fn set_management_external_id(&mut self, id: Option<alien_core::ManagementExternalId>) {
+        self.management_external_id = id;
     }
 
     /// The deletion policy the next steps run under, as deletion sets it from runtime metadata.
@@ -843,6 +851,7 @@ pub struct SingleControllerExecutorBuilder {
     input_values: std::collections::HashMap<String, serde_json::Value>,
     setup_run: bool,
     management_config: Option<ManagementConfig>,
+    management_external_id: Option<alien_core::ManagementExternalId>,
     gcp_federation_scope: Option<alien_core::GcpFederationScope>,
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
@@ -867,6 +876,7 @@ pub struct SingleControllerExecutorBuilder {
     resource_prefix: String,
     permission_profiles: Vec<(String, alien_core::permissions::PermissionProfile)>,
     remote_access: bool,
+    extensions: Vec<alien_core::ExtensionManifest>,
     delay_mode: DelayMode,
 }
 
@@ -883,6 +893,7 @@ impl SingleControllerExecutorBuilder {
             input_values: Default::default(),
             setup_run: true,
             management_config: None,
+            management_external_id: None,
             gcp_federation_scope: None,
             compute_backend: None,
             environment_variables: EnvironmentVariablesSnapshot {
@@ -910,6 +921,7 @@ impl SingleControllerExecutorBuilder {
             resource_prefix: "test".to_string(),
             permission_profiles: Vec::new(),
             remote_access: false,
+            extensions: Vec::new(),
             delay_mode: DelayMode::default(),
         }
     }
@@ -957,6 +969,12 @@ impl SingleControllerExecutorBuilder {
         self
     }
 
+    /// Adds an extension to the stack.
+    pub fn extension(mut self, manifest: alien_core::ExtensionManifest) -> Self {
+        self.extensions.push(manifest);
+        self
+    }
+
     /// Sets the stack settings.
     /// Whether this invocation has the installer's credentials.
     pub fn setup_run(mut self, setup_run: bool) -> Self {
@@ -998,6 +1016,12 @@ impl SingleControllerExecutorBuilder {
 
     pub fn management_config(mut self, config: ManagementConfig) -> Self {
         self.management_config = Some(config);
+        self
+    }
+
+    /// Sets the ExternalId a setup run writes into managing-role trusts.
+    pub fn management_external_id(mut self, id: alien_core::ManagementExternalId) -> Self {
+        self.management_external_id = Some(id);
         self
     }
 
@@ -1460,6 +1484,7 @@ impl SingleControllerExecutorBuilder {
             inputs: self.stack_inputs.clone(),
             dynamic_container_repositories: vec![],
             dynamic_container_image_resources: vec![],
+            extensions: self.extensions.clone(),
             operations: None,
             built_architectures: Default::default(),
         };
@@ -1484,6 +1509,7 @@ impl SingleControllerExecutorBuilder {
             .maybe_setup_run_id(setup_run_id.clone())
             .deployment_id(TEST_DEPLOYMENT_ID.to_string())
             .maybe_management_config(management_config.clone())
+            .maybe_management_external_id(self.management_external_id.clone())
             .maybe_gcp_federation_scope(self.gcp_federation_scope.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
@@ -1637,6 +1663,7 @@ impl SingleControllerExecutorBuilder {
             setup_run: self.setup_run,
             setup_run_id,
             management_config,
+            management_external_id: self.management_external_id,
             gcp_federation_scope: self.gcp_federation_scope,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,

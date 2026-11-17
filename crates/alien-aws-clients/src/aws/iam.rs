@@ -135,6 +135,7 @@ impl IamClient {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: Some("us-east-1".into()),
+            interceptors: self.credentials.interceptors().clone(),
         }
     }
 
@@ -215,10 +216,13 @@ impl IamClient {
             .post(&url)
             .host("iam.amazonaws.com")
             .content_type_form()
-            .body(body.clone());
+            .body(body);
 
         let sign_config = self.sign_config();
-        let result = match retry {
+        // IAM request bodies and role reads carry trust policies, which can hold an
+        // `sts:ExternalId`. An error chain is persisted and returned to API callers, so it must
+        // keep neither body.
+        let result = alien_client_core::redact_secret_bodies(match retry {
             XmlRetry::Retryable => {
                 crate::aws::aws_request_utils::sign_send_xml(builder, &sign_config).await
             }
@@ -237,7 +241,7 @@ impl IamClient {
                 )
                 .await
             }
-        };
+        });
 
         match result {
             Ok(v) => Ok(v),
@@ -251,7 +255,7 @@ impl IamClient {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     if let Some(mapped) =
-                        Self::map_iam_error(status, text, operation_name, resource_name, &body)
+                        Self::map_iam_error(status, text, operation_name, resource_name)
                     {
                         Err(e.context(mapped))
                     } else {
@@ -323,11 +327,12 @@ impl IamClient {
             .post(&url)
             .host("iam.amazonaws.com")
             .content_type_form()
-            .body(body.clone());
+            .body(body);
 
-        let result =
+        let result = alien_client_core::redact_request_body(
             crate::aws::aws_request_utils::sign_send_no_response(builder, &self.sign_config())
-                .await;
+                .await,
+        );
 
         match result {
             Ok(_) => Ok(()),
@@ -341,7 +346,7 @@ impl IamClient {
                     let status = StatusCode::from_u16(*http_status)
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     if let Some(mapped) =
-                        Self::map_iam_error(status, text, operation_name, resource_name, &body)
+                        Self::map_iam_error(status, text, operation_name, resource_name)
                     {
                         Err(e.context(mapped))
                     } else {
@@ -360,7 +365,6 @@ impl IamClient {
         error_body: &str,
         operation: &str,
         resource_name: &str,
-        request_body: &str,
     ) -> Option<ErrorData> {
         // Attempt to parse the canonical AWS error XML.
         let parsed_error: std::result::Result<IamErrorResponse, _> =
@@ -457,7 +461,7 @@ impl IamClient {
                     url: "iam.amazonaws.com".into(),
                     http_status: status.as_u16(),
                     http_response_text: Some(error_body.into()),
-                    http_request_text: Some(request_body.into()),
+                    http_request_text: None,
                 },
             },
         })
@@ -1323,4 +1327,62 @@ pub struct TrustPolicyDocument {
     pub version: String,
     /// List of policy statements
     pub statement: Vec<TrustPolicyStatement>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AwsClientConfig, AwsCredentials, ServiceOverrides};
+    use httpmock::prelude::*;
+
+    const EXTERNAL_ID: &str = "c2VudGluZWwtZXh0ZXJuYWwtaWQ";
+
+    /// A role's trust policy carries its `sts:ExternalId`. A role read that answers 200 but does
+    /// not parse must not keep that body in the error, which is persisted in resource state.
+    #[tokio::test]
+    async fn an_unparseable_role_read_does_not_record_the_trust_policy() {
+        let server = MockServer::start_async().await;
+        let trust = urlencoding::encode(&format!(
+            r#"{{"Statement":[{{"Condition":{{"StringEquals":{{"sts:ExternalId":"{EXTERNAL_ID}"}}}}}}]}}"#
+        ))
+        .into_owned();
+        let read = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .x_www_form_urlencoded_tuple("Action", "GetRole");
+                then.status(200).body(format!(
+                    "<GetRoleResponse><GetRoleResult><Role>\
+                     <AssumeRolePolicyDocument>{trust}</AssumeRolePolicyDocument>\
+                     <RoleName>{EXTERNAL_ID}</RoleName>\
+                     </Role></GetRoleResult></GetRoleResponse>"
+                ));
+            })
+            .await;
+        let client = IamClient::new(
+            reqwest::Client::new(),
+            AwsCredentialProvider::from_config_sync(AwsClientConfig {
+                account_id: "123456789012".into(),
+                region: "us-east-1".into(),
+                credentials: AwsCredentials::AccessKeys {
+                    access_key_id: "test-access-key".into(),
+                    secret_access_key: "test-secret-key".into(),
+                    session_token: None,
+                },
+                service_overrides: Some(ServiceOverrides {
+                    endpoints: std::collections::HashMap::from([("iam".into(), server.base_url())]),
+                }),
+            }),
+        );
+
+        let error = client
+            .get_role("app-role")
+            .await
+            .expect_err("a role without an ARN does not parse");
+
+        assert!(read.hits_async().await >= 1);
+        let debug = format!("{error:?}");
+        assert!(!debug.contains(EXTERNAL_ID), "{debug}");
+        let recorded = serde_json::to_string(&error).unwrap();
+        assert!(!recorded.contains(EXTERNAL_ID), "{recorded}");
+    }
 }

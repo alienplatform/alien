@@ -45,6 +45,8 @@ pub struct CloudQuotasClient {
     project_id: String,
 }
 
+crate::gcp::api_client::impl_with_interceptors!(CloudQuotasClient);
+
 impl CloudQuotasClient {
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         Self {

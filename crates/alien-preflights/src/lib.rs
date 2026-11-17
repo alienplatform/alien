@@ -172,6 +172,29 @@ impl CheckResult {
     }
 }
 
+/// Where a Kubernetes deployment's cluster runs, as far as the caller knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClusterCloud {
+    /// Not known: a release, a build or the one chart every Kubernetes target installs.
+    Unknown,
+    /// In no cloud Alien manages, such as a cluster on-premises.
+    NoCloud,
+    /// In this cloud: an eks, gke or aks cluster.
+    Cloud(Platform),
+}
+
+impl ClusterCloud {
+    /// The cluster of a deployment, whose config names its cloud or none.
+    pub fn of_deployment(base_platform: Option<Platform>) -> Self {
+        base_platform.map_or(Self::NoCloud, Self::Cloud)
+    }
+
+    /// The cluster a template or a build is for: the cloud a target names, or any cluster.
+    pub fn of_target(base_platform: Option<Platform>) -> Self {
+        base_platform.map_or(Self::Unknown, Self::Cloud)
+    }
+}
+
 /// Validates stack configuration without requiring cloud access.
 /// Can run during build time for early error detection.
 #[async_trait::async_trait]
@@ -189,6 +212,17 @@ pub trait CompileTimeCheck: Send + Sync {
 
     /// Run the check without cloud access
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult>;
+
+    /// Run the check for a deployment on `platform` whose Kubernetes cluster runs where `cloud`
+    /// says. Only a check whose answer depends on that cloud reads it.
+    async fn check_on(
+        &self,
+        stack: &Stack,
+        platform: Platform,
+        _cloud: ClusterCloud,
+    ) -> Result<CheckResult> {
+        self.check(stack, platform).await
+    }
 }
 
 /// Validates that the deployment target provides required environment capabilities.
@@ -361,6 +395,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::ResourceReferencesExistCheck));
         registry.add_compile_time_check(Box::new(compile_time::TriggerEdgeOwnershipCheck));
         registry.add_compile_time_check(Box::new(compile_time::SingleQueueTriggerCheck));
+        registry.add_compile_time_check(Box::new(compile_time::LinkEnvironmentCheck));
         registry.add_compile_time_check(Box::new(
             compile_time::ServiceAccountImpersonateValidationCheck,
         ));
@@ -524,6 +559,7 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::RemoteBindingsMutation));
         registry.add_mutation(Box::new(mutations::ResourceLinkPermissionsMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
+        registry.add_mutation(Box::new(mutations::ExtensionIdentityMutation));
 
         // Phase 3: Service activations and platform infrastructure
         // These scan resource types to decide what to create, so they must see all
@@ -706,6 +742,70 @@ impl PreflightRegistry {
 impl Default for PreflightRegistry {
     fn default() -> Self {
         Self::with_built_ins()
+    }
+}
+
+/// `text` with `\` and each control, bidi or line separator character escaped (`\\`,
+/// `\u{1b}`, `\n`, `\u{202e}`), so it prints as the text it holds. A check message quotes what
+/// the stack and its extensions' manifests hold through this; whatever prints a message passes
+/// it through [`escape_for_display`], which leaves `\` alone, so quoted text is escaped once.
+pub fn escape_control_characters(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            c if changes_how_text_prints(c) => escaped.extend(c.escape_default()),
+            c => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+/// `text` with each control, bidi or line separator character escaped but its line breaks and
+/// `\`, for printing a message whose quoted text [`escape_control_characters`] escaped.
+pub fn escape_for_display(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' => escaped.push(c),
+            c if changes_how_text_prints(c) => escaped.extend(c.escape_default()),
+            c => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+fn changes_how_text_prints(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{2028}' | '\u{2029}')
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::{escape_control_characters, escape_for_display};
+
+    /// A real escape and the text `\u{1b}` print apart, and a bidi override or line separator
+    /// prints as its code point instead of reordering or breaking the line.
+    #[test]
+    fn quoted_text_prints_as_the_text_it_holds() {
+        assert_eq!(
+            escape_control_characters(
+                "a\u{1b}[2J \\u{1b}[2J \u{202e}b\u{2066}\u{2028}\n\u{7f}\u{85}"
+            ),
+            "a\\u{1b}[2J \\\\u{1b}[2J \\u{202e}b\\u{2066}\\u{2028}\\n\\u{7f}\\u{85}"
+        );
+    }
+
+    /// Printing a message whose quoted text was escaped leaves that text as it is, and still
+    /// escapes what the message holds unquoted, keeping its line breaks.
+    #[test]
+    fn a_printed_message_is_escaped_once() {
+        let quoted = escape_control_characters("acme\u{1b}[2J \\ \u{202e}");
+        let message = format!("Extension name '{quoted}' is refused:\nfix\r\u{1b}[31m it");
+        assert_eq!(
+            escape_for_display(&message),
+            "Extension name 'acme\\u{1b}[2J \\\\ \\u{202e}' is refused:\nfix\\r\\u{1b}[31m it"
+        );
     }
 }
 

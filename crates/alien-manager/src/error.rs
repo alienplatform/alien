@@ -308,6 +308,48 @@ pub enum ErrorData {
     )]
     Forbidden { reason: String },
 
+    /// No extension bundle object is stored under the digest.
+    #[error(
+        code = "EXTENSION_BUNDLE_OBJECT_NOT_FOUND",
+        message = "No extension bundle object is stored under {digest}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    ExtensionBundleObjectNotFound { digest: String },
+
+    /// A release's stack pins an extension bundle this manager can't find.
+    #[error(
+        code = "EXTENSION_BUNDLE_MISSING",
+        message = "{message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    ExtensionBundleMissing { message: String },
+
+    /// A release's stack pins an extension bundle this manager refused or could not load, so
+    /// the release's extensions can't run. The message names the extension.
+    #[error(
+        code = "EXTENSION_BUNDLE_UNUSABLE",
+        message = "{message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 422
+    )]
+    ExtensionBundleUnusable { message: String },
+
+    /// A release's stack pins an extension bundle this manager could not fetch now. The message
+    /// names the extension.
+    #[error(
+        code = "EXTENSION_BUNDLE_UNAVAILABLE",
+        message = "{message}",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    ExtensionBundleUnavailable { message: String },
+
     /// A code made from a deployment token cannot be issued or redeemed once
     /// the deployment's operator has a key.
     #[error(

@@ -35,6 +35,13 @@ struct UnusedResolver;
 
 #[async_trait::async_trait]
 impl alien_manager::traits::CredentialResolver for UnusedResolver {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         panic!("credential resolution must not be reached in these tests");
     }

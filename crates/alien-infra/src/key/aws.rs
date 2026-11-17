@@ -99,13 +99,17 @@ impl AwsKeyController {
         if self.create_requested && self.key_arn.is_none() {
             // A crash between the CreateKey call and the checkpoint left a key this
             // deployment may own. Tags are written by anyone who can tag, so the key is
-            // adopted only after its metadata and policy are checked and rewritten.
-            let tagging = ctx
+            // adopted only after its metadata and policy are checked and rewritten. The lookup
+            // picks the key that gets this deployment's policy and grants, so no interceptor
+            // reads or rewrites its calls.
+            let lookup = ctx
                 .service_provider
-                .get_aws_resource_groups_tagging_client(aws)
-                .await?;
+                .without_interceptors()
+                .unwrap_or_else(|| ctx.service_provider.clone());
+            let tagging = lookup.get_aws_resource_groups_tagging_client(aws).await?;
+            let described = lookup.get_aws_kms_client(aws).await?;
             if let Some(arn) =
-                find_tagged_key(ctx, tagging.as_ref(), client.as_ref(), &key.id, &marker).await?
+                find_tagged_key(ctx, tagging.as_ref(), described.as_ref(), &key.id, &marker).await?
             {
                 client.put_key_policy(&arn, &policy).await.context(
                     ErrorData::CloudPlatformError {

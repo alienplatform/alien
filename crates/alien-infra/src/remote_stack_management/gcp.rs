@@ -19,7 +19,7 @@ use alien_macros::controller;
 use alien_permissions::generators::GcpIamBinding;
 use alien_permissions::{
     generators::{GcpBindingTargetScope, GcpGrantPlan, GcpRuntimePermissionsGenerator},
-    get_permission_set, list_permission_set_ids, BindingTarget, PermissionContext,
+    list_permission_set_ids, BindingTarget, PermissionContext,
 };
 use chrono::Utc;
 
@@ -823,11 +823,11 @@ impl GcpRemoteStackManagementController {
         let mut permission_sets = Vec::new();
 
         for permission_set_ref in global_permission_set_refs {
-            let Some(permission_set) =
-                permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-            else {
-                continue;
-            };
+            let permission_set = super::resolve_management_permission_set(
+                ctx.desired_stack,
+                permission_set_ref,
+                "management",
+            )?;
             // A set with no GCP block grants nothing on GCP (for example `daemon/heartbeat`:
             // a daemon's health comes from its compute cluster, not a cloud API). The setup
             // emitter and the AWS and Azure management controllers skip these sets too.
@@ -886,17 +886,7 @@ impl GcpRemoteStackManagementController {
                 if scope == "*" && !global.contains(&reference) {
                     continue;
                 }
-                let set = reference
-                    .resolve(|name| get_permission_set(name).cloned())
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::ResourceConfigInvalid {
-                            message: format!(
-                                "Unknown management permission set '{}'",
-                                reference.id()
-                            ),
-                            resource_id: Some(scope.clone()),
-                        })
-                    })?;
+                let set = super::resolve_management_permission_set(stack, reference, scope)?;
                 if set.platforms.gcp.is_none() {
                     continue;
                 }
@@ -964,11 +954,11 @@ impl GcpRemoteStackManagementController {
                 .with_signing(&ctx.deployment_config.stack_settings);
 
             for permission_set_ref in permission_set_refs {
-                let Some(permission_set) =
-                    permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-                else {
-                    continue;
-                };
+                let permission_set = super::resolve_management_permission_set(
+                    ctx.desired_stack,
+                    permission_set_ref,
+                    &resource_id,
+                )?;
                 if permission_set.platforms.gcp.is_none() {
                     continue;
                 }
@@ -1083,6 +1073,7 @@ mod tests {
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use alien_gcp_clients::iam::{ListRolesResponse, MockIamApi, Role};
     use alien_gcp_clients::resource_manager::MockResourceManagerApi;
+    use alien_permissions::get_permission_set;
 
     const PROJECT: &str = "test-project-123";
 
@@ -1900,6 +1891,38 @@ mod tests {
             assert_eq!(
                 plan.custom_roles,
                 canonical.custom_roles_for_bindings(&plan.bindings)
+            );
+        }
+    }
+
+    /// The management service account never gets an extension's set: a grant of one, at stack
+    /// scope or on a resource, is refused rather than resolved from the stack.
+    #[test]
+    fn a_management_grant_of_an_extensions_set_is_refused() {
+        let (extension, _) = crate::service_account::extension_with_a_stack_wide_set();
+        for scope in ["*", "objects"] {
+            let mut stack = Stack::new("example".to_string())
+                .add(
+                    alien_core::Storage::new("objects".to_string()).build(),
+                    alien_core::ResourceLifecycle::Frozen,
+                )
+                .management(alien_core::ManagementPermissions::Extend(
+                    alien_core::PermissionProfile::new()
+                        .resource(scope, ["acme/dns-zone/records-write"]),
+                ))
+                .build();
+            stack.extensions.push(extension.clone());
+            let error = GcpRemoteStackManagementController::management_service_account_plan(
+                &stack,
+                &test_permission_context().with_service_account_name("management-account"),
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{scope}");
+            assert!(
+                error
+                    .message
+                    .contains("granted only to the extension's own identity"),
+                "{error:?}"
             );
         }
     }

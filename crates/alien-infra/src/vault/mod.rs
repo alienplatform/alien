@@ -32,7 +32,9 @@ fn permissions_revision(ctx: &ResourceControllerContext<'_>) -> Result<String> {
         for reference in references {
             sets.push(
                 reference
-                    .resolve(|id| alien_permissions::get_permission_set(id).cloned())
+                    .resolve(|id| {
+                        alien_permissions::get_stack_permission_set(ctx.desired_stack, id).cloned()
+                    })
                     .ok_or_else(|| {
                         AlienError::new(ErrorData::ResourceConfigInvalid {
                             message: format!("Vault permission set '{}' not found", reference.id()),

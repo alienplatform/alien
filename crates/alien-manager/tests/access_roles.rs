@@ -34,9 +34,11 @@ use alien_core::{
     CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::AlienError;
+use alien_infra::extension_bundle::testing::TestBundle;
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::config::ManagerConfig;
-use alien_manager::providers::OssAuthz;
+use alien_manager::extension_bundles::ExtensionBundles;
+use alien_manager::providers::{OssAuthz, StateDirExtensionBundles};
 use alien_manager::routes::registry_proxy::{
     CredentialCache, PullValidationCache, RegistryRoutingTable,
 };
@@ -46,7 +48,7 @@ use alien_manager::stores::sqlite::{
 };
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams, CredentialResolver,
-    DeploymentRecord, DeploymentStore, ReleaseStore, TokenStore,
+    DeploymentRecord, DeploymentStore, ExtensionBundleStore, ReleaseStore, TokenStore,
 };
 
 /// Hands out the subject registered for each bearer token, the way an
@@ -73,6 +75,13 @@ struct NoCredentials;
 
 #[async_trait]
 impl CredentialResolver for NoCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         unreachable!("these routes resolve no credentials")
     }
@@ -212,13 +221,14 @@ async fn state() -> (AppState, String, tempfile::TempDir) {
         registry_routing_table: Arc::new(
             RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
         ),
-        import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        host_registrations: alien_infra::HostRegistrations::NONE,
         charts: None,
         runtime_identity: None,
         release_channels: None,
         signing: None,
         bundle_signing_key: None,
         bundle_sources: None,
+        extension_bundles: None,
         log_buffer: Arc::new(alien_manager::LogBuffer::new()),
         values: None,
         value_access: None,
@@ -242,6 +252,21 @@ async fn pull(state: &AppState, role: Role, path: &str) -> (StatusCode, String) 
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// The one version the manager serves of `chart`.
+async fn served_version(state: &AppState, chart: &str) -> String {
+    let (status, body) = pull(
+        state,
+        Role::ProjectDeveloper,
+        &format!("charts/{chart}/tags/list"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let tags: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let tags = tags["tags"].as_array().expect("tags is a list");
+    assert_eq!(tags.len(), 1, "{body}");
+    tags[0].as_str().unwrap().to_string()
 }
 
 #[tokio::test]
@@ -275,6 +300,21 @@ async fn capability_credentials_cannot_pull_charts_or_the_operator_image() {
             "developer pulling {path}: {body}"
         );
     }
+}
+
+/// Gives `state` a bundle store holding `bundle`'s core zip, so its releases load the extension.
+async fn store_bundle(state: &mut AppState, directory: &tempfile::TempDir, bundle: &TestBundle) {
+    let store = Arc::new(StateDirExtensionBundles::new(directory.path()));
+    store
+        .put(
+            &Subject::system(),
+            "default",
+            bundle.manifest.digest.trim_start_matches("sha256:"),
+            bundle.zip.clone(),
+        )
+        .await
+        .unwrap();
+    state.extension_bundles = Some(Arc::new(ExtensionBundles::new(store)));
 }
 
 /// Before it enrolls, an operator pulls its own image from the manager with
@@ -369,6 +409,13 @@ struct LocalVaultCredentials(String);
 
 #[async_trait]
 impl CredentialResolver for LocalVaultCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         Ok(ClientConfig::Local {
             state_directory: self.0.clone(),
@@ -529,6 +576,13 @@ struct VaultCredentials(ClientConfig);
 
 #[async_trait]
 impl CredentialResolver for VaultCredentials {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         Ok(self.0.clone())
     }

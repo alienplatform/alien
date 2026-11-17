@@ -225,7 +225,11 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         let preflight_runner = &preflight_runner;
         async move {
             let summary = preflight_runner
-                .run_build_time_preflights(&stack, settings.platform.runtime_platform())
+                .run_build_time_preflights_on(
+                    &stack,
+                    settings.platform.runtime_platform(),
+                    alien_preflights::ClusterCloud::of_target(settings.platform.base_platform()),
+                )
                 .await
                 .context(ErrorData::StackProcessorFailed {
                     message: "Failed to run build-time preflights".to_string(),

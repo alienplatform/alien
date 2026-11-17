@@ -212,6 +212,7 @@ mod tests {
 
     fn config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,

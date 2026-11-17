@@ -1,6 +1,7 @@
 use crate::aws::aws_request_utils::{AwsRequestBuilderExt, AwsRequestSigner, AwsSignConfig};
 use crate::aws::credential_provider::AwsCredentialProvider;
-use alien_client_core::{ErrorData, RequestBuilderExt, Result};
+use alien_client_core::interceptor::keep_interceptor_failure_final;
+use alien_client_core::{ErrorData, Result};
 use alien_core::{AWS_SIGNED_UPLOAD_HEADERS, SIGNED_UPLOAD_EXPOSED_HEADERS};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -131,6 +132,15 @@ impl S3Client {
             region: self.credentials.region().to_string(),
             credentials: self.credentials.get_credentials(),
             signing_region: None,
+            interceptors: self.credentials.interceptors().clone(),
+        }
+    }
+
+    /// For a call whose body is an object's bytes, which interceptors are never offered.
+    fn object_sign_config(&self) -> AwsSignConfig {
+        AwsSignConfig {
+            interceptors: self.credentials.interceptors().for_object_payload(),
+            ..self.sign_config()
         }
     }
 
@@ -272,14 +282,16 @@ impl S3Client {
             .host(&host_header)
             .content_sha256("");
 
-        let response = builder
-            .sign_aws_request(&self.sign_config())?
-            .with_retry()
-            .send_raw()
-            .await
-            .context(ErrorData::HttpRequestFailed {
-                message: format!("{} request failed for '{}'", operation, resource),
-            })?;
+        let response = keep_interceptor_failure_final(
+            builder
+                .sign_aws_request(&self.sign_config())?
+                .with_retry()
+                .send_raw()
+                .await
+                .context(ErrorData::HttpRequestFailed {
+                    message: format!("{} request failed for '{}'", operation, resource),
+                }),
+        )?;
 
         let status = response.status();
         let body = response.text().await.ok();
@@ -693,18 +705,19 @@ impl S3Api for S3Client {
         let operation = "GetBucketLifecycleConfiguration";
         let url = self.url(bucket, "?lifecycle");
         self.credentials.ensure_fresh().await?;
-        let response = self
-            .client
-            .request(Method::GET, &url)
-            .host(&self.host(bucket))
-            .content_sha256("")
-            .sign_aws_request(&self.sign_config())?
-            .with_retry()
-            .send_raw()
-            .await
-            .context(ErrorData::HttpRequestFailed {
-                message: format!("{operation} request failed for '{bucket}'"),
-            })?;
+        let response = keep_interceptor_failure_final(
+            self.client
+                .request(Method::GET, &url)
+                .host(&self.host(bucket))
+                .content_sha256("")
+                .sign_aws_request(&self.sign_config())?
+                .with_retry()
+                .send_raw()
+                .await
+                .context(ErrorData::HttpRequestFailed {
+                    message: format!("{operation} request failed for '{bucket}'"),
+                }),
+        )?;
         let status = response.status();
         let minimum_size = response
             .headers()
@@ -1314,7 +1327,7 @@ impl S3Api for S3Client {
         builder = builder.body(request.body.clone());
 
         // Sign the request
-        let signed_builder = builder.sign_aws_request(&self.sign_config())?;
+        let signed_builder = builder.sign_aws_request(&self.object_sign_config())?;
 
         // Execute the request with retry
         let response =
@@ -1403,7 +1416,7 @@ impl S3Api for S3Client {
         }
 
         // Sign the request
-        let signed_builder = builder.sign_aws_request(&self.sign_config())?;
+        let signed_builder = builder.sign_aws_request(&self.object_sign_config())?;
 
         // Execute the request with retry
         let response =
@@ -1530,7 +1543,7 @@ impl S3Api for S3Client {
             .content_sha256("");
 
         // Sign the request
-        let signed_builder = builder.sign_aws_request(&self.sign_config())?;
+        let signed_builder = builder.sign_aws_request(&self.object_sign_config())?;
 
         // Execute the request with retry
         let response =

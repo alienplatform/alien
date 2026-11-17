@@ -1077,6 +1077,7 @@ mod tests {
 
     fn deployment_config() -> DeploymentConfig {
         DeploymentConfig {
+            management_external_id: None,
             image_registry: None,
             image_pull_secrets: Vec::new(),
             runtime_identity_audience: None,
@@ -1498,6 +1499,7 @@ mod tests {
         Stack {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             built_architectures: Default::default(),
             id: "test-stack".to_string(),

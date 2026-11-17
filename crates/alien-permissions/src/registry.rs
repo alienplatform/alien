@@ -112,6 +112,26 @@
 // This includes the static PERMISSION_SETS_REGISTRY and the public API workers
 include!(concat!(env!("OUT_DIR"), "/permission_sets_registry.rs"));
 
+/// Finds a permission set a stack can name: one of Alien's, or one an extension in the stack
+/// defines for the type its id names (`<extension>/<type>/<name>`).
+///
+/// Extension sets come from `Stack.extensions`, so a deployment resolves only the sets of the
+/// extensions its own stack lists.
+pub fn get_stack_permission_set<'a>(
+    stack: &'a alien_core::Stack,
+    id: &str,
+) -> Option<&'a alien_core::permissions::PermissionSet> {
+    if let Some(permission_set) = get_permission_set(id) {
+        return Some(permission_set);
+    }
+    let (resource_type, _) = id.rsplit_once('/')?;
+    stack
+        .descriptor(&alien_core::ResourceType::from(resource_type))?
+        .permission_sets
+        .iter()
+        .find(|permission_set| permission_set.id == id)
+}
+
 /// AWS actions that hand out a credential reaching inside a MicroVM session.
 ///
 /// A MicroVM auth token is what the sandbox agent protocol travels on, and `ConnectMicrovm`
@@ -228,19 +248,33 @@ pub fn permission_set_uses_aws_key_data(
 }
 
 /// IAM action wildcard matching: `*` matches any run of characters, `?` any one character.
-fn iam_action_pattern_matches(pattern: &[u8], action: &[u8]) -> bool {
-    match (pattern.first(), action.first()) {
-        (None, None) => true,
-        (Some(b'*'), _) => {
-            iam_action_pattern_matches(&pattern[1..], action)
-                || (!action.is_empty() && iam_action_pattern_matches(pattern, &action[1..]))
+///
+/// On a mismatch only the last `*` is retried one character further, so the time is bounded by
+/// the product of the two lengths: an extension's descriptor supplies the pattern.
+pub(crate) fn iam_action_pattern_matches(pattern: &[u8], action: &[u8]) -> bool {
+    let (mut p, mut a) = (0, 0);
+    let mut last_star: Option<(usize, usize)> = None;
+    while a < action.len() {
+        match pattern.get(p).copied() {
+            Some(b'*') => {
+                last_star = Some((p, a));
+                p += 1;
+            }
+            Some(c) if c == b'?' || c == action[a] => {
+                p += 1;
+                a += 1;
+            }
+            _ => match last_star {
+                Some((star, from)) => {
+                    p = star + 1;
+                    a = from + 1;
+                    last_star = Some((star, from + 1));
+                }
+                None => return false,
+            },
         }
-        (Some(b'?'), Some(_)) => iam_action_pattern_matches(&pattern[1..], &action[1..]),
-        (Some(expected), Some(actual)) if expected == actual => {
-            iam_action_pattern_matches(&pattern[1..], &action[1..])
-        }
-        _ => false,
     }
+    pattern[p..].iter().all(|&c| c == b'*')
 }
 
 /// Predefined GCP roles that carry `aiplatform.sandboxEnvironments.execute`, read off the live
@@ -1066,6 +1100,31 @@ mod key_data_tests {
             assert!(
                 !permission_set_uses_aws_key_data(&aws_set(actions)),
                 "{actions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wildcards_match_as_iam_reads_them() {
+        for (pattern, action, expected) in [
+            ("*", "", true),
+            ("*", "*a", true),
+            ("", "", true),
+            ("", "a", false),
+            ("a", "", false),
+            ("a**", "a", true),
+            ("?", "", false),
+            ("s3:get*", "s3:getobject", true),
+            ("s3:*object", "s3:getobjectversion", false),
+            ("s3:*object*", "s3:getobjectversion", true),
+            ("kms:re?ncrypt*", "kms:reencryptfrom", true),
+            ("*a*b", "xaybzb", true),
+            ("*a*b", "xaybzc", false),
+        ] {
+            assert_eq!(
+                iam_action_pattern_matches(pattern.as_bytes(), action.as_bytes()),
+                expected,
+                "{pattern:?} {action:?}"
             );
         }
     }

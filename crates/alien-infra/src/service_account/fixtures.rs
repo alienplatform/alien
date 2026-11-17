@@ -327,3 +327,70 @@ pub fn function_execute_permission_set() -> PermissionSet {
         },
     }
 }
+
+/// An extension whose permission set `acme/dns-zone/records-write` an `app` profile holds
+/// stack-wide. Alien's own registry has no set by that id, so only the stack can resolve it. The
+/// set grants on AWS and Azure, and not on Google Cloud, where resolving it is the whole of the
+/// work.
+pub fn extension_with_a_stack_wide_set() -> (alien_core::ExtensionManifest, PermissionProfile) {
+    let manifest = serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "1.0.0",
+        "digest": "sha256:0",
+        "resourceTypes": {
+            "acme/dns-zone": {
+                "lifecycles": ["frozen"],
+                "holdsData": false,
+                "setup": { "cloudformation": [], "terraform": [], "helm": [], "importers": [] },
+                "controllerPlatforms": [],
+                "permissionSets": [{
+                    "id": "acme/dns-zone/records-write",
+                    "description": "Write the zone's DNS records",
+                    "platforms": {
+                        "aws": [{
+                            "grant": { "actions": ["route53:ChangeResourceRecordSets"] },
+                            "binding": { "stack": { "resources": ["*"] }, "resource": { "resources": ["*"] } }
+                        }],
+                        "azure": [{
+                            "grant": { "actions": ["Microsoft.Network/dnsZones/read"], "dataActions": [] },
+                            "binding": {
+                                "stack": { "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}" },
+                                "resource": { "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}" }
+                            }
+                        }]
+                    }
+                }],
+                "link": { "permissionSets": [] },
+                "schemas": { "config": {}, "outputs": {} }
+            }
+        }
+    }))
+    .expect("the manifest reads");
+    let profile = PermissionProfile::new().global(["acme/dns-zone/records-write"]);
+    (manifest, profile)
+}
+
+/// What setup records for `extension`'s Azure identity in a deployment with `prefix`: its
+/// managed identity `<prefix>-<extension>-ext` in resource group `rg-a` of `subscription`, with
+/// `client_id`. Insert it at `<extension>-ext`.
+pub fn azure_extension_identity_state(
+    prefix: &str,
+    subscription: &str,
+    extension: &str,
+    client_id: &str,
+) -> alien_core::StackResourceState {
+    let id = format!("{extension}-ext");
+    let name = super::get_azure_managed_identity_name(prefix, &id);
+    alien_core::StackResourceState::builder()
+        .resource_type(ServiceAccount::RESOURCE_TYPE.to_string())
+        .status(alien_core::ResourceStatus::Running)
+        .config(alien_core::Resource::new(
+            ServiceAccount::new(id).extension(extension.to_string()).build(),
+        ))
+        .outputs(alien_core::ResourceOutputs::new(alien_core::ServiceAccountOutputs {
+            identity: client_id.to_string(),
+            resource_id: format!("/subscriptions/{subscription}/resourceGroups/rg-a/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{name}"),
+        }))
+        .lifecycle(alien_core::ResourceLifecycle::Frozen)
+        .build()
+}

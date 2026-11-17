@@ -17,6 +17,8 @@ pub mod gcp_request_utils;
 pub mod gcs;
 pub mod iam;
 mod iam_workload_identity;
+#[cfg(test)]
+mod interceptor_tests;
 pub mod longrunning;
 pub mod memorystore;
 pub mod model_garden;

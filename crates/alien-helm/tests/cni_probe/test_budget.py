@@ -24,6 +24,7 @@ NO_SETUP_CHECK = {
     ".github/workflows/kind-lifecycle.yml": "installs the CNI (cilium), not the chart",
     "crates/alien-cli/README.md": "describes the command",
     "crates/alien-core/src/deployment/state.rs": "doc comment",
+    "crates/alien-core/src/extension.rs": "names the setup format",
     "crates/alien-deploy-cli/README.md": "describes the command",
     "crates/alien-deploy-cli/src/commands/register.rs": "name of the import source",
     "crates/alien-deployment/src/initial_setup.rs": "error text",

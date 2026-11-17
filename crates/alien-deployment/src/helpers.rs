@@ -93,6 +93,43 @@ pub(crate) fn injected_target_stack(
     Ok(target_stack)
 }
 
+/// The controllers a deployment's update, deletion and teardown executors use: Alien's, the
+/// extensions' of the stack the deployment applies (the target release's, or an unfinished
+/// update's while a newer target waits for it), and the current release's for any type that
+/// stack no longer defines, so a resource whose type an update removes, together with its
+/// extension, keeps its controller until it is deleted. The applied stack's extensions come
+/// from `service_provider`, and the current release's from the provider loaded for it.
+pub(crate) fn resource_registry(
+    state: &alien_core::DeploymentState,
+    service_provider: &std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+) -> Result<std::sync::Arc<alien_infra::ResourceRegistry>> {
+    let empty = Stack::new(String::new()).build();
+    let current = state
+        .current_release
+        .as_ref()
+        .map_or(&empty, |release| &release.stack);
+    let target = state.applied_stack().unwrap_or(current);
+    let target_extensions =
+        alien_infra::LoadedExtensions::from_provider(target, service_provider.as_ref()).context(
+            ErrorData::StackExecutionFailed {
+                message: "Failed to load the target release's extensions".to_string(),
+            },
+        )?;
+    let current_extensions = alien_infra::LoadedExtensions::from_provider(
+        current,
+        current_release_provider(state, service_provider)?.as_ref(),
+    )
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to load the current release's extensions".to_string(),
+    })?;
+    Ok(std::sync::Arc::new(
+        alien_infra::ResourceRegistry::with_built_ins_and_releases(
+            (target, &target_extensions),
+            (current, &current_extensions),
+        ),
+    ))
+}
+
 /// A failed resource a retry did not resume, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnresumedFailure {
@@ -2418,6 +2455,7 @@ mod tests {
             inputs: Vec::new(),
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
+            extensions: Vec::new(),
             operations: None,
             built_architectures: Default::default(),
         }
@@ -4422,5 +4460,362 @@ mod tests {
         unkeyed.update(b"A=1\n");
         assert_ne!(one, format!("env-{:x}", unkeyed.finalize()));
         assert!(one.starts_with("env-") && one.len() == 4 + 64);
+    }
+}
+
+/// The provider a step of `state` runs with: `provider`, or real clients when the caller passes
+/// none. A deployment whose release lists extensions needs a provider that loaded each of them,
+/// or its controllers would run without their interceptors. During an update, the current
+/// release's extensions are checked against the provider chosen for it.
+pub(crate) fn service_provider_for(
+    state: &DeploymentState,
+    provider: Option<std::sync::Arc<dyn alien_infra::PlatformServiceProvider>>,
+) -> Result<std::sync::Arc<dyn alien_infra::PlatformServiceProvider>> {
+    let releases = [
+        ("current", state.current_release.as_ref()),
+        ("target", state.target_release.as_ref()),
+    ];
+    let Some(provider) = provider else {
+        if let Some((which, release)) = releases
+            .into_iter()
+            .filter_map(|(which, release)| release.map(|release| (which, release)))
+            .find(|(_, release)| !release.stack.extensions.is_empty())
+        {
+            return Err(AlienError::new(ErrorData::MissingConfiguration {
+                message: format!(
+                    "The {which} release {} uses extensions {:?}; pass the service provider that loaded them",
+                    release_name(release),
+                    extension_names(&release.stack)
+                ),
+            }));
+        }
+        if let Some((release_id, stack)) = state
+            .unfinished_update()
+            .filter(|(_, stack)| !stack.extensions.is_empty())
+        {
+            return Err(AlienError::new(ErrorData::MissingConfiguration {
+                message: format!(
+                    "The unfinished release {release_id} uses extensions {:?}; pass the service provider that loaded them",
+                    extension_names(stack)
+                ),
+            }));
+        }
+        return Ok(std::sync::Arc::new(
+            alien_infra::DefaultPlatformServiceProvider::default(),
+        ));
+    };
+    let [(_, current), (_, target)] = releases;
+    match (state.unfinished_update(), target) {
+        (Some((release_id, stack)), _) => {
+            check_loaded("unfinished", release_id, stack, provider.as_ref())?
+        }
+        (None, Some(target)) => check_loaded(
+            "target",
+            release_name(target),
+            &target.stack,
+            provider.as_ref(),
+        )?,
+        (None, None) => {}
+    }
+    if let Some(current) = current {
+        check_loaded(
+            "current",
+            release_name(current),
+            &current.stack,
+            current_release_provider(state, &provider)?.as_ref(),
+        )?;
+    }
+    Ok(provider)
+}
+
+/// The provider that carries the current release's extensions. While the deployment moves to
+/// the target release, it deletes the resources the target release removes, and the whole
+/// deployment's resources if the deployment is deleted, with their data protection.
+///
+/// It is `provider` when there is no target release or both list the same extensions, the
+/// provider without interceptors when the current release lists none, and otherwise the
+/// provider the caller loaded for the current release.
+pub(crate) fn current_release_provider(
+    state: &DeploymentState,
+    provider: &std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+) -> Result<std::sync::Arc<dyn alien_infra::PlatformServiceProvider>> {
+    let (Some(current), Some(target), Some(applied)) = (
+        &state.current_release,
+        &state.target_release,
+        state.applied_stack(),
+    ) else {
+        return Ok(provider.clone());
+    };
+    if current.stack.extensions == applied.extensions {
+        return Ok(provider.clone());
+    }
+    if current.stack.extensions.is_empty() {
+        return Ok(provider
+            .without_interceptors()
+            .unwrap_or_else(|| provider.clone()));
+    }
+    provider.for_current_release().ok_or_else(|| {
+        AlienError::new(ErrorData::MissingConfiguration {
+            message: format!(
+                "The current release {} uses extensions {:?} and the release it moves to, {}, {:?}; the service provider for the current release is not loaded",
+                release_name(current),
+                extension_names(&current.stack),
+                state
+                    .unfinished_update()
+                    .map_or(release_name(target), |(release_id, _)| release_id),
+                extension_names(applied)
+            ),
+        })
+    })
+}
+
+/// What a deployment's service provider was loaded for: the extensions of the stack it applies
+/// and those of its current release. A step can change them (an unfinished update finishes, a
+/// newer target is prepared), and the provider loaded before it then lacks a release's
+/// extensions, so the runner stops for its caller to load the provider again.
+pub(crate) fn extensions_loaded_for(
+    state: &DeploymentState,
+) -> (
+    Vec<alien_core::ExtensionManifest>,
+    Vec<alien_core::ExtensionManifest>,
+) {
+    (
+        state
+            .applied_stack()
+            .map(|stack| stack.extensions.clone())
+            .unwrap_or_default(),
+        state
+            .current_release
+            .as_ref()
+            .map(|release| release.stack.extensions.clone())
+            .unwrap_or_default(),
+    )
+}
+
+/// Fails unless `provider` loaded each extension the `which` release lists.
+fn check_loaded(
+    which: &str,
+    release_id: &str,
+    stack: &Stack,
+    provider: &dyn alien_infra::PlatformServiceProvider,
+) -> Result<()> {
+    alien_infra::LoadedExtensions::from_provider(stack, provider)
+        .context(ErrorData::MissingConfiguration {
+            message: format!(
+                "The {which} release {release_id} uses extensions {:?}; the service provider for it has not loaded them",
+                extension_names(stack)
+            ),
+        })?;
+    Ok(())
+}
+
+fn release_name(release: &alien_core::ReleaseInfo) -> &str {
+    release.release_id.as_deref().unwrap_or("(unnamed)")
+}
+
+/// Each extension `stack` lists, with its version and bundle digest, so two releases of one
+/// extension read apart.
+fn extension_names(stack: &Stack) -> Vec<String> {
+    stack
+        .extensions
+        .iter()
+        .map(|extension| {
+            format!(
+                "{} {} ({})",
+                extension.name, extension.version, extension.digest
+            )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod service_provider_tests {
+    use super::*;
+    use alien_core::{DeploymentStatus, ReleaseInfo};
+
+    fn state(extensions: serde_json::Value) -> DeploymentState {
+        let stack: Stack = serde_json::from_value(serde_json::json!({
+            "id": "app",
+            "resources": {},
+            "extensions": extensions
+        }))
+        .unwrap();
+        DeploymentState {
+            status: DeploymentStatus::Pending,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: Some(ReleaseInfo {
+                release_id: Some("rel_1".to_string()),
+                version: None,
+                description: None,
+                stack,
+                signed: None,
+                signer_lists: Vec::new(),
+            }),
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            error: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    #[test]
+    fn a_release_with_extensions_needs_the_provider_that_loaded_them() {
+        let error = service_provider_for(
+            &state(serde_json::json!([{
+                "name": "acme",
+                "version": "1.0.0",
+                "digest": "sha256:0",
+                "resourceTypes": {}
+            }])),
+            None,
+        )
+        .err()
+        .expect("no silent default for a release with extensions");
+        assert!(error.message.contains("acme"), "{error}");
+
+        assert!(service_provider_for(&state(serde_json::json!([])), None).is_ok());
+    }
+
+    #[derive(Debug)]
+    struct NeverStepped;
+
+    #[async_trait::async_trait]
+    impl alien_infra::step_protocol::Transport for NeverStepped {
+        async fn step(
+            &self,
+            _request: &alien_infra::step_protocol::protocol::StepRequest,
+            _timeout: std::time::Duration,
+        ) -> std::result::Result<
+            alien_infra::step_protocol::protocol::StepResponse,
+            alien_infra::step_protocol::TransportFailure,
+        > {
+            unreachable!("the test never steps")
+        }
+    }
+
+    /// A newer target arrived while an update was in a step it can't stop: the update finishes
+    /// on the stack it was prepared from, so the type only that release defines keeps its
+    /// extension's controller, though neither the current nor the target release lists it.
+    #[test]
+    fn an_unfinished_update_keeps_its_releases_controllers() {
+        use alien_infra::step_protocol::test_controller::DNS_ZONE;
+
+        let release = |id: &str, stack: Stack| ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack,
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        let empty: Stack = serde_json::from_value(serde_json::json!({
+            "id": "app", "resources": {}
+        }))
+        .unwrap();
+        let with_zone: Stack = serde_json::from_value(serde_json::json!({
+            "id": "app",
+            "resources": {},
+            "extensions": [{
+                "name": "acme", "version": "1.0.0", "digest": "sha256:0",
+                "resourceTypes": { DNS_ZONE: {
+                    "lifecycles": ["live"], "holdsData": false,
+                    "setup": { "cloudformation": [], "terraform": [], "helm": [], "importers": [] },
+                    "controllerPlatforms": ["test"], "permissionSets": [],
+                    "link": { "permissionSets": [] }, "schemas": { "config": {}, "outputs": {} }
+                }}
+            }]
+        }))
+        .unwrap();
+        let state = DeploymentState {
+            status: DeploymentStatus::Updating,
+            platform: Platform::Test,
+            current_release: Some(release("rel_a", empty.clone())),
+            target_release: Some(release("rel_c", empty)),
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: Some(alien_core::RuntimeMetadata {
+                pending_prepared_stack: Some(with_zone),
+                pending_prepared_release_id: Some("rel_b".to_string()),
+                ..Default::default()
+            }),
+            error: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let loaded = std::sync::Arc::new(
+            alien_infra::LoadedExtensions::default()
+                .with_hooks("acme", crate::testing::no_hooks("acme"))
+                .with_controller(
+                    "acme",
+                    alien_infra::step_protocol::ProxyFactory::new(
+                        "dep",
+                        std::sync::Arc::new(NeverStepped),
+                        None,
+                    ),
+                ),
+        );
+        let provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider> =
+            std::sync::Arc::new(
+                alien_infra::DefaultPlatformServiceProvider::default()
+                    .with_releases(&state, |_| Ok(loaded.clone()))
+                    .unwrap(),
+            );
+
+        let provider = service_provider_for(&state, Some(provider)).unwrap();
+        let registry = resource_registry(&state, &provider).unwrap();
+        registry
+            .get_controller(DNS_ZONE.into(), Platform::Test)
+            .unwrap();
+    }
+
+    /// The provider is loaded for the releases' extensions. Once the unfinished update finishes,
+    /// its release becomes the current one and the newer target is applied, so the extensions
+    /// change and the runner stops for the provider to be loaded again; a release change that
+    /// keeps them leaves the provider as it is.
+    #[test]
+    fn finishing_an_unfinished_update_changes_what_the_provider_is_loaded_for() {
+        let release = |id: &str, stack: Stack| ReleaseInfo {
+            release_id: Some(id.to_string()),
+            version: None,
+            description: None,
+            stack,
+            signed: None,
+            signer_lists: Vec::new(),
+        };
+        let empty: Stack = serde_json::from_value(serde_json::json!({
+            "id": "app", "resources": {}
+        }))
+        .unwrap();
+        let with_acme: Stack = serde_json::from_value(serde_json::json!({
+            "id": "app", "resources": {},
+            "extensions": [{ "name": "acme", "version": "1.0.0", "digest": "sha256:0", "resourceTypes": {} }]
+        }))
+        .unwrap();
+        let mut unfinished = state(serde_json::json!([]));
+        unfinished.current_release = Some(release("rel_a", empty.clone()));
+        unfinished.target_release = Some(release("rel_c", empty.clone()));
+        unfinished.runtime_metadata = Some(alien_core::RuntimeMetadata {
+            pending_prepared_stack: Some(with_acme.clone()),
+            pending_prepared_release_id: Some("rel_b".to_string()),
+            ..Default::default()
+        });
+
+        let mut finished = unfinished.clone();
+        finished.current_release = Some(release("rel_b", with_acme));
+        finished.runtime_metadata = Some(alien_core::RuntimeMetadata::default());
+        assert_ne!(
+            extensions_loaded_for(&unfinished),
+            extensions_loaded_for(&finished)
+        );
+
+        let mut moved_on = finished.clone();
+        moved_on.target_release = Some(release("rel_d", empty));
+        assert_eq!(
+            extensions_loaded_for(&finished),
+            extensions_loaded_for(&moved_on)
+        );
     }
 }

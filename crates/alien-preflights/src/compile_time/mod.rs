@@ -8,6 +8,8 @@ pub mod compute_pool_data_disk;
 pub mod container_lifecycle;
 pub mod container_network_settings;
 pub mod daemon_host_access_permissions;
+#[cfg(feature = "runtime-checks")]
+pub(crate) mod extension_identity_boundary;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
 pub mod health_check_startup_timeout;
@@ -15,6 +17,7 @@ pub mod iam_inline_policy_size;
 #[cfg(feature = "runtime-checks")]
 pub(crate) mod iam_workload_aggregate;
 pub mod kubernetes_workload_settings;
+pub mod link_environment;
 pub mod live_provision_permissions;
 pub mod machines_container_public_endpoints;
 pub mod machines_daemon_public_endpoints;
@@ -58,6 +61,7 @@ pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
 pub use health_check_startup_timeout::HealthCheckStartupTimeoutCheck;
 pub use iam_inline_policy_size::IamInlinePolicySizeCheck;
 pub use kubernetes_workload_settings::KubernetesWorkloadSettingsCheck;
+pub use link_environment::LinkEnvironmentCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;
 pub use machines_container_public_endpoints::MachinesContainerPublicEndpointsCheck;
 pub use machines_daemon_public_endpoints::MachinesDaemonPublicEndpointsCheck;

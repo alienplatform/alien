@@ -37,6 +37,13 @@ struct LocalAzureTargetCredentialResolver {
 
 #[async_trait]
 impl CredentialResolver for LocalAzureTargetCredentialResolver {
+    async fn management_external_id(
+        &self,
+        _: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        Ok(None)
+    }
+
     async fn resolve(&self, _deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
         Ok(ClientConfig::Azure(Box::new(
             alien_core::AzureClientConfig {
@@ -103,6 +110,13 @@ impl CredentialResolver for AzureManagementConfigResolver {
         platform: Platform,
     ) -> Result<Option<ManagementConfig>, AlienError> {
         Ok((platform == Platform::Azure).then(|| self.management_config.clone()))
+    }
+
+    async fn management_external_id(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<Option<alien_core::ManagementExternalId>, AlienError> {
+        self.inner.management_external_id(deployment).await
     }
 }
 

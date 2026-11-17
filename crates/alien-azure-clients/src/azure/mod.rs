@@ -22,6 +22,8 @@ pub mod data_protection;
 pub mod disks;
 pub mod event_grid;
 pub mod flexible_server;
+#[cfg(test)]
+mod interceptor_tests;
 pub mod keyvault;
 pub mod load_balancers;
 pub mod long_running_operation;

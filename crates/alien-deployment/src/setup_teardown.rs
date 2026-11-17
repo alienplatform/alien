@@ -95,6 +95,11 @@ async fn run_setup_teardown_after_handoff_inner(
         }));
     }
 
+    let service_provider = crate::helpers::service_provider_for(state, service_provider)?;
+    let registry = crate::helpers::resource_registry(state, &service_provider)?;
+    // The resources are deleted with the current release's interceptors.
+    let service_provider = crate::helpers::current_release_provider(state, &service_provider)?;
+
     if state.protocol_version < alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION {
         let mut upgraded = state.clone();
         upgraded.protocol_version = alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION;
@@ -130,9 +135,6 @@ async fn run_setup_teardown_after_handoff_inner(
         DeploymentStatus::RetentionRequired
     };
     state.error = None;
-
-    let service_provider = service_provider
-        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
 
     // Expiry must be off before the identities that could turn it back on, or
     // that a later erase would use, are removed.
@@ -327,7 +329,11 @@ async fn run_setup_teardown_after_handoff_inner(
         service_provider,
         Some(lifecycles.clone()),
     )
-    .and_then(|executor| executor.preserving_resources(&stack_state, retained.clone()))
+    .and_then(|executor| {
+        executor
+            .with_resource_registry(registry)
+            .preserving_resources(&stack_state, retained.clone())
+    })
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to create stack executor for setup teardown".to_string(),
     }) {
@@ -1392,6 +1398,71 @@ mod tests {
         assert!(transport.checkpoints.lock().unwrap().is_empty());
         assert_eq!(state.status, DeploymentStatus::TeardownFailed);
         assert!(state.error.is_some(), "the earlier failure stays recorded");
+    }
+
+    /// A teardown that cannot load the release's extensions keeps the failure it is retrying.
+    #[tokio::test]
+    async fn a_teardown_without_the_release_extensions_keeps_the_recorded_failure() {
+        let transport = RecordingTransport::default();
+        let stack: alien_core::Stack = serde_json::from_value(serde_json::json!({
+            "id": "app",
+            "resources": {},
+            "extensions": [{
+                "name": "acme",
+                "version": "1.0.0",
+                "digest": "sha256:0",
+                "resourceTypes": {}
+            }]
+        }))
+        .unwrap();
+        let mut state = DeploymentState {
+            status: DeploymentStatus::TeardownFailed,
+            current_release: Some(alien_core::ReleaseInfo {
+                release_id: Some("rel_1".to_string()),
+                version: None,
+                description: None,
+                stack,
+                signed: None,
+                signer_lists: Vec::new(),
+            }),
+            error: Some(AlienError::new(alien_error::GenericError {
+                message: "the earlier failure".to_string(),
+            })),
+            ..teardown_required(InitialSetupAuthority::DirectSetup)
+        };
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+
+        let refused = run_setup_teardown_after_handoff(
+            &mut state,
+            &mut config,
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            "dep_test",
+            &RunnerPolicy {
+                operation: LoopOperation::Delete,
+                ..Default::default()
+            },
+            &transport,
+            None,
+        )
+        .await
+        .expect_err("no provider loaded the release's extensions");
+
+        assert!(refused.message.contains("acme"), "{refused}");
+        assert!(transport.checkpoints.lock().unwrap().is_empty());
+        assert_eq!(state.status, DeploymentStatus::TeardownFailed);
+        assert_eq!(
+            state.error.as_ref().map(|error| error.message.as_str()),
+            Some("the earlier failure")
+        );
     }
 
     #[tokio::test]
