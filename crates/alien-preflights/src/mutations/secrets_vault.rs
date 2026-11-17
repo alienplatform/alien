@@ -3097,6 +3097,75 @@ mod tests {
         }
     }
 
+    /// After a release dropped its secret input and setup later removed the grant and the vault,
+    /// the next release neither pauses nor brings the vault or the grant back, and what
+    /// registration prepares from the setup equals what the update prepares from its state.
+    #[tokio::test]
+    async fn a_removed_secret_input_stays_removed_after_setup_removed_its_vault() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let (installed, _narrowed, config) =
+                prepared_with_and_without_the_input(platform).await;
+            let mut release = deployer_secret_stack(&[("api", "api")], &["api"]);
+            release.inputs.clear();
+            let prepare = |state: StackState| {
+                let (release, config) = (release.clone(), config.clone());
+                async move {
+                    let stack = DeployerSecretsVaultMutation
+                        .mutate(release, &state, &config)
+                        .await
+                        .unwrap();
+                    ServiceAccountMutation
+                        .mutate(stack, &state, &config)
+                        .await
+                        .unwrap()
+                }
+            };
+            // What registration prepares: no state, no inputs.
+            let registered = prepare(StackState::new(platform)).await;
+            // The state after setup: the account is imported, the vault is gone.
+            let mut after_setup = StackState::new(platform);
+            let account = &registered.resources["api-sa"];
+            let mut resource = StackResourceState::new_pending(
+                account.config.resource_type().to_string(),
+                account.config.clone(),
+                Some(account.lifecycle),
+                account.dependencies.clone(),
+            );
+            resource.status = alien_core::ResourceStatus::Running;
+            after_setup.resources.insert("api-sa".to_string(), resource);
+            let next = prepare(after_setup).await;
+
+            assert!(
+                !next.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID),
+                "{platform:?}"
+            );
+            assert_eq!(registered.setup_update_digest(), next.setup_update_digest());
+            for result in [
+                PermissionProfilesUnchangedCheck
+                    .check_with_config(&registered, &next, &config, platform)
+                    .await
+                    .unwrap(),
+                FrozenResourcesUnchangedCheck { platform }
+                    .check_with_config(&registered, &next, &config, platform)
+                    .await
+                    .unwrap(),
+            ] {
+                assert!(result.success, "{platform:?}: {:?}", result.errors);
+                assert!(
+                    result.warnings.is_empty(),
+                    "{platform:?}: {:?}",
+                    result.warnings
+                );
+            }
+            // Putting the input back needs a vault and a grant setup has not made.
+            let readded = FrozenResourcesUnchangedCheck { platform }
+                .check_with_config(&next, &installed, &config, platform)
+                .await
+                .unwrap();
+            assert!(!readded.success, "{platform:?}");
+        }
+    }
+
     #[tokio::test]
     async fn installed_vault_does_not_turn_stored_only_mappings_into_slots() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {

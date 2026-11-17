@@ -475,8 +475,10 @@ pub async fn handle_update_pending(
     let pending_prepared_release_id = target_release_id.map(str::to_string);
     // What this release no longer asks for but the installed identities still hold. The update
     // runs; the next setup update removes it, so the platform can recommend one.
+    // A setup update that authorized this release already applied the narrowing: nothing is left.
     let setup_cleanup_recommended = old_stack_for_comparison
         .as_deref()
+        .filter(|_| !setup_update_authorized)
         .map(|installed| {
             alien_preflights::compatibility::narrowing::leftover_grants(installed, &mutated_stack)
         })
@@ -938,7 +940,30 @@ pub async fn handle_updating(
         next.stack_state = Some(step_result.next_state);
         next.error = None;
         // The converged stack is the installed baseline either way.
+        let installed = runtime_metadata.prepared_stack.take();
         runtime_metadata.prepared_stack = runtime_metadata.pending_prepared_stack.take();
+        // The identities still hold the grants a narrowing release dropped, so the baseline
+        // keeps them until setup: a later release that asks for them again compares equal, and
+        // one that asks for anything else is a real addition.
+        if let (Some(installed), Some(converged)) =
+            (installed.as_ref(), runtime_metadata.prepared_stack.as_mut())
+        {
+            if !runtime_metadata.setup_cleanup_recommended.is_empty() {
+                for (name, profile) in &installed.permissions.profiles {
+                    if converged.permissions.profiles.get(name).is_some_and(|new| {
+                        new != profile
+                            && alien_preflights::compatibility::narrowing::profile_narrowed(
+                                profile, new,
+                            )
+                    }) {
+                        converged
+                            .permissions
+                            .profiles
+                            .insert(name.clone(), profile.clone());
+                    }
+                }
+            }
+        }
         let converged_release_id = runtime_metadata.pending_prepared_release_id.take();
         let target_release_id = next
             .target_release
@@ -2352,6 +2377,8 @@ mod aws_handoff_tests {
         };
         let installed_account =
             account(PermissionProfile::new().resource("deployer-secrets", ["vault/data-read"]));
+        let installed_profile =
+            PermissionProfile::new().resource("deployer-secrets", ["vault/data-read"]);
         let stack = |account: ServiceAccount, vault_edge: bool| {
             let mut stack = Stack::new("narrowing".into())
                 .add(
@@ -2360,6 +2387,14 @@ mod aws_handoff_tests {
                 )
                 .add(account, ResourceLifecycle::Frozen)
                 .build();
+            stack.permissions.profiles.insert(
+                "api".to_string(),
+                if vault_edge {
+                    installed_profile.clone()
+                } else {
+                    PermissionProfile::new()
+                },
+            );
             if vault_edge {
                 stack
                     .resources
