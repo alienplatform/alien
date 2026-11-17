@@ -63,9 +63,21 @@ pub const ENV_MUST_DROP_PUBLIC: &str = "ALIEN_SANDBOX_MUST_DROP_PUBLIC";
 pub const MUST_DROP_PUBLIC_PROBE: &str = "1.1.1.1:443";
 /// The agent's first argument that stages the protected files (the Kubernetes init container).
 pub const STAGE_PROTECTED_FILES_ARGUMENT: &str = "--stage-protected-files";
-/// Names inside the staging directory the pod mounts over the agent binary and `/opt/alien`.
+/// The agent's first argument that prints its uid and gid and exits, touching nothing else.
+pub const AGENT_IDENTITY_ARGUMENT: &str = "identity";
+/// File name the staging step also writes at the top of the staging directory. Agents built before
+/// the directory mount were staged that way and an Operator of that release mounts it over the
+/// image's agent path; keeping it lets that Operator run an image built with this agent.
 pub const STAGED_AGENT_NAME: &str = "agent";
+/// Name of the directory inside the staging volume that the pod mounts read-only at `/opt/alien`.
 pub const STAGED_METADATA_NAME: &str = "opt";
+/// The agent's file name inside that directory. A pod mounts directories only, never the single
+/// file: runtimes that run the pod in a VM share a directory mount into the guest as a mount
+/// point but do not list a single-file bind mount, so the agent could not prove the file
+/// read-only there. The container starts the agent from [`STAGED_AGENT_PATH`].
+pub const STAGED_AGENT_FILE: &str = "alien-sandbox-agent";
+/// Where the staged agent runs from on Kubernetes (inside the read-only `/opt/alien` mount).
+pub const STAGED_AGENT_PATH: &str = "/opt/alien/alien-sandbox-agent";
 
 /// Mode of the agent binary, owned by `0:0` so the exec uid cannot rewrite its supervisor.
 pub const AGENT_MODE: u32 = 0o755;

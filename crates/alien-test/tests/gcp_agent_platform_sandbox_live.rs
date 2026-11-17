@@ -1325,3 +1325,151 @@ async fn sweep_orphaned_engines() {
         );
     }
 }
+
+// ---- Output past the reply limit --------------------------------------------------------------
+
+/// 5 MiB of 64-byte numbered lines on stdout, so a kept prefix can be checked byte for byte.
+const FIVE_MIB_OF_LINES: &str = "awk 'BEGIN{for(i=0;i<81920;i++)printf \"%063d\\n\",i}'";
+
+/// Output far past the proxy's reply limit: a synchronous command (short deadline) returns the
+/// first bytes that fit `GCP_STREAM_REPLY_BUDGET`, intact, with `truncated` set; a job (deadline
+/// past the synchronous window) returns the agent's whole 4 MiB across polls, also with
+/// `truncated` set because 5 MiB is past the agent's own cap. Needs an image whose agent honours
+/// `replyBudget`.
+#[tokio::test]
+#[ignore = "requires a real GCP project; see module docs"]
+async fn output_past_the_reply_limit_is_capped_and_truncated() {
+    use alien_bindings::providers::sandbox::gcp_agent_platform::GCP_STREAM_REPLY_BUDGET;
+
+    let config = LiveConfig::from_env();
+    let client = config.client();
+    let engine = provision_engine(&client).await;
+    record_engine(&engine);
+    let _guard = EngineGuard {
+        client: client.clone(),
+        engine: engine.clone(),
+    };
+    let template = provision_template(&client, &engine, &agent_image(), true).await;
+    let provider = provider(&client, &engine, &template);
+    let session = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds");
+    let sid = session.sandbox_id.clone();
+
+    // 20s stays on the synchronous `:execute`; 90s forces a detached job.
+    for (path, timeout) in [("synchronous", 20), ("job", 90)] {
+        let mut stream = provider
+            .run_command(
+                &sid,
+                RunCommandRequest {
+                    command: "/bin/sh".to_string(),
+                    args: vec!["-lc".to_string(), FIVE_MIB_OF_LINES.to_string()],
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    timeout: Duration::from_secs(timeout),
+                },
+            )
+            .await
+            .expect("the command starts");
+        let mut stdout = Vec::new();
+        let mut exit = None;
+        while let Some(frame) = stream.next().await {
+            match frame.unwrap_or_else(|error| panic!("{path}: a frame decodes: {error}")) {
+                CommandOutput::Stdout { data, .. } => stdout.extend_from_slice(&data),
+                CommandOutput::Stderr { .. } => {}
+                CommandOutput::Exit { code, truncated } => exit = Some((code, truncated)),
+            }
+        }
+        let (code, truncated) = exit.expect("exactly one terminal exit frame arrives");
+        println!(
+            "{path}: kept {} bytes of 5 MiB, reply budget {GCP_STREAM_REPLY_BUDGET}, exit {code}, truncated {truncated}",
+            stdout.len()
+        );
+        assert_eq!(code, 0, "{path}");
+        assert!(truncated, "{path}: the result says it was cut");
+        if path == "job" {
+            // A job returns what the agent kept, the 4 MiB per-stream cap, across many polls.
+            assert_eq!(stdout.len(), 4 << 20, "{path}: the agent's whole 4 MiB");
+        } else {
+            assert!(
+                stdout.len() > 200_000 && stdout.len() < GCP_STREAM_REPLY_BUDGET,
+                "{path}: kept {} bytes, expected the first ~300 KB",
+                stdout.len()
+            );
+        }
+        let expected: Vec<u8> = (0..stdout.len() / 64)
+            .flat_map(|i| format!("{i:063}\n").into_bytes())
+            .collect();
+        assert_eq!(
+            stdout[..expected.len()],
+            expected[..],
+            "{path}: the kept bytes are the start of the output, intact"
+        );
+    }
+
+    provider
+        .terminate(&sid)
+        .await
+        .expect("terminate confirms gone");
+}
+
+/// A file far past the reply limit reads back whole: the client pages it by offset and length and
+/// joins the pages. Needs an image whose agent honours `offset` and `length`.
+#[tokio::test]
+#[ignore = "requires a real GCP project; see module docs"]
+async fn a_file_past_the_reply_limit_reads_back_in_pages() {
+    let config = LiveConfig::from_env();
+    let client = config.client();
+    let engine = provision_engine(&client).await;
+    record_engine(&engine);
+    let _guard = EngineGuard {
+        client: client.clone(),
+        engine: engine.clone(),
+    };
+    let template = provision_template(&client, &engine, &agent_image(), true).await;
+    let provider = provider(&client, &engine, &template);
+    let session = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds");
+    let sid = session.sandbox_id.clone();
+
+    // 5 MiB of numbered 64-byte lines, written inside the sandbox and read back through the API.
+    let mut stream = provider
+        .run_command(
+            &sid,
+            RunCommandRequest {
+                command: "/bin/sh".to_string(),
+                args: vec![
+                    "-lc".to_string(),
+                    "awk 'BEGIN{for(i=0;i<81920;i++)printf \"%063d\\n\",i}' > /sandbox/big.txt"
+                        .to_string(),
+                ],
+                cwd: None,
+                env: BTreeMap::new(),
+                timeout: Duration::from_secs(20),
+            },
+        )
+        .await
+        .expect("the command starts");
+    while let Some(frame) = stream.next().await {
+        frame.expect("a frame decodes");
+    }
+
+    let read = provider
+        .read_file(&sid, "/big.txt")
+        .await
+        .expect("a 5 MiB file reads back");
+    let expected: Vec<u8> = (0..81920)
+        .flat_map(|i| format!("{i:063}\n").into_bytes())
+        .collect();
+    println!("read {} bytes of 5 MiB", read.len());
+    assert_eq!(read.len(), expected.len());
+    assert!(read == expected, "the pages join into the original bytes");
+
+    provider
+        .terminate(&sid)
+        .await
+        .expect("terminate confirms gone");
+}

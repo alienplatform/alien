@@ -45,6 +45,29 @@ const MAX_SYNCHRONOUS_TIMEOUT: Duration = Duration::from_secs(30);
 /// caller, not on what the API mints — the names seen are far shorter.
 const MAX_SANDBOX_ID: usize = 63;
 
+/// Encoded reply bytes each output stream (stdout, stderr) may take in one `:execute` reply on GCP,
+/// sent to the agent as `replyBudget`. A synchronous command keeps the first frames that fit and is
+/// marked truncated; a job's poll returns that much per call and the rest on the next.
+///
+/// Agent Platform's `:execute` refuses a reply above `GCP_REPLY_LIMIT_BYTES` (HTTP 400
+/// `FAILED_PRECONDITION`, "Response size too large"). A byte of output is base64-encoded twice on
+/// the way (in the agent's frame, then in the reply's `outputs` data), and every line is its own
+/// frame with its own JSON, so the agent charges each frame its encoded cost rather than counting
+/// raw bytes. Two streams at this budget come to at most 1.6 MB of the 2.0 MB limit, leaving room
+/// for the terminal frame and a job poll's envelope. This is the one number to change if the limit
+/// moves. In large frames it keeps about 450 KB of raw output per stream.
+pub const GCP_STREAM_REPLY_BUDGET: usize = 800_000;
+
+/// Raw bytes of a file one `readFile` call asks for. The reply carries them base64-encoded in the
+/// agent's JSON, which the transport base64-encodes again, so 900 KB of file is about 1.6 MB on
+/// the wire, under `GCP_REPLY_LIMIT_BYTES`. A larger file is read in pages of this size.
+pub const GCP_READ_PAGE_BYTES: usize = 900_000;
+
+/// The size above which `:execute` has been measured to refuse a reply; a test keeps the worst
+/// reply under it.
+#[cfg(test)]
+const GCP_REPLY_LIMIT_BYTES: usize = 2_000_000;
+
 /// How long a created sandbox has to reach `STATE_RUNNING`, and how often that is checked.
 const SANDBOX_READY_ATTEMPTS: u32 = 150;
 const SANDBOX_READY_INTERVAL: Duration = Duration::from_secs(2);
@@ -121,6 +144,7 @@ const GET_OR_CREATE: &str = "sandbox.getOrCreate";
 const RUN_COMMAND: &str = "sandbox.runCommand";
 const JOB_START: &str = "sandbox.jobStart";
 const JOB_POLL: &str = "sandbox.jobPoll";
+const READ_FILE: &str = "sandbox.readFile";
 const JOB_CANCEL: &str = "sandbox.jobCancel";
 const TERMINATE: &str = "sandbox.terminate";
 /// Where `pause` leaves the generation the sandbox had, inside the sandbox. A resume reads it back,
@@ -891,6 +915,9 @@ impl GcpAgentPlatformSandbox {
         // a `:execute` carrying a command leaves its outcome unestablished. The cause stays on the
         // chain rather than in `reason`, keeping a redacted request body out of an externally
         // visible message.
+        if is_reply_unreadable(&error) {
+            return reply_too_large(operation, error);
+        }
         if operation == RUN_COMMAND || operation == JOB_START {
             return error.context(ErrorData::SandboxOutcomeUnknown {
                 operation: operation.to_string(),
@@ -1256,6 +1283,7 @@ impl GcpAgentPlatformSandbox {
             finished: false,
             stopped: false,
             deadline_at: tokio::time::Instant::now() + timeout + JOB_POLL_GRACE,
+            draining: false,
         };
 
         Ok(Box::pin(stream::unfold(state, job_poll_step)))
@@ -1673,6 +1701,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
         )
         .await?;
 
+        // The agent reports a finished job's outcome while pages of its output are still to be
+        // read (`running` stays true until the last page). A caller that stops at the first
+        // `exit` or `error` would miss those pages, so the outcome is public only when no pages
+        // remain. `finished` stays internal: it is how this client avoids cancelling or timing
+        // out a job that has already ended.
+        let settled = !reply.running;
         Ok(JobPoll {
             running: reply.running,
             frames: reply
@@ -1680,11 +1714,11 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 .into_iter()
                 .map(WireFrame::into_output)
                 .collect::<Result<Vec<_>>>()?,
-            exit: reply.exit_code.map(|code| JobExit {
+            exit: reply.exit_code.filter(|_| settled).map(|code| JobExit {
                 code,
                 truncated: reply.truncated.unwrap_or(false),
             }),
-            error: reply.error.map(|error| JobError {
+            error: reply.error.filter(|_| settled).map(|error| JobError {
                 code: error.code,
                 message: error.message,
             }),
@@ -1710,37 +1744,89 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
-        Self::checked_sandbox_id("sandbox.readFile", sandbox_id)?;
-        let body = self
-            .execute_op(
-                sandbox_id,
-                "sandbox.readFile",
-                json!({ "v": AGENT_PROTOCOL_VERSION, "op": "readFile", "path": path }),
-            )
-            .await?;
+        Self::checked_sandbox_id(READ_FILE, sandbox_id)?;
 
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct ReadFile {
             contents_base64: String,
+            /// Absent from an agent that predates paging, which returns the whole file.
+            total_bytes: Option<u64>,
+            /// Identity of the file as the agent opened it (inode, modification time, size).
+            /// Absent from an agent that predates it; the size then still has to agree.
+            version: Option<String>,
         }
-        let read: ReadFile = serde_json::from_slice(&body).map_err(|_| {
-            AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "agentRefused".to_string(),
-                reason: format!("sandbox.readFile was refused: {}", truncated(&body)),
-            })
-        })?;
 
-        BASE64
-            .decode(read.contents_base64.as_bytes())
-            .map_err(|error| {
-                AlienError::new(ErrorData::UnexpectedResponseFormat {
-                    provider: "gcp-agent-platform".to_string(),
-                    binding_name: "sandbox.readFile".to_string(),
-                    field: "contentsBase64".to_string(),
-                    response_json: format!("the agent returned data that is not base64: {error}"),
+        // One `:execute` reply cannot carry a large file, so the file is read a page at a time
+        // and joined here; the agent's own transfer limit is on the file, not on a page. Each
+        // page reopens the file, so a page is only joined to the pages before it when the file is
+        // the same one: a file replaced or changed between pages restarts the read from the
+        // start once, and a second change fails rather than return a mix of two versions.
+        let mut contents = Vec::new();
+        let mut identity: Option<(Option<String>, u64)> = None;
+        let mut restarted = false;
+        loop {
+            let body = self
+                .execute_op(
+                    sandbox_id,
+                    READ_FILE,
+                    json!({
+                        "v": AGENT_PROTOCOL_VERSION,
+                        "op": "readFile",
+                        "path": path,
+                        "offset": contents.len(),
+                        "length": GCP_READ_PAGE_BYTES,
+                    }),
+                )
+                .await?;
+            let read: ReadFile = serde_json::from_slice(&body).map_err(|_| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "agentRefused".to_string(),
+                    reason: format!("{READ_FILE} was refused: {}", truncated(&body)),
                 })
-            })
+            })?;
+            let page = BASE64
+                .decode(read.contents_base64.as_bytes())
+                .map_err(|error| {
+                    AlienError::new(ErrorData::UnexpectedResponseFormat {
+                        provider: "gcp-agent-platform".to_string(),
+                        binding_name: READ_FILE.to_string(),
+                        field: "contentsBase64".to_string(),
+                        response_json: format!(
+                            "the agent returned data that is not base64: {error}"
+                        ),
+                    })
+                })?;
+            let Some(total) = read.total_bytes else {
+                // An agent without paging ignored the range and sent the whole file.
+                return Ok(page);
+            };
+            let seen = (read.version, total);
+            match &identity {
+                Some(first) if *first != seen => {
+                    if restarted {
+                        return Err(AlienError::new(ErrorData::SandboxFileChanged {
+                            path: path.to_string(),
+                        }));
+                    }
+                    restarted = true;
+                    contents.clear();
+                    identity = None;
+                    // This page belongs to the new version only when it starts at the start; it
+                    // was asked for at the old offset, so read again from 0.
+                    continue;
+                }
+                Some(_) => {}
+                None => identity = Some(seen),
+            }
+            let page_empty = page.is_empty();
+            contents.extend_from_slice(&page);
+            // An empty page ends the read even when the size says more: the file shrank, and
+            // asking again for the same offset would never advance.
+            if contents.len() as u64 >= total || page_empty {
+                return Ok(contents);
+            }
+        }
     }
 
     async fn write_files(&self, sandbox_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
@@ -2173,7 +2259,7 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             return None;
         }
 
-        if tokio::time::Instant::now() >= state.deadline_at {
+        if !state.draining && tokio::time::Instant::now() >= state.deadline_at {
             // The deadline is this client's decision, so it only names an outcome once the cancel
             // that makes it true has landed. A cancel that fails leaves the job running, and the
             // caller has to be told that rather than that the command was stopped.
@@ -2223,16 +2309,33 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             // A standalone poll is repeatable, but this one watches a running command, and giving
             // up on it leaves that command's outcome unestablished.
             Err(error) => {
-                state
-                    .pending
-                    .push_back(Err(error.context(ErrorData::SandboxOutcomeUnknown {
+                // A reply the proxy refused for size says what happened and will again; the job
+                // is still stopped by this stream's drop, so it is not an unknown outcome.
+                state.pending.push_back(Err(if is_reply_unreadable(&error) {
+                    error
+                } else {
+                    error.context(ErrorData::SandboxOutcomeUnknown {
                         operation: RUN_COMMAND.to_string(),
                         reason: "the job is no longer watched".to_string(),
-                    })));
+                    })
+                }));
                 state.finished = true;
                 continue;
             }
         };
+
+        // The agent holds a job's outcome back until every buffered frame has been returned, one
+        // budgeted reply at a time. A poll that returned frames is that drain, so it earns the
+        // grace again: the drain is bounded by what the agent buffered, and a command that ran
+        // its whole timeout must not be reported as timed out for output still on its way.
+        if poll.finished {
+            state.draining = true;
+        }
+        if !poll.frames.is_empty() {
+            state.deadline_at = state
+                .deadline_at
+                .max(tokio::time::Instant::now() + JOB_POLL_GRACE);
+        }
 
         for frame in poll.frames {
             // A seq gap is truncated output, not a frame still to come, so the cursor takes the
@@ -2319,6 +2422,9 @@ fn unanswered_job(
             reason: format!("{operation}: the sandbox does not exist"),
         });
     }
+    if is_reply_unreadable(&error) {
+        return reply_too_large(operation, error);
+    }
     error.context(ErrorData::SandboxUnreachable {
         operation: operation.to_string(),
         reason: "the sandbox did not complete the call".to_string(),
@@ -2354,6 +2460,9 @@ struct JobPollState {
     /// Set only where the job itself ended, so a stream that ends any other way still cancels.
     stopped: bool,
     deadline_at: tokio::time::Instant,
+    /// The agent reported the command ended and is paging out the rest of its output. The
+    /// deadline bounds a command, not the reading of one that is over, so it no longer applies.
+    draining: bool,
 }
 
 /// Kills the command a dropped stream stops reading.
@@ -2417,6 +2526,10 @@ impl Drop for JobPollState {
 #[serde(rename_all = "camelCase")]
 struct JobPollReply {
     running: bool,
+    /// The command has ended and only buffered output is left to read. Absent from agents that
+    /// predate it, which read as not finished.
+    #[serde(default)]
+    finished: bool,
     #[serde(default)]
     frames: Vec<WireFrame>,
     #[serde(default)]
@@ -2589,6 +2702,9 @@ fn exec_envelope(op: &str, _sandbox_id: &str, request: &RunCommandRequest) -> se
         "timeoutMs": timeout_millis(request.timeout),
         "cwd": request.cwd,
         "env": request.env,
+        // Only the synchronous call is cut at the budget. A job keeps its whole output, and each
+        // poll is bounded instead (see `poll_body`), so a job can return what `exec` cannot.
+        "replyBudget": (op == "exec").then_some(GCP_STREAM_REPLY_BUDGET),
     })
 }
 
@@ -2598,6 +2714,8 @@ fn poll_body(job_id: &str, since_seq: Option<u64>) -> Vec<u8> {
         "op": "jobPoll",
         "jobId": job_id,
         "sinceSeq": since_seq,
+        // The frames that do not fit one reply stay in the job for the next poll.
+        "replyBudget": GCP_STREAM_REPLY_BUDGET,
     }))
     .unwrap_or_default()
 }
@@ -2839,13 +2957,25 @@ fn agent_answer(error: &AlienError<AgentPlatformErrorData>) -> Option<String> {
 /// source chain, so the classification is read by walking that chain rather than off the outer
 /// variant — a path or trace id mentioning 404 in a message never reaches this.
 fn is_not_found(error: &AlienError<AgentPlatformErrorData>) -> bool {
-    const NOT_FOUND: &str = "REMOTE_RESOURCE_NOT_FOUND";
-    if error.code == NOT_FOUND {
+    chain_has_code(error, "REMOTE_RESOURCE_NOT_FOUND")
+}
+
+/// Whether the proxy refused the call because the agent's reply was above its size limit: HTTP 400
+/// `FAILED_PRECONDITION` with "Response size too large. Received at least N bytes.", which the
+/// client reports as a conflict carrying that message. The agent budgets its replies below the
+/// limit, so this means an agent that predates the budget.
+fn is_reply_unreadable<
+    T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+>(
+    error: &AlienError<T>,
+) -> bool {
+    const TOO_LARGE: &str = "Response size too large";
+    if error.code == "REMOTE_RESOURCE_CONFLICT" && error.message.contains(TOO_LARGE) {
         return true;
     }
     let mut node = error.source.as_deref();
     while let Some(current) = node {
-        if current.code == NOT_FOUND {
+        if current.code == "REMOTE_RESOURCE_CONFLICT" && current.message.contains(TOO_LARGE) {
             return true;
         }
         node = current.source.as_deref();
@@ -2891,6 +3021,46 @@ fn is_wake_in_progress(error: &AlienError<AgentPlatformErrorData>) -> bool {
     http_status(error) == Some(503)
         && super::refusal::response_text(error)
             .is_some_and(|text| text.contains("resume has been initiated"))
+}
+
+fn chain_has_code<T: alien_error::AlienErrorData + Clone + std::fmt::Debug + serde::Serialize>(
+    error: &AlienError<T>,
+    code: &str,
+) -> bool {
+    if error.code == code {
+        return true;
+    }
+    let mut node = error.source.as_deref();
+    while let Some(current) = node {
+        if current.code == code {
+            return true;
+        }
+        node = current.source.as_deref();
+    }
+    false
+}
+
+/// The error for a reply the proxy could not return. Not retryable and not "unknown": the call
+/// reached the agent, and running it again returns the same oversized output.
+fn reply_too_large(
+    operation: &str,
+    error: AlienError<AgentPlatformErrorData>,
+) -> AlienError<ErrorData> {
+    error.context(ErrorData::SandboxCommandFailed {
+        failure: "outputTooLarge".to_string(),
+        reason: if operation == READ_FILE {
+            format!(
+                "{operation}: the file is larger than one call can carry on this cloud and the \
+                 sandbox image predates paged reads, so rebuild it with the current agent"
+            )
+        } else {
+            format!(
+                "{operation}: the sandbox's reply was larger than one call can carry on this \
+                 cloud; the sandbox image predates the output budget, so rebuild it with the \
+                 current agent"
+            )
+        },
+    })
 }
 
 /// A body short enough to sit in an error message without carrying a whole response into it.
