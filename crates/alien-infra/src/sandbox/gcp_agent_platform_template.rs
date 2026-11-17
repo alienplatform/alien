@@ -638,6 +638,23 @@ impl GcpAgentPlatformTemplateController {
         self.preview_ports = config.preview_ports.clone();
         let previous = ctx.previous_resource_config::<Sandbox>()?;
 
+        // A direct setup run owns the grants around the engine, so each setup run places the ones
+        // a newly added profile or remote caller needs, as applying the package again does.
+        if ctx.is_direct_setup_run() {
+            if let Some(engine) = self.engine.clone() {
+                let signer = crate::sandbox::gcp_engine_setup::set_up_engine_access(
+                    ctx,
+                    config,
+                    &engine,
+                    &mut self.engine_setup,
+                )
+                .await?;
+                if signer.is_some() {
+                    self.preview_service_account = signer;
+                }
+            }
+        }
+
         // The template is immutable, so an unchanged body needs no work and a changed one is a
         // replace, never an in-place edit.
         if template_identity(config)? == template_identity(previous)? {
@@ -737,6 +754,14 @@ impl GcpAgentPlatformTemplateController {
         status = ResourceStatus::RefreshFailed
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
+
+    /// Every direct setup run reconciles the grants around the engine, so a profile or remote
+    /// caller added since the last run gets its grant.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        Ok(matches!(self.state, GcpAgentPlatformTemplateState::Ready)
+            && ctx.deployment_config.setup_run
+            && ctx.is_direct_setup_run())
+    }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         None

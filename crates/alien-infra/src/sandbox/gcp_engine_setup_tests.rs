@@ -89,12 +89,36 @@ fn not_found(name: String) -> alien_client_core::Error {
 }
 
 fn clients(calls: &Arc<Mutex<Calls>>) -> (MockIamApi, MockAgentPlatformApi) {
+    clients_with_signer(calls, None)
+}
+
+/// `existing` is the description of a signer account that is already there, so the create is a
+/// conflict and the read returns it.
+fn clients_with_signer(
+    calls: &Arc<Mutex<Calls>>,
+    existing: Option<String>,
+) -> (MockIamApi, MockAgentPlatformApi) {
     let mut iam = MockIamApi::new();
     let c = calls.clone();
+    let conflict = existing.is_some();
     iam.expect_create_service_account().returning(move |id, _| {
+        if conflict {
+            return Err(AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceConflict {
+                    message: "exists".to_string(),
+                    resource_type: "ServiceAccount".to_string(),
+                    resource_name: id,
+                },
+            ));
+        }
         c.lock().unwrap().created_accounts.push(id.clone());
         Ok(alien_gcp_clients::iam::ServiceAccount::builder()
             .email(format!("{id}@{PROJECT}.iam.gserviceaccount.com"))
+            .build())
+    });
+    iam.expect_get_service_account().returning(move |_| {
+        Ok(alien_gcp_clients::iam::ServiceAccount::builder()
+            .description(existing.clone().unwrap_or_default())
             .build())
     });
     let c = calls.clone();
@@ -381,5 +405,67 @@ async fn a_direct_setup_gives_the_remote_caller_its_engine_grant() {
         held[0].role.ends_with("sandbox_lifecycle_and_exec"),
         "{}",
         held[0].role
+    );
+}
+
+/// An account already there under the signer's name, with nothing in it that this deployment's
+/// setup wrote, is somebody else's: setup stops, records nothing, and teardown deletes nothing.
+#[tokio::test]
+async fn a_signer_account_this_setup_did_not_make_is_refused_and_never_deleted() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (iam, platform) = clients_with_signer(&calls, Some("made by hand".to_string()));
+    let mut executor = executor(iam, platform, true).await;
+    let _ = executor.run_until_terminal().await;
+    assert_ne!(executor.status(), ResourceStatus::Running);
+    let controller = executor
+        .internal_state::<GcpAgentPlatformTemplateController>()
+        .unwrap();
+    assert!(controller.engine_setup.signer_created.is_none());
+    executor.delete().ok();
+    let _ = executor.run_until_terminal().await;
+    assert!(
+        calls.lock().unwrap().deleted_accounts.is_empty(),
+        "an account the setup did not make is not deleted"
+    );
+}
+
+/// The signer carries this deployment's marker, so an earlier attempt of this setup made it: the
+/// retry adopts it, records it, and teardown removes it.
+#[tokio::test]
+async fn a_signer_account_an_earlier_attempt_made_is_adopted_by_the_retry() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let marker = crate::sandbox::gcp_engine_setup::signer_marker("test", "box");
+    let (iam, platform) = clients_with_signer(&calls, Some(format!("Signs. {marker}")));
+    let mut executor = executor(iam, platform, true).await;
+    executor.run_until_terminal().await.expect("create runs");
+    assert_eq!(executor.status(), ResourceStatus::Running);
+    executor.delete().expect("delete is accepted");
+    executor.run_until_terminal().await.expect("delete runs");
+    assert_eq!(calls.lock().unwrap().deleted_accounts.len(), 1);
+}
+
+/// A setup run again, with a remote caller added since, places its engine grant; a run that is
+/// not a setup run asks for nothing.
+#[tokio::test]
+async fn a_setup_rerun_places_the_grants_a_new_caller_needs() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (iam, platform) = clients(&calls);
+    let mut executor = executor_full(iam, platform, true, false, true).await;
+    executor.run_until_terminal().await.expect("create runs");
+    assert!(executor.needs_update().unwrap(), "a setup rerun reconciles the grants");
+    // The caller's grant disappears (as if never placed), the rerun puts it back.
+    calls.lock().unwrap().engine_policy = Some(IamPolicy::default());
+    executor
+        .update(sandbox(vec![], alien_core::SandboxEgress::Allow))
+        .expect("update is accepted");
+    executor.run_until_terminal().await.expect("update runs");
+    let calls = calls.lock().unwrap();
+    let on_engine = calls.engine_policy.as_ref().unwrap();
+    assert!(
+        on_engine
+            .bindings
+            .iter()
+            .any(|b| b.members.contains(&format!("serviceAccount:{CALLER}"))),
+        "{on_engine:?}"
     );
 }
