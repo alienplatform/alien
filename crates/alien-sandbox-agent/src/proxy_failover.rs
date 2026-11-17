@@ -5,8 +5,8 @@
 //! the agent listens on loopback and, for each new connection, dials the replicas in turn: the
 //! last one that worked first, then the other, with a connect timeout, so a stopped, rebooting or
 //! blackholed replica costs at most one timeout and the next connection goes straight to the
-//! healthy one. Bytes are relayed unchanged, so the proxy credentials stay between the command
-//! and the gateway.
+//! healthy one. Bytes are relayed unchanged; the forwarder adds no credentials (the proxy token is
+//! in the command's own environment).
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,15 +26,14 @@ pub const ENV_PROXY_LISTEN: &str = "ALIEN_SANDBOX_PROXY_LISTEN";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 const PASSES: usize = 2;
 
-/// Failover is by TCP connect, plus one replay of a CONNECT that got no answer byte (see `relay`).
-/// It does not retry refusals, on purpose. A replica that is up but has not synchronized a
-/// grant yet (a restarted one, or one a new sandbox's grant has not reached) answers `407`/`403`
-/// and refuses, which is the fail-closed answer, never a wider one: both replicas enforce the same
-/// signed policy and a missing grant only ever denies. Retrying a refused CONNECT on the other
-/// replica would mean reading and replaying the guest's request, and the proxy credentials would
-/// then be handled outside the relay that today passes bytes unchanged. The sticky preference
-/// keeps traffic on the replica that last worked, and the startup gate (which passes when either
-/// replica connects) then does not hold the workload back for a replica that is still syncing.
+/// Failover is by TCP connect, plus one replay of a CONNECT that got no answer byte (see
+/// `relay_connect`). It does not retry refusals, on purpose. A replica that is up but has not
+/// synchronized a grant yet (a restarted one, or one a new sandbox's grant has not reached)
+/// answers `407`/`403` and refuses, which is the fail-closed answer, never a wider one: both
+/// replicas enforce the same signed policy and a missing grant only ever denies. An answer byte
+/// means the replica spoke, so that answer stands. The sticky preference keeps traffic on the
+/// replica that last worked, and the startup gate (which passes when either replica connects)
+/// then does not hold the workload back for a replica that is still syncing.
 ///
 /// Replicas in dial order with a sticky preference for the last good one.
 pub struct Replicas {
@@ -91,33 +90,82 @@ fn demote(replicas: &Replicas, index: usize) {
         .store((index + 1) % count, Ordering::Relaxed);
 }
 
+/// The most of a CONNECT request kept for the one replay. Past this, a replica that closes
+/// without answering is not retried.
+const REPLAY_LIMIT: usize = 32 * 1024;
+
 async fn relay(replicas: Arc<Replicas>, mut guest: TcpStream) {
-    let mut head = vec![0u8; 8192];
-    let read = match guest.read(&mut head).await {
+    let mut first = vec![0u8; 8192];
+    let read = match guest.read(&mut first).await {
         Ok(read) if read > 0 => read,
         _ => return,
     };
-    head.truncate(read);
-    // Only a CONNECT that got no answer byte is replayed: nothing was tunnelled, so the other
-    // replica sees the same request. Other requests (a plain proxied POST) are never replayed.
-    let attempts = if head.starts_with(b"CONNECT ") { 2 } else { 1 };
-    for _ in 0..attempts {
+    first.truncate(read);
+    if first.starts_with(b"CONNECT ") {
+        return relay_connect(replicas, guest, first).await;
+    }
+    // Anything else (a plain proxied request) is never replayed: it may carry a body.
+    let Some(mut gateway) = replicas.dial().await else {
+        return;
+    };
+    if gateway.write_all(&first).await.is_ok() {
+        let _ = copy_bidirectional(&mut guest, &mut gateway).await;
+    }
+}
+
+/// A CONNECT is replayed once on the other replica when the first closes or resets before one
+/// answer byte: nothing was tunnelled, so the other replica sees the same request. Guest bytes
+/// keep flowing to the replica while waiting for the answer (a request head can arrive in many
+/// writes), and a copy of up to `REPLAY_LIMIT` bytes is kept for the replay.
+async fn relay_connect(replicas: Arc<Replicas>, mut guest: TcpStream, first: Vec<u8>) {
+    let mut copy = Some(first);
+    let mut guest_eof = false;
+    let mut chunk = vec![0u8; 8192];
+    let mut answer = vec![0u8; 8192];
+    for _ in 0..2 {
         let Some((mut gateway, index)) = replicas.dial_index().await else {
             return;
         };
-        let mut answer = vec![0u8; 8192];
-        let first = match gateway.write_all(&head).await {
-            Ok(()) => gateway.read(&mut answer).await,
-            Err(error) => Err(error),
+        let mut failed = match &copy {
+            Some(bytes) => gateway.write_all(bytes).await.is_err(),
+            None => false,
         };
-        match first {
-            Ok(read) if read > 0 => {
-                if guest.write_all(&answer[..read]).await.is_ok() {
-                    let _ = copy_bidirectional(&mut guest, &mut gateway).await;
-                }
-                return;
+        if !failed && guest_eof {
+            let _ = gateway.shutdown().await;
+        }
+        while !failed {
+            tokio::select! {
+                read = guest.read(&mut chunk), if !guest_eof => match read {
+                    Ok(0) => {
+                        guest_eof = true;
+                        let _ = gateway.shutdown().await;
+                    }
+                    Err(_) => return,
+                    Ok(read) => {
+                        if let Some(bytes) = copy.as_mut() {
+                            if bytes.len() + read > REPLAY_LIMIT {
+                                copy = None;
+                            } else {
+                                bytes.extend_from_slice(&chunk[..read]);
+                            }
+                        }
+                        failed = gateway.write_all(&chunk[..read]).await.is_err();
+                    }
+                },
+                read = gateway.read(&mut answer) => match read {
+                    Ok(read) if read > 0 => {
+                        if guest.write_all(&answer[..read]).await.is_ok() {
+                            let _ = copy_bidirectional(&mut guest, &mut gateway).await;
+                        }
+                        return;
+                    }
+                    _ => failed = true,
+                },
             }
-            _ => demote(&replicas, index),
+        }
+        demote(&replicas, index);
+        if copy.is_none() {
+            return;
         }
     }
 }
@@ -310,6 +358,179 @@ mod tests {
         )
         .await;
         assert_eq!(got, 0);
+    }
+
+    /// What a scripted replica does once it has the whole request.
+    #[derive(Clone, Copy)]
+    enum Reply {
+        Answer,
+        Close,
+        OneByteThenClose,
+    }
+
+    /// A replica that reads a full request (head, and a body when `Content-Length` says so),
+    /// then acts. Returns its address and how many connections it got.
+    async fn scripted(reply: Reply) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut got = Vec::new();
+                    let mut buffer = [0u8; 4096];
+                    loop {
+                        if let Some(end) = got.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&got[..end]).to_lowercase();
+                            let length = head
+                                .split("content-length: ")
+                                .nth(1)
+                                .and_then(|rest| rest.split("\r\n").next())
+                                .and_then(|value| value.parse::<usize>().ok())
+                                .unwrap_or(0);
+                            if got.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                        match stream.read(&mut buffer).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => got.extend_from_slice(&buffer[..read]),
+                        }
+                    }
+                    match reply {
+                        Reply::Answer => {
+                            let _ = stream
+                                .write_all(format!("ANSWER {}", got.len()).as_bytes())
+                                .await;
+                            let mut rest = Vec::new();
+                            let _ = stream.read_to_end(&mut rest).await;
+                        }
+                        Reply::Close => {}
+                        Reply::OneByteThenClose => {
+                            let _ = stream.write_all(b"X").await;
+                        }
+                    }
+                });
+            }
+        });
+        (address, hits)
+    }
+
+    /// Sends the writes one after another (with a pause between) and reads until the forwarder
+    /// closes or 3 seconds pass.
+    async fn exchange(replicas: Vec<String>, writes: Vec<Vec<u8>>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local = listener.local_addr().unwrap();
+        tokio::spawn(serve(
+            listener,
+            Arc::new(Replicas::new(replicas, Duration::from_millis(300))),
+        ));
+        let mut client = TcpStream::connect(local).await.unwrap();
+        for write in writes {
+            client.write_all(&write).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let mut got = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(3), client.read_to_end(&mut got)).await;
+        String::from_utf8_lossy(&got).to_string()
+    }
+
+    #[tokio::test]
+    async fn a_connect_head_in_three_writes_reaches_the_replica_whole() {
+        let (good, _) = scripted(Reply::Answer).await;
+        let got = exchange(
+            vec![good],
+            vec![
+                b"CONNECT a:443 HTTP/1.1\r\n".to_vec(),
+                b"Host: a:443\r\n".to_vec(),
+                b"\r\n".to_vec(),
+            ],
+        )
+        .await;
+        assert!(got.starts_with("ANSWER 39"), "{got}");
+    }
+
+    #[tokio::test]
+    async fn a_connect_head_of_20_kib_reaches_the_replica_whole() {
+        let (good, _) = scripted(Reply::Answer).await;
+        let head = format!(
+            "CONNECT a:443 HTTP/1.1\r\nX-Pad: {}\r\n\r\n",
+            "p".repeat(20 * 1024)
+        );
+        let want = format!("ANSWER {}", head.len());
+        let got = exchange(vec![good], vec![head.into_bytes()]).await;
+        assert_eq!(got, want);
+    }
+
+    #[tokio::test]
+    async fn a_post_with_its_body_in_a_second_write_is_relayed_as_before() {
+        let (good, _) = scripted(Reply::Answer).await;
+        let head = b"POST http://a/ HTTP/1.1\r\nContent-Length: 5\r\n\r\n".to_vec();
+        let want = format!("ANSWER {}", head.len() + 5);
+        let got = exchange(vec![good], vec![head, b"hello".to_vec()]).await;
+        assert_eq!(got, want);
+    }
+
+    #[tokio::test]
+    async fn a_split_connect_head_is_replayed_whole_on_the_other_replica() {
+        let (bad, bad_hits) = scripted(Reply::Close).await;
+        let (good, good_hits) = scripted(Reply::Answer).await;
+        let got = exchange(
+            vec![bad, good],
+            vec![
+                b"CONNECT a:443 HTTP/1.1\r\n".to_vec(),
+                b"Host: a:443\r\n".to_vec(),
+                b"\r\n".to_vec(),
+            ],
+        )
+        .await;
+        assert!(got.starts_with("ANSWER 39"), "{got}");
+        assert_eq!(bad_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(good_hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn one_answer_byte_then_a_close_is_not_replayed() {
+        let (first, first_hits) = scripted(Reply::OneByteThenClose).await;
+        let (second, second_hits) = scripted(Reply::Answer).await;
+        let got = exchange(
+            vec![first, second],
+            vec![b"CONNECT a:443 HTTP/1.1\r\n\r\n".to_vec()],
+        )
+        .await;
+        assert_eq!(got, "X");
+        assert_eq!(first_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(second_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn when_both_replicas_close_the_connection_closes_after_one_replay() {
+        let (first, first_hits) = scripted(Reply::Close).await;
+        let (second, second_hits) = scripted(Reply::Close).await;
+        let got = exchange(
+            vec![first, second],
+            vec![b"CONNECT a:443 HTTP/1.1\r\n\r\n".to_vec()],
+        )
+        .await;
+        assert_eq!(got, "");
+        assert_eq!(first_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(second_hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_connect_head_past_the_replay_limit_is_not_replayed() {
+        let (first, first_hits) = scripted(Reply::Close).await;
+        let (second, second_hits) = scripted(Reply::Answer).await;
+        let head = format!(
+            "CONNECT a:443 HTTP/1.1\r\nX-Pad: {}\r\n\r\n",
+            "p".repeat(40 * 1024)
+        );
+        let got = exchange(vec![first, second], vec![head.into_bytes()]).await;
+        assert_eq!(got, "");
+        assert_eq!(first_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(second_hits.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
