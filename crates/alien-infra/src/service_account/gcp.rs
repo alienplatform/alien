@@ -342,6 +342,10 @@ impl GcpServiceAccountController {
         self.service_account_email = None;
         self.service_account_unique_id = None;
 
+        if self.owns_deployment_custom_roles(ctx, &config.id) {
+            ResourcePermissionsHelper::delete_gcp_custom_roles(ctx).await?;
+        }
+
         Ok(HandlerAction::Continue {
             state: Deleted,
             suggested_delay: None,
@@ -402,6 +406,24 @@ impl GcpServiceAccountController {
 
 // Separate impl block for helper methods
 impl GcpServiceAccountController {
+    /// Whether this deletion is the one that removes the deployment's custom roles. Setup that
+    /// Alien ran itself has no remote stack management resource whose delete does it, and a
+    /// setup package removes its own roles. The roles are shared by every profile, so the last
+    /// service account to go removes them, after its own bindings.
+    fn owns_deployment_custom_roles(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        this_id: &str,
+    ) -> bool {
+        ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            && !ctx.state.resources.iter().any(|(id, resource)| {
+                resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+                    || (id != this_id
+                        && resource.resource_type == ServiceAccount::RESOURCE_TYPE.as_ref()
+                        && resource.status != ResourceStatus::Deleted)
+            })
+    }
+
     async fn sync_stack_role_bindings(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
 
@@ -878,6 +900,116 @@ fn emit_gcp_service_account_heartbeat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Deleting the last service account of a direct Google Cloud setup removes the custom
+    /// roles of the deployment; nothing else does, so they stayed behind after every destroy.
+    /// A service account that is not the last leaves them to the one that is.
+    mod custom_role_cleanup {
+        use std::sync::{Arc, Mutex};
+
+        use alien_core::{InitialSetupAuthority, Platform, ResourceLifecycle};
+        use alien_gcp_clients::iam::{MockIamApi, Role};
+        use alien_gcp_clients::resource_manager::MockResourceManagerApi;
+
+        use super::*;
+        use crate::core::controller_test::SingleControllerExecutor;
+        use crate::core::MockPlatformServiceProvider;
+
+        async fn delete(second_account: bool, authority: InitialSetupAuthority) -> Vec<String> {
+            let namespace = GcpCustomRoleNaming::HashedLongPrefix.namespace("test");
+            let own = format!("projects/test-project-123/roles/role_{namespace}_sandbox_execute");
+            let foreign = format!("projects/test-project-123/roles/role_{namespace}_other");
+            let deleted = Arc::new(Mutex::new(Vec::new()));
+            let mut iam = MockIamApi::new();
+            iam.expect_delete_service_account().returning(|_| Ok(()));
+            iam.expect_list_roles().returning(move |_, _, _| {
+                Ok(alien_gcp_clients::iam::ListRolesResponse::builder()
+                    .roles(vec![
+                        Role::builder()
+                            .name(own.clone())
+                            .description("Sandbox execute. Resource prefix: test.".to_string())
+                            .build(),
+                        // Another deployment whose prefix starts the same.
+                        Role::builder()
+                            .name(foreign.clone())
+                            .description("Other. Resource prefix: test-prod.".to_string())
+                            .build(),
+                    ])
+                    .build())
+            });
+            let sink = deleted.clone();
+            iam.expect_delete_role().returning(move |name| {
+                sink.lock().unwrap().push(name);
+                Ok(Role::builder().build())
+            });
+            let mut manager = MockResourceManagerApi::new();
+            manager
+                .expect_get_project_iam_policy()
+                .returning(|_, _| Ok(alien_gcp_clients::iam::IamPolicy::default()));
+            let (iam, manager) = (Arc::new(iam), Arc::new(manager));
+            let mut provider = MockPlatformServiceProvider::new();
+            provider
+                .expect_get_gcp_iam_client()
+                .returning(move |_| Ok(iam.clone()));
+            provider
+                .expect_get_gcp_resource_manager_client()
+                .returning(move |_| Ok(manager.clone()));
+
+            let mut builder = SingleControllerExecutor::builder()
+                // The harness's own stack already holds this profile's account, so it is the only one.
+                .resource(ServiceAccount::new("default-profile-sa".to_string()).build())
+                .resource_prefix("test")
+                .resource_lifecycle(ResourceLifecycle::Frozen)
+                .controller(GcpServiceAccountController {
+                    service_account_email: Some(
+                        "test-default-profile-sa@test-project-123.iam.gserviceaccount.com".to_string(),
+                    ),
+                    state: GcpServiceAccountState::Ready,
+                    ..Default::default()
+                })
+                .platform(Platform::Gcp)
+                .initial_setup_authority(authority)
+                .service_provider(Arc::new(provider));
+            if second_account {
+                builder = builder.with_dependency(
+                    ServiceAccount::new("other-sa".to_string()).build(),
+                    GcpServiceAccountController {
+                        service_account_email: Some(
+                            "test-other-sa@test-project-123.iam.gserviceaccount.com".to_string(),
+                        ),
+                        state: GcpServiceAccountState::Ready,
+                        ..Default::default()
+                    },
+                );
+            }
+            let mut executor = builder.build().await.unwrap();
+            executor.delete().expect("delete is accepted");
+            executor.run_until_terminal().await.expect("delete runs");
+            let deleted = deleted.lock().unwrap().clone();
+            deleted
+        }
+
+        #[tokio::test]
+        async fn the_last_service_account_of_a_direct_setup_removes_only_its_deployments_roles() {
+            let removed = delete(false, InitialSetupAuthority::DirectSetup).await;
+            assert_eq!(removed.len(), 1, "{removed:?}");
+            assert!(removed[0].ends_with("_sandbox_execute"), "{removed:?}");
+        }
+
+        #[tokio::test]
+        async fn another_service_account_still_present_keeps_the_roles() {
+            assert!(delete(true, InitialSetupAuthority::DirectSetup)
+                .await
+                .is_empty());
+        }
+
+        #[tokio::test]
+        async fn a_setup_package_removes_its_own_roles() {
+            assert!(delete(false, InitialSetupAuthority::ImportedHandoff)
+                .await
+                .is_empty());
+        }
+    }
 
     #[test]
     fn gcp_service_account_id_within_limit() {
