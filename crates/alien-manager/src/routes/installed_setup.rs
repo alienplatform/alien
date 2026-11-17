@@ -1119,7 +1119,6 @@ pub(super) mod tests {
             project_id: "project".to_string(),
             stacks: std::collections::HashMap::from([(Platform::Kubernetes, stack)]),
             signed_stacks: Default::default(),
-            setup_templates: Default::default(),
             git_commit_sha: None,
             git_commit_ref: None,
             git_commit_message: None,
