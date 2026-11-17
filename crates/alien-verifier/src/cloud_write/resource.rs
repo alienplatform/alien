@@ -510,6 +510,65 @@ pub fn check_aws_write(
                         )
                         .map_err(refused)?;
                     }
+                    // Only what the signed stack declares: the dead-letter target is a queue
+                    // of this stack, in this account and region, under this install's prefix.
+                    "RedrivePolicy" if value.is_empty() => {
+                        if signed_dead_letter(facts).is_some() {
+                            return Err(refused(
+                                "RedrivePolicy is cleared, but the signed stack gives the queue a \
+                                 dead-letter queue"
+                                    .to_string(),
+                            ));
+                        }
+                    }
+                    "RedrivePolicy" => {
+                        let document: Value = serde_json::from_str(value).map_err(|error| {
+                            refused(format!("the redrive policy is not JSON: {error}"))
+                        })?;
+                        let Some((target, max_attempts)) = signed_dead_letter(facts) else {
+                            return Err(refused(
+                                "RedrivePolicy is set, but the signed stack gives the queue no \
+                                 dead-letter queue"
+                                    .to_string(),
+                            ));
+                        };
+                        let expected_arn = format!(
+                            "arn:{}:sqs:{region}:{account}:{}",
+                            aws_partition(&region),
+                            aws_resource_policies::aws_prefixed_resource_name(
+                                &facts.place.prefix,
+                                &target
+                            )
+                        );
+                        let expected = serde_json::json!({
+                            "deadLetterTargetArn": expected_arn,
+                            "maxReceiveCount": max_attempts,
+                        });
+                        if document != expected {
+                            return Err(refused(format!(
+                                "the redrive policy is {document}, not {expected}, what the \
+                                 signed stack declares for queue '{}'",
+                                facts.resource_id
+                            )));
+                        }
+                    }
+                    "MessageRetentionPeriod" => {
+                        let is_target =
+                            !alien_core::queues_dead_lettering_to(&facts.stack, facts.resource_id)
+                                .is_empty();
+                        let expected = if is_target {
+                            alien_core::AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS
+                        } else {
+                            alien_core::AWS_DEFAULT_RETENTION_SECONDS
+                        };
+                        if *value != expected.to_string() {
+                            return Err(refused(format!(
+                                "MessageRetentionPeriod {value} is not {expected}, what the \
+                                 signed stack gives queue '{}'",
+                                facts.resource_id
+                            )));
+                        }
+                    }
                     other => {
                         return Err(refused(format!(
                             "SetQueueAttributes sets attribute {other}, which is not one the \
@@ -881,6 +940,18 @@ fn check_notification_document(
         ));
     }
     Ok(())
+}
+
+/// The dead-letter target id and attempts the signed stack declares for the queue being written.
+fn signed_dead_letter(facts: &ResourceFacts<'_>) -> Option<(String, u32)> {
+    let queue = facts
+        .stack
+        .resources
+        .get(facts.resource_id)?
+        .config
+        .downcast_ref::<alien_core::Queue>()?;
+    let dead_letter = queue.dead_letter.as_ref()?;
+    Some((dead_letter.queue.id.clone(), dead_letter.max_attempts))
 }
 
 fn own_queue_name(facts: &ResourceFacts<'_>) -> String {
