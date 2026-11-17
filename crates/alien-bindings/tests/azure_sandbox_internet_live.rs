@@ -976,8 +976,13 @@ async fn live_gateway_replace() {
         };
         let id = make().await?;
         created.borrow_mut().push(id.clone());
-        let idle = make().await?;
-        created.borrow_mut().push(idle.clone());
+        let mut idles = Vec::new();
+        for _ in 0..3 {
+            let idle = make().await?;
+            created.borrow_mut().push(idle.clone());
+            idles.push(idle);
+        }
+        let idle = idles[0].clone();
         for host in ["example.com", "www.google.com"] {
             let seen = proxy(sandbox, &id, host, 443, "").await;
             note(format!("{} before: {host} {seen}", now()));
@@ -1053,23 +1058,28 @@ async fn live_gateway_replace() {
                 }
                 if stage == "vm0-back" && !idle_first {
                     idle_first = true;
-                    // An idle sandbox is paused by the platform; resuming it is the first thing
-                    // that happens to it, then its first connection.
-                    let resumed = sandbox.resume(&idle).await;
-                    note(format!("{} [{stage}] IDLE sandbox resume: {resumed:?}", now()));
-                    // Retry until it connects (at most 8 tries), so the time to the first working
-                    // connection is on the record; the first try is the one that matters.
-                    for attempt in 1..=8 {
-                        let seen = proxy(sandbox, &idle, "example.com", 443, "").await;
-                        note(format!(
-                            "{} [{stage}] IDLE sandbox connection {attempt} example.com: {seen}",
-                            now()
-                        ));
-                        if connected(&seen) {
-                            break;
+                    // Idle sandboxes are paused by the platform: each is resumed, then makes its
+                    // first connection, all at once. Up to 8 tries each, so the time to the first
+                    // working connection is on the record; the first try is the one that matters.
+                    let first = async |n: usize, sandbox_id: String| {
+                        let resumed = sandbox.resume(&sandbox_id).await;
+                        note(format!("{} [vm0-back] idle {n} resume: {resumed:?}", now()));
+                        for attempt in 1..=8 {
+                            let seen = proxy(sandbox, &sandbox_id, "example.com", 443, "").await;
+                            note(format!(
+                                "{} [vm0-back] idle {n} ({sandbox_id}) connection {attempt}: {seen}",
+                                now()
+                            ));
+                            if connected(&seen) {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_secs(2)).await;
                         }
-                        tokio::time::sleep(Duration::from_secs(2)).await;
-                    }
+                    };
+                    futures::future::join_all(
+                        idles.iter().cloned().enumerate().map(|(n, id)| first(n, id)),
+                    )
+                    .await;
                 }
                 for host in ["example.com", "www.google.com"] {
                     let seen = proxy(sandbox, &id, host, 443, "").await;
