@@ -25,10 +25,10 @@ pub struct Verified<B> {
     pub digest: String,
     /// Expiry.
     pub not_after: Option<DateTime<Utc>>,
-    /// Whether the install had accepted this statement before, so it was
-    /// checked against the signer list version it names, not the current one.
+    /// Whether the current signer list keeps this statement (`keep`), so no
+    /// signature was needed: its signer may have left the list.
     pub kept: bool,
-    /// Signer ids whose signatures counted.
+    /// Signer ids whose signatures counted; none for a kept statement.
     pub signers: BTreeSet<String>,
     /// The body.
     pub body: B,
@@ -41,7 +41,6 @@ pub struct Trust {
     settings: SigningSettings,
     install: InstallId,
     chain: SignerChain,
-    accepted: BTreeSet<String>,
 }
 
 impl Trust {
@@ -62,7 +61,6 @@ impl Trust {
             settings,
             install,
             chain,
-            accepted: ledger.accepted.iter().cloned().collect(),
         })
     }
 
@@ -98,19 +96,20 @@ impl Trust {
         ledger.check_chain(&self.chain)?;
         ledger.adopt_root(&self.settings.fingerprint, &self.install);
         ledger.record_chain(&self.chain);
-        ledger.accept_running(accepted);
-        Ok(())
+        ledger.accept_running(accepted)
     }
 
     /// Run the checks for a statement of `kind` and parse its body: project
     /// and install, the statement's own expiry, the deny-list and signatures
     /// by keys that hold the kind's role.
     ///
-    /// A new statement is checked against the current signer list. One the
-    /// install already accepted (the ledger holds its digest) is checked
-    /// against the list version it names, so removing its signer later
-    /// doesn't stop it; only the deny-list does. Every enforcer applies this
-    /// one rule.
+    /// Signatures are checked against the current signer list. A statement
+    /// signed by a key that has left the list is accepted only when the
+    /// current list's `keep` names its digest, kind and sequence: the admins
+    /// signed that entry with the list, so the ledger and the install's
+    /// history play no part, and a new machine or Operator instance accepts
+    /// it the same way. The deny-list refuses a statement first. Every
+    /// enforcer applies this one rule.
     pub fn verify<B: DeserializeOwned>(
         &self,
         statement: &SignedStatement,
@@ -126,13 +125,7 @@ impl Trust {
         let opened = statement.open()?;
         self.check_header(&opened, kind, now)?;
         let current = self.chain.current();
-        let kept = self.accepted.contains(&opened.digest);
-        let list = if kept {
-            self.chain.version(opened.signer_list_version)
-        } else {
-            None
-        };
-        if opened.signer_list_version > current.version || (kept && list.is_none()) {
+        if opened.signer_list_version > current.version {
             return Err(AlienError::new(ErrorData::SignerListMissing {
                 needed: opened.signer_list_version,
                 current: current.version,
@@ -143,10 +136,11 @@ impl Trust {
                 digest: opened.digest,
             }));
         }
-        let signers = list
-            .unwrap_or(current)
-            .check_signatures(&opened, kind.role())?;
-        finish(opened, signers, kept)
+        if current.keeps(&opened) {
+            return finish(opened, BTreeSet::new(), true);
+        }
+        let signers = current.check_signatures(&opened, kind.role())?;
+        finish(opened, signers, false)
     }
 
     /// Verify a release for this install's channel and check its rules.

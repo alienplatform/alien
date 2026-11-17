@@ -86,6 +86,57 @@ pub fn release_deny_entry(sequence: u64) -> String {
     format!("release:{sequence}")
 }
 
+/// What a kept statement is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeptKind {
+    /// A `release/v2` statement.
+    Release,
+    /// A `config/v1` statement.
+    Config,
+}
+
+impl KeptKind {
+    /// The statement kind this names.
+    pub fn kind(self) -> Kind {
+        match self {
+            Self::Release => Kind::Release,
+            Self::Config => Kind::Config,
+        }
+    }
+
+    /// The name in JSON and on screen.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Release => "release",
+            Self::Config => "config",
+        }
+    }
+}
+
+/// Most statements one list may keep.
+pub const MAX_KEEP: usize = 4096;
+
+/// A statement the admins keep running although no signer on the list signed it
+/// any more (its key was removed or rotated). The admin signs the entry with
+/// the list, so enforcers need nothing else to accept the statement: a new
+/// machine or a new Operator instance accepts it from the list alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Keep {
+    /// `sha256:<hex>` of the statement's payload. This is what binds.
+    pub digest: String,
+    /// Whether it is a release or a config.
+    pub kind: KeptKind,
+    /// The release id the control plane gave the statement when the admin kept
+    /// it. The admin saw it on screen; enforcers don't check it, because a
+    /// statement can't name an id the control plane assigns after signing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
+    /// The statement's sequence.
+    pub sequence: u64,
+}
+
 /// The body of a `signer-list/v1` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -101,6 +152,11 @@ pub struct SignerListBody {
     /// platform's statement of one release carries the same sequence).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deny: Vec<String>,
+    /// Statements signed by a key that is no longer on the list, which still
+    /// run. Without an entry here everything a removed key signed is refused.
+    /// Later versions carry the entries until an admin drops them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keep: Vec<Keep>,
     /// Set on a version the recovery key signed, so whoever verifies the
     /// install sees that signing was restored with the recovery code.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -114,6 +170,16 @@ impl SignerListBody {
         self.deny.iter().any(|denied| *denied == opened.digest)
             || (opened.kind == crate::envelope::Kind::Release
                 && self.deny.contains(&release_deny_entry(opened.sequence)))
+    }
+
+    /// Whether the list keeps this statement: an entry names its digest, kind
+    /// and sequence.
+    pub fn keeps(&self, opened: &crate::envelope::Opened) -> bool {
+        self.keep.iter().any(|kept| {
+            kept.digest == opened.digest
+                && kept.kind.kind() == opened.kind
+                && kept.sequence == opened.sequence
+        })
     }
 }
 
@@ -147,6 +213,11 @@ impl TrustedList {
     /// Whether a statement digest is denied.
     pub fn denies(&self, digest: &str) -> bool {
         self.body.deny.iter().any(|denied| denied == digest)
+    }
+
+    /// Whether the list keeps this statement. See [`SignerListBody::keeps`].
+    pub fn keeps(&self, opened: &crate::envelope::Opened) -> bool {
+        self.body.keeps(opened)
     }
 
     /// Whether the list refuses this statement. See [`SignerListBody::refuses`].
@@ -471,6 +542,27 @@ fn parse_list(project: &str, opened: &Opened, authorizing_version: u64) -> Resul
             version,
             format!("more than {MAX_SIGNERS} signers"),
         ));
+    }
+    if body.keep.len() > MAX_KEEP {
+        return Err(list_refused(
+            version,
+            format!("more than {MAX_KEEP} kept statements"),
+        ));
+    }
+    let mut kept_digests = BTreeSet::new();
+    for kept in &body.keep {
+        if !crate::release::is_sha256_digest(&kept.digest) {
+            return Err(list_refused(
+                version,
+                format!("kept '{}' is not a digest", kept.digest),
+            ));
+        }
+        if !kept_digests.insert(kept.digest.as_str()) {
+            return Err(list_refused(
+                version,
+                format!("{} is kept twice", kept.digest),
+            ));
+        }
     }
     let mut keys = BTreeMap::new();
     let mut key_texts = BTreeSet::new();

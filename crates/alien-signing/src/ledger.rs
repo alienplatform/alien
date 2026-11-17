@@ -8,12 +8,17 @@
 //! own copy, and write the result back. Values only rise. An older signed
 //! release or config may run again: what the ledger holds is trust, not a version floor.
 //!
-//! The accepted digests are what makes removing a signer safe: a statement
-//! on the list keeps running after its signer leaves. Only enforcers write
-//! them, after verifying the statement; management has no access to the
-//! ledger (it is denied `/signed/*`). A digest still has to match a statement
-//! with a valid signature at the list version it names, so a forged entry
-//! can't make anything unsigned run.
+//! The ledger is history and a trust anchor, not a permission. What keeps a
+//! release or config running after its signer leaves the list is the signer
+//! list's `keep`, which the admins sign; the ledger never makes a statement
+//! verify. The accepted digests only record what the install took, newest
+//! last. Only enforcers write them, after verifying the statement; management
+//! has no access to the ledger (it is denied `/signed/*`).
+//!
+//! The ledger has to fit the smallest store an install uses (AWS SSM
+//! Standard parameters hold 4 KB), so it is size-capped: a write that would
+//! pass [`MAX_LEDGER_BYTES`] evicts the oldest history first and is refused
+//! when what runs now alone would not fit.
 
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
@@ -35,10 +40,11 @@ pub struct Entry {
 
 /// How many accepted digests a ledger keeps besides the ones running now; the
 /// oldest go first.
-pub const MAX_ACCEPTED: usize = 32;
+pub const MAX_ACCEPTED: usize = 24;
 
-/// What a ledger may hold at most: the history plus what runs now.
-pub const MAX_LEDGER_ACCEPTED: usize = 1024;
+/// The most bytes a ledger's JSON may take: AWS SSM Standard's parameter limit,
+/// the smallest store an install keeps its ledger in.
+pub const MAX_LEDGER_BYTES: usize = 4096;
 
 /// The ledger of one install.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,8 +110,11 @@ impl Ledger {
                 return Err(refused(format!("'{}' is not a digest", entry.digest)));
             }
         }
-        if ledger.accepted.len() > MAX_LEDGER_ACCEPTED {
-            return Err(refused("it lists too many accepted statements"));
+        if bytes.len() > MAX_LEDGER_BYTES {
+            return Err(refused(format!(
+                "it is {} bytes, over the {MAX_LEDGER_BYTES} its store holds",
+                bytes.len()
+            )));
         }
         for digest in &ledger.accepted {
             if !is_sha256_digest(digest) {
@@ -142,10 +151,12 @@ impl Ledger {
             .cloned()
             .collect();
         merged.extend(std::mem::take(&mut self.accepted));
-        let excess = merged.len().saturating_sub(MAX_LEDGER_ACCEPTED);
-        merged.drain(..excess);
         self.accepted = merged;
-        Ok(())
+        // Oldest first: what this side holds sits at the end and goes last.
+        while self.json_len() > MAX_LEDGER_BYTES && !self.accepted.is_empty() {
+            self.accepted.remove(0);
+        }
+        self.check_size()
     }
 
     /// Refuse a trust root other than the one the install accepted state
@@ -175,6 +186,21 @@ impl Ledger {
         Ok(())
     }
 
+    fn json_len(&self) -> usize {
+        self.to_json().len()
+    }
+
+    /// Refuse a ledger that doesn't fit its store.
+    pub fn check_size(&self) -> Result<()> {
+        let len = self.json_len();
+        if len > MAX_LEDGER_BYTES {
+            return Err(refused(format!(
+                "it would take {len} bytes, over the {MAX_LEDGER_BYTES} its store holds"
+            )));
+        }
+        Ok(())
+    }
+
     /// Whether the install accepted the statement with this digest.
     pub fn accepted(&self, digest: &str) -> bool {
         self.accepted.iter().any(|held| held == digest)
@@ -182,24 +208,31 @@ impl Ledger {
 
     /// Record an accepted statement's digest. Accepting one again moves it to
     /// the end, so the newest are the last to go.
-    pub fn accept(&mut self, digest: &str) {
-        self.accept_with(digest, &[]);
+    pub fn accept(&mut self, digest: &str) -> Result<()> {
+        self.accept_with(digest, &[])
     }
 
     /// Record the digests of the statements running now. They are never
-    /// evicted, whatever else the install accepted since: a key rotation must
-    /// not stop what runs.
-    pub fn accept_running(&mut self, running: &[&str]) {
+    /// evicted, whatever else the install accepted since. Refused, and the
+    /// ledger left as it was, when they alone would not fit the store.
+    pub fn accept_running(&mut self, running: &[&str]) -> Result<()> {
+        let before = self.clone();
         let running: Vec<String> = running.iter().map(|digest| digest.to_string()).collect();
         for digest in &running {
-            self.accept_with(digest, &running);
+            if let Err(error) = self.accept_with(digest, &running) {
+                *self = before;
+                return Err(error);
+            }
         }
+        Ok(())
     }
 
-    fn accept_with(&mut self, digest: &str, running: &[String]) {
+    fn accept_with(&mut self, digest: &str, running: &[String]) -> Result<()> {
         self.accepted.retain(|held| held != digest);
         self.accepted.push(digest.to_string());
-        while self.accepted.len() > MAX_ACCEPTED + running.len() {
+        while self.accepted.len() > MAX_ACCEPTED + running.len()
+            || self.json_len() > MAX_LEDGER_BYTES
+        {
             match self
                 .accepted
                 .iter()
@@ -211,6 +244,7 @@ impl Ledger {
                 None => break,
             }
         }
+        self.check_size()
     }
 
     /// Whether the install ever accepted signed state.
@@ -318,7 +352,9 @@ mod tests {
         let release = digest(1);
         for n in 0..40 {
             let config = digest(100 + n);
-            ledger.accept_running(&[release.as_str(), config.as_str()]);
+            ledger
+                .accept_running(&[release.as_str(), config.as_str()])
+                .unwrap();
         }
         assert!(ledger.accepted(&release));
         assert!(ledger.accepted(&digest(139)));
@@ -330,12 +366,12 @@ mod tests {
     #[test]
     fn accepting_again_moves_a_digest_to_the_end() {
         let mut ledger = Ledger::new("shop-prod");
-        ledger.accept(&digest(1));
+        ledger.accept(&digest(1)).unwrap();
         for n in 0..MAX_ACCEPTED - 1 {
-            ledger.accept(&digest(10 + n));
+            ledger.accept(&digest(10 + n)).unwrap();
         }
-        ledger.accept(&digest(1));
-        ledger.accept(&digest(500));
+        ledger.accept(&digest(1)).unwrap();
+        ledger.accept(&digest(500)).unwrap();
         assert!(ledger.accepted(&digest(1)));
         assert!(!ledger.accepted(&digest(10)));
     }
@@ -343,21 +379,59 @@ mod tests {
     #[test]
     fn merging_never_pushes_out_what_this_side_holds() {
         let mut ours = Ledger::new("shop-prod");
-        ours.accept_running(&[digest(1).as_str(), digest(2).as_str()]);
+        ours.accept_running(&[digest(1).as_str(), digest(2).as_str()])
+            .unwrap();
         let mut theirs = Ledger::new("shop-prod");
         for n in 0..MAX_ACCEPTED {
-            theirs.accept(&digest(100 + n));
+            theirs.accept(&digest(100 + n)).unwrap();
         }
         ours.merge(&theirs).unwrap();
         assert!(ours.accepted(&digest(1)) && ours.accepted(&digest(2)));
+        assert!(ours.to_json().len() <= MAX_LEDGER_BYTES);
+    }
+
+    /// A fully populated ledger, as the largest root fields make it.
+    fn full_root() -> Ledger {
+        let mut ledger = Ledger::new(&"p".repeat(40));
+        ledger.fingerprint = Some(format!("SHA256:{}", "a".repeat(64)));
+        ledger.install = Some("aws:111122223333:us-east-1:acme-prod".to_string());
+        ledger.signer_list = Some(Entry {
+            sequence: u64::MAX,
+            digest: digest(7),
+        });
+        ledger
     }
 
     #[test]
-    fn a_batch_larger_than_the_history_is_kept_whole() {
-        let mut ledger = Ledger::new("shop-prod");
-        let running: Vec<String> = (0..40).map(digest).collect();
+    fn the_ledger_never_grows_past_what_its_store_holds() {
+        let mut ledger = full_root();
+        for n in 0..500 {
+            ledger.accept(&digest(n)).unwrap();
+            assert!(ledger.to_json().len() <= MAX_LEDGER_BYTES);
+        }
+        // Parse-and-write round trips what was written.
+        let text = ledger.to_json();
+        Ledger::parse(text.as_bytes(), &"p".repeat(40)).unwrap();
+    }
+
+    #[test]
+    fn running_digests_that_do_not_fit_are_refused_and_change_nothing() {
+        let mut ledger = full_root();
+        ledger.accept(&digest(1)).unwrap();
+        let before = ledger.clone();
+        let running: Vec<String> = (10..90).map(digest).collect();
         let refs: Vec<&str> = running.iter().map(String::as_str).collect();
-        ledger.accept_running(&refs);
-        assert!(running.iter().all(|d| ledger.accepted(d)));
+        let error = ledger.accept_running(&refs).unwrap_err();
+        assert!(error.message.contains("4096"), "{}", error.message);
+        assert_eq!(ledger, before);
+    }
+
+    #[test]
+    fn a_stored_ledger_over_the_cap_is_refused() {
+        let mut ledger = full_root();
+        ledger.accepted = (0..80).map(digest).collect();
+        let text = ledger.to_json();
+        assert!(text.len() > MAX_LEDGER_BYTES);
+        assert!(Ledger::parse(text.as_bytes(), &"p".repeat(40)).is_err());
     }
 }

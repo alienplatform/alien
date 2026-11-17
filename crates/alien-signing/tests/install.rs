@@ -31,13 +31,20 @@ fn accept(trust: &Trust, ledger: &mut Ledger, sequence: u64) -> alien_signing::R
     trust.record(ledger, &[&verified.digest])
 }
 
-/// A list that drops CI, signed by both admins of version 2.
-fn without_ci(keys: &Keys, trust: &Trust, deny: &[String]) -> alien_signing::SignedStatement {
+/// A list that drops CI, signed by both admins of version 2. `keep` is what the
+/// admins keep of what CI signed; `deny` what they refuse.
+fn without_ci(
+    keys: &Keys,
+    trust: &Trust,
+    deny: &[String],
+    keep: &[alien_signing::Keep],
+) -> alien_signing::SignedStatement {
     let current = trust.chain().current();
     let mut body = version_2_body(keys);
     body.previous = Some(current.digest.clone());
     body.signers.retain(|signer| signer.id != "ci");
     body.deny.extend(deny.iter().cloned());
+    body.keep.extend(keep.iter().cloned());
     list(PROJECT, current.version + 1, current.version, body)
         .sign_with("alice-laptop", &keys.admin)
         .unwrap()
@@ -45,21 +52,31 @@ fn without_ci(keys: &Keys, trust: &Trust, deny: &[String]) -> alien_signing::Sig
         .unwrap()
 }
 
+fn keep_of(statement: &alien_signing::SignedStatement) -> alien_signing::Keep {
+    let opened = statement.open().unwrap();
+    alien_signing::Keep {
+        digest: opened.digest,
+        kind: alien_signing::KeptKind::Release,
+        release_id: Some("rel_one".to_string()),
+        sequence: opened.sequence,
+    }
+}
+
 #[test]
-fn a_removed_signer_keeps_what_it_signed_but_signs_nothing_new() {
+fn a_removed_signer_keeps_only_what_the_list_keeps() {
     let keys = keys();
-    let mut ledger = Ledger::new(PREFIX);
+    let ledger = Ledger::new(PREFIX);
     let trust = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &ledger);
     let by_ci = release(&keys, 10);
-    accept(&trust, &mut ledger, 10).unwrap();
 
-    // Version 3 drops CI. The install is restarted from its ledger.
-    let dropped = without_ci(&keys, &trust, &[]);
+    // Version 3 drops CI and keeps the release.
+    let dropped = without_ci(&keys, &trust, &[], &[keep_of(&by_ci)]);
     let chain = [genesis(&keys), version_2(&keys), dropped];
     let trust = fresh_trust(&keys, &chain, &ledger);
+    let base = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &ledger);
     let verified = trust
         .verify_release(&by_ci, now())
-        .expect("what CI signed and the install accepted keeps running");
+        .expect("what the list keeps runs");
     assert!(verified.kept);
     assert_eq!(
         code(trust.verify_release(&release(&keys, 11), now())),
@@ -67,45 +84,94 @@ fn a_removed_signer_keeps_what_it_signed_but_signs_nothing_new() {
         "CI can't sign a new release"
     );
 
-    // A removed signer's release the install never accepted is a new statement.
-    let fresh = fresh_trust(&keys, &chain, &Ledger::new(PREFIX));
+    // Without a keep entry, everything the removed key signed is refused.
+    let revoking = without_ci(&keys, &base, &[], &[]);
+    let chain_no_keep = [genesis(&keys), version_2(&keys), revoking];
+    let none = fresh_trust(&keys, &chain_no_keep, &ledger);
     assert_eq!(
-        code(fresh.verify_release(&by_ci, now())),
+        code(none.verify_release(&by_ci, now())),
         "SIGNING_SIGNATURE_REFUSED"
     );
 
-    // Only the deny-list stops a running release.
+    // The deny-list wins over keep.
     let digest = by_ci.open().unwrap().digest;
-    let denying = without_ci(&keys, &trust, &[digest]);
+    let denying = without_ci(&keys, &trust, &[digest], &[keep_of(&by_ci)]);
     let chain = [genesis(&keys), version_2(&keys), chain[2].clone(), denying];
     let trust = fresh_trust(&keys, &chain, &ledger);
     assert_eq!(code(trust.verify_release(&by_ci, now())), "SIGNING_DENIED");
 }
 
 #[test]
-fn a_kept_statement_still_needs_a_signature_from_the_list_it_names() {
+fn a_ledger_entry_makes_nothing_verify() {
     let keys = keys();
-    // A ledger that names a digest nobody signed makes nothing run.
+    // Digests written into the ledger by hand, or by an enforcer, never let
+    // a statement of a removed signer, or an unsigned one, run.
     let mut ledger = Ledger::new(PREFIX);
     let unsigned = alien_signing::SignedStatement {
         signatures: Vec::new(),
         ..release(&keys, 10)
     };
-    let forged_by_ci = statement("release/v2", PROJECT, None, 10, 1, release_body())
-        .sign_with("ci", &keys.operator)
-        .unwrap();
-    for forged in [&unsigned, &forged_by_ci] {
-        ledger.accept(&forged.open().unwrap().digest);
+    let by_ci = release(&keys, 11);
+    for forged in [&unsigned, &by_ci] {
+        ledger.accept(&forged.open().unwrap().digest).unwrap();
     }
-    let trust = Trust::new(settings(&keys), install(), &[genesis(&keys)], &ledger).unwrap();
+    let base = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &Ledger::new(PREFIX));
+    let dropped = without_ci(&keys, &base, &[], &[]);
+    let chain = [genesis(&keys), version_2(&keys), dropped];
+    let trust = Trust::new(settings(&keys), install(), &chain, &ledger).unwrap();
     assert_eq!(
         code(trust.verify_release(&unsigned, now())),
         "SIGNING_UNSIGNED"
     );
     assert_eq!(
-        code(trust.verify_release(&forged_by_ci, now())),
+        code(trust.verify_release(&by_ci, now())),
         "SIGNING_SIGNATURE_REFUSED"
     );
+}
+
+#[test]
+fn a_keep_entry_binds_the_digest_kind_and_sequence() {
+    let keys = keys();
+    let base = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &Ledger::new(PREFIX));
+    let by_ci = release(&keys, 10);
+    let mut wrong_sequence = keep_of(&by_ci);
+    wrong_sequence.sequence = 99;
+    let mut wrong_kind = keep_of(&by_ci);
+    wrong_kind.kind = alien_signing::KeptKind::Config;
+    for entry in [wrong_sequence, wrong_kind] {
+        let dropped = without_ci(&keys, &base, &[], &[entry]);
+        let chain = [genesis(&keys), version_2(&keys), dropped];
+        let trust = fresh_trust(&keys, &chain, &Ledger::new(PREFIX));
+        assert_eq!(
+            code(trust.verify_release(&by_ci, now())),
+            "SIGNING_SIGNATURE_REFUSED"
+        );
+    }
+}
+
+#[test]
+fn a_new_machine_accepts_a_kept_statement_from_the_list_alone() {
+    let keys = keys();
+    let base = fresh_trust(&keys, &[genesis(&keys), version_2(&keys)], &Ledger::new(PREFIX));
+    let by_ci = release(&keys, 10);
+    let dropped = without_ci(&keys, &base, &[], &[keep_of(&by_ci)]);
+    // A later version carries the keep along (the admin changes something else).
+    let chain3 = [genesis(&keys), version_2(&keys), dropped.clone()];
+    let trust3 = fresh_trust(&keys, &chain3, &Ledger::new(PREFIX));
+    let mut body = trust3.chain().current().body.clone();
+    body.previous = Some(trust3.chain().current().digest.clone());
+    body.signers.retain(|signer| signer.id != "bob-laptop");
+    body.admin_threshold = 1;
+    assert_eq!(body.keep.len(), 1);
+    let v4 = list(PROJECT, 4, 3, body)
+        .sign_with("alice-laptop", &keys.admin)
+        .unwrap()
+        .sign_with("carol-laptop", &keys.second_admin)
+        .unwrap();
+    let chain = [genesis(&keys), version_2(&keys), dropped, v4];
+    // An empty ledger, as a machine or Operator instance that never saw the release has.
+    let new_machine = fresh_trust(&keys, &chain, &Ledger::new(PREFIX));
+    assert!(new_machine.verify_release(&by_ci, now()).unwrap().kept);
 }
 
 #[test]

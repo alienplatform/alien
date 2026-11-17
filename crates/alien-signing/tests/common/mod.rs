@@ -143,6 +143,7 @@ pub fn genesis_body(keys: &Keys) -> SignerListBody {
             ),
         ],
         deny: Vec::new(),
+        keep: Vec::new(),
         recovered: false,
     }
 }
