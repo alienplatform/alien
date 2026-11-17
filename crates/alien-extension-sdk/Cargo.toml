@@ -1,0 +1,91 @@
+[package]
+name = "alien-extension-sdk"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Write Alien extensions: template modifiers, custom resources and interceptors"
+license-file.workspace = true
+
+[features]
+default = []
+# `controller_prelude`, for a controller crate's library, and `run_controllers` with
+# `local_controller_prelude`, for its binary.
+controller = [
+  "dep:alien-infra",
+  "dep:async-trait",
+  "dep:aws-credential-types",
+  "dep:aws-smithy-async",
+  "dep:aws-smithy-http-client",
+  "dep:aws-smithy-runtime-api",
+  "dep:aws-smithy-types",
+  "dep:aws-types",
+  "dep:base64",
+  "dep:chrono",
+  "dep:pollster",
+  "dep:tokio",
+]
+# `testing`: builds a hooks crate into a module and runs its hooks natively and in the module.
+testing = ["dep:alien-hooks-runtime", "dep:hex", "dep:sha2"]
+
+[dependencies]
+alien-cloudformation = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-helm = { workspace = true }
+alien-macros = { workspace = true }
+alien-terraform = { workspace = true }
+form_urlencoded = { workspace = true }
+hcl-rs = { workspace = true }
+indexmap = { workspace = true }
+# Permission sets are JSONC, as Alien's own are.
+json5 = "0.4"
+quick-xml = "0.41.0"
+serde = { workspace = true, features = ["derive"] }
+url = { workspace = true }
+utoipa = { workspace = true }
+# Bodies an interceptor edits keep their key order, and a hook gives the same bytes natively and
+# in the module whatever features the rest of a build turns on.
+serde_json = { workspace = true, features = ["preserve_order"] }
+
+# What a controller module's API is built from, natively and for wasm32-wasip1.
+async-trait = { workspace = true, optional = true }
+aws-credential-types = { workspace = true, optional = true }
+aws-smithy-async = { workspace = true, optional = true }
+aws-smithy-runtime-api = { workspace = true, optional = true, features = ["client", "http-1x"] }
+aws-smithy-types = { workspace = true, optional = true, features = ["http-body-1-x"] }
+aws-types = { version = "1", optional = true }
+base64 = { workspace = true, optional = true }
+# Reads the step's deadline.
+chrono = { workspace = true, optional = true, features = ["serde"] }
+# Drives a handler's future: every call it makes blocks in the host until it is answered.
+pollster = { version = "0.4", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The features `SingleControllerExecutor` needs to build.
+alien-infra = { workspace = true, optional = true, features = ["aws", "gcp", "azure", "test-utils"] }
+alien-hooks-runtime = { workspace = true, optional = true }
+# The native `aws_sdk_config` is built from these, not `aws-config`, so nothing in the
+# environment or a profile reaches it.
+aws-smithy-async = { workspace = true, optional = true, features = ["rt-tokio"] }
+aws-smithy-http-client = { version = "1", optional = true, features = ["rustls-aws-lc"] }
+tokio = { workspace = true, optional = true, features = ["rt-multi-thread"] }
+hex = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+
+[dev-dependencies]
+alien-extension-sdk = { path = ".", features = ["controller", "testing"] }
+async-trait = { workspace = true }
+alien-aws-clients = { workspace = true, features = ["test-utils"] }
+alien-azure-clients = { workspace = true }
+alien-client-core = { workspace = true, features = ["test-utils"] }
+alien-gcp-clients = { workspace = true }
+acme-hooks = { path = "tests/guests/acme" }
+acme-types = { path = "tests/guests/acme-types" }
+# Proves `aws_sdk_config` with a client aws-config already brings in.
+aws-sdk-sts = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+backups-hooks = { path = "tests/guests/backups" }
+alien-terraform = { workspace = true, features = ["test-utils"] }
+reqwest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+utoipa = { workspace = true }
+bon = { workspace = true }

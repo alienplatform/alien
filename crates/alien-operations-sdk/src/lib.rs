@@ -50,7 +50,9 @@ pub use manifest::{
 pub use mcp::{
     generate_mcp_tools, generate_mcp_tools_canonical, CanonicalMcpToolSchema, McpToolSchema,
 };
-pub use plugin::{dispatch, run_plugin, Plugin};
+#[cfg(not(target_arch = "wasm32"))]
+pub use plugin::run_plugin;
+pub use plugin::{dispatch, Plugin};
 pub use protocol::{
     is_explicitly_retryable, retryable_error, PluginInvocation, PluginResult, PROTOCOL_VERSION,
     RETRYABLE_ERROR_DETAILS,

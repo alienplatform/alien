@@ -31,6 +31,7 @@ NO_SETUP_CHECK = {
     "crates/alien-deployment/src/initial_setup.rs": "error text",
     "crates/alien-deployment/src/manager_api_transport.rs": "the setup method name",
     "crates/alien-deployment/tests/helm_initial_setup_retry.rs": "error text",
+    "crates/alien-extension-sdk/tests/release_check.rs": "renders, does not install",
     "crates/alien-helm/examples/render_chart.rs": "renders, does not install",
     "crates/alien-helm/src/package.rs": "comment",
     "crates/alien-helm/src/templates/_runtime-identity.tpl": "comment",

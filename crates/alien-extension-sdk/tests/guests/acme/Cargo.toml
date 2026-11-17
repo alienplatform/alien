@@ -1,0 +1,17 @@
+# The hooks crate of the docs' full example (Build a full extension), plus one hook of each kind
+# the example lacks and one that panics. Tests build it into a module and run every hook natively
+# and in the module.
+[package]
+name = "acme-hooks"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+acme-types = { path = "../acme-types" }
+alien-extension-sdk = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

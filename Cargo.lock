@@ -3,6 +3,42 @@
 version = 4
 
 [[package]]
+name = "acme-controller"
+version = "0.0.0"
+dependencies = [
+ "acme-types",
+ "alien-extension-sdk",
+ "alien-infra",
+ "aws-sdk-route53",
+ "bon",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "utoipa",
+]
+
+[[package]]
+name = "acme-hooks"
+version = "0.0.0"
+dependencies = [
+ "acme-types",
+ "alien-extension-sdk",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "acme-types"
+version = "0.0.0"
+dependencies = [
+ "alien-extension-sdk",
+ "bon",
+ "serde",
+ "utoipa",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -660,7 +696,6 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "tokio",
- "workspace-hack",
 ]
 
 [[package]]
@@ -937,6 +972,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-extension-sdk"
+version = "3.3.69"
+dependencies = [
+ "acme-hooks",
+ "acme-types",
+ "alien-aws-clients",
+ "alien-azure-clients",
+ "alien-client-core",
+ "alien-cloudformation",
+ "alien-core",
+ "alien-error",
+ "alien-extension-sdk",
+ "alien-gcp-clients",
+ "alien-helm",
+ "alien-hooks-runtime",
+ "alien-infra",
+ "alien-macros",
+ "alien-terraform",
+ "async-trait",
+ "aws-credential-types",
+ "aws-sdk-sts",
+ "aws-smithy-async",
+ "aws-smithy-http-client",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "backups-hooks",
+ "base64 0.22.1",
+ "bon",
+ "chrono",
+ "form_urlencoded",
+ "hcl-rs",
+ "hex",
+ "indexmap 2.14.1",
+ "json5",
+ "pollster",
+ "quick-xml 0.41.0",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "url",
+ "utoipa",
+]
+
+[[package]]
 name = "alien-gcp-clients"
 version = "3.3.69"
 dependencies = [
@@ -993,7 +1075,6 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
- "workspace-hack",
  "yaml-rust2",
 ]
 
@@ -1326,7 +1407,6 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "workspace-hack",
 ]
 
 [[package]]
@@ -1599,7 +1679,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -2422,6 +2501,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-route53"
+version = "1.121.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09f42b43b7fb350012627d9f3d5f5503b6cbf5b3736172604fbd0d83018cf21a"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
 name = "aws-sdk-sso"
 version = "1.107.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2697,6 +2802,7 @@ dependencies = [
  "base64-simd",
  "bytes",
  "bytes-utils",
+ "futures-core",
  "http 0.2.12",
  "http 1.5.0",
  "http-body 0.4.6",
@@ -2709,6 +2815,8 @@ dependencies = [
  "ryu",
  "serde",
  "time",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2904,6 +3012,13 @@ dependencies = [
  "fastrand",
  "gloo-timers",
  "tokio",
+]
+
+[[package]]
+name = "backups-hooks"
+version = "0.0.0"
+dependencies = [
+ "alien-extension-sdk",
 ]
 
 [[package]]
@@ -8293,6 +8408,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "order-hooks"
+version = "0.0.0"
+dependencies = [
+ "alien-extension-sdk",
+]
+
+[[package]]
 name = "ordered-float"
 version = "2.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8755,6 +8877,12 @@ dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "poly1305"
@@ -11427,6 +11555,14 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "steered-hooks"
+version = "0.0.0"
+dependencies = [
+ "alien-extension-sdk",
+ "serde_json",
+]
 
 [[package]]
 name = "string_cache"
