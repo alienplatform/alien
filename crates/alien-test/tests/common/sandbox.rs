@@ -532,10 +532,14 @@ pub async fn check_gcp_template_runs_a_command(
         .and_then(|engine| engine.name)
         .context("the deployment's engine is not listed")?;
     let engine_id = engine.rsplit('/').next().unwrap_or(&engine).to_string();
-    let templates = client
+    // A replaced template stays listed, state DELETED, for a while; only live ones count.
+    let templates: Vec<_> = client
         .list_templates(&engine_id)
         .await
-        .context("list templates")?;
+        .context("list templates")?
+        .into_iter()
+        .filter(|template| !format!("{:?}", template.state).to_uppercase().contains("DELETED"))
+        .collect();
     ensure!(
         templates.len() == 1,
         "expected one template, found {}",
