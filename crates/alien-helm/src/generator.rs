@@ -25,6 +25,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
 use alien_permissions::operations::kubernetes::OperatorFeature;
+use crate::emitters::workload_restart;
 use indexmap::IndexMap;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -2170,6 +2171,7 @@ fn generate_operator_manifest_inner(
             &crd_names,
             options.permission,
             options.custom_operation_permissions,
+            options.format,
         ));
         docs.push(operator_clusterrolebinding_doc(
             namespace,
@@ -2184,9 +2186,22 @@ fn generate_operator_manifest_inner(
             &crd_names,
             options.permission,
             options.custom_operation_permissions,
+            options.format,
         ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
+    // The workload `patch` rule and the policy that limits it to a restart are
+    // one decision: both come from `restart_grants`.
+    docs.extend(workload_restart_policy_docs(
+        &operator_name,
+        options.scope,
+        &labels,
+        &restart_grants(
+            options.permission,
+            options.custom_operation_permissions,
+            options.format,
+        ),
+    ));
     // Dynamic workloads need write access in this deployment namespace only.
     // Keep it in a Role even when inventory observation uses a ClusterRole.
     if dynamic_containers {
@@ -2663,6 +2678,7 @@ fn operator_role_doc(
     crd_names: &AccessRequestCrdNames,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
+    format: OperatorOutputFormat,
 ) -> String {
     let mut yaml = operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
@@ -2671,7 +2687,7 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations, format));
     yaml
 }
 
@@ -2819,6 +2835,7 @@ fn operator_rules(
     names: &AccessRequestCrdNames,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
+    format: OperatorOutputFormat,
 ) -> String {
     // Normalize runtime and operation grants together. Names are part of the key:
     // sharing a grant never widens a named requirement to all resources.
@@ -2873,6 +2890,10 @@ fn operator_rules(
             let verbs: BTreeSet<_> = rule
                 .verbs
                 .iter()
+                .filter(|verb| {
+                    // A workload `patch` is rendered only with its policy, below.
+                    !workload_restart::is_restart_patch(&rule.api_group, &rule.resource, verb)
+                })
                 .filter(|verb| {
                     alien_permissions::operations::kubernetes::grants_verb(
                         match permission {
@@ -2930,7 +2951,160 @@ fn operator_rules(
             ));
         }
     }
+    // The `patch` on workloads exists only where the cluster serves the
+    // admission policy API: the same condition guards the policy objects.
+    let restart = restart_grants(permission, custom_operations, format);
+    if !restart.0.is_empty() {
+        yaml.push_str(&format!(
+            "  {{{{- if {} }}}}\n",
+            workload_restart::POLICY_API_CONDITION
+        ));
+        for (grant, reasons) in &restart.0 {
+            for reason in reasons {
+                yaml.push_str(&format!(
+                    "  # Required by {reason} (limited to a restart by the admission policy of this chart)\n"
+                ));
+            }
+            yaml.push_str(&format!(
+                "  - apiGroups: ['apps']\n    resources: [{}]\n    verbs: ['patch']\n",
+                yaml_string(grant.resource)
+            ));
+            if !grant.resource_names.is_empty() {
+                yaml.push_str(&format!(
+                    "    resourceNames: [{}]\n",
+                    grant
+                        .resource_names
+                        .iter()
+                        .map(|name| yaml_string(name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+        yaml.push_str("  {{- end }}\n");
+    }
     yaml
+}
+
+/// One workload `patch` rule: a kind and the names it is limited to.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct RestartGrant {
+    resource: &'static str,
+    resource_names: BTreeSet<String>,
+}
+
+/// The workload `patch` rules of the enabled operations, with the reasons that
+/// asked for them. This is the single decision behind both the Operator's
+/// `patch` rule and the admission policy that limits it to a restart: the Role
+/// renders the rules and [`workload_restart_policy_docs`] renders the policies
+/// from this value, so neither exists without the other.
+///
+/// Empty for a read-only (`Diagnostics`) install, and for a raw manifest: a
+/// `kubectl apply` cannot tell whether the cluster serves the policy API and
+/// would still apply the Role if the policy kind is unknown. A Helm template
+/// renders both only where `.Capabilities` says the API is served.
+struct RestartGrants(BTreeMap<RestartGrant, BTreeSet<String>>);
+
+fn restart_grants(
+    permission: OperatorPermission,
+    custom_operations: &[KubernetesOperationPermissions],
+    format: OperatorOutputFormat,
+) -> RestartGrants {
+    let mut grants = BTreeMap::<RestartGrant, BTreeSet<String>>::new();
+    if permission != OperatorPermission::Remediation || format != OperatorOutputFormat::HelmTemplate
+    {
+        return RestartGrants(grants);
+    }
+    for operation in custom_operations {
+        for rule in &operation.permissions.rules {
+            if !rule.verbs.iter().any(|verb| {
+                workload_restart::is_restart_patch(&rule.api_group, &rule.resource, verb)
+            }) {
+                continue;
+            }
+            if let Some(kind) = workload_restart::restart_kind(&rule.resource) {
+                grants
+                    .entry(RestartGrant {
+                        resource: kind.resource,
+                        resource_names: rule.resource_names.iter().cloned().collect(),
+                    })
+                    .or_default()
+                    .insert(format!(
+                        "{}/{}: {}",
+                        operation.plugin, operation.operation, rule.reason
+                    ));
+            }
+        }
+    }
+    RestartGrants(grants)
+}
+
+/// The admission policy and binding for each workload kind the Operator may
+/// patch, or nothing when no `patch` rule is rendered.
+fn workload_restart_policy_docs(
+    operator_name: &str,
+    scope: OperatorScope,
+    labels: &BTreeMap<String, String>,
+    grants: &RestartGrants,
+) -> Vec<String> {
+    // A template-valued name (`{{ include ... }}`) is used as the expression it
+    // wraps; a literal name is quoted.
+    let name_expression = match operator_name
+        .trim()
+        .strip_prefix("{{")
+        .and_then(|rest| rest.strip_suffix("}}"))
+    {
+        Some(expression) => format!("({})", expression.trim()),
+        None => helm_string(operator_name),
+    };
+    let resources: BTreeSet<&str> = grants.0.keys().map(|grant| grant.resource).collect();
+    let mut docs = Vec::new();
+    for resource in resources {
+        let kind = workload_restart::restart_kind(resource)
+            .expect("restart grants are only built for restart kinds");
+        // Cluster-scoped objects must not collide across releases.
+        let object_name = format!(
+            "{{{{ printf \"%s-restart-%s-%s\" {name_expression} {} (sha256sum (printf \"%s/%s\" .Release.Namespace .Release.Name) | trunc 8) }}}}",
+            helm_string(resource)
+        );
+        let mut metadata = String::from("metadata:\n");
+        metadata.push_str(&format!("  name: {object_name}\n  labels:\n"));
+        append_operator_labels(&mut metadata, labels, 4);
+        let mut policy = format!(
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\n{metadata}spec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n      - apiGroups: ['apps']\n        apiVersions: ['v1']\n        operations: ['UPDATE']\n        resources: [{}]\n  matchConditions:\n    - name: operator-account\n      expression: {{{{ printf \"request.userInfo.username == 'system:serviceaccount:%s:%s'\" .Release.Namespace {name_expression} | quote }}}}\n  variables:\n",
+            yaml_string(resource)
+        );
+        for (name, expression) in workload_restart::VARIABLES {
+            policy.push_str(&format!(
+                "    - name: {name}\n      expression: {}\n",
+                helm_string(expression)
+            ));
+        }
+        policy.push_str("  validations:\n");
+        for (expression, message) in workload_restart::validations(kind) {
+            policy.push_str(&format!(
+                "    - expression: {}\n      message: {}\n",
+                helm_string(&expression),
+                helm_string(message)
+            ));
+        }
+        let mut binding = format!(
+            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\n{metadata}spec:\n  policyName: {object_name}\n  validationActions: ['Deny']\n"
+        );
+        // A namespaced install's Role covers its own namespace only.
+        if !scope.is_cluster_wide() {
+            binding.push_str(
+                "  matchResources:\n    namespaceSelector:\n      matchLabels:\n        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}\n",
+            );
+        }
+        for doc in [policy, binding] {
+            docs.push(format!(
+                "{{{{- if {} }}}}\n{doc}{{{{- end }}}}\n",
+                workload_restart::POLICY_API_CONDITION
+            ));
+        }
+    }
+    docs
 }
 
 /// The access-request `CustomResourceDefinition`, white-labeled from `names`.
@@ -3073,9 +3247,10 @@ fn operator_clusterrole_doc(
     crd_names: &AccessRequestCrdNames,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
+    format: OperatorOutputFormat,
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations, format));
     yaml
 }
 
