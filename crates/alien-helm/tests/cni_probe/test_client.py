@@ -21,7 +21,7 @@ def free_port():
 class Listener:
     """Answers HTTP requests with the marker until stopped (`url` of a stopped one is refused)."""
 
-    def __init__(self, serve=True, port=None):
+    def __init__(self, serve=True, port=None, allowed=True):
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 self.send_response(200)
@@ -32,15 +32,24 @@ class Listener:
                 pass
 
         self.port = port or free_port()
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", self.port), Handler) if serve else None
-        if self.server:
-            threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.allowed_port = free_port()
+        # The listener's second port, the one the denied pods' policies admit.
+        self.servers = []
+        if serve:
+            self.servers.append(http.server.ThreadingHTTPServer(("127.0.0.1", self.port), Handler))
+        if allowed:
+            self.servers.append(http.server.ThreadingHTTPServer(("127.0.0.1", self.allowed_port), Handler))
+        for server in self.servers:
+            threading.Thread(target=server.serve_forever, daemon=True).start()
 
     def stop(self):
-        if self.server:
-            self.server.shutdown()
-            self.server.server_close()
-            self.server = None
+        for server in self.servers:
+            server.shutdown()
+            server.server_close()
+        self.servers = []
+
+    def allowed_url(self):
+        return f"http://127.0.0.1:{self.allowed_port}/"
 
     def url(self):
         return f"http://127.0.0.1:{self.port}/"
@@ -52,7 +61,7 @@ class Pod:
     def __init__(self, listener, **settings):
         self.error = None
         self.log = None
-        code = probe.client_code(listener.url(), MARKER)
+        code = probe.client_code(listener.url(), MARKER, listener.allowed_url())
         scope = {"LOG": "/dev/null", "BIND": "127.0.0.1", **FAST, **settings}
         self.thread = threading.Thread(target=self._run, args=(code, scope), daemon=True)
         self.thread.start()
@@ -98,12 +107,14 @@ class DeniedPodsAndControl(unittest.TestCase):
         time.sleep(2)
         listener.stop()
         self.assertRegex(str(control.result()), "listener unreachable from the control")
-        self.assertIsNone(pod.result())
+        # The denied pod sees the allowed port go too: its refusals prove nothing either (a
+        # connection cut off by the stop is a failure as well).
+        self.assertRegex(str(pod.result()), "cannot reach the listener on the allowed port|ConnectionReset|RemoteDisconnected")
 
     def test_an_unreachable_denied_pod_fails_instead_of_counting_refusals(self):
         refused = Listener(serve=False)
         pod, _ = denied(refused, SERVED_WAIT=2)  # no control ever reaches it
-        self.assertRegex(str(pod.result()), "denied pod network is not up")
+        self.assertRegex(str(pod.result()), "the control did not reach this pod in time")
 
     def test_a_control_that_cannot_reach_a_denied_pod_fails(self):
         up = Listener()
@@ -148,6 +159,42 @@ class DeniedPodsAndControl(unittest.TestCase):
         finally:
             flapping.stop()
             up.stop()
+
+
+class AllowedPort(unittest.TestCase):
+    """The denied pod's own egress must work on the allowed port while 8080 is refused."""
+
+    def test_a_denied_pod_that_cannot_reach_the_allowed_port_fails_even_when_refused_on_the_other(self):
+        # Egress dropped by something else: both ports fail, so the refusal proves nothing.
+        up = Listener()
+        both_down = Listener(serve=False, allowed=False)
+        pod, address = denied(both_down)
+        control = Pod(up, TARGETS=[address])
+        try:
+            self.assertRegex(str(pod.result()), "cannot reach the listener on the allowed port")
+            control.result()
+        finally:
+            up.stop()
+
+    def test_the_allowed_port_is_checked_on_every_tick_of_the_hold(self):
+        # 8080 is refused and 8081 answers at first; 8081 goes away during the hold.
+        up = Listener()
+        listener = Listener(serve=False)
+        pod, address = denied(listener, WINDOW=8, HOLD=6)
+        control = Pod(up, TARGETS=[address], CONTROL_RUN=30)
+        time.sleep(3)
+        listener.stop()
+        try:
+            # Either the refused connection is named, or the one cut off by the stop is reported.
+            self.assertRegex(str(pod.result()), "cannot reach the listener on the allowed port|ConnectionReset|RemoteDisconnected")
+            control.result()
+        finally:
+            up.stop()
+
+    def test_the_client_names_the_same_address_on_two_ports(self):
+        code = probe.client_code("http://10.1.2.3:8080/", MARKER, "http://10.1.2.3:8081/")
+        self.assertIn("http://10.1.2.3:8081/", code)
+        self.assertEqual(probe.pod_url("fd00::1", 8081), "http://[fd00::1]:8081/")
 
 
 class PlainControls(unittest.TestCase):
@@ -204,7 +251,9 @@ class Stages(unittest.TestCase):
             ("running", "denied"), ("running", "ingress-denied"), ("start", "control")])
         control = events[4][2]
         self.assertEqual(len(control["TARGETS"]), 2)
-        self.assertTrue(all(address.startswith("10.0.0.") for address in control["TARGETS"]))
+        # Whole URLs: the control appends a path to each, so a bare address cannot be used.
+        self.assertTrue(all(address.startswith("http://10.0.0.") and address.endswith(":8080/")
+                            for address in control["TARGETS"]), control["TARGETS"])
         self.assertEqual(events[0][2], {"DENIED": True})
 
     def test_every_client_is_awaited_and_the_recovering_control_runs_last(self):

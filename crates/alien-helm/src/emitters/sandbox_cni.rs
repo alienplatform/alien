@@ -336,6 +336,36 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+        - protocol: TCP
+          port: 8081
+---
+# The `denied` pod's egress allow: the listener's allowed port only. The probe's own deny-all
+# policy refuses everything else, so on the same address and at the same moment one port answers
+# and the other is refused; that is what makes a refusal on 8080 mean something.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{{{ $name }}}}-denied-egress
+  namespace: {{{{ $podNamespace }}}}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-9"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
+spec:
+  podSelector:
+    matchLabels:
+      alien.dev/cni-probe: {{{{ $name }}}}
+      alien.dev/cni-role: denied
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              alien.dev/cni-probe: {{{{ $name }}}}
+              alien.dev/cni-role: listener
+      ports:
+        - protocol: TCP
+          port: 8081
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -364,6 +394,19 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    # The allowed port of the two pods the probe refuses on 8080: the `denied` pod's egress is
+    # what is tested there, and the `ingress-denied` pod's ingress to 8080.
+    - from:
+        - podSelector:
+            matchLabels:
+              alien.dev/cni-probe: {{{{ $name }}}}
+            matchExpressions:
+              - key: alien.dev/cni-role
+                operator: In
+                values: [denied, ingress-denied]
+      ports:
+        - protocol: TCP
+          port: 8081
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

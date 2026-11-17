@@ -47,7 +47,9 @@ ADMISSION_SECONDS = 30
 POD_START_SECONDS = 35
 # A denied pod: how long it waits for the control to reach it (the control's own pod start, then
 # one request), how long a refusal may take to appear, and how long refusals must then hold.
-DENIED_SERVED_WAIT_SECONDS = 60
+# It covers the other denied pod's start, the control's start, one recreate of the control
+# (START_BOUND_SECONDS stuck, then a new start) and the control's first request.
+DENIED_SERVED_WAIT_SECONDS = 35 + 35 + 45 + 35 + 20
 ENFORCEMENT_WINDOW_SECONDS = 45
 HOLD_SECONDS = 10
 # After it is done a denied pod keeps answering, so the control can read that it is done.
@@ -92,7 +94,7 @@ RECOVER=globals().get('RECOVER',0)
 TARGETS=globals().get('TARGETS',[])
 LOG=globals().get('LOG','/dev/termination-log')
 BIND=globals().get('BIND','0.0.0.0')
-PORT=globals().get('PORT',8080)
+PORT=globals().get('PORT',@PORT@)
 WINDOW=globals().get('WINDOW',@WINDOW@)
 HOLD=globals().get('HOLD',@HOLD@)
 LINGER=globals().get('LINGER',@LINGER@)
@@ -111,6 +113,11 @@ def get(url):
 def reach():
     body=get(@URL@)
     require(body is None or body==@MARKER@, 'wrong positive control body')
+    return body is not None
+def reach_allowed():
+    # The same listener address on the one port its policies admit for this pod.
+    body=get(@ALLOWED_URL@)
+    require(body is None or body==@MARKER@, 'wrong allowed port body')
     return body is not None
 def note(text):
     print(text,flush=True)
@@ -132,15 +139,21 @@ if DENIED:
     try:
         waited=time.monotonic()
         while not state['served']:
-            require(time.monotonic()-waited<SERVED_WAIT,'denied pod network is not up: the control did not reach it')
+            require(time.monotonic()-waited<SERVED_WAIT,'the control did not reach this pod in time: the control pod may not have started or may have been refused, see its status')
             time.sleep(0.2)
         state['state']='counting'
         # The policy may need a moment to reach a new pod: wait, bounded, for the first refusal, then
         # require refusals to hold. Reaching the listener after a refusal, or never being refused
         # within the window, is a failure.
+        # On every tick the allowed port must answer: the same pod, the same destination address,
+        # the same moment, only the port (and so the policy) differs. If it does not, a refusal on
+        # the other port proves nothing.
+        NOT_UP='the denied pod cannot reach the listener on the allowed port: a refusal proves nothing'
         start=time.monotonic()
         reachable=0
-        while reach():
+        while True:
+            require(reach_allowed(),NOT_UP)
+            if not reach(): break
             reachable+=1
             require(time.monotonic()-start<WINDOW,'NetworkPolicy did not block traffic')
             time.sleep(1)
@@ -148,6 +161,7 @@ if DENIED:
         hold_until=time.monotonic()+HOLD
         while time.monotonic()<hold_until:
             time.sleep(1)
+            require(reach_allowed(),NOT_UP)
             require(not reach(),'NetworkPolicy did not block traffic: reachable again after a refusal')
         state['state']='done'
         note('blocked after %.1fs (%d reachable attempts first), held %ds'%(blocked_after,reachable,HOLD))
@@ -198,12 +212,27 @@ else:
 '''
 
 
-def client_code(url, marker):
-    """Source of the client pods. The caller sets `DENIED`, `RECOVER` or `TARGETS` before it."""
+LISTENER_PORT = 8080
+ALLOWED_PORT = 8081
+DENIED_POD_PORT = 8080
+
+
+def pod_url(ip, port):
+    """The URL of a pod's address and port (an IPv6 address is bracketed)."""
+    authority = f"[{ip}]" if ":" in ip else ip
+    return f"http://{authority}:{port}/"
+
+
+def client_code(url, marker, allowed_url):
+    """Source of the client pods. The caller sets `DENIED`, `RECOVER` or `TARGETS` before it.
+
+    `url` is the listener's port the denied pods must be refused on, `allowed_url` the port of the
+    same address that their policies admit.
+    """
     constants = {
         "@WINDOW@": ENFORCEMENT_WINDOW_SECONDS, "@HOLD@": HOLD_SECONDS, "@LINGER@": LINGER_SECONDS,
         "@SERVED_WAIT@": DENIED_SERVED_WAIT_SECONDS, "@SERVE_WAIT@": SERVE_WAIT_SECONDS,
-        "@CONTROL_RUN@": CONTROL_RUN_SECONDS, "@URL@": repr(url), "@MARKER@": repr(marker.encode()),
+        "@CONTROL_RUN@": CONTROL_RUN_SECONDS, "@URL@": repr(url), "@ALLOWED_URL@": repr(allowed_url), "@PORT@": DENIED_POD_PORT, "@MARKER@": repr(marker.encode()),
     }
     source = CLIENT
     for token, value in constants.items():
@@ -220,6 +249,7 @@ def client_code(url, marker):
 # the CNI to remove a deleted policy.
 DENIED_ROLES = ["denied", "ingress-denied"]
 CONTROL_ROLE = "control"
+PODS_OF_THE_RUN = ["listener", CONTROL_ROLE, *DENIED_ROLES, "control-after", "ingress-control-after"]
 AFTER_ROLES = [("control-after", 0), ("ingress-control-after", RECOVER_SECONDS)]
 
 
@@ -227,7 +257,7 @@ def run_stages(start_client, wait_client, wait_running):
     """`start_client(role, **settings)` creates a pod; `wait_running(role)` returns it Running."""
     for role in DENIED_ROLES:
         start_client(role, DENIED=True)
-    addresses = [wait_running(role)["status"]["podIP"] for role in DENIED_ROLES]
+    addresses = [pod_url(wait_running(role)["status"]["podIP"], DENIED_POD_PORT) for role in DENIED_ROLES]
     start_client(CONTROL_ROLE, TARGETS=addresses)
     for role in [CONTROL_ROLE, *DENIED_ROLES]:
         wait_client(role)
@@ -435,6 +465,10 @@ def main():
         "  self.send_response(200); self.end_headers(); "
         f"self.wfile.write({marker.encode()!r})\n"
         " def log_message(self,*args): pass\n"
+        "import threading\n"
+        # The allowed port is bound first, so it answers whenever the readiness port does.
+        "allowed=HTTPServer(('0.0.0.0',8081),Handler)\n"
+        "threading.Thread(target=allowed.serve_forever,daemon=True).start()\n"
         "HTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
     )
 
@@ -469,14 +503,13 @@ def main():
 
     def pod(role, code):
         spec = pod_spec(role, code)
-        # Clients run in the sandbox runtime class, as sessions do.
-        if role != "listener":
-            if runtime_class:
-                spec["spec"]["runtimeClassName"] = runtime_class
-            if node_selector:
-                spec["spec"]["nodeSelector"] = node_selector
-            if tolerations:
-                spec["spec"]["tolerations"] = tolerations
+        # Every pod runs in the sandbox runtime class, on the nodes sessions use.
+        if runtime_class:
+            spec["spec"]["runtimeClassName"] = runtime_class
+        if node_selector:
+            spec["spec"]["nodeSelector"] = node_selector
+        if tolerations:
+            spec["spec"]["tolerations"] = tolerations
         return spec
 
     def pod_spec(role, code):
@@ -534,6 +567,15 @@ def main():
     }, admission + "-policies", "probe NetworkPolicies use the probe's own names")
 
     try:
+        # Objects of an earlier run that was cut short carry the same fixed names. With no owner
+        # (the pods live in another namespace than the Job) nothing else removes them: delete them
+        # first, by name. A pod still terminating answers 409 when created, and `create` waits.
+        for leftover in [pods + "/" + prefix + "-" + role for role in PODS_OF_THE_RUN] + [policies + "/" + prefix]:
+            try:
+                request("DELETE", leftover, {"gracePeriodSeconds": 0})
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
         # The server and positive control have no policy. Only the subject is denied.
         create(policies, {
             "apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
@@ -550,9 +592,7 @@ def main():
             c["type"] == "Ready" and c["status"] == "True"
             for c in p.get("status", {}).get("conditions", [])))
         ip = listener["status"]["podIP"]
-        authority = f"[{ip}]" if ":" in ip else ip
-        url = f"http://{authority}:8080/"
-        probe = client_code(url, marker)
+        probe = client_code(pod_url(ip, LISTENER_PORT), marker, pod_url(ip, ALLOWED_PORT))
         def start(role, **settings):
             settings_code = "".join(f"{name}={value!r}\n" for name, value in settings.items())
             create(pods, pod(role, settings_code + probe))

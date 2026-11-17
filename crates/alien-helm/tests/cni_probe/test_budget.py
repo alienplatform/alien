@@ -37,6 +37,14 @@ class Budget(unittest.TestCase):
         self.assertGreaterEqual(
             probe.DENIED_SERVED_WAIT_SECONDS, probe.POD_START_SECONDS + probe.SERVE_WAIT_SECONDS)
 
+    def test_a_denied_pod_waits_through_the_start_and_one_recreate_of_the_control(self):
+        # The other denied pod's start, the control's start, one recreate of the control, and the
+        # control's first request: a retry the run budgets for must not fail the denied pod.
+        start = probe.POD_START_SECONDS
+        self.assertGreaterEqual(
+            probe.DENIED_SERVED_WAIT_SECONDS,
+            start + start + probe.START_BOUND_SECONDS + start + probe.SERVE_WAIT_SECONDS)
+
     def test_a_denied_pod_fits_its_own_pod_deadline(self):
         self.assertGreater(
             probe.POD_DEADLINE_SECONDS,
@@ -46,6 +54,12 @@ class Budget(unittest.TestCase):
     def test_the_install_instructions_wait_as_long_as_this_test_assumes(self):
         generator = (RUST.parent.parent / "generator.rs").read_text()
         self.assertIn(f"--timeout {INSTALL_WAIT_SECONDS // 60}m", generator)
+        # Every place that installs or upgrades the chart waits as long.
+        crates = RUST.parents[3]
+        wait = f"{INSTALL_WAIT_SECONDS // 60}m"
+        self.assertIn(f"--timeout {wait}", (crates / "alien-cli/src/commands/onboard.rs").read_text())
+        self.assertIn(f'"--timeout", "{wait}"', (crates / "alien-deploy-cli/src/commands/sync.rs").read_text())
+        self.assertIn(f"timeout: {wait}", generator)
 
     def test_the_job_deadline_covers_the_script_the_runner_start_and_a_margin(self):
         self.assertEqual(
