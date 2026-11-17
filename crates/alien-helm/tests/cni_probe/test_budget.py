@@ -26,6 +26,7 @@ NO_SETUP_CHECK = {
     "crates/alien-core/src/deployment/state.rs": "doc comment",
     "crates/alien-core/src/extension.rs": "names the setup format",
     "crates/alien-deploy-cli/README.md": "describes the command",
+    "crates/alien-deploy-cli/src/commands/helm_release.rs": "adds the release check to the install sync.rs builds with the wait; its tests build commands",
     "crates/alien-deploy-cli/src/commands/register.rs": "name of the import source",
     "crates/alien-deployment/src/initial_setup.rs": "error text",
     "crates/alien-deployment/src/manager_api_transport.rs": "the setup method name",

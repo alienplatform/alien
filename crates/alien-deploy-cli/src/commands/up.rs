@@ -343,6 +343,7 @@ impl From<DeployConfigNetwork> for NetworkSettings {
 
 #[cfg(test)]
 mod tests {
+    use super::super::helm_release::check_manifest;
     #[test]
     fn a_kubernetes_install_keeps_an_earlier_saved_key_and_saves_no_new_one() {
         use super::token_to_save;
@@ -364,6 +365,201 @@ mod tests {
         MockServer,
     };
     use std::io::Write;
+
+    /// The release check reads what Helm hands its post-renderer: an object of an extension's
+    /// subchart that takes the kind and name of one of Alien's is refused, naming
+    /// the extension, even when the template renders it only on an upgrade; an object of the
+    /// extension's own passes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_extension_object_that_repeats_one_of_alien_s_is_refused_on_upgrade() {
+        if !crate::commands::helm_release::local_helm_is_4() {
+            eprintln!("skipped: the local helm is not Helm 4");
+            return;
+        }
+        let plain = Stack::new("app".to_string()).build();
+        let settings = StackSettings::default();
+        let chart = render_kubernetes_helm_chart(
+            &plain,
+            &settings,
+            "app",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .unwrap();
+        let values = write_kubernetes_helm_values(
+            chart.path(),
+            "https://manager.example.com",
+            Some(&OperatorEnrollment {
+                code: "ax_enroll_fixture",
+                audience: "https://manager.example.com",
+            }),
+            "dep_1",
+            "app",
+            "app",
+            &settings,
+            "registry.example.com/alien-operator:1.0.0",
+            None,
+            None,
+        )
+        .unwrap();
+        // A post-renderer that keeps what Helm hands it, as the release check reads it.
+        let plugins = tempfile::tempdir().unwrap();
+        let seen = plugins.path().join("seen.yaml");
+        std::fs::create_dir_all(plugins.path().join("keep")).unwrap();
+        std::fs::write(
+            plugins.path().join("keep.sh"),
+            format!("#!/bin/sh\ntee {}\n", seen.display()),
+        )
+        .unwrap();
+        std::process::Command::new("chmod")
+            .arg("+x")
+            .arg(plugins.path().join("keep.sh"))
+            .status()
+            .unwrap();
+        std::fs::write(
+            plugins.path().join("keep/plugin.yaml"),
+            format!(
+                "apiVersion: v1\ntype: postrenderer/v1\nname: keep\nversion: 0.1.0\nruntime: subprocess\nruntimeConfig:\n  platformCommand:\n    - command: {}\n",
+                plugins.path().join("keep.sh").display()
+            ),
+        )
+        .unwrap();
+        let post_rendered = |upgrade: bool| {
+            let mut helm = std::process::Command::new("helm");
+            helm.args(["template", "rel"])
+                .arg(chart.path())
+                .args(["--namespace", "ns", "--post-renderer", "keep", "-f"])
+                .arg(&values)
+                .env("HELM_PLUGINS", plugins.path());
+            if upgrade {
+                // What an upgrade reads from the installed release with `lookup`.
+                helm.args([
+                    "--is-upgrade",
+                    "--set-string",
+                    "logCollector.scope.deploymentLabelValue=dep_1",
+                    // An upgrade keeps the installed release's key; the chart refuses to make one.
+                    "--set-string",
+                    "runtime.encryption.key=0000000000000000000000000000000000000000000000000000000000000001",
+                ]);
+            }
+            let output = helm.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            std::fs::read_to_string(&seen).unwrap()
+        };
+        let alien = post_rendered(false);
+        check_manifest(&alien, &[]).expect("Alien's release repeats no object");
+        let secret = alien_helm::post_rendered_objects(&alien)
+            .unwrap()
+            .into_iter()
+            .find(|object| object.kind == "Secret")
+            .expect("Alien's chart renders a Secret");
+
+        // The chart as the modifier pass leaves it for an extension with Helm modifiers.
+        let mut stack = plain.clone();
+        stack.extensions = vec![serde_json::from_value(serde_json::json!({
+            "name": "acme", "version": "1.0.0", "digest": "sha256:0", "resourceTypes": {}
+        }))
+        .unwrap()];
+        let write = |path: &str, contents: String| {
+            let path = chart.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        };
+        let read = |path: &str| std::fs::read_to_string(chart.path().join(path)).unwrap();
+        write("files/stack.json", serde_json::to_string(&stack).unwrap());
+        write(
+            "Chart.yaml",
+            format!(
+                "{}dependencies:\n- name: acme\n  version: 0.0.0\n",
+                read("Chart.yaml")
+            ),
+        );
+        write(
+            "values.schema.json",
+            read("values.schema.json").replacen(
+                "\"properties\": {",
+                "\"properties\": {\n    \"acme\": { \"type\": \"object\" },",
+                1,
+            ),
+        );
+        write(
+            "charts/acme/Chart.yaml",
+            "apiVersion: v2\nname: acme\ntype: application\nversion: 0.0.0\n".to_string(),
+        );
+        write("charts/acme/values.yaml", "{}\n".to_string());
+        write(
+            "charts/acme/templates/acme.yaml",
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: acme\n".to_string(),
+        );
+        let extensions = super::super::helm_release::extension_subcharts(chart.path()).unwrap();
+        assert_eq!(extensions, ["acme"]);
+        check_manifest(&post_rendered(true), &extensions)
+            .expect("an object of the extension's own passes");
+
+        for gate in ["if .Release.IsUpgrade", "if index .Release \"IsUpgrade\""] {
+            write(
+                "charts/acme/templates/zz-gated.yaml",
+                format!(
+                    "{{{{- {gate} }}}}\napiVersion: v1\nkind: Secret\nmetadata:\n  name: {}\n{{{{- end }}}}\n",
+                    secret.name
+                ),
+            );
+            check_manifest(&post_rendered(false), &extensions)
+                .expect("an install renders no second Secret");
+            let refusal = check_manifest(&post_rendered(true), &extensions).unwrap_err();
+            assert!(
+                refusal.contains(&format!(
+                    "extension 'acme' renders Secret {} (",
+                    secret.name
+                )) && refusal.contains("app/charts/acme/templates/zz-gated.yaml")
+                    && refusal.contains("app/templates/")
+                    && refusal.ends_with("collide whatever namespace each names"),
+                "{gate}: {refusal}"
+            );
+        }
+    }
+
+    /// The chart the deploy CLI installs carries the stack's Helm modifiers: an extension the
+    /// stack lists whose hooks module this process hasn't loaded stops the install.
+    #[tokio::test]
+    async fn the_installed_chart_runs_the_stack_s_helm_modifiers() {
+        let mut stack = Stack::new("app".to_string())
+            .add(
+                alien_core::Storage::new("data".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let settings = StackSettings::default();
+        let chart = render_kubernetes_helm_chart(
+            &stack,
+            &settings,
+            "app",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .unwrap();
+        assert!(chart.path().join("Chart.yaml").exists());
+
+        stack.extensions = vec![serde_json::from_value(serde_json::json!({
+            "name": "acme", "version": "1.0.0", "digest": "sha256:0", "resourceTypes": {}
+        }))
+        .unwrap()];
+        let error = render_kubernetes_helm_chart(
+            &stack,
+            &settings,
+            "app",
+            &alien_infra::LoadedExtensions::default(),
+        )
+        .unwrap_err();
+        let chain = format!("{error:?}");
+        assert!(
+            error.message.contains("extension") && chain.contains("extension 'acme' can't run"),
+            "{chain}"
+        );
+    }
 
     #[tokio::test]
     async fn setup_delete_acquire_sends_the_platform_setup_method() {
@@ -8414,7 +8610,7 @@ fn render_kubernetes_helm_chart(
     let mut helm_settings = stack_settings.clone();
     // Helm charts install the Kubernetes operator, which always polls the manager.
     helm_settings.deployment_model = DeploymentModel::Pull;
-    let chart = alien_helm::generate_helm_chart(
+    let mut chart = alien_helm::generate_helm_chart(
         stack,
         alien_helm::HelmOptions {
             registry: &registries.helm,
@@ -8427,6 +8623,12 @@ fn render_kubernetes_helm_chart(
             message: format!("Failed to generate Kubernetes Helm chart: {error}"),
         })
     })?;
+    registries
+        .modifiers
+        .modify_helm(&mut chart)
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to apply the stack's extensions to the Helm chart".to_string(),
+        })?;
 
     for (relative_path, contents) in chart.files {
         let path = chart_dir.path().join(relative_path);
@@ -8519,7 +8721,7 @@ fn write_kubernetes_helm_values(
     Ok(values_path)
 }
 
-async fn helm_upgrade_install(
+pub(crate) async fn helm_upgrade_install(
     helm: &str,
     chart_dir: &Path,
     values_file: &Path,
@@ -8549,22 +8751,30 @@ async fn helm_upgrade_install(
         cmd.arg("--kube-context").arg(context);
     }
 
-    let output = cmd
-        .output()
-        .await
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to execute helm. Ensure Helm is installed and available on PATH."
-                .to_string(),
-        })?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Helm upgrade/install failed: {stderr}"),
-        }));
+    let check = super::helm_release::add_release_check(&mut cmd, chart_dir).await?;
+    let result = async {
+        let output =
+            cmd.output()
+                .await
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message:
+                        "Failed to execute helm. Ensure Helm is installed and available on PATH."
+                            .to_string(),
+                })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!("Helm upgrade/install failed: {stderr}"),
+            }));
+        }
+        Ok(())
     }
-
-    Ok(())
+    .await;
+    match &check {
+        Some(check) => check.explain(result),
+        None => result,
+    }
 }
 
 fn split_image_tag(image: &str) -> Result<(String, String)> {
