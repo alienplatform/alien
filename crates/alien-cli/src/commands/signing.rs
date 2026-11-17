@@ -379,6 +379,14 @@ fn diff(current: &SignerListBody, next: &SignerListBody) -> Vec<String> {
                 kind_name(other.kind)
             ));
         }
+        if other.backend != signer.backend {
+            lines.push(format!(
+                "~ {}: key kept in {} → {}",
+                who(signer),
+                signer.backend.map_or("unknown", |backend| backend.as_str()),
+                other.backend.map_or("unknown", |backend| backend.as_str())
+            ));
+        }
         if other.roles != signer.roles {
             lines.push(format!(
                 "~ {}: roles {} → {}",
@@ -460,7 +468,7 @@ fn roles_text(roles: &[Role]) -> String {
     roles
         .iter()
         .map(|role| match role {
-            Role::Release => "release and debug sessions",
+            Role::Release => "release",
             Role::Admin => "manage devices",
         })
         .collect::<Vec<_>>()
@@ -975,6 +983,90 @@ async fn rotate(ctx: &ExecutionMode, name: &str, revoke: bool, out: Option<&Path
             eprintln!("✓ The old {name} key can't sign");
         }
     }
+    Ok(())
+}
+
+/// `alien releases revoke`: refuse a release's statements everywhere, as the
+/// next signer list version. Refused while a channel points at the release,
+/// so no install is left following a release it refuses.
+pub async fn revoke_release(ctx: &ExecutionMode, id: &str) -> Result<()> {
+    let admin = admin(ctx).await?;
+    let project = admin.chain.project().to_string();
+    let query = api::project_query(ctx, &project).await?;
+    let release = api::get_json(ctx, &format!("/v1/releases/{id}"), &query).await?;
+    let mut current: Vec<String> = release["currentChannels"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|channel| channel.as_str().map(str::to_string))
+        .collect();
+    for channel in all_items(ctx, "/v1/release-channels", &query).await? {
+        if channel["currentReleaseId"].as_str() == Some(id) {
+            if let Some(name) = channel["name"].as_str() {
+                if !current.iter().any(|held| held == name) {
+                    current.push(name.to_string());
+                }
+            }
+        }
+    }
+    if let Some(channel) = current.first() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "id".to_string(),
+            message: format!(
+                "Release {id} is current on {channel}. Promote another release first."
+            ),
+        }));
+    }
+    // The statements the server returned count only when they verify as
+    // releases of this project from the pinned list.
+    let mut digests = Vec::new();
+    for (_, statement) in release["signedStacks"].as_object().into_iter().flatten() {
+        let statement: SignedStatement =
+            serde_json::from_value(statement.clone()).map_err(|error| {
+                AlienError::new(ErrorData::SigningFailed {
+                    message: format!("The server returned a release statement that doesn't parse: {error}"),
+                })
+            })?;
+        let opened = statement.open().context(ErrorData::SigningFailed {
+            message: "The server returned a release statement that doesn't open".to_string(),
+        })?;
+        crate::signing::check_statement(&admin.chain, &opened, Kind::Release, None).map_err(
+            |reason| {
+                AlienError::new(ErrorData::SigningFailed {
+                    message: format!(
+                        "A statement of release {id} doesn't check out against the device list: {reason}. Nothing was signed."
+                    ),
+                })
+            },
+        )?;
+        if !digests.contains(&opened.digest) {
+            digests.push(opened.digest);
+        }
+    }
+    if digests.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "id".to_string(),
+            message: format!("Release {id} is not signed, so there is nothing to refuse"),
+        }));
+    }
+    let mut body = admin.chain.current().body.clone();
+    let added: Vec<String> = digests
+        .into_iter()
+        .filter(|digest| !body.deny.contains(digest))
+        .collect();
+    if added.is_empty() {
+        println!("Release {id} is already refused.");
+        return Ok(());
+    }
+    body.deny.extend(added.iter().cloned());
+    body.recovered = false;
+    println!(
+        "Refusing release {id} ({} statement(s)) for {project}. Protected deployments will not apply it, also as a rollback.",
+        added.len()
+    );
+    let statement = admin.sign_next(body, "sign")?;
+    admin.publish(&statement).await?;
+    println!("✓ Release {id} is refused · delivered to protected deployments as the next device list");
     Ok(())
 }
 
