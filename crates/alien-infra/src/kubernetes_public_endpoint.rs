@@ -180,6 +180,9 @@ fn apply_wait_deadline(
             let started = *state.wait_started_unix.entry(kind).or_insert(now_unix);
             let elapsed = now_unix.saturating_sub(started).max(0) as u64;
             if elapsed >= kind.bound().as_secs() {
+                // The deployment fails and may be retried with this same state: the retry
+                // gets fresh windows instead of failing at once on the old start.
+                state.wait_started_unix.clear();
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
                         "Timed out after {} seconds waiting for {}",
@@ -250,7 +253,14 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
     state: &mut KubernetesPublicEndpointState,
 ) -> Result<KubernetesEndpointAction> {
     let resource_id = target.resource_id.to_string();
-    let step = reconcile_endpoint_step(ctx, target, state).await?;
+    let step = match reconcile_endpoint_step(ctx, target, state).await {
+        Ok(step) => step,
+        Err(error) => {
+            // A failed step (for example a refused certificate) ends the wait the same way.
+            state.wait_started_unix.clear();
+            return Err(error);
+        }
+    };
     apply_wait_deadline(&resource_id, state, step, chrono::Utc::now().timestamp())
 }
 
@@ -5098,22 +5108,22 @@ mod tests {
             let error = apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 1_800)
                 .expect_err("the original start counts");
             assert!(error.to_string().contains("managed certificate"), "{error}");
-            // The load balancer wait has its own clock, started at its first poll.
-            assert_eq!(state.wait_started_unix[&EndpointWait::Endpoint], 1_600);
-            apply_wait_deadline(
-                "api",
-                &mut state,
-                EndpointStep::endpoint(ENDPOINT_WAIT),
-                2_199,
-            )
-            .expect("inside its own bound");
-            apply_wait_deadline(
-                "api",
-                &mut state,
-                EndpointStep::endpoint(ENDPOINT_WAIT),
-                2_200,
-            )
-            .expect_err("past its own bound");
+            // The timeout ended every wait: nothing is left for a retry to trip over.
+            assert!(state.wait_started_unix.is_empty());
+        }
+
+        /// A wait that timed out fails the deployment; its retry loads the same endpoint state
+        /// and must get a fresh window, not fail again at once.
+        #[test]
+        fn a_retry_after_a_timeout_gets_a_fresh_window() {
+            let mut state = KubernetesPublicEndpointState::default();
+            apply_wait_deadline("api", &mut state, certificate_wait(), 1_000).expect("starts");
+            apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 1_800)
+                .expect_err("timed out");
+            let retry = apply_wait_deadline("api", &mut state, certificate_wait(), 3_000)
+                .expect("a fresh window, not an error");
+            assert!(matches!(retry, KubernetesEndpointAction::Waiting { .. }));
+            assert_eq!(state.wait_started_unix[&EndpointWait::Certificate], 3_000);
         }
 
         /// A wait that finished leaves nothing behind: a DNS lag long after an earlier wait
