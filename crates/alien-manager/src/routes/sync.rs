@@ -287,6 +287,11 @@ pub struct InitializeRequest {
     /// rendered Operator manifests or `helm` for generated Helm installs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub setup_method: Option<String>,
+    /// What the client's setup run can do, such as `create-keys`. A standalone manager
+    /// accepts and ignores it; embedded managers forward it to their control plane.
+    /// Older clients omit it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_capabilities: Vec<String>,
     /// Helm release that installed this deployment, for `helm` setups. Lets
     /// the manager tell the deployment owner the exact `helm uninstall`
     /// command. Older clients omit it.
