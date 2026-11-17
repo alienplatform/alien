@@ -20,7 +20,8 @@ use alien_signing::ReleaseBody;
 use crate::error::{ErrorData, Result};
 use crate::function::Accepting;
 use crate::machines::{
-    check_setup_ids, roll_basics, ImageFacts, ImagePins, RollBasics, RollMachines,
+    check_setup_ids, machine_agent_from_description, roll_basics, ImageFacts, ImagePins,
+    RollBasics, RollMachines,
 };
 use crate::plan::Place;
 
@@ -102,6 +103,9 @@ pub fn image_facts(image: &str, definition: &Value, version: &Value) -> Result<I
         architecture: architecture.to_string(),
         created: created.with_timezone(&Utc),
         root_disk_gib,
+        machine_agent: definition["properties"]["description"]
+            .as_str()
+            .and_then(machine_agent_from_description),
     })
 }
 
@@ -560,7 +564,10 @@ mod tests {
                     "name": "1.0.0"
                 }))
             } else if path.contains("/communityGalleries/") {
-                Some(json!({"properties": {"architecture": "x64", "osType": "Linux"}}))
+                Some(
+                    json!({"properties": {"architecture": "x64", "osType": "Linux",
+                    "description": format!("machine-agent=sha256:{}", "2".repeat(64))}}),
+                )
             } else {
                 Some(json!({"location": "westeurope"}))
             })
