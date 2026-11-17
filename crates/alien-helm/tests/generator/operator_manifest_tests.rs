@@ -910,3 +910,244 @@ fn chart_version_keeps_pod_templates_but_image_changes_roll_them() {
         }
     }
 }
+
+const POLICY_API: &str = "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy";
+const WORKLOAD_KINDS: [&str; 3] = ["deployments", "statefulsets", "daemonsets"];
+
+/// An operation that may patch the given workload kinds, declared as a plugin author would.
+fn restart_operation(kinds: &[&str], names: &[&str]) -> KubernetesOperationPermissions {
+    let mut operation = custom_operation("restarter");
+    operation.tier = alien_operations_sdk::RiskTier::Mutating;
+    operation.permissions.rules = kinds
+        .iter()
+        .map(|kind| alien_operations_sdk::KubernetesPermissionRule {
+            api_group: "apps".into(),
+            resource: (*kind).into(),
+            verbs: vec!["patch".into()],
+            resource_names: names.iter().map(|name| (*name).into()).collect(),
+            reason: "Restart workloads".into(),
+        })
+        .collect();
+    operation
+}
+
+/// The Operator template as a Helm chart, rendered for release `rel` in namespace `ns` on a
+/// cluster serving `api_versions`.
+fn rendered_operator_chart(
+    scope: OperatorScope,
+    permission: OperatorPermission,
+    operations: &[KubernetesOperationPermissions],
+    api_versions: &[&str],
+) -> Vec<YamlValue> {
+    let template = generate_operator_manifest(OperatorManifestOptions {
+        custom_operation_permissions: operations,
+        manager_url: "https://manager.example.com",
+        group_token: "test-token",
+        encryption_key: TEST_ENCRYPTION_KEY,
+        image: "registry.example.com/operator:test",
+        log_collector: None,
+        stack_settings: None,
+        project_name: "my-saas",
+        environment_name: None,
+        install_namespace: None,
+        label_domain: None,
+        scope,
+        label_selector: None,
+        permission,
+        format: OperatorOutputFormat::HelmTemplate,
+    })
+    .expect("operator template should render");
+    let files = IndexMap::from([
+        (
+            "Chart.yaml".to_string(),
+            "apiVersion: v2\nname: operator-test\nversion: 0.1.0\n".to_string(),
+        ),
+        (
+            "values.yaml".to_string(),
+            "remoteOperator:\n  serviceAccountAnnotations: {}\nalien:\n  version: test\n"
+                .to_string(),
+        ),
+        ("templates/operator.yaml".to_string(), template),
+    ]);
+    let rendered =
+        test_utils::helm_template_with_api_versions(&files, None, "rel", "ns1", api_versions);
+    rendered.assert_ok("operator chart helm template");
+    parse_manifest(&rendered.stdout)
+}
+
+/// Resources the Operator's Role or ClusterRole may `patch` in the `apps` group.
+fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
+    docs.iter()
+        .filter(|doc| doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
+        .flat_map(|role| role["rules"].as_sequence().into_iter().flatten())
+        .filter(|rule| {
+            rule["apiGroups"][0] == "apps"
+                && rule["verbs"]
+                    .as_sequence()
+                    .is_some_and(|verbs| verbs.iter().any(|verb| verb == "patch"))
+        })
+        .flat_map(|rule| rule["resources"].as_sequence().into_iter().flatten())
+        .filter_map(|resource| resource.as_str())
+        .filter(|resource| WORKLOAD_KINDS.contains(resource))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Resources a bound policy of the chart limits, and whether every policy has a binding.
+fn restricted_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
+    let policies: Vec<_> = docs
+        .iter()
+        .filter(|doc| doc["kind"] == "ValidatingAdmissionPolicy")
+        .collect();
+    let bindings: BTreeSet<_> = docs
+        .iter()
+        .filter(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding")
+        .map(|doc| doc["spec"]["policyName"].as_str().unwrap().to_owned())
+        .collect();
+    let names: BTreeSet<_> = policies
+        .iter()
+        .map(|doc| doc["metadata"]["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names, bindings,
+        "every policy needs its binding and the reverse"
+    );
+    policies
+        .iter()
+        .flat_map(|doc| {
+            doc["spec"]["matchConstraints"]["resourceRules"]
+                .as_sequence()
+                .unwrap()
+        })
+        .flat_map(|rule| rule["resources"].as_sequence().unwrap())
+        .map(|resource| resource.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn workload_patch_is_rendered_if_and_only_if_its_restart_policy_is() {
+    let cases: Vec<Vec<&str>> = vec![
+        vec![],
+        vec!["deployments"],
+        vec!["statefulsets", "daemonsets"],
+        WORKLOAD_KINDS.to_vec(),
+    ];
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        for kinds in &cases {
+            let operations: Vec<_> = (!kinds.is_empty())
+                .then(|| restart_operation(kinds, &[]))
+                .into_iter()
+                .collect();
+            for permission in [
+                OperatorPermission::Diagnostics,
+                OperatorPermission::Remediation,
+            ] {
+                for api_versions in [&[][..], &[POLICY_API][..]] {
+                    let docs =
+                        rendered_operator_chart(scope, permission, &operations, api_versions);
+                    let patched = patchable_workloads(&docs);
+                    let restricted = restricted_workloads(&docs);
+                    let expected: BTreeSet<String> = if permission
+                        == OperatorPermission::Remediation
+                        && !api_versions.is_empty()
+                    {
+                        kinds.iter().map(|kind| (*kind).to_owned()).collect()
+                    } else {
+                        BTreeSet::new()
+                    };
+                    let context =
+                        format!("{scope:?} {kinds:?} {permission:?} api={api_versions:?}");
+                    assert_eq!(patched, expected, "patch rules: {context}");
+                    assert_eq!(restricted, expected, "restart policies: {context}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_manifests_never_render_a_workload_patch_or_policy() {
+    let operations = [restart_operation(&WORKLOAD_KINDS, &[])];
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        let manifest = rendered_with_custom(
+            scope,
+            OperatorPermission::Remediation,
+            &operations,
+            OperatorOutputFormat::RawManifest,
+        )
+        .unwrap();
+        let docs = parse_manifest(&manifest);
+        assert!(patchable_workloads(&docs).is_empty());
+        assert!(restricted_workloads(&docs).is_empty());
+    }
+}
+
+#[test]
+fn restart_policy_admits_only_the_operator_account_restarting_in_its_namespace() {
+    let operations = [restart_operation(&["deployments"], &["web"])];
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        let docs = rendered_operator_chart(
+            scope,
+            OperatorPermission::Remediation,
+            &operations,
+            &[POLICY_API],
+        );
+        let policy = docs
+            .iter()
+            .find(|doc| doc["kind"] == "ValidatingAdmissionPolicy")
+            .expect("a restart policy");
+        let spec = &policy["spec"];
+        assert_eq!(spec["failurePolicy"], "Fail");
+        let rule = &spec["matchConstraints"]["resourceRules"][0];
+        assert_eq!(
+            rule["operations"],
+            serde_yaml::to_value(["UPDATE"]).unwrap()
+        );
+        assert_eq!(rule["apiGroups"], serde_yaml::to_value(["apps"]).unwrap());
+        assert_eq!(
+            rule["resources"],
+            serde_yaml::to_value(["deployments"]).unwrap()
+        );
+        assert_eq!(
+            spec["matchConditions"][0]["expression"],
+            "request.userInfo.username == 'system:serviceaccount:ns1:my-saas-operator'"
+        );
+        let expressions: String = spec["validations"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|validation| validation["expression"].as_str().unwrap())
+            .collect();
+        assert!(expressions.contains("kubectl.kubernetes.io/restartedAt"));
+        assert!(expressions.contains("object.spec.template.spec == oldObject.spec.template.spec"));
+        let binding = docs
+            .iter()
+            .find(|doc| doc["kind"] == "ValidatingAdmissionPolicyBinding")
+            .unwrap();
+        assert_eq!(
+            binding["spec"]["validationActions"],
+            serde_yaml::to_value(["Deny"]).unwrap()
+        );
+        let selector = &binding["spec"]["matchResources"]["namespaceSelector"]["matchLabels"];
+        if scope == OperatorScope::Namespace {
+            assert_eq!(selector["kubernetes.io/metadata.name"], "ns1");
+        } else {
+            assert!(binding["spec"]["matchResources"].is_null());
+        }
+        // The rule keeps its resource name limit.
+        let role = docs
+            .iter()
+            .find(|doc| doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
+            .unwrap();
+        let patch_rule = role["rules"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .find(|rule| rule["verbs"] == serde_yaml::to_value(["patch"]).unwrap())
+            .unwrap();
+        assert_eq!(
+            patch_rule["resourceNames"],
+            serde_yaml::to_value(["web"]).unwrap()
+        );
+    }
+}

@@ -1,9 +1,19 @@
 //! Explicit Kubernetes requirements for an operation. Installers apply these
 //! rules only for enabled plugins and within the selected installation scope.
 //!
-//! Version 1 supports reads, pod deletion, and workload scale patches. It does
+//! Version 1 supports reads, pod deletion, workload scale patches, and patches
+//! of Deployments, StatefulSets and DaemonSets (mutating tier only). It does
 //! not support Secrets, impersonation, RBAC changes, remote execution, or
 //! workload creation (which could mount Secrets or assume a service account).
+//!
+//! Kubernetes RBAC cannot limit a patch to one field, so the chart grants the
+//! workload patch together with a cluster admission policy that admits only a
+//! restart (the `kubectl.kubernetes.io/restartedAt` annotation of the pod
+//! template) from the Operator's ServiceAccount. Any other change, such as the
+//! image, environment or replicas, is refused by the cluster. That policy
+//! needs Kubernetes 1.30 or later; on an older cluster the chart renders no
+//! workload patch, and the operation is not permitted there. Raw manifests
+//! never render it.
 //!
 //! Add this field to an operation in `metadata.json`:
 //! ```json
@@ -26,7 +36,7 @@
 use alien_error::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::{ErrorData, Result, RiskTier};
+use crate::{ErrorData, PluginResult, Result, RiskTier};
 
 /// Versioned requirements declared in an operation's `kubernetesPermissions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +110,23 @@ impl KubernetesPermissions {
     }
 }
 
+/// Error code a plugin returns when the cluster refuses a workload patch because the chart
+/// rendered no grant for it. See [`workload_patch_unavailable`].
+pub const WORKLOAD_PATCH_UNAVAILABLE: &str = "KUBERNETES_WORKLOAD_PATCH_UNAVAILABLE";
+
+/// The result a plugin returns when its workload patch (such as a rollout restart) is answered
+/// with `Forbidden`. The chart grants that patch only together with a cluster admission policy,
+/// which needs Kubernetes 1.30 or later, so on an older cluster, or an install whose permission
+/// ceiling is read-only, no grant exists and retrying cannot help.
+pub fn workload_patch_unavailable() -> PluginResult {
+    PluginResult::error(
+        WORKLOAD_PATCH_UNAVAILABLE,
+        "This operation is not available on this cluster: restarting a workload needs the \
+         cluster admission policy API (ValidatingAdmissionPolicy, Kubernetes 1.30 or later) \
+         and an installation that allows changes. The installation did not grant the permission.",
+    )
+}
+
 fn validate_label(value: &str, field: &str) -> Result<()> {
     let attribution = alien_permissions::operations::Attribution {
         plugin: if field == "plugin" {
@@ -124,7 +151,7 @@ fn validate_label(value: &str, field: &str) -> Result<()> {
 mod tests {
     use serde_json::{json, Value};
 
-    use crate::{CanonicalPluginManifest, KubernetesOperationPermissions, RiskTier};
+    use crate::{CanonicalPluginManifest, KubernetesOperationPermissions, PluginResult, RiskTier};
 
     type PluginManifest = CanonicalPluginManifest;
 
@@ -139,6 +166,19 @@ mod tests {
                     "reason": "Inspect the selected widget"}]
             }}]
         })
+    }
+
+    #[test]
+    fn unavailable_workload_patch_names_the_missing_cluster_feature_and_is_not_retryable() {
+        let result = super::workload_patch_unavailable();
+        assert!(!crate::is_explicitly_retryable(&result));
+        match result {
+            PluginResult::Error { code, message, .. } => {
+                assert_eq!(code, super::WORKLOAD_PATCH_UNAVAILABLE);
+                assert!(message.contains("Kubernetes 1.30"), "{message}");
+            }
+            other => panic!("expected an error, got {other:?}"),
+        }
     }
 
     #[test]

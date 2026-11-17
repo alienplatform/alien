@@ -39,7 +39,8 @@ pub use alien_core::permissions::{
 pub use docs::{generate_docs, generate_docs_canonical};
 pub use error::{ErrorData, Result};
 pub use kubernetes::{
-    KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions,
+    workload_patch_unavailable, KubernetesOperationPermissions, KubernetesPermissionRule,
+    KubernetesPermissions, WORKLOAD_PATCH_UNAVAILABLE,
 };
 #[allow(deprecated)]
 pub use manifest::{
