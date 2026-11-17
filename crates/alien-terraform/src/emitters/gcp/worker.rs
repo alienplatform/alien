@@ -198,8 +198,18 @@ impl TfEmitter for GcpWorkerEmitter {
                                 ))),
                             ),
                             nested(block("push_config", push_body)),
-                        ],
+                        ]
+                        .into_iter()
+                        .chain(source_queue_dead_letter_policy(ctx, queue)?),
                     ));
+                    if source_queue_has_dead_letter(ctx, queue) {
+                        super::queue::emit_dead_letter_subscriber(
+                            &mut fragment,
+                            &sub_label,
+                            &sub_label,
+                            expr::traversal(["google_pubsub_subscription", &sub_label, "id"]),
+                        );
+                    }
                 }
                 WorkerTrigger::Schedule { cron } => {
                     let job_label = format!("{label}_schedule_{index}");
@@ -593,4 +603,32 @@ fn command_management_permission_refs<'a>(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The `dead_letter_policy` for a push subscription of `queue_ref`'s topic, when that queue has a
+/// dead-letter setting.
+fn source_queue_dead_letter_policy(
+    ctx: &EmitContext<'_>,
+    queue_ref: &alien_core::ResourceRef,
+) -> Result<Option<hcl::structure::Structure>> {
+    match ctx
+        .stack
+        .resources()
+        .find(|(id, _)| id.as_str() == queue_ref.id)
+        .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Queue>())
+    {
+        Some(queue) => super::queue::dead_letter_policy_block(ctx, queue),
+        None => Ok(None),
+    }
+}
+
+fn source_queue_has_dead_letter(
+    ctx: &EmitContext<'_>,
+    queue_ref: &alien_core::ResourceRef,
+) -> bool {
+    ctx.stack
+        .resources()
+        .find(|(id, _)| id.as_str() == queue_ref.id)
+        .and_then(|(_, entry)| entry.config.downcast_ref::<alien_core::Queue>())
+        .is_some_and(|queue| queue.dead_letter.is_some())
 }

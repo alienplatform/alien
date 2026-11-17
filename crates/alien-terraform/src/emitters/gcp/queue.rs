@@ -72,12 +72,43 @@ impl TfEmitter for GcpQueueEmitter {
                     [attr("ttl", Expression::String("".to_string()))],
                 )),
                 attr("labels", labels(ctx, "queue")),
-            ],
+            ]
+            .into_iter()
+            .chain(dead_letter_policy_block(ctx, queue)?),
         );
 
         let mut fragment = TfFragment::default();
         fragment.resource_blocks.push(topic);
         fragment.resource_blocks.push(subscription);
+        if queue.dead_letter.is_some() {
+            // The Pub/Sub service agent acknowledges on the source subscription.
+            emit_dead_letter_subscriber(
+                &mut fragment,
+                label,
+                &format!("{label}_dead_letter"),
+                expr::traversal(["google_pubsub_subscription", label, "id"]),
+            );
+        }
+        if !alien_core::queues_dead_lettering_to(ctx.stack, queue.id()).is_empty() {
+            // ...and publishes to the target topic.
+            let agent = emit_pubsub_agent(&mut fragment, &format!("{label}_dead_letter_target"));
+            fragment.resource_blocks.push(resource_block(
+                "google_pubsub_topic_iam_member",
+                &format!("{label}_dead_letter_publisher"),
+                [
+                    attr("project", expr::raw("var.gcp_project")),
+                    attr(
+                        "topic",
+                        expr::traversal(["google_pubsub_topic", label, "id"]),
+                    ),
+                    attr(
+                        "role",
+                        Expression::String("roles/pubsub.publisher".to_string()),
+                    ),
+                    attr("member", agent),
+                ],
+            ));
+        }
         emit_queue_iam(ctx, &mut fragment, label)?;
         if queue_receives_storage_notifications(ctx.stack, queue.id()) {
             emit_storage_publisher(&mut fragment, label);
@@ -122,6 +153,75 @@ impl TfEmitter for GcpQueueEmitter {
             ),
         ])))
     }
+}
+
+/// The `dead_letter_policy` block for a subscription of `queue`'s topic, when it has a
+/// dead-letter setting.
+pub(crate) fn dead_letter_policy_block(
+    ctx: &EmitContext<'_>,
+    queue: &Queue,
+) -> Result<Option<hcl::structure::Structure>> {
+    let Some(dead_letter) = &queue.dead_letter else {
+        return Ok(None);
+    };
+    let target_label = ctx.name_for(&dead_letter.queue.id).ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!(
+                "Queue '{}' dead-letters to '{}', which has no Terraform label",
+                queue.id(),
+                dead_letter.queue.id
+            ),
+        })
+    })?;
+    Ok(Some(nested(block(
+        "dead_letter_policy",
+        [
+            attr(
+                "dead_letter_topic",
+                expr::traversal(["google_pubsub_topic", target_label, "id"]),
+            ),
+            attr(
+                "max_delivery_attempts",
+                Expression::Number(hcl::Number::from(i64::from(dead_letter.max_attempts))),
+            ),
+        ],
+    ))))
+}
+
+/// Reads the project number and returns the Pub/Sub service agent as an IAM member.
+pub(crate) fn emit_pubsub_agent(fragment: &mut TfFragment, id: &str) -> Expression {
+    let project_label = format!("{id}_project");
+    fragment.data_blocks.push(data_block(
+        "google_project",
+        &project_label,
+        [attr("project_id", expr::raw("var.gcp_project"))],
+    ));
+    expr::template(format!(
+        "serviceAccount:service-${{data.google_project.{project_label}.number}}@gcp-sa-pubsub.iam.gserviceaccount.com"
+    ))
+}
+
+/// Grants the Pub/Sub service agent `roles/pubsub.subscriber` on one source subscription.
+pub(crate) fn emit_dead_letter_subscriber(
+    fragment: &mut TfFragment,
+    id: &str,
+    grant_label: &str,
+    subscription: Expression,
+) {
+    let agent = emit_pubsub_agent(fragment, id);
+    fragment.resource_blocks.push(resource_block(
+        "google_pubsub_subscription_iam_member",
+        &format!("{grant_label}_subscriber"),
+        [
+            attr("project", expr::raw("var.gcp_project")),
+            attr("subscription", subscription),
+            attr(
+                "role",
+                Expression::String("roles/pubsub.subscriber".to_string()),
+            ),
+            attr("member", agent),
+        ],
+    ));
 }
 
 fn emit_storage_publisher(fragment: &mut TfFragment, label: &str) {
