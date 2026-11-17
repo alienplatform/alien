@@ -1145,7 +1145,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(compact_helm.contains("atomic = true"));
     assert!(!compact_helm.contains("cleanup_on_fail"));
     assert!(compact_helm.contains("wait = true"));
-    assert!(compact_helm.contains("timeout = 300"));
+    assert!(compact_helm.contains("timeout = 900"));
     let variables = module
         .get("variables.tf")
         .expect("registered module should include variables");

@@ -5668,9 +5668,11 @@ fn helm_install_body(
                 expr::raw("var.remote_operator_enabled ? 2 : 1"),
             ),
             attr("wait", Expression::Bool(true)),
-            attr("timeout", Expression::Number(300.into())),
         ]);
     }
+    // The chart's setup check runs as a Helm hook, and the provider applies this timeout to each
+    // hook: the default (300 s) is shorter than the check's budget on slow-start runtimes.
+    helm_body.push(attr("timeout", Expression::Number(900.into())));
     helm_body.push(attr(
         "depends_on",
         Expression::Array(if product_remote_operator {

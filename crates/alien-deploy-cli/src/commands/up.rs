@@ -8048,7 +8048,7 @@ async fn helm_upgrade_install(
         .arg(values_file)
         .arg("--wait")
         .arg("--timeout")
-        .arg("300s");
+        .arg("15m");
 
     if let Some(kubeconfig) = kubeconfig {
         cmd.env("KUBECONFIG", kubeconfig);

@@ -59,6 +59,7 @@ printf 'management:\n  token: %s\n' "$ALIEN_TOKEN" | \
 helm install files oci://manager.example.com/charts/files \
   --namespace files --create-namespace \
   --set management.name=acme \
+  --timeout 15m \
   --values values.yaml \
   --values -
 ```

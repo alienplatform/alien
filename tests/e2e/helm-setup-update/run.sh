@@ -123,7 +123,7 @@ P
   sed "s/^version: .*/version: 1.0.$1/" "$d/app/Chart.yaml" > "$d/Chart.yaml.new" && mv "$d/Chart.yaml.new" "$d/app/Chart.yaml"
   helm package "$d/app" -d "$d" >/dev/null; echo "$d/app-1.0.$1.tgz"
 }
-upgrade() { helm --kube-context $CTX upgrade app "$1" -n $NS --set management.token="$DGT" --timeout 120s "${@:2}" >/dev/null; }
+upgrade() { helm --kube-context $CTX upgrade app "$1" -n $NS --set management.token="$DGT" --timeout 15m "${@:2}" >/dev/null; }
 
 dep() { api $M/v1/deployments | python3 -c "import sys,json;print(json.dumps(json.load(sys.stdin)['items'][0]))"; }
 field() { dep | python3 -c "import sys,json;d=json.load(sys.stdin);m=d['runtimeMetadata'];print($1)"; }

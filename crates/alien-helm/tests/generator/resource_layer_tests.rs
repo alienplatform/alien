@@ -2066,3 +2066,38 @@ fn the_kube_api_discovery_role_is_named_per_install() {
     let second = names("customer-aa-two");
     assert_ne!(first, second);
 }
+
+/// Every egress mode is bounded by the session NetworkPolicy, so every sandbox chart proves the
+/// cluster enforces it before the install. Under `none` the policy is the only thing keeping a
+/// session off the network.
+#[test]
+fn every_sandbox_egress_mode_renders_the_network_policy_probe() {
+    for egress in [
+        SandboxEgress::None,
+        SandboxEgress::Internet,
+        SandboxEgress::Allow,
+    ] {
+        let stack = Stack::new("sandbox-probe-every-mode".to_string())
+            .add(
+                Sandbox::new("agent".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu:24.04".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(egress.clone())
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: Some(3600),
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let chart = render(&stack, StackSettings::default());
+        assert!(
+            chart.files.contains_key("templates/sandbox-cni-probe.yaml"),
+            "{egress:?}: {:?}",
+            chart.files.keys().collect::<Vec<_>>()
+        );
+    }
+}
