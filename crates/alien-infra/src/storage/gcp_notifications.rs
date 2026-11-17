@@ -367,6 +367,10 @@ mod tests {
                     subscription_name: Some("test-work-sub".into()),
                     storage_publisher_member: Some("serviceAccount:storage".into()),
                     storage_publisher_pending: None,
+                    dead_letter_policy: None,
+                    dead_letter_agent: None,
+                    dead_letter_subscriber: false,
+                    dead_letter_publisher: false,
                     _internal_stay_count: None,
                 },
             )
@@ -525,6 +529,10 @@ mod tests {
                     subscription_name: Some("test-work-sub".into()),
                     storage_publisher_member: Some("serviceAccount:storage".into()),
                     storage_publisher_pending: None,
+                    dead_letter_policy: None,
+                    dead_letter_agent: None,
+                    dead_letter_subscriber: false,
+                    dead_letter_publisher: false,
                     _internal_stay_count: None,
                 },
             )
@@ -614,6 +622,10 @@ mod tests {
             subscription_name: Some("test-work-sub".into()),
             storage_publisher_member: Some("serviceAccount:storage".into()),
             storage_publisher_pending: None,
+            dead_letter_policy: None,
+            dead_letter_agent: None,
+            dead_letter_subscriber: false,
+            dead_letter_publisher: false,
             _internal_stay_count: None,
         };
         let checkpoint = GcpStorageController {

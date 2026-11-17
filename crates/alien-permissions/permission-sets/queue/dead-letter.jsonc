@@ -1,0 +1,39 @@
+{
+  "id": "queue/dead-letter",
+  "description": "Allows reconciling a queue's dead-letter policy and the Pub/Sub service agent grants it needs",
+  "platforms": {
+    "gcp": [
+      {
+        // The service agent publishes to the target topic: its publisher grant.
+        "grant": { "permissions": ["pubsub.topics.getIamPolicy", "pubsub.topics.setIamPolicy"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}/topics/${resourceName}" }
+        }
+      },
+      {
+        // The service agent acknowledges on the source subscription: its subscriber grant.
+        // The policy itself is patched on the subscription.
+        "grant": {
+          "permissions": [
+            "pubsub.subscriptions.getIamPolicy",
+            "pubsub.subscriptions.setIamPolicy",
+            "pubsub.subscriptions.update"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}/subscriptions/${resourceName}-sub" }
+        }
+      },
+      {
+        // The service agent's address is built from the project number.
+        "grant": { "permissions": ["resourcemanager.projects.get"] },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ]
+  }
+}

@@ -8348,6 +8348,10 @@ mod tests {
                             subscription_name: Some("test-test-queue-sub".into()),
                             storage_publisher_member: None,
                             storage_publisher_pending: None,
+                            dead_letter_policy: None,
+                            dead_letter_agent: None,
+                            dead_letter_subscriber: false,
+                            dead_letter_publisher: false,
                             _internal_stay_count: None,
                         },
                     )
@@ -8404,6 +8408,10 @@ mod tests {
             subscription_name: Some("test-test-queue-sub".to_string()),
             storage_publisher_member: None,
             storage_publisher_pending: None,
+            dead_letter_policy: None,
+            dead_letter_agent: None,
+            dead_letter_subscriber: false,
+            dead_letter_publisher: false,
             _internal_stay_count: None,
         };
 
@@ -8477,6 +8485,10 @@ mod tests {
             subscription_name: Some("test-test-queue-sub".to_string()),
             storage_publisher_member: None,
             storage_publisher_pending: None,
+            dead_letter_policy: None,
+            dead_letter_agent: None,
+            dead_letter_subscriber: false,
+            dead_letter_publisher: false,
             _internal_stay_count: None,
         };
 
