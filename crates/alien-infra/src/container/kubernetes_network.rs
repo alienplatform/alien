@@ -8,6 +8,7 @@ use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as ClientError;
 use alien_core::{Container, Daemon, Stack};
 use alien_error::{AlienError, Context, ContextError};
+use k8s_openapi::api::core::v1::{PodDNSConfig, PodDNSConfigOption};
 use k8s_openapi::api::networking::v1::{
     IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule, NetworkPolicyPeer,
     NetworkPolicyPort, NetworkPolicySpec,
@@ -247,6 +248,75 @@ fn resolver_rule(resolv_conf: Option<&str>) -> Option<NetworkPolicyEgressRule> {
         ),
         ports: Some(vec![port(53, "UDP"), port(53, "TCP")]),
     })
+}
+
+/// Resolver settings that send a pod's lookups to the cluster DNS Service address.
+///
+/// By default the kubelet writes its own resolver address into the pod. A cluster that runs a
+/// node-local DNS cache points it at a link-local address (for example AKS LocalDNS), and the
+/// network policy dataplane may not match a link-local address as an address block. The
+/// cluster DNS Service address is matched through the `kube-dns` pod selector in the policy.
+/// The search path and `ndots` are the kubelet's defaults for a pod in `namespace`.
+fn cluster_dns_config(namespace: &str, domain: &str, service_address: &str) -> PodDNSConfig {
+    PodDNSConfig {
+        nameservers: Some(vec![service_address.to_string()]),
+        searches: Some(vec![
+            format!("{namespace}.svc.{domain}"),
+            format!("svc.{domain}"),
+            domain.to_string(),
+        ]),
+        options: Some(vec![PodDNSConfigOption {
+            name: Some("ndots".into()),
+            value: Some("5".into()),
+        }]),
+    }
+}
+
+impl KubernetesContainerController {
+    /// Applies [`cluster_dns_config`] to a pod that has egress enforced. Left as the cluster
+    /// default when the cluster domain or the `kube-dns` Service cannot be determined.
+    pub(super) async fn use_cluster_dns(
+        &self,
+        pod_spec: &mut k8s_openapi::api::core::v1::PodSpec,
+        namespace: &str,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        let Some(domain) = crate::sandbox::kubernetes_egress::detected_cluster_domain() else {
+            return Ok(());
+        };
+        let service = ctx
+            .service_provider
+            .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
+            .await?
+            .get_service("kube-system", "kube-dns")
+            .await;
+        let service = match service {
+            Ok(service) => service,
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(ClientError::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(())
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: "Failed to read the cluster DNS Service".into(),
+                    resource_id: Some(ctx.desired_config.id().into()),
+                }))
+            }
+        };
+        let address = service
+            .spec
+            .and_then(|spec| spec.cluster_ip)
+            .filter(|address| address.parse::<std::net::Ipv4Addr>().is_ok());
+        if let Some(address) = address {
+            pod_spec.dns_policy = Some("None".into());
+            pod_spec.dns_config = Some(cluster_dns_config(namespace, &domain, &address));
+        }
+        Ok(())
+    }
 }
 
 fn require_owner(

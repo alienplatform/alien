@@ -3148,6 +3148,11 @@ impl KubernetesContainerController {
             enable_service_links: Some(false),
             ..Default::default()
         };
+        if gateway {
+            // The gateway's DNS must pass its own egress policy, which admits the cluster DNS
+            // pods; a node-local cache address would not match it everywhere.
+            self.use_cluster_dns(&mut pod_spec, namespace, ctx).await?;
+        }
         // A workload that links a sandbox calls the session broker with a token projected for it.
         crate::sandbox::kubernetes_broker_token::project_into(&mut pod_spec, &config.links);
 
@@ -4750,6 +4755,81 @@ mod tests {
             .expect("drift check"));
     }
 
+    /// The gateway's lookups go to the cluster DNS Service address, which its egress policy
+    /// admits through the `kube-dns` pod selector, not to a link-local address a node-local
+    /// cache may have put in its resolver file.
+    #[tokio::test]
+    async fn the_gateway_resolves_through_the_cluster_dns_service() {
+        unsafe {
+            std::env::set_var(
+                crate::sandbox::kubernetes_egress::CLUSTER_DOMAIN_ENV,
+                "corp.example",
+            )
+        };
+        use httpmock::Method::GET;
+        let server = httpmock::MockServer::start_async().await;
+        let dns = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/api/v1/namespaces/kube-system/services/kube-dns");
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"v1","kind":"Service",
+                    "metadata":{"name":"kube-dns","namespace":"kube-system"},
+                    "spec":{"clusterIP":"10.0.0.10"}
+                }));
+            })
+            .await;
+        let gateway = gateway_container(
+            "example.invalid/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        );
+        let harness = KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
+        let state = secrets_vault_state();
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        point_at(&mut ctx, &server);
+        let controller = manifest_test_controller();
+        let pod = controller
+            .build_deployment(&gateway, "gateway", "test-ns", "gateway-sa", None, None, &ctx)
+            .await
+            .expect("deployment manifest")
+            .spec
+            .expect("deployment spec")
+            .template
+            .spec
+            .expect("pod spec");
+        assert_eq!(dns.hits_async().await, 1);
+        assert_eq!(pod.dns_policy.as_deref(), Some("None"));
+        let config = pod.dns_config.expect("resolver settings");
+        assert_eq!(config.nameservers, Some(vec!["10.0.0.10".to_string()]));
+        assert_eq!(
+            config.searches,
+            Some(vec![
+                "test-ns.svc.corp.example".to_string(),
+                "svc.corp.example".to_string(),
+                "corp.example".to_string()
+            ])
+        );
+        assert_eq!(config.options.unwrap()[0].value.as_deref(), Some("5"));
+
+        // A workload that is not the gateway keeps the cluster's resolver.
+        let other = manifest_test_container(&[], false);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(other.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        point_at(&mut ctx, &server);
+        let pod = controller
+            .build_deployment(&other, "app", "test-ns", "app-sa", None, None, &ctx)
+            .await
+            .expect("deployment manifest")
+            .spec
+            .expect("deployment spec")
+            .template
+            .spec
+            .expect("pod spec");
+        assert!(pod.dns_policy.is_none() && pod.dns_config.is_none());
+        assert_eq!(dns.hits_async().await, 1);
+    }
+
     /// A gateway on an image that reads mounted files gets the vault's configuration Secret and
     /// replica-secret Secret mounted by the kubelet, and the controller reads neither: it only
     /// creates the replica secret before the pods need it. An earlier image still gets the
@@ -4976,6 +5056,7 @@ mod tests {
                 port: 8080,
             });
         }
+        let server = httpmock::MockServer::start_async().await;
         for (config, delay, automount) in [
             (&gateway, Some(GATEWAY_READY_DELAY_SECONDS), Some(false)),
             (&ordinary, None, None),
@@ -4984,6 +5065,7 @@ mod tests {
             let state = secrets_vault_state();
             let mut ctx = harness.ctx();
             ctx.state = &state;
+            point_at(&mut ctx, &server);
             let pod = manifest_test_controller()
                 .build_deployment(config, "web", "test-ns", "web-sa", None, None, &ctx)
                 .await
