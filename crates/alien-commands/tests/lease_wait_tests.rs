@@ -731,6 +731,74 @@ async fn waits_of_one_deployment_are_bounded_over_all_its_targets() {
     }
 }
 
+/// Two waiters on two manager processes over one store, one command: whichever
+/// process queued it, exactly one of them leases it and the other ends empty.
+#[tokio::test]
+async fn two_waiters_on_two_servers_racing_for_one_command_lease_it_exactly_once() {
+    for round in 0..5 {
+        let server = TestCommandServer::builder()
+            .with_pull_mode()
+            .with_lease_wait_probe_interval(Duration::from_millis(100))
+            .build()
+            .await;
+        let replica = Arc::new(second_replica(&server).with_lease_wait_probe_interval(
+            Duration::from_millis(100),
+        ));
+        let request = lease_request(&server, 3);
+        let first = {
+            let (s, r) = (server.command_server.clone(), request.clone());
+            tokio::spawn(async move { s.acquire_lease(&r.deployment_id, &r).await })
+        };
+        let second = {
+            let (s, r) = (replica.clone(), request.clone());
+            tokio::spawn(async move { s.acquire_lease(&r.deployment_id, &r).await })
+        };
+        wait_for_open_waits(&server, 1).await;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while replica.open_lease_waits() != 1 {
+            assert!(Instant::now() < deadline, "the replica's waiter never parked");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // Queued through the first process in even rounds, the replica in odd ones.
+        let created = if round % 2 == 0 {
+            server
+                .create_command(test_inline_create_command(DEPLOYMENT_ID, "read"))
+                .await
+                .unwrap()
+                .command_id
+        } else {
+            let mut registry_create = test_inline_create_command(DEPLOYMENT_ID, "read");
+            registry_create.target_resource_id = Some(server.default_target.resource_id.clone());
+            replica.create_command(registry_create).await.unwrap().command_id
+        };
+        let (first, second) = (first.await.unwrap().unwrap(), second.await.unwrap().unwrap());
+        let leased: Vec<_> = first.leases.iter().chain(second.leases.iter()).collect();
+        assert_eq!(leased.len(), 1, "round {round}: one lease, got {leased:?}");
+        assert_eq!(leased[0].command_id, created);
+    }
+}
+
+/// A client that goes away during a wait gives its slot back at once, not when
+/// the wait would have ended.
+#[tokio::test]
+async fn a_dropped_connection_frees_its_wait_slot() {
+    let server = pull_server().await;
+    let lease_client = client(&server);
+    let request = lease_request(&server, 25);
+    let waiting = tokio::spawn(async move { lease_client.acquire(&request).await });
+    wait_for_open_waits(&server, 1).await;
+    // Aborting drops the request and its connection.
+    waiting.abort();
+    let _ = waiting.await;
+    let started = Instant::now();
+    wait_for_open_waits(&server, 0).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the slot was held for {:?}",
+        started.elapsed()
+    );
+}
+
 /// Eight waiters on one target: one stream of wake key reads, and one create
 /// costs a few scans, not eight each.
 #[tokio::test]
