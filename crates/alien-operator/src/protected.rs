@@ -20,9 +20,10 @@
 //!
 //! - a target's stack comes only from its verified statement; the manager may
 //!   move an image to another registry, never change its digest;
-//! - a signer list older than the one accepted is refused; a release or
-//!   config signed by a key no longer on the list is refused too, so after a
-//!   signer is removed the current release is signed again by a current signer;
+//! - a signer list older than the one accepted is refused; a new release or
+//!   config must be signed by a key on the current list, while one the install
+//!   already accepted keeps running after its signer is removed, unless the
+//!   list denies it;
 //! - the deployment configuration is rebuilt here: environment variables only
 //!   for the input mappings the signed stack declares, developer inputs and
 //!   configurable env only from the deployment's signed `config/v1`, deployer

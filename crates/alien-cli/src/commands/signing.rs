@@ -882,6 +882,7 @@ async fn publish_ci_signer(
 /// is published.
 async fn add_key(ctx: &ExecutionMode, name: &str, out: Option<&Path>) -> Result<()> {
     check_key_name(name)?;
+    check_out_free(out)?;
     let admin = admin(ctx).await?;
     if admin.chain.current().signer(name).is_some() {
         return Err(AlienError::new(ErrorData::ValidationError {
@@ -900,6 +901,18 @@ async fn add_key(ctx: &ExecutionMode, name: &str, out: Option<&Path>) -> Result<
     show_ci_key(&key, out)?;
     eprintln!("✓ {name} can release (and sign debug sessions); it can't change the devices");
     Ok(())
+}
+
+/// Refuse an `--out` file that already exists before the list changes, so a key
+/// the list trusts is never left with nowhere to be written.
+fn check_out_free(out: Option<&Path>) -> Result<()> {
+    match out {
+        Some(path) if path.exists() => Err(AlienError::new(ErrorData::ValidationError {
+            field: "out".to_string(),
+            message: format!("{} already exists; choose a new file", path.display()),
+        })),
+        _ => Ok(()),
+    }
 }
 
 /// Print `key` as PKCS#8 PEM to stdout, or write it to `out` (mode 0600),
@@ -922,6 +935,7 @@ fn show_ci_key(key: &SecretKey, out: Option<&Path>) -> Result<()> {
 }
 
 async fn rotate(ctx: &ExecutionMode, name: &str, revoke: bool, out: Option<&Path>) -> Result<()> {
+    check_out_free(out)?;
     let admin = admin(ctx).await?;
     let list = admin.chain.current();
     let old = list
