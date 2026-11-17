@@ -208,6 +208,23 @@ pub fn helm_template_in_namespace(
     )
 }
 
+/// Render a chart for a release in `namespace` on a cluster that serves each of `api_versions`
+/// (`group/version/Kind`). `helm template` serves only the API versions Helm knows by default, so
+/// this is how a test renders what a newer cluster would.
+pub fn helm_template_with_api_versions(
+    files: &LinterFiles,
+    values_yaml: Option<&str>,
+    release_name: &str,
+    namespace: &str,
+    api_versions: &[&str],
+) -> LinterRun {
+    let mut flags = vec!["--namespace", namespace];
+    for api_version in api_versions {
+        flags.extend(["--api-versions", api_version]);
+    }
+    helm_template_with_options(files, values_yaml, release_name, &flags, None)
+}
+
 /// Render a chart as a cluster of the given version string, such as `v1.36.0-eks-abc123`, would.
 pub fn helm_template_for_kube_version(
     files: &LinterFiles,
