@@ -215,4 +215,16 @@ mod tests {
         }
         assert!(check_addresses(&[public], &["8.8.8.0/24".parse().unwrap()]).is_err());
     }
+
+    #[test]
+    fn ipv6_metadata_and_link_local_addresses_are_refused() {
+        let public = "8.8.8.8".parse().unwrap();
+        for ip in ["fd00:ec2::254", "fe80::1"] {
+            assert!(
+                check_addresses(&[public, ip.parse().unwrap()], &[]).is_err(),
+                "{ip}"
+            );
+            assert!(Target::parse(&format!("[{ip}]:80"), None).is_err(), "{ip}");
+        }
+    }
 }
