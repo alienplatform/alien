@@ -386,6 +386,53 @@ pub(crate) async fn tear_down_engine_access(
     Ok(())
 }
 
+/// Deletes the preview signer when its description carries this deployment's marker, for a
+/// teardown whose state lost `EngineSetupRecord`. An account without the marker (made by the
+/// Terraform package or by somebody else) is left alone.
+pub(crate) async fn remove_marked_signer(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+) -> Result<()> {
+    let gcp_config = ctx.get_gcp_config()?;
+    let iam = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+    let account_id = preview_signer_account_id(ctx.resource_prefix, sandbox_id);
+    let email = format!(
+        "{account_id}@{}.iam.gserviceaccount.com",
+        gcp_config.project_id
+    );
+    let marker = signer_marker(ctx.resource_prefix, sandbox_id);
+    let existing = match iam.get_service_account(email.clone()).await {
+        Ok(account) => account,
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to read service account {email} to check ownership"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?,
+    };
+    if existing
+        .description
+        .as_deref()
+        .is_some_and(|text| text.contains(&marker))
+    {
+        if let Err(error) = iam.delete_service_account(email.clone()).await {
+            if !matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            ) {
+                tracing::warn!(signer=%email, error=%error, "could not delete the preview signer, continuing");
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -173,7 +173,7 @@ impl Drop for EngineGuard {
 async fn provision_engine(client: &Arc<AgentPlatformClient>) -> String {
     let display = format!("{LIVE_PREFIX}{}", uuid::Uuid::new_v4().simple());
     let operation = client
-        .create_engine(&display)
+        .create_engine(&display, None)
         .await
         .expect("engine create accepted");
     let engine: ReasoningEngine = client

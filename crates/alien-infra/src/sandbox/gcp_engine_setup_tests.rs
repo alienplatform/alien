@@ -209,6 +209,25 @@ async fn executor_full(
     management: bool,
     remote: bool,
 ) -> SingleControllerExecutor {
+    executor_seeded(
+        iam,
+        platform,
+        setup_run,
+        management,
+        remote,
+        GcpAgentPlatformTemplateController::default(),
+    )
+    .await
+}
+
+async fn executor_seeded(
+    iam: MockIamApi,
+    platform: MockAgentPlatformApi,
+    setup_run: bool,
+    management: bool,
+    remote: bool,
+    controller: GcpAgentPlatformTemplateController,
+) -> SingleControllerExecutor {
     let iam = Arc::new(iam);
     let platform = Arc::new(platform);
     let mut provider = MockPlatformServiceProvider::new();
@@ -227,7 +246,7 @@ async fn executor_full(
         })
         .resource_prefix("test")
         .resource_lifecycle(ResourceLifecycle::Frozen)
-        .controller(GcpAgentPlatformTemplateController::default())
+        .controller(controller)
         .platform(Platform::Gcp)
         .initial_setup_authority(InitialSetupAuthority::DirectSetup)
         .setup_run(setup_run)
@@ -456,6 +475,38 @@ async fn a_signer_account_an_earlier_attempt_made_is_adopted_by_the_retry() {
     executor.delete().expect("delete is accepted");
     executor.run_until_terminal().await.expect("delete runs");
     assert_eq!(calls.lock().unwrap().deleted_accounts.len(), 1);
+}
+
+/// An older manager rewrites the controller state without the setup record. The signer's own
+/// description still names this deployment, so teardown removes it; an account without that
+/// marker stays.
+#[tokio::test]
+async fn a_signer_the_state_forgot_is_removed_only_when_it_carries_this_deployments_marker() {
+    let marker = crate::sandbox::gcp_engine_setup::signer_marker("test", "box");
+    for (description, removed) in [
+        (format!("Signs. {marker}"), 1),
+        ("made by hand".to_string(), 0),
+        (
+            crate::sandbox::gcp_engine_setup::signer_marker("other", "box"),
+            0,
+        ),
+    ] {
+        let calls = Arc::new(Mutex::new(Calls::default()));
+        let (iam, platform) = clients_with_signer(&calls, Some(description));
+        let mut executor = executor_seeded(
+            iam,
+            platform,
+            false,
+            false,
+            false,
+            GcpAgentPlatformTemplateController::mock_ready("eng", "tpl"),
+        )
+        .await;
+        executor.delete().expect("delete is accepted");
+        executor.run_until_terminal().await.expect("delete runs");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(calls.lock().unwrap().deleted_accounts.len(), removed);
+    }
 }
 
 /// A setup run again with nothing changed asks for no update; with a profile added since, it asks

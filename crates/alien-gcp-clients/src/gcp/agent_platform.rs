@@ -193,6 +193,9 @@ pub struct ReasoningEngine {
     /// Human-readable display name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// Free text set at creation; setup writes its ownership marker here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Preview fields not modelled above, kept rather than dropped.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,
@@ -537,7 +540,11 @@ pub async fn revoke_on_engine(
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait AgentPlatformApi: Send + Sync + Debug {
     /// Create a reasoning engine. Single-attempt; returns the operation to poll.
-    async fn create_engine(&self, display_name: &str) -> Result<Operation>;
+    async fn create_engine(
+        &self,
+        display_name: &str,
+        description: Option<String>,
+    ) -> Result<Operation>;
     /// Delete a reasoning engine. Retries; a not-found is success.
     async fn delete_engine(&self, engine: &str) -> Result<()>;
     /// Read the IAM policy of one reasoning engine, at policy version 3 so conditional bindings
@@ -815,16 +822,18 @@ fn tolerate_not_found(result: alien_client_core::Result<Operation>, operation: &
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl AgentPlatformApi for AgentPlatformClient {
-    async fn create_engine(&self, display_name: &str) -> Result<Operation> {
+    async fn create_engine(
+        &self,
+        display_name: &str,
+        description: Option<String>,
+    ) -> Result<Operation> {
         let path = self.engines_path();
+        let mut body = serde_json::json!({ "displayName": display_name });
+        if let Some(description) = description {
+            body["description"] = serde_json::Value::String(description);
+        }
         self.base
-            .execute_request_once(
-                Method::POST,
-                &path,
-                None,
-                Some(serde_json::json!({ "displayName": display_name })),
-                display_name,
-            )
+            .execute_request_once(Method::POST, &path, None, Some(body), display_name)
             .await
             .context(AgentPlatformErrorData::RequestFailed {
                 operation: "create engine".to_string(),
@@ -1172,7 +1181,7 @@ mod tests {
             })
             .await;
         client(&server)
-            .create_engine("engine-display")
+            .create_engine("engine-display", None)
             .await
             .expect_err("create should surface the failure");
         assert_eq!(

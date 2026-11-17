@@ -111,7 +111,10 @@ impl GcpAgentPlatformEngineController {
             Some(name) => Some(name),
             None => {
                 client
-                    .create_engine(&display_name)
+                    .create_engine(
+                        &display_name,
+                        Some(engine_marker(ctx.resource_prefix, &config.id)),
+                    )
                     .await
                     .context(ErrorData::CloudPlatformError {
                         message: format!("Failed to create reasoning engine '{display_name}'"),
@@ -237,7 +240,8 @@ impl GcpAgentPlatformEngineController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<GcpAgentPlatformEngine>()?;
 
-        if !self.owns_engine_deletion(ctx, &config.id)? {
+        let owned = self.owns_engine_deletion(ctx, &config.id)?;
+        if !owned && !self.marked_as_ours(ctx, &config.id).await? {
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
@@ -293,7 +297,43 @@ impl GcpAgentPlatformEngineController {
     }
 }
 
+/// Text in the engine's description that only a direct setup of this deployment writes. It
+/// proves ownership when the controller state lost `created_here` (an older manager rewrote it).
+pub(crate) fn engine_marker(resource_prefix: &str, resource_id: &str) -> String {
+    format!("Alien setup owner: {resource_prefix}/{resource_id}.")
+}
+
 impl GcpAgentPlatformEngineController {
+    /// True only when the engine in state carries this deployment's marker in the cloud. An
+    /// engine without the marker (Terraform-made, or another deployment's) is left alone.
+    async fn marked_as_ours(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        let Some(engine) = self.engine_id.as_deref() else {
+            return Ok(false);
+        };
+        let client = ctx
+            .service_provider
+            .get_gcp_agent_platform_client(ctx.get_gcp_config()?)?;
+        let marker = engine_marker(ctx.resource_prefix, resource_id);
+        let engines = client
+            .list_engines()
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to list reasoning engines to check ownership".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            })?;
+        Ok(engines.iter().any(|candidate| {
+            candidate.name.as_deref().map(last_segment) == Some(engine)
+                && candidate
+                    .description
+                    .as_deref()
+                    .is_some_and(|text| text.contains(&marker))
+        }))
+    }
+
     fn owns_engine_deletion(
         &self,
         ctx: &ResourceControllerContext<'_>,
@@ -329,7 +369,7 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
     use alien_core::{Platform, ResourceLifecycle};
-    use alien_gcp_clients::agent_platform::MockAgentPlatformApi;
+    use alien_gcp_clients::agent_platform::{MockAgentPlatformApi, ReasoningEngine};
     use alien_gcp_clients::longrunning::Operation;
     use std::sync::Arc;
 
@@ -392,7 +432,7 @@ mod tests {
     #[tokio::test]
     async fn create_records_the_server_assigned_id_then_deletes_it() {
         let mut m = MockAgentPlatformApi::new();
-        m.expect_create_engine().returning(|_| Ok(pending_op()));
+        m.expect_create_engine().returning(|_, _| Ok(pending_op()));
         m.expect_get_operation()
             .returning(|_| Ok(done_engine_op("eng-42")));
         m.expect_delete_engine().times(1).returning(|_| Ok(()));
@@ -443,7 +483,7 @@ mod tests {
     #[tokio::test]
     async fn a_create_failure_lands_in_provision_failed() {
         let mut m = MockAgentPlatformApi::new();
-        m.expect_create_engine().returning(|_| {
+        m.expect_create_engine().returning(|_, _| {
             Err(AlienError::new(
                 alien_gcp_clients::agent_platform::AgentPlatformErrorData::RequestFailed {
                     operation: "create engine".to_string(),
@@ -470,16 +510,68 @@ mod tests {
         );
     }
 
-    /// A Frozen engine belongs to the setup stack. `terraform destroy` removes it, and the
-    /// controller deleting it first would take the parent of sessions the stack still owns — so
-    /// this asserts on the client, not on the status a wrong implementation would also reach.
+    fn listed(engine: &str, description: Option<&str>) -> ReasoningEngine {
+        ReasoningEngine {
+            name: Some(format!(
+                "projects/p/locations/us-central1/reasoningEngines/{engine}"
+            )),
+            display_name: None,
+            description: description.map(str::to_string),
+            extra: Default::default(),
+        }
+    }
+
+    /// A Frozen engine belongs to the setup stack unless the cloud object says this deployment
+    /// made it. `terraform destroy` removes a package engine, and the controller deleting it
+    /// first would take the parent of sessions the stack still owns, so an engine with no
+    /// marker (or another deployment's) is never deleted, asserted on the client.
     #[tokio::test]
-    async fn a_frozen_engine_is_torn_down_without_a_single_provider_call() {
-        let mut provider = MockPlatformServiceProvider::new();
-        provider.expect_get_gcp_agent_platform_client().never();
+    async fn a_frozen_engine_without_this_deployments_marker_is_left_alone() {
+        for description in [
+            None,
+            Some("Alien setup owner: other/orders-engine."),
+            Some("made by hand"),
+        ] {
+            let mut m = MockAgentPlatformApi::new();
+            m.expect_list_engines()
+                .returning(move || Ok(vec![listed("eng-42", description)]));
+            m.expect_delete_engine().never();
+
+            let mut executor = build_executor_with(
+                provider_with(Arc::new(m)),
+                ResourceLifecycle::Frozen,
+                GcpAgentPlatformEngineController::mock_ready("eng-42"),
+            )
+            .await;
+
+            executor.delete().expect("delete is accepted");
+            executor
+                .run_until_terminal()
+                .await
+                .expect("delete runs to terminal");
+            assert_eq!(executor.status(), ResourceStatus::Deleted);
+        }
+    }
+
+    /// An older manager rewrites the controller state without `created_here`. The marker this
+    /// setup wrote on the engine still proves the engine is its own, so teardown removes it.
+    #[tokio::test]
+    async fn a_frozen_engine_with_this_deployments_marker_is_deleted_when_the_state_lost_its_flag()
+    {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_list_engines().returning(|| {
+            Ok(vec![
+                listed("eng-1", Some("Alien setup owner: test/orders-engine.")),
+                listed("eng-42", Some("Alien setup owner: test/orders-engine.")),
+            ])
+        });
+        m.expect_delete_engine()
+            .withf(|engine| engine == "eng-42")
+            .times(1)
+            .returning(|_| Ok(()));
 
         let mut executor = build_executor_with(
-            Arc::new(provider),
+            provider_with(Arc::new(m)),
             ResourceLifecycle::Frozen,
             GcpAgentPlatformEngineController::mock_ready("eng-42"),
         )
@@ -493,13 +585,34 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Deleted);
     }
 
+    /// The marker is written when the engine is created.
+    #[tokio::test]
+    async fn the_engine_is_created_with_this_deployments_marker() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_create_engine()
+            .withf(|_, description| {
+                description.as_deref() == Some("Alien setup owner: test/orders-engine.")
+            })
+            .times(1)
+            .returning(|_, _| Ok(pending_op()));
+        m.expect_get_operation()
+            .returning(|_| Ok(done_engine_op("eng-42")));
+        let mut executor = build_executor_with(
+            provider_with(Arc::new(m)),
+            ResourceLifecycle::Frozen,
+            Default::default(),
+        )
+        .await;
+        executor.run_until_terminal().await.expect("create runs");
+    }
+
     /// A direct setup has no package to run `terraform destroy`, so the engine its own controller
     /// created is removed by its own teardown, Frozen or not. An imported one (never created
     /// here) is still left to the package, which the test above pins.
     #[tokio::test]
     async fn a_frozen_engine_a_direct_setup_created_is_deleted_by_its_teardown() {
         let mut m = MockAgentPlatformApi::new();
-        m.expect_create_engine().returning(|_| Ok(pending_op()));
+        m.expect_create_engine().returning(|_, _| Ok(pending_op()));
         m.expect_get_operation()
             .returning(|_| Ok(done_engine_op("eng-42")));
         m.expect_delete_engine()

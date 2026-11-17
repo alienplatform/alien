@@ -746,6 +746,10 @@ impl GcpAgentPlatformTemplateController {
                 &self.engine_setup,
             )
             .await?;
+        } else {
+            // The record may have been dropped by an older manager rewriting the state; the
+            // signer's own description still names this deployment.
+            crate::sandbox::gcp_engine_setup::remove_marked_signer(ctx, &config.id).await?;
         }
         self.clear_state();
         info!(id=%config.id, "sandbox template teardown complete");
@@ -1031,6 +1035,20 @@ mod tests {
         provider
             .expect_get_gcp_agent_platform_client()
             .returning(move |_| Ok(client.clone()));
+        // Teardown looks for a preview signer this deployment may have made; none exists here.
+        let mut iam = alien_gcp_clients::iam::MockIamApi::new();
+        iam.expect_get_service_account().returning(|name| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "ServiceAccount".to_string(),
+                    resource_name: name,
+                },
+            ))
+        });
+        let iam = Arc::new(iam);
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
         Arc::new(provider)
     }
 
