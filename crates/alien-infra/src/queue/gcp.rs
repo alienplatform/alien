@@ -158,15 +158,6 @@ impl GcpQueueController {
 
         // Create pull subscription
         let dead_letter = dead_letter_policy(ctx, &q)?;
-        if dead_letter.is_some()
-            && crate::core::verifier::protected_statements(ctx, &q.id)?.is_some()
-        {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "A dead-letter setting is not supported on a protected install yet"
-                    .to_string(),
-                resource_id: Some(q.id.clone()),
-            }));
-        }
         let subscription = Subscription::builder()
             .topic(format!("projects/{}/topics/{}", cfg.project_id, topic))
             .maybe_dead_letter_policy(dead_letter.clone())
@@ -573,6 +564,89 @@ impl GcpQueueController {
             Ok(None)
         }
     }
+}
+
+/// Read-modify-write of one topic policy: adds or removes only the Pub/Sub service agent's
+/// publisher binding, keeping every other member and the etag.
+async fn set_agent_on_topic(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn alien_gcp_clients::pubsub::PubSubApi,
+    queue_id: &str,
+    topic: &str,
+    agent: &str,
+    enabled: bool,
+) -> Result<()> {
+    let mut policy = client
+        .get_topic_iam_policy(topic.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            resource_id: Some(queue_id.to_string()),
+            message: format!("Read the dead-letter publisher policy of topic '{topic}'"),
+        })?;
+    if set_role_member(&mut policy, PUBLISHER, agent, enabled) {
+        if !protected_queue_writes(
+            ctx,
+            queue_id,
+            vec![ResourceWrite::SetTopicIamPolicy {
+                topic: topic.to_string(),
+                policy: policy_json(&policy, queue_id)?,
+            }],
+        )
+        .await?
+        {
+            client
+                .set_topic_iam_policy(topic.to_string(), policy)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    resource_id: Some(queue_id.to_string()),
+                    message: format!(
+                        "Change the Pub/Sub service agent's publisher grant on topic '{topic}'"
+                    ),
+                })?;
+        }
+    }
+    Ok(())
+}
+
+/// The same for a subscription: the Pub/Sub service agent's subscriber binding.
+async fn set_agent_on_subscription(
+    ctx: &ResourceControllerContext<'_>,
+    client: &dyn alien_gcp_clients::pubsub::PubSubApi,
+    queue_id: &str,
+    subscription: &str,
+    agent: &str,
+    enabled: bool,
+) -> Result<()> {
+    let mut policy = client
+        .get_subscription_iam_policy(subscription.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            resource_id: Some(queue_id.to_string()),
+            message: format!("Read the dead-letter subscriber policy of '{subscription}'"),
+        })?;
+    if set_role_member(&mut policy, SUBSCRIBER, agent, enabled) {
+        if !protected_queue_writes(
+            ctx,
+            queue_id,
+            vec![ResourceWrite::SetSubscriptionIamPolicy {
+                subscription: subscription.to_string(),
+                policy: policy_json(&policy, queue_id)?,
+            }],
+        )
+        .await?
+        {
+            client
+                .set_subscription_iam_policy(subscription.to_string(), policy)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    resource_id: Some(queue_id.to_string()),
+                    message: format!(
+                        "Change the Pub/Sub service agent's subscriber grant on '{subscription}'"
+                    ),
+                })?;
+        }
+    }
+    Ok(())
 }
 
 fn may_manage_storage_publisher(ctx: &ResourceControllerContext<'_>, id: &str) -> bool {
@@ -1236,13 +1310,6 @@ impl GcpQueueController {
         let want_subscriber = queue.dead_letter.is_some();
         let want_publisher = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
         let desired_policy = dead_letter_policy(ctx, &queue)?;
-        if crate::core::verifier::protected_statements(ctx, &queue.id)?.is_some() {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "A dead-letter setting is not supported on a protected install yet"
-                    .to_string(),
-                resource_id: Some(queue.id.clone()),
-            }));
-        }
         let invalid = |message: &str| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: message.to_string(),
@@ -1258,139 +1325,92 @@ impl GcpQueueController {
             self.dead_letter_agent = Some(pubsub_service_agent(ctx, &queue.id).await?);
         }
         let agent = self.dead_letter_agent.clone();
+        let topic = self.topic_name.clone();
+        let subscription = self.subscription_name.clone();
 
         if let Some(agent) = &agent {
             if want_publisher && !self.dead_letter_publisher {
-                let topic = self
-                    .topic_name
+                let topic = topic
                     .clone()
                     .ok_or_else(|| invalid("Topic name not set in state"))?;
-                let mut policy = client.get_topic_iam_policy(topic.clone()).await.context(
-                    ErrorData::CloudPlatformError {
-                        resource_id: Some(queue.id.clone()),
-                        message: format!(
-                            "Read the dead-letter publisher policy of topic '{topic}'"
-                        ),
-                    },
-                )?;
-                if set_role_member(&mut policy, PUBLISHER, agent, true) {
-                    client
-                        .set_topic_iam_policy(topic.clone(), policy)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            resource_id: Some(queue.id.clone()),
-                            message: format!(
-                                "Grant the Pub/Sub service agent publisher on topic '{topic}'"
-                            ),
-                        })?;
-                }
+                set_agent_on_topic(ctx, client.as_ref(), &queue.id, &topic, agent, true).await?;
                 self.dead_letter_publisher = true;
             }
             if want_subscriber && !self.dead_letter_subscriber {
-                let subscription = self
-                    .subscription_name
+                let subscription = subscription
                     .clone()
                     .ok_or_else(|| invalid("Subscription name not set in state"))?;
-                let mut policy = client
-                    .get_subscription_iam_policy(subscription.clone())
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        resource_id: Some(queue.id.clone()),
-                        message: format!(
-                            "Read the dead-letter subscriber policy of '{subscription}'"
-                        ),
-                    })?;
-                if set_role_member(&mut policy, SUBSCRIBER, agent, true) {
-                    client
-                        .set_subscription_iam_policy(subscription.clone(), policy)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            resource_id: Some(queue.id.clone()),
-                            message: format!(
-                                "Grant the Pub/Sub service agent subscriber on '{subscription}'"
-                            ),
-                        })?;
-                }
+                set_agent_on_subscription(
+                    ctx,
+                    client.as_ref(),
+                    &queue.id,
+                    &subscription,
+                    agent,
+                    true,
+                )
+                .await?;
                 self.dead_letter_subscriber = true;
             }
         }
 
         if policy_key(&desired_policy) != self.dead_letter_policy {
-            let subscription = self
-                .subscription_name
+            let subscription = subscription
                 .clone()
                 .ok_or_else(|| invalid("Subscription name not set in state"))?;
             // An absent policy in the patch removes it.
-            client
-                .patch_subscription(
-                    subscription.clone(),
+            let request = alien_gcp_clients::pubsub::SubscriptionPatchRequest::builder()
+                .subscription(
                     alien_gcp_clients::pubsub::SubscriptionPatch::builder()
                         .maybe_dead_letter_policy(desired_policy.clone())
                         .build(),
-                    Some("deadLetterPolicy".to_string()),
                 )
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    resource_id: Some(queue.id.clone()),
-                    message: format!(
-                        "Update the dead-letter policy of subscription '{subscription}'"
-                    ),
-                })?;
+                .update_mask("deadLetterPolicy".to_string())
+                .build();
+            if !protected_queue_writes(
+                ctx,
+                &queue.id,
+                vec![ResourceWrite::PatchSubscription {
+                    subscription: subscription.clone(),
+                    body: body_json(&request, &queue.id)?,
+                }],
+            )
+            .await?
+            {
+                client
+                    .patch_subscription(
+                        subscription.clone(),
+                        request.subscription,
+                        request.update_mask,
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        resource_id: Some(queue.id.clone()),
+                        message: format!(
+                            "Update the dead-letter policy of subscription '{subscription}'"
+                        ),
+                    })?;
+            }
             self.dead_letter_policy = policy_key(&desired_policy);
         }
 
         if let Some(agent) = &agent {
             if !want_publisher && self.dead_letter_publisher {
-                let topic = self
-                    .topic_name
-                    .clone()
-                    .ok_or_else(|| invalid("Topic name not set in state"))?;
-                let mut policy = client.get_topic_iam_policy(topic.clone()).await.context(
-                    ErrorData::CloudPlatformError {
-                        resource_id: Some(queue.id.clone()),
-                        message: format!(
-                            "Read the dead-letter publisher policy of topic '{topic}'"
-                        ),
-                    },
-                )?;
-                if set_role_member(&mut policy, PUBLISHER, agent, false) {
-                    client
-                        .set_topic_iam_policy(topic.clone(), policy)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            resource_id: Some(queue.id.clone()),
-                            message: format!(
-                                "Revoke the Pub/Sub service agent publisher on topic '{topic}'"
-                            ),
-                        })?;
-                }
+                let topic = topic.ok_or_else(|| invalid("Topic name not set in state"))?;
+                set_agent_on_topic(ctx, client.as_ref(), &queue.id, &topic, agent, false).await?;
                 self.dead_letter_publisher = false;
             }
             if !want_subscriber && self.dead_letter_subscriber {
-                let subscription = self
-                    .subscription_name
-                    .clone()
-                    .ok_or_else(|| invalid("Subscription name not set in state"))?;
-                let mut policy = client
-                    .get_subscription_iam_policy(subscription.clone())
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        resource_id: Some(queue.id.clone()),
-                        message: format!(
-                            "Read the dead-letter subscriber policy of '{subscription}'"
-                        ),
-                    })?;
-                if set_role_member(&mut policy, SUBSCRIBER, agent, false) {
-                    client
-                        .set_subscription_iam_policy(subscription.clone(), policy)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            resource_id: Some(queue.id.clone()),
-                            message: format!(
-                                "Revoke the Pub/Sub service agent subscriber on '{subscription}'"
-                            ),
-                        })?;
-                }
+                let subscription =
+                    subscription.ok_or_else(|| invalid("Subscription name not set in state"))?;
+                set_agent_on_subscription(
+                    ctx,
+                    client.as_ref(),
+                    &queue.id,
+                    &subscription,
+                    agent,
+                    false,
+                )
+                .await?;
                 self.dead_letter_subscriber = false;
             }
         }

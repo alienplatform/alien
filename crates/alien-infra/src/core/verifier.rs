@@ -554,6 +554,13 @@ pub enum ResourceWrite {
         subscription: String,
         body: serde_json::Value,
     },
+    /// Pub/Sub patch of a queue's pull subscription: the request as the client sends it. It may
+    /// change the dead-letter policy only.
+    #[serde(rename_all = "camelCase")]
+    PatchSubscription {
+        subscription: String,
+        body: serde_json::Value,
+    },
     /// Pub/Sub create of a worker's commands push subscription: the subscription as the client
     /// sends it.
     #[serde(rename_all = "camelCase")]

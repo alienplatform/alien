@@ -2001,6 +2001,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dead_letter_permission_is_only_for_live_gcp_queues_that_use_it() {
+        for platform in [Platform::Gcp, Platform::Aws, Platform::Azure] {
+            for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
+                for dead_letter in [false, true] {
+                    let mut tasks = alien_core::Queue::new("tasks".into()).build();
+                    if dead_letter {
+                        tasks.dead_letter = Some(
+                            alien_core::QueueDeadLetter::builder()
+                                .queue(alien_core::ResourceRef::new(
+                                    alien_core::Queue::RESOURCE_TYPE,
+                                    "failed",
+                                ))
+                                .build(),
+                        );
+                    }
+                    let stack = Stack::new("test".into())
+                        .add(tasks, lifecycle)
+                        .add(alien_core::Queue::new("failed".into()).build(), lifecycle)
+                        .build();
+                    let config = DeploymentConfig::builder()
+                        .stack_settings(StackSettings::default())
+                        .environment_variables(empty_env_snapshot())
+                        .allow_frozen_changes(false)
+                        .external_bindings(ExternalBindings::default())
+                        .build();
+                    let prepared = ManagementPermissionProfileMutation
+                        .mutate(stack, &StackState::new(platform), &config)
+                        .await
+                        .unwrap();
+                    let holders: Vec<String> = prepared
+                        .management()
+                        .profile()
+                        .map(|profile| {
+                            profile
+                                .0
+                                .iter()
+                                .filter(|(_, grants)| {
+                                    grants.iter().any(|g| g.id() == "queue/dead-letter")
+                                })
+                                .map(|(resource, _)| resource.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let expected: Vec<&str> = if platform == Platform::Gcp
+                        && lifecycle == ResourceLifecycle::Live
+                        && dead_letter
+                    {
+                        vec!["*"]
+                    } else {
+                        vec![]
+                    };
+                    let mut holders = holders;
+                    holders.sort();
+                    assert_eq!(
+                        holders, expected,
+                        "{platform:?} {lifecycle:?} deadLetter={dead_letter}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn storage_trigger_from_frozen_storage_gets_source_management_permission() {
         let storage = Storage::new("uploads".to_string()).build();
         let worker = Worker::new("processor".to_string())
