@@ -527,6 +527,16 @@ Images must be linux/amd64 and their container must keep running in the foregrou
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
 Alien stops the create at the FAILED state and names this as the likely cause.
 
+## Where a GCP sandbox image lives and who can change it
+
+On GCP a sandbox runs from an Artifact Registry repository in the customer's project, pinned by
+digest. Alien's management identity can upload and tag images in that one repository; it cannot
+delete them, read other repositories or read customer data. It can replace that sandbox's template
+only for a release whose egress and settings the customer's setup approved, so it can roll a new
+image without setup: the same power it already has over live containers and functions. On a direct
+install this starts once setup runs with this version. On signed installs the verifier accepts only
+the signed digest. Egress changes always need the customer's setup.
+
 ## Preview on GCP
 
 On Google Cloud, preview access equals command access; port-scoped preview sharing is not
