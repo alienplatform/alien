@@ -210,8 +210,13 @@ impl Queue for GcpPubSubQueue {
                         alien_core::MessagePayload::Text(text) => MessagePayload::Text(text),
                     },
                     receipt_handle: received.ack_id,
-                    // Pub/Sub only populates delivery attempts with a dead-letter policy.
-                    attempt: 1,
+                    // Pub/Sub only populates delivery attempts when the subscription has a
+                    // dead-letter policy; without one every delivery reports 1.
+                    attempt: received
+                        .delivery_attempt
+                        .and_then(|attempt| u32::try_from(attempt).ok())
+                        .filter(|attempt| *attempt > 0)
+                        .unwrap_or(1),
                 }),
                 GcpQueueDelivery::Filtered => filtered_receipts.push(received.ack_id),
             }
@@ -351,6 +356,44 @@ mod notification_tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn receive_reports_the_delivery_attempt_pubsub_counts() {
+        let server = MockServer::start_async().await;
+        let message = |id: &str, ack: &str, attempt: Option<i64>| {
+            let mut received = json!({
+                "ackId": ack,
+                "message": {"messageId": id, "data": BASE64_STANDARD.encode("{\"n\":1}")}
+            });
+            if let Some(attempt) = attempt {
+                received["deliveryAttempt"] = json!(attempt);
+            }
+            received
+        };
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/projects/test/subscriptions/jobs-sub:pull");
+                then.status(200).json_body(json!({"receivedMessages": [
+                    message("a", "ack-a", Some(3)),
+                    message("b", "ack-b", None),
+                ]}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/projects/test/subscriptions/jobs-sub:modifyAckDeadline");
+                then.status(200).json_body(json!({}));
+            })
+            .await;
+        let messages = queue(&server).await.receive("jobs", 10).await.unwrap();
+        assert_eq!(
+            messages.iter().map(|m| m.attempt).collect::<Vec<_>>(),
+            [3, 1],
+            "a counted delivery is reported, an uncounted one is the first"
+        );
     }
 
     #[tokio::test]
