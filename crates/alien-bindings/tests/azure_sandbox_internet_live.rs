@@ -949,6 +949,27 @@ def padded_connect():
     line = s.recv(200).split(b"\r\n")[0].decode(errors="replace")
     s.close()
     return line
+def split_connect():
+    # the CONNECT head in 3 writes, 50-200 ms apart: it crosses the proxy's replay window
+    head = f"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Basic {basic}\r\n\r\n".encode()
+    s = socket.create_connection((env.hostname, env.port), timeout=30)
+    s.settimeout(30)
+    cut = [len(head) // 3, 2 * len(head) // 3]
+    for part, pause in ((head[:cut[0]], 0.05), (head[cut[0]:cut[1]], 0.2), (head[cut[1]:], 0)):
+        s.sendall(part)
+        time.sleep(pause)
+    line = s.recv(200).split(b"\r\n")[0].decode(errors="replace")
+    s.close()
+    return "200" if " 200 " in line else "ERR " + line[:60]
+def plain_post():
+    # plain http:// through the proxy, a non-streamed POST with a 64 KiB Content-Length body
+    r = requests.post("http://example.com/", data=b"y" * 65536, timeout=30)
+    return "ok" if r.status_code < 600 else str(r.status_code)
+def curl_https():
+    import subprocess
+    out = subprocess.run(["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "30", "https://example.com"],
+                         capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else "ERR curl " + str(out.returncode) + " " + out.stderr.strip()[:50]
 def post():
     def body():
         for _ in range(32):
@@ -956,12 +977,13 @@ def post():
             time.sleep(0.05)
     r = requests.post("https://speed.cloudflare.com/__up", data=body(), timeout=60)
     return str(r.status_code)
-kinds = {"requests-get": get, "connect-20KiB-header": padded_connect, "streamed-post-2MiB": post}
+kinds = {"requests-get": get, "connect-20KiB-header": padded_connect, "streamed-post-2MiB": post,
+         "connect-3-writes": split_connect, "plain-post-64KiB": plain_post, "curl-https": curl_https}
 last, counts = {}, {}
 end, tick, lastsum = time.time() + seconds, 0, time.time()
 while time.time() < end:
     for kind, fn in kinds.items():
-        if kind != "requests-get" and tick % 5: continue
+        if kind not in ("requests-get", "connect-3-writes", "curl-https") and tick % 5: continue
         t = time.time()
         try: out = fn()
         except Exception as e: out = "ERR " + type(e).__name__ + " " + str(e)[:70]
