@@ -97,6 +97,11 @@ Accepted limitations of this version:
   with a retryable error while one is down, because a replica that missed a narrowing would
   keep serving the wider policy; a delete reaches every replica that answers. The gateway
   container image is pinned by setup and is updated only by a setup re-run.
+- **Encryption at host.** Encryption at host is off on the gateway VMs and is not configurable
+  in this module yet: it needs the `Microsoft.Compute/EncryptionAtHost` feature registered on the
+  subscription (`az feature register --namespace Microsoft.Compute --name EncryptionAtHost`), and
+  the apply fails without it. Ask us if you need it on. The OS disks are still encrypted at rest
+  with platform-managed keys, and the VMs hold no customer data (policies live in memory).
 - **Gateway identity.** Each VM's managed identity reads only two Key Vault secrets
   (`sandbox-egress-gateway-config`, `sandbox-egress-replica-secret`), never the
   signing key. The container reaches the identity endpoint through the docker bridge

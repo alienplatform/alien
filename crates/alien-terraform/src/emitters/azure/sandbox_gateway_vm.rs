@@ -29,8 +29,11 @@ const SECRETS_USER_ROLE: &str = "4633458b-17de-408a-b874-0445c86b69e6";
 /// Host indices of the two gateway addresses inside the gateway subnet.
 pub(super) const GATEWAY_HOSTS: [usize; 2] = [4, 5];
 
-/// The Ubuntu 24.04 LTS server image version the gateway VMs are created from.
-pub(super) const UBUNTU_IMAGE_VERSION: &str = "24.04.202611050";
+/// The Ubuntu 24.04 LTS server image version the gateway VMs are created from. Pinned to a version
+/// that a real apply created VMs from: Azure's image listing can show a newer version
+/// (24.04.202611050 was listed) that a create refuses with `PlatformImageNotFound`, so check a bump
+/// with `az vm image show --urn Canonical:ubuntu-24_04-lts:server:<version>` in the target regions.
+pub(super) const UBUNTU_IMAGE_VERSION: &str = "24.04.202610250";
 
 /// A general-purpose size that most subscriptions allow; burstable B-series sizes are
 /// restricted on some, and vCPU quota is per family, so customers can pick another family.

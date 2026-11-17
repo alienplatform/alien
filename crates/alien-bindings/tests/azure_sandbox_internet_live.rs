@@ -875,11 +875,64 @@ async fn live_leak_probes() {
     publish(&provider, &body).await;
 }
 
+/// A long transfer through the proxy: CONNECT to the host, TLS, GET `/__down?bytes=N`, read
+/// throttled (about 1 MB/s) for `seconds`, and print one `XFER` line per event with epoch times:
+/// connect, a progress line every 10 s, the cut (what error, at which byte) and each reconnect.
+/// A cut is not hidden: the transfer reconnects with a new request and the lines show the gap.
+const TRANSFER_PROBE: &str = r#"
+import base64, os, socket, ssl, sys, time, urllib.parse
+host, seconds = sys.argv[1], int(sys.argv[2])
+env = urllib.parse.urlparse(os.environ["HTTPS_PROXY"])
+basic = base64.b64encode(f"{env.username}:{env.password}".encode()).decode()
+ctx = ssl.create_default_context()
+end = time.time() + seconds
+total = 0
+def now(): return int(time.time())
+def connect():
+    s = socket.create_connection((env.hostname, env.port), timeout=30)
+    s.sendall(f"CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\nProxy-Authorization: Basic {basic}\r\n\r\n".encode())
+    head = b""
+    while b"\r\n\r\n" not in head:
+        d = s.recv(512)
+        if not d: raise EOFError("proxy closed before the CONNECT answer")
+        head += d
+    line = head.split(b"\r\n")[0].decode(errors="replace")
+    if " 200 " not in line: raise RuntimeError("CONNECT " + line)
+    t = ctx.wrap_socket(s, server_hostname=host)
+    t.settimeout(30)
+    t.sendall(f"GET /__down?bytes=2000000000 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+    return t
+attempt = 0
+while time.time() < end:
+    attempt += 1
+    got, last = 0, time.time()
+    try:
+        t = connect()
+        print("XFER", now(), "connected attempt", attempt, flush=True)
+        while time.time() < end:
+            d = t.recv(16384)
+            if not d: raise EOFError("closed by peer")
+            got += len(d); total += len(d)
+            if time.time() - last >= 10:
+                last = time.time(); print("XFER", now(), "progress attempt", attempt, "bytes", got, flush=True)
+            time.sleep(0.015)
+        print("XFER", now(), "finished attempt", attempt, "bytes", got, flush=True)
+    except Exception as e:
+        print("XFER", now(), "CUT attempt", attempt, type(e).__name__, str(e)[:80], "after bytes", got, flush=True)
+        time.sleep(1)
+print("XFER", now(), "end total bytes", total, "attempts", attempt, flush=True)
+"#;
+
 /// A running sandbox across a setup re-run that installs a new gateway image. The operator runs the
-/// re-run from outside; this test coordinates through one vault secret: it writes
-/// `gw-replace-signal` = `ready` after the first check, then probes the SAME sandbox every few
-/// seconds (an allowed and an unlisted host) until the operator sets the secret to `done`, and
-/// finally creates a NEW sandbox. Every probe is logged with its time, so a gap shows.
+/// re-run from outside and drives three stages through the vault secret `gw-replace-signal`
+/// (`ready` -> `vm0-back` -> `done`). Measured, all with times on one clock:
+/// - the SAME sandbox probes an allowed and an unlisted host every second (each probe logs its own
+///   latency; a gap or a failure is a line, not hidden);
+/// - a long throttled download runs in that sandbox for the whole roll (its cut and reconnects);
+/// - an IDLE second sandbox makes its first connection only when the stage becomes `vm0-back`
+///   (the operator sets it when VM0's run command has finished: VM1 restarts next), and again at
+///   `done`;
+/// - finally a NEW sandbox connects.
 #[tokio::test]
 #[ignore = "live Azure: run inside the deployment's VNet via scripts/azure-internet-live.sh"]
 async fn live_gateway_replace() {
@@ -887,99 +940,178 @@ async fn live_gateway_replace() {
     let sandbox = provider.load_sandbox("box").await.expect("loads");
     let sandbox: &dyn alien_bindings::traits::Sandbox = sandbox.as_ref();
     let vault = provider.load_vault("secrets").await.expect("vault");
-    let mut log: Vec<String> = Vec::new();
-    let mut created = Vec::new();
+    let log = std::cell::RefCell::new(Vec::<String>::new());
+    let created = std::cell::RefCell::new(Vec::<String>::new());
     let now = || {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs()
     };
+    let note = |line: String| log.borrow_mut().push(line);
+    let policy = || {
+        Some(allow(&[
+            "example.com",
+            "speed.cloudflare.com",
+        ]))
+    };
 
     let outcome = async {
-        let first = sandbox
-            .create(CreateSandboxRequest {
-                egress: Some(allow(&["example.com"])),
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| format!("create: {error}"))?;
-        let id = first.sandbox_id.clone();
-        created.push(id.clone());
+        let make = || async {
+            sandbox
+                .create(CreateSandboxRequest {
+                    egress: policy(),
+                    ..Default::default()
+                })
+                .await
+                .map(|created| created.sandbox_id)
+                .map_err(|error| format!("create: {error}"))
+        };
+        let id = make().await?;
+        created.borrow_mut().push(id.clone());
+        let idle = make().await?;
+        created.borrow_mut().push(idle.clone());
         for host in ["example.com", "www.google.com"] {
             let seen = proxy(sandbox, &id, host, 443, "").await;
-            log.push(format!("{} before: {host} {seen}", now()));
+            note(format!("{} before: {host} {seen}", now()));
         }
         vault
             .set_secret("gw-replace-signal", "ready")
             .await
             .map_err(|error| format!("signal: {error}"))?;
-        let mut stage = "ready".to_string();
-        // The vault secret holds about 25 KB, so only a change of answer is logged, with a count.
-        let mut last: std::collections::HashMap<&str, String> = Default::default();
-        let mut counts: std::collections::HashMap<String, u32> = Default::default();
-        for _ in 0..600 {
-            let signal = vault
-                .get_secret("gw-replace-signal")
-                .await
-                .unwrap_or_default();
-            if signal != stage {
-                log.push(format!("{} signal now `{signal}`", now()));
-                stage = signal;
-            }
-            for host in ["example.com", "www.google.com"] {
-                let seen = proxy(sandbox, &id, host, 443, "").await;
-                let short: String = seen.chars().take(60).collect();
-                *counts.entry(format!("{host} {short}")).or_default() += 1;
-                if last.get(host) != Some(&short) {
-                    log.push(format!(
-                        "{} [{stage}] the SAME sandbox, {host} now: {short}",
-                        now()
-                    ));
-                    last.insert(host, short);
+
+        // The long download, streamed: lines are logged as they arrive, and it is dropped
+        // when the operator says `done` (the probes set the flag).
+        let finished = std::cell::Cell::new(false);
+        let transfer = async {
+            let stream = sandbox
+                .run_command(
+                    &id,
+                    RunCommandRequest {
+                        command: "python3".to_string(),
+                        args: ["-c", TRANSFER_PROBE, "speed.cloudflare.com", "3000"]
+                            .iter()
+                            .map(|arg| arg.to_string())
+                            .collect(),
+                        cwd: None,
+                        env: BTreeMap::new(),
+                        timeout: Duration::from_secs(3100),
+                    },
+                )
+                .await;
+            let mut stream = match stream {
+                Ok(stream) => stream,
+                Err(error) => return note(format!("transfer: RUN-ERROR {error}")),
+            };
+            let mut pending = String::new();
+            loop {
+                tokio::select! {
+                    frame = stream.next() => match frame {
+                        Some(Ok(CommandOutput::Stdout { data, .. })) => {
+                            pending.push_str(&String::from_utf8_lossy(&data));
+                            while let Some(at) = pending.find('\n') {
+                                let line: String = pending.drain(..=at).collect();
+                                note(format!("transfer: {}", line.trim_end()));
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(error)) => return note(format!("transfer: stream error {error}")),
+                        None => return note("transfer: command ended".to_string()),
+                    },
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                        if finished.get() {
+                            return note("transfer: stopped by the operator's `done`".to_string());
+                        }
+                    }
                 }
             }
-            if stage == "done" {
-                break;
+        };
+        // Probes every second until the operator says `done`; then the idle sandbox's last
+        // connection and a NEW sandbox.
+        let probes = async {
+            let mut stage = "ready".to_string();
+            let mut last: HashMap<&str, String> = Default::default();
+            let mut counts: HashMap<String, u32> = Default::default();
+            let mut worst: HashMap<&str, f64> = Default::default();
+            let mut idle_first = false;
+            for _ in 0..1700 {
+                let signal = vault
+                    .get_secret("gw-replace-signal")
+                    .await
+                    .unwrap_or_default();
+                if signal != stage && !signal.is_empty() {
+                    note(format!("{} signal now `{signal}`", now()));
+                    stage = signal;
+                }
+                if stage == "vm0-back" && !idle_first {
+                    idle_first = true;
+                    let seen = proxy(sandbox, &idle, "example.com", 443, "").await;
+                    note(format!(
+                        "{} [{stage}] IDLE sandbox FIRST connection example.com: {seen}",
+                        now()
+                    ));
+                }
+                for host in ["example.com", "www.google.com"] {
+                    let seen = proxy(sandbox, &id, host, 443, "").await;
+                    let seconds: f64 = seen
+                        .rsplit(' ')
+                        .next()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0.0);
+                    let status: String = seen
+                        .trim_end_matches(|c: char| c == '.' || c.is_ascii_digit() || c == ' ')
+                        .to_string();
+                    *counts.entry(format!("{host} {status}")).or_default() += 1;
+                    let w = worst.entry(host).or_default();
+                    if seconds > *w {
+                        *w = seconds;
+                    }
+                    if last.get(host) != Some(&status) || seconds > 3.0 {
+                        note(format!(
+                            "{} [{stage}] the SAME sandbox, {host} now: {seen}",
+                            now()
+                        ));
+                        last.insert(host, status);
+                    }
+                }
+                if stage == "done" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
-            tokio::time::sleep(Duration::from_secs(3)).await;
-        }
-        let mut totals: Vec<_> = counts.into_iter().collect();
-        totals.sort();
-        for (what, n) in totals {
-            log.push(format!("total probes: {what} x{n}"));
-        }
+            let mut totals: Vec<_> = counts.into_iter().collect();
+            totals.sort();
+            for (what, n) in totals {
+                note(format!("total probes: {what} x{n}"));
+            }
+            for (host, w) in worst {
+                note(format!("slowest probe {host}: {w}s"));
+            }
+            finished.set(true);
+            stage
+        };
+        let (stage, ()) = futures::join!(probes, transfer);
         if stage != "done" {
             return Err("no `done` signal".to_string());
         }
-        match sandbox
-            .create(CreateSandboxRequest {
-                egress: Some(allow(&["example.com"])),
-                ..Default::default()
-            })
-            .await
-        {
+        let seen = proxy(sandbox, &idle, "example.com", 443, "").await;
+        note(format!("{} done: the IDLE sandbox again, example.com {seen}", now()));
+        match make().await {
             Ok(new) => {
-                created.push(new.sandbox_id.clone());
-                let seen = proxy(sandbox, &new.sandbox_id, "example.com", 443, "").await;
-                log.push(format!(
-                    "{} after: a NEW sandbox, example.com {seen}",
-                    now()
-                ));
+                created.borrow_mut().push(new.clone());
+                let seen = proxy(sandbox, &new, "example.com", 443, "").await;
+                note(format!("{} after: a NEW sandbox, example.com {seen}", now()));
             }
-            Err(error) => log.push(format!(
-                "{} after: a NEW sandbox, create failed: {error}",
-                now()
-            )),
+            Err(error) => note(format!("{} after: a NEW sandbox, {error}", now())),
         }
         Ok::<(), String>(())
     }
     .await;
     if let Err(error) = outcome {
-        log.push(format!("error: {error}"));
+        note(format!("error: {error}"));
     }
-    for id in &created {
+    for id in created.borrow().iter() {
         let _ = sandbox.terminate(id).await;
     }
-    publish(&provider, &format!("DONE\n{}", log.join("\n"))).await;
+    publish(&provider, &format!("DONE\n{}", log.borrow().join("\n"))).await;
 }
