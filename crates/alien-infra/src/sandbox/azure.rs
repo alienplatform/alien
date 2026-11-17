@@ -102,6 +102,11 @@ pub struct AzureSandboxController {
     /// package imported is left to `terraform destroy`.
     #[serde(default)]
     pub(crate) created_group: bool,
+    /// Recorded, and saved, after the group was found absent and before the create call. A group
+    /// that exists while this is unset was not made by this deployment and is never taken over;
+    /// one that exists while it is set is this deployment's own earlier attempt.
+    #[serde(default)]
+    pub(crate) group_create_intent: bool,
     /// Role definitions the group's role assignments used, read before the group is deleted so the
     /// custom ones this deployment made are removed with it.
     #[serde(default)]
@@ -174,7 +179,7 @@ impl AzureSandboxController {
         let nothing_imported =
             self.sandbox_group.is_none() && self.region.is_none() && self.resource_group.is_none();
         if nothing_imported && ctx.is_direct_setup_run() {
-            return self.create_group(ctx, config).await;
+            return self.record_group_intent(ctx, config).await;
         }
         let (group, region, resource_group) =
             self.identity(&config.id)
@@ -194,6 +199,17 @@ impl AzureSandboxController {
             state: self.state_after_group(config),
             suggested_delay: None,
         })
+    }
+
+    /// The create call itself. The intent was saved by the step before, so a group found here
+    /// after a failed attempt is this deployment's own.
+    #[handler(state = CreatingGroup, on_failure = ProvisionFailed, status = ResourceStatus::Provisioning)]
+    async fn creating_group(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+        self.create_group(ctx, config).await
     }
 
     /// A role assignment names the group, so the group has to be finished first.
@@ -1188,6 +1204,63 @@ impl AzureSandboxController {
         Ok((group, client))
     }
 
+    /// A group that already exists under this name is never taken over: destroy would delete it
+    /// with its sandboxes and images. Only an absent group is created, and the intent to create
+    /// it is saved first so a retry can tell its own earlier attempt from a stranger's group.
+    async fn record_group_intent(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Result<AzureSandboxHandlerAction> {
+        if matches!(config.egress, SandboxEgress::Internet) {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: "an Azure sandbox with internet egress needs the dedicated sandbox \
+                          subnets the Terraform setup package creates; set it up with the \
+                          package, or declare egress none or allow"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        if !self.group_create_intent {
+            let resource_group =
+                crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
+            let group = sandbox_group_name(ctx.resource_prefix, &config.id);
+            let arm = ctx
+                .service_provider
+                .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
+            match arm.get_sandbox_group(&resource_group, &group).await {
+                Ok(_) => {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Azure sandbox group '{group}' already exists in resource group \
+                             '{resource_group}' and this deployment did not create it. Setup \
+                             will not take it over, because destroying the deployment would \
+                             delete it with its sandboxes and images. Delete it, or install \
+                             from the Terraform setup package, which imports it."
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }))
+                }
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to read Azure sandbox group '{group}'"),
+                        resource_id: Some(config.id.clone()),
+                    }))
+                }
+            }
+            self.group_create_intent = true;
+        }
+        Ok(AzureSandboxHandlerAction::Continue {
+            state: AzureSandboxState::CreatingGroup,
+            suggested_delay: None,
+        })
+    }
+
     /// Creates the group with the setup credentials and waits for ARM to finish it.
     async fn create_group(
         &mut self,
@@ -1381,6 +1454,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
@@ -1440,6 +1514,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
@@ -1609,6 +1684,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
@@ -1664,6 +1740,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
@@ -1727,6 +1804,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
@@ -1767,6 +1845,7 @@ mod tests {
             egress_config_digest: None,
             egress_replica_secret_ready: false,
             created_group: false,
+            group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
             _internal_stay_count: None,
@@ -1881,6 +1960,7 @@ mod tests {
                 egress_config_digest: None,
                 egress_replica_secret_ready: false,
                 created_group: false,
+                group_create_intent: false,
                 group_role_definitions: Vec::new(),
                 default_policy: None,
                 _internal_stay_count: None,
@@ -3069,7 +3149,7 @@ mod direct_setup_tests {
         AzureResourceGroup, InitialSetupAuthority, Platform, ResourceLifecycle, SandboxCode,
         SandboxLifecyclePolicy,
     };
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use std::sync::Arc;
 
     fn sandbox(egress: SandboxEgress) -> Sandbox {
@@ -3194,6 +3274,8 @@ mod direct_setup_tests {
     #[tokio::test]
     async fn a_direct_setup_creates_and_records_the_group() {
         let mut groups = MockSandboxGroupsApi::new();
+        let made = Arc::new(AtomicBool::new(false));
+        let made_by_create = made.clone();
         groups
             .expect_create_or_update_sandbox_group()
             .withf(|rg, name, location| {
@@ -3202,11 +3284,18 @@ mod direct_setup_tests {
                     && location == "eastus"
             })
             .times(1)
-            .returning(|_, _, _| Ok(group("Creating")));
+            .returning(move |_, _, _| {
+                made_by_create.store(true, Ordering::SeqCst);
+                Ok(group("Creating"))
+            });
         let polls = Arc::new(AtomicU32::new(0));
         let seen = polls.clone();
         groups.expect_get_sandbox_group().returning(move |_, _| {
-            // Still creating on the first read, as ARM is, then finished.
+            // Absent before the create; still creating on the first read after, as ARM is,
+            // then finished.
+            if !made.load(Ordering::SeqCst) {
+                return Err(not_found());
+            }
             Ok(group(if seen.fetch_add(1, Ordering::SeqCst) == 0 {
                 "Creating"
             } else {
@@ -3232,6 +3321,7 @@ mod direct_setup_tests {
             Some("default-resource-group")
         );
         assert!(controller.created_group);
+        assert!(controller.group_create_intent);
         assert!(
             polls.load(Ordering::SeqCst) >= 2,
             "waits for the group to finish"
@@ -3244,12 +3334,21 @@ mod direct_setup_tests {
     #[tokio::test]
     async fn a_direct_setup_run_issues_no_disk_image_call() {
         let mut groups = MockSandboxGroupsApi::new();
+        let made = Arc::new(AtomicBool::new(false));
+        let made_by_create = made.clone();
         groups
             .expect_create_or_update_sandbox_group()
-            .returning(|_, _, _| Ok(group("Succeeded")));
-        groups
-            .expect_get_sandbox_group()
-            .returning(|_, _| Ok(group("Succeeded")));
+            .returning(move |_, _, _| {
+                made_by_create.store(true, Ordering::SeqCst);
+                Ok(group("Succeeded"))
+            });
+        groups.expect_get_sandbox_group().returning(move |_, _| {
+            if made.load(Ordering::SeqCst) {
+                Ok(group("Succeeded"))
+            } else {
+                Err(not_found())
+            }
+        });
         let groups: Arc<dyn alien_azure_clients::sandbox_groups::SandboxGroupsApi> =
             Arc::new(groups);
         let mut provider = MockPlatformServiceProvider::new();
@@ -3352,34 +3451,55 @@ mod direct_setup_tests {
         assert_ne!(executor.status(), ResourceStatus::Running);
     }
 
-    /// A retry after a failed setup finds the group where the failed run left it and converges.
+    /// A retry after a failed attempt that had already recorded its intent finds its own group
+    /// and converges on it.
     #[tokio::test]
-    async fn a_retry_converges_on_the_group_the_failed_run_made() {
-        for _ in 0..2 {
-            let mut executor = executor(
-                AzureSandboxController::default(),
-                {
-                    let mut again = MockSandboxGroupsApi::new();
-                    again
-                        .expect_create_or_update_sandbox_group()
-                        .times(1)
-                        .returning(|_, _, _| Ok(group("Succeeded")));
-                    again
-                        .expect_get_sandbox_group()
-                        .returning(|_, _| Ok(group("Succeeded")));
-                    again
-                },
-                true,
-                SandboxEgress::None,
-            )
-            .await;
-            drive(&mut executor).await;
-            let controller = executor.internal_state::<AzureSandboxController>().unwrap();
-            assert_eq!(
-                controller.sandbox_group.as_deref(),
-                Some("test-prefix-box-one")
-            );
-        }
+    async fn a_retry_converges_on_the_group_its_own_attempt_made() {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_create_or_update_sandbox_group()
+            .times(1)
+            .returning(|_, _, _| Ok(group("Succeeded")));
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let after_failed_attempt = AzureSandboxController {
+            group_create_intent: true,
+            ..Default::default()
+        };
+        let mut executor = executor(after_failed_attempt, groups, true, SandboxEgress::None).await;
+        drive(&mut executor).await;
+        let controller = executor.internal_state::<AzureSandboxController>().unwrap();
+        assert_eq!(
+            controller.sandbox_group.as_deref(),
+            Some("test-prefix-box-one")
+        );
+        assert!(controller.created_group);
+    }
+
+    /// A group already there under the name, with no intent of this deployment's recorded, is an
+    /// earlier Terraform install's or the customer's. It is refused and never taken over, so
+    /// destroy cannot delete it.
+    #[tokio::test]
+    async fn a_group_this_deployment_did_not_create_is_refused_not_adopted() {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups.expect_create_or_update_sandbox_group().times(0);
+        groups.expect_delete_sandbox_group().times(0);
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let mut executor = executor(
+            AzureSandboxController::default(),
+            groups,
+            true,
+            SandboxEgress::None,
+        )
+        .await;
+        drive(&mut executor).await;
+        let controller = executor.internal_state::<AzureSandboxController>().unwrap();
+        assert!(!controller.created_group);
+        assert!(controller.sandbox_group.is_none());
+        assert_ne!(executor.status(), ResourceStatus::Running);
     }
 
     /// An internet-egress group connects to subnets only the package creates, so a direct setup
@@ -3417,6 +3537,7 @@ mod direct_setup_tests {
                 region: Some("eastus".to_string()),
                 resource_group: Some("rg".to_string()),
                 created_group: created,
+                group_create_intent: false,
                 group_role_definitions: Vec::new(),
                 ..Default::default()
             };
@@ -3503,6 +3624,7 @@ mod direct_setup_tests {
             region: Some("eastus".to_string()),
             resource_group: Some("rg".to_string()),
             created_group: true,
+            group_create_intent: false,
             ..Default::default()
         };
         let mut executor = executor_with_authorization(
