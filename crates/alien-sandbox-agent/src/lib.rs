@@ -5,6 +5,7 @@ pub mod exec;
 pub mod files;
 pub mod interactive;
 pub mod jobs;
+pub mod metadata;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;

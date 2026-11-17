@@ -31,6 +31,21 @@ pub enum ErrorData {
         message: String,
     },
 
+    /// The manager answered a runtime credential exchange with a refusal (a 4xx status).
+    ///
+    /// Unlike a transport failure or a server error, asking again gives the same answer until an
+    /// operator changes the grant, so it is not retried.
+    #[error(
+        code = "RUNTIME_AUTHORITY_REFUSED",
+        message = "Runtime authority refused: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    RuntimeAuthorityRefused {
+        /// What the manager answered
+        message: String,
+    },
+
     /// The requested resource does not exist.
     #[error(
         code = "REMOTE_RESOURCE_NOT_FOUND",
