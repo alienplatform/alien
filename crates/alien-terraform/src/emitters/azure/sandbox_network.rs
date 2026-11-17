@@ -493,7 +493,7 @@ fn emit_gateway_subnet_nsg(
             attr("tags", tags(ctx, "sandbox-gateway-network")),
         ],
     ));
-    let mut priority = 100;
+    let mut proxy_index = 0;
     for (id, entry) in ctx.stack.resources() {
         let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
             continue;
@@ -515,12 +515,12 @@ fn emit_gateway_subnet_nsg(
             fragment,
             &label,
             &format!("proxy_from_{sandbox_label}"),
-            priority,
+            proxy_priority(proxy_index)?,
             "Allow",
             source,
             "3128",
         );
-        priority += 1;
+        proxy_index += 1;
     }
     for (index, suffix) in ["public", "private", "container_apps"]
         .into_iter()
@@ -530,7 +530,7 @@ fn emit_gateway_subnet_nsg(
             fragment,
             &label,
             &format!("admin_from_{suffix}"),
-            200 + index as i64,
+            ADMIN_PRIORITY_BASE + index as i64,
             "Allow",
             expr::raw(format!(
                 "azurerm_subnet.{network}_{suffix}.address_prefixes[0]"
@@ -575,6 +575,25 @@ fn emit_gateway_subnet_nsg(
     Ok(())
 }
 
+/// Inbound priorities on the gateway subnet's NSG, one range per rule kind so a rule kind can
+/// never collide with another: proxy rules (one per `internet` sandbox, at most
+/// `MAX_SANDBOXES`) take 100..220, admin rules 300.., peer rules 400.., the final deny 4000.
+const PROXY_PRIORITY_BASE: i64 = 100;
+const ADMIN_PRIORITY_BASE: i64 = 300;
+const PEER_PRIORITY_BASE: i64 = 400;
+/// The dedicated subnet slots (`subnet_slots`) bound the number of sandboxes.
+const MAX_SANDBOXES: i64 = 120;
+
+fn proxy_priority(index: i64) -> Result<i64> {
+    if index >= MAX_SANDBOXES {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: "Azure sandbox network setup".into(),
+            reason: format!("at most {MAX_SANDBOXES} sandboxes can use `egress: internet`"),
+        }));
+    }
+    Ok(PROXY_PRIORITY_BASE + index)
+}
+
 /// The two gateway VMs synchronize policies over the authenticated admin port, and only from
 /// each other's static addresses.
 fn peer_rules(fragment: &mut TfFragment, label: &str, network: &str) {
@@ -583,7 +602,7 @@ fn peer_rules(fragment: &mut TfFragment, label: &str, network: &str) {
             fragment,
             label,
             &format!("peer_{index}"),
-            210 + index as i64,
+            PEER_PRIORITY_BASE + index as i64,
             "Allow",
             gateway_ip(network, *host),
             "3129",
@@ -689,10 +708,16 @@ mod proxy_rule_tests {
     fn every_rule_has_its_own_priority_of_at_least_100() {
         let rendered = rendered_rules();
         let mut seen = std::collections::BTreeSet::new();
-        for line in rendered.lines().filter(|l| l.trim_start().starts_with("priority")) {
+        for line in rendered
+            .lines()
+            .filter(|l| l.trim_start().starts_with("priority"))
+        {
             let value: i64 = line.rsplit('=').next().unwrap().trim().parse().unwrap();
             assert!(value >= 100, "{line}");
-            assert!(seen.insert(value), "duplicate priority {value}:\n{rendered}");
+            assert!(
+                seen.insert(value),
+                "duplicate priority {value}:\n{rendered}"
+            );
         }
     }
 
@@ -760,6 +785,25 @@ mod proxy_rule_tests {
 mod gateway_inbound_tests {
     use super::*;
 
+    /// 120 sandboxes' proxy rules, the admin rules and the peer rules never share a priority.
+    #[test]
+    fn proxy_admin_and_peer_priorities_stay_apart_at_120_sandboxes() {
+        let mut seen = std::collections::BTreeSet::new();
+        for index in 0..MAX_SANDBOXES {
+            assert!(seen.insert(proxy_priority(index).unwrap()));
+        }
+        assert!(proxy_priority(MAX_SANDBOXES).is_err());
+        assert_eq!(seen.len(), 120);
+        for index in 0..3 {
+            assert!(seen.insert(ADMIN_PRIORITY_BASE + index), "admin {index}");
+        }
+        for index in 0..GATEWAY_HOSTS.len() as i64 {
+            assert!(seen.insert(PEER_PRIORITY_BASE + index), "peer {index}");
+        }
+        assert!(seen.insert(4000));
+        assert!(seen.iter().all(|p| (100..=4096).contains(p)));
+    }
+
     #[test]
     fn each_gateway_may_reach_the_admin_port_of_its_peer_only_by_its_own_address() {
         let mut fragment = TfFragment::default();
@@ -771,7 +815,10 @@ mod gateway_inbound_tests {
         )
         .unwrap();
         for (index, host) in GATEWAY_HOSTS.iter().enumerate() {
-            assert!(rendered.contains(&format!("\"peer_{index}\"")), "{rendered}");
+            assert!(
+                rendered.contains(&format!("\"peer_{index}\"")),
+                "{rendered}"
+            );
             assert!(
                 rendered.contains(&format!(
                     "cidrhost(azurerm_subnet.net_sandbox_gateway.address_prefixes[0], {host})"
@@ -779,7 +826,12 @@ mod gateway_inbound_tests {
                 "{rendered}"
             );
         }
-        assert_eq!(rendered.matches("destination_port_range = \"3129\"").count(), 2);
+        assert_eq!(
+            rendered
+                .matches("destination_port_range = \"3129\"")
+                .count(),
+            2
+        );
         assert_eq!(rendered.matches("\"Allow\"").count(), 2);
     }
 

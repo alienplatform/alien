@@ -71,7 +71,10 @@ Accepted limitations of this version:
   VMs' custom data (which would replace both VMs at once); a run command on each VM
   pulls the image, restarts the gateway and waits until it is ready, meaning it has
   caught up its policies from the other gateway. The second VM's command waits for the
-  first, and a VM that is serving is not restarted unless its peer is serving. The gateway
+  first, and a VM that is serving is not restarted unless its peer is serving. Before any
+  update, a repair command on each VM (one at a time) restarts a gateway that is installed
+  but not serving, so a re-run repairs an unhealthy VM while the other serves and never
+  restarts the only serving gateway. The gateway
   opens its proxy port only after it has caught up, so while a gateway restarts (or a new
   image never catches up) its port is closed and agents' connects fail over to the other
   gateway; a failed wait fails the apply and stops the roll with the other gateway serving.

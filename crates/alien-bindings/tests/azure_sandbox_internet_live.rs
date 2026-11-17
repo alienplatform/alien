@@ -702,33 +702,53 @@ async fn live_internet_proof() {
 /// only python3, so every probe is a python socket: an `ssl` handshake without SNI, raw bytes, a
 /// hand-written HTTP/1.0 request, the h2c prior-knowledge preface, an SSH banner, UDP datagrams, SNI
 /// of an allowed name against the listener's address, and a plain request with an allowed Host.
-/// After each TLS handshake a full HTTP request goes inside the session (verification off) and the
+/// After each TLS handshake a full HTTP request goes inside a session of its own per inner host (verification off) and the
 /// answer is recorded. The wireserver is probed with the connect and the read told apart.
 const LEAK_PROBE: &str = r#"
 import socket, ssl, sys, time
 ip, nonce = sys.argv[1], sys.argv[2]
 def out(label, outcome): print("PROBE", label, outcome, flush=True)
+def tls_session(port, sni):
+    s = socket.create_connection((ip, port), timeout=8)
+    c = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
+    s.settimeout(8)
+    return c.wrap_socket(s, server_hostname=sni or None)
 def tcp(label, port, payload=b"", tls=None, inner=None):
     t = time.time()
+    if tls is not None:
+        # One TLS connection per inner host: a request with `Connection: close` ends its session,
+        # so a second host on the same session would never be tested.
+        seen = ""
+        try:
+            s = tls_session(port, tls)
+        except Exception as e:
+            return out(label, "CONNECT-" + type(e).__name__ + " " + str(round(time.time() - t, 1)) + "s")
+        try:
+            seen = "TLS-HANDSHAKE-OK " + str(s.version()) + " peer-cert-der-bytes=" + str(len(s.getpeercert(True) or b""))
+        except Exception as e:
+            seen = "TLS-INFO-" + type(e).__name__
+        s.close()
+        for host in (inner or []):
+            try:
+                s = tls_session(port, tls)
+            except Exception as e:
+                seen += " | host=" + host + " no-session " + type(e).__name__
+                continue
+            try:
+                s.settimeout(8)
+                s.sendall(("GET /" + nonce + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n").encode())
+                d = s.recv(120); seen += " | host=" + host + " reply=" + repr(d[:100])
+            except Exception as e:
+                seen += " | host=" + host + " no-reply " + type(e).__name__
+            finally:
+                try: s.close()
+                except Exception: pass
+        return out(label, seen)
     try:
         s = socket.create_connection((ip, port), timeout=8)
     except Exception as e:
         return out(label, "CONNECT-" + type(e).__name__ + " " + str(round(time.time() - t, 1)) + "s")
     try:
-        if tls is not None:
-            c = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
-            s.settimeout(8)
-            s = c.wrap_socket(s, server_hostname=tls or None)
-            seen = "TLS-HANDSHAKE-OK " + str(s.version()) + " peer-cert-der-bytes=" + str(len(s.getpeercert(True) or b""))
-            for host in (inner or []):
-                s.settimeout(8)
-                s.sendall(("GET /" + nonce + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n").encode())
-                try:
-                    d = s.recv(120); seen += " | host=" + host + " reply=" + repr(d[:100])
-                except Exception as e:
-                    seen += " | host=" + host + " no-reply " + type(e).__name__
-                    break
-            return out(label, seen)
         s.settimeout(6); s.sendall(payload)
         try:
             d = s.recv(80); out(label, "CONNECTED reply=" + repr(d[:60]))
@@ -932,7 +952,9 @@ print("XFER", now(), "end total bytes", total, "attempts", attempt, flush=True)
 
 /// Clients as real software uses them, for the whole roll: Python `requests` over HTTPS through the
 /// proxy (each second), a CONNECT with a 20 KiB header (every 5 s) and a streamed (chunked) POST
-/// (every 5 s). One `REQ` line per change of outcome, per slow call (> 3 s) and every 30 s a count.
+/// (every 5 s). A success is the status `200` (a plain POST also needs the echo service to report the whole
+/// 64 KiB body). One `REQ` line per change of outcome, per slow call (> 3 s), every failure as a
+/// `FAIL` line, and every 30 s a count.
 const CLIENT_PROBE: &str = r#"
 import base64, os, socket, sys, time, urllib.parse
 import requests
@@ -948,7 +970,7 @@ def padded_connect():
     s.sendall(f"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nX-Pad: {'a' * 20000}\r\nProxy-Authorization: Basic {basic}\r\n\r\n".encode())
     line = s.recv(200).split(b"\r\n")[0].decode(errors="replace")
     s.close()
-    return line
+    return "200" if " 200 " in line else "ERR " + line[:60]
 def split_connect():
     # the CONNECT head in 3 writes, 50-200 ms apart: it crosses the proxy's replay window
     head = f"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Basic {basic}\r\n\r\n".encode()
@@ -962,9 +984,13 @@ def split_connect():
     s.close()
     return "200" if " 200 " in line else "ERR " + line[:60]
 def plain_post():
-    # plain http:// through the proxy, a non-streamed POST with a 64 KiB Content-Length body
-    r = requests.post("http://example.com/", data=b"y" * 65536, timeout=30)
-    return "ok" if r.status_code < 600 else str(r.status_code)
+    # plain http:// through the proxy, a non-streamed POST with a 64 KiB Content-Length body to an
+    # echo service: 200 only when the service reports the whole body (not any HTTP status).
+    r = requests.post("http://httpbin.org/post", data=b"y" * 65536, headers={"Content-Type": "text/plain"}, timeout=30)
+    if r.status_code != 200:
+        return "ERR status " + str(r.status_code)
+    got = len(r.json().get("data", ""))
+    return "200" if got == 65536 else "ERR body " + str(got) + " of 65536 bytes received"
 def curl_https():
     import subprocess
     out = subprocess.run(["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "30", "https://example.com"],
@@ -989,6 +1015,9 @@ while time.time() < end:
         except Exception as e: out = "ERR " + type(e).__name__ + " " + str(e)[:70]
         took = time.time() - t
         counts[(kind, out)] = counts.get((kind, out), 0) + 1
+        if out != "200":
+            # every failure is its own line: the operator's test fails on any `FAIL` line
+            print("REQ", now(), "FAIL", kind, out, round(took, 1), flush=True)
         if last.get(kind) != out or took > 3:
             print("REQ", now(), kind, out, round(took, 1), flush=True)
             last[kind] = out
@@ -1026,7 +1055,20 @@ async fn live_gateway_replace() {
             .as_secs()
     };
     let note = |line: String| log.borrow_mut().push(line);
-    let policy = || Some(allow(&["example.com", "speed.cloudflare.com"]));
+    // Every failed step is a `FAIL` line and fails the test; nothing is only noted.
+    let failures = std::cell::RefCell::new(Vec::<String>::new());
+    let fail = |what: String| {
+        log.borrow_mut().push(format!("{} FAIL: {what}", now()));
+        failures.borrow_mut().push(what);
+    };
+    let stage_now = std::cell::RefCell::new("ready".to_string());
+    let policy = || {
+        Some(allow(&[
+            "example.com",
+            "speed.cloudflare.com",
+            "httpbin.org",
+        ]))
+    };
 
     let outcome = std::panic::AssertUnwindSafe(async {
         let make = || async {
@@ -1051,6 +1093,11 @@ async fn live_gateway_replace() {
         for host in ["example.com", "www.google.com"] {
             let seen = proxy(sandbox, &id, host, 443, "").await;
             note(format!("{} before: {host} {seen}", now()));
+            if (host == "example.com") != connected(&seen)
+                || (host != "example.com") != refused(&seen)
+            {
+                fail(format!("before the roll: {host} {seen}"));
+            }
         }
         vault
             .set_secret("gw-replace-signal", "ready")
@@ -1078,7 +1125,7 @@ async fn live_gateway_replace() {
                 .await;
             let mut stream = match stream {
                 Ok(stream) => stream,
-                Err(error) => return note(format!("transfer: RUN-ERROR {error}")),
+                Err(error) => return fail(format!("transfer: RUN-ERROR {error}")),
             };
             let mut pending = String::new();
             loop {
@@ -1092,8 +1139,8 @@ async fn live_gateway_replace() {
                             }
                         }
                         Some(Ok(_)) => {}
-                        Some(Err(error)) => return note(format!("transfer: stream error {error}")),
-                        None => return note("transfer: command ended".to_string()),
+                        Some(Err(error)) => return fail(format!("transfer: stream error {error}")),
+                        None => return fail("transfer: command ended before `done`".to_string()),
                     },
                     _ = tokio::time::sleep(Duration::from_secs(2)) => {
                         if finished.get() {
@@ -1110,7 +1157,6 @@ async fn live_gateway_replace() {
             let mut last: HashMap<&str, String> = Default::default();
             let mut counts: HashMap<String, u32> = Default::default();
             let mut worst: HashMap<&str, f64> = Default::default();
-            let mut idle_first = false;
             let mut tick = 0u32;
             for _ in 0..1700 {
                 let signal = vault
@@ -1120,31 +1166,7 @@ async fn live_gateway_replace() {
                 if signal != stage && !signal.is_empty() {
                     note(format!("{} signal now `{signal}`", now()));
                     stage = signal;
-                }
-                if stage == "vm0-back" && !idle_first {
-                    idle_first = true;
-                    // Idle sandboxes are paused by the platform: each is resumed, then makes its
-                    // first connection, all at once. Up to 8 tries each, so the time to the first
-                    // working connection is on the record; the first try is the one that matters.
-                    let first = async |n: usize, sandbox_id: String| {
-                        let resumed = sandbox.resume(&sandbox_id).await;
-                        note(format!("{} [vm0-back] idle {n} resume: {resumed:?}", now()));
-                        for attempt in 1..=8 {
-                            let seen = proxy(sandbox, &sandbox_id, "example.com", 443, "").await;
-                            note(format!(
-                                "{} [vm0-back] idle {n} ({sandbox_id}) connection {attempt}: {seen}",
-                                now()
-                            ));
-                            if connected(&seen) {
-                                break;
-                            }
-                            tokio::time::sleep(Duration::from_secs(2)).await;
-                        }
-                    };
-                    futures::future::join_all(
-                        idles.iter().cloned().enumerate().map(|(n, id)| first(n, id)),
-                    )
-                    .await;
+                    *stage_now.borrow_mut() = stage.clone();
                 }
                 for host in ["example.com", "www.google.com"] {
                     let seen = proxy(sandbox, &id, host, 443, "").await;
@@ -1156,6 +1178,11 @@ async fn live_gateway_replace() {
                     let status: String = seen
                         .trim_end_matches(|c: char| c == '.' || c.is_ascii_digit() || c == ' ')
                         .to_string();
+                    if (host == "example.com") != connected(&seen)
+                        || (host != "example.com") != refused(&seen)
+                    {
+                        fail(format!("[{stage}] the SAME sandbox, {host}: {seen}"));
+                    }
                     *counts.entry(format!("{host} {status}")).or_default() += 1;
                     let w = worst.entry(host).or_default();
                     if seconds > *w {
@@ -1214,7 +1241,7 @@ async fn live_gateway_replace() {
                 .await;
             let mut stream = match stream {
                 Ok(stream) => stream,
-                Err(error) => return note(format!("clients: RUN-ERROR {error}")),
+                Err(error) => return fail(format!("clients: RUN-ERROR {error}")),
             };
             let mut pending = String::new();
             loop {
@@ -1225,11 +1252,14 @@ async fn live_gateway_replace() {
                             while let Some(at) = pending.find('\n') {
                                 let line: String = pending.drain(..=at).collect();
                                 note(format!("clients: {}", line.trim_end()));
+                                if line.contains(" FAIL ") {
+                                    fail(format!("clients: {}", line.trim_end()));
+                                }
                             }
                         }
                         Some(Ok(_)) => {}
-                        Some(Err(error)) => return note(format!("clients: stream error {error}")),
-                        None => return note("clients: command ended".to_string()),
+                        Some(Err(error)) => return fail(format!("clients: stream error {error}")),
+                        None => return fail("clients: command ended before `done`".to_string()),
                     },
                     _ = tokio::time::sleep(Duration::from_secs(2)) => {
                         if finished.get() {
@@ -1239,19 +1269,88 @@ async fn live_gateway_replace() {
                 }
             }
         };
-        let (stage, (), ()) = futures::join!(probes, transfer, clients);
+        // The idle sandboxes' first connections run alongside the probes, not instead of them.
+        let idle_checks = async {
+            let mut skipped_stage = false;
+            loop {
+                let stage = stage_now.borrow().clone();
+                if stage == "vm0-back" {
+                    break;
+                }
+                if stage == "done" || finished.get() {
+                    skipped_stage = true;
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            if skipped_stage {
+                return fail(
+                    "the signal never showed `vm0-back`: the idle sandboxes were not tested"
+                        .to_string(),
+                );
+            }
+            // Idle sandboxes are paused by the platform: each is resumed, then makes its first
+            // connection, all at once. Up to 8 tries each, so the time to the first working
+            // connection is on the record; the first try is the one that matters and a failed
+            // first try fails the test.
+            let first = async |n: usize, sandbox_id: String| {
+                let resumed = sandbox.resume(&sandbox_id).await;
+                note(format!("{} [vm0-back] idle {n} resume: {resumed:?}", now()));
+                if let Err(error) = resumed {
+                    fail(format!("idle {n} resume: {error}"));
+                }
+                for attempt in 1..=8 {
+                    let seen = proxy(sandbox, &sandbox_id, "example.com", 443, "").await;
+                    note(format!(
+                        "{} [vm0-back] idle {n} ({sandbox_id}) connection {attempt}: {seen}",
+                        now()
+                    ));
+                    if connected(&seen) {
+                        break;
+                    }
+                    if attempt == 1 {
+                        fail(format!("idle {n}: the first connection failed: {seen}"));
+                    }
+                    if attempt == 8 {
+                        fail(format!("idle {n}: no connection in 8 tries: {seen}"));
+                    }
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+            };
+            futures::future::join_all(
+                idles
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(n, id)| first(n, id)),
+            )
+            .await;
+        };
+        let (stage, (), (), ()) = futures::join!(probes, transfer, clients, idle_checks);
         if stage != "done" {
             return Err("no `done` signal".to_string());
         }
         let seen = proxy(sandbox, &idle, "example.com", 443, "").await;
-        note(format!("{} done: the IDLE sandbox again, example.com {seen}", now()));
+        note(format!(
+            "{} done: the IDLE sandbox again, example.com {seen}",
+            now()
+        ));
+        if !connected(&seen) {
+            fail(format!("done: the IDLE sandbox again, example.com {seen}"));
+        }
         match make().await {
             Ok(new) => {
                 created.borrow_mut().push(new.clone());
                 let seen = proxy(sandbox, &new, "example.com", 443, "").await;
-                note(format!("{} after: a NEW sandbox, example.com {seen}", now()));
+                note(format!(
+                    "{} after: a NEW sandbox, example.com {seen}",
+                    now()
+                ));
+                if !connected(&seen) {
+                    fail(format!("after: a NEW sandbox, example.com {seen}"));
+                }
             }
-            Err(error) => note(format!("{} after: a NEW sandbox, {error}", now())),
+            Err(error) => fail(format!("after: a NEW sandbox, {error}")),
         }
         Ok::<(), String>(())
     })
@@ -1259,11 +1358,18 @@ async fn live_gateway_replace() {
     .await;
     match outcome {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => note(format!("error: {error}")),
-        Err(_) => note("error: the test panicked".to_string()),
+        Ok(Err(error)) => fail(error),
+        Err(_) => fail("the test panicked".to_string()),
     }
     for id in created.borrow().iter() {
         let _ = sandbox.terminate(id).await;
     }
-    publish(&provider, &format!("DONE\n{}", log.borrow().join("\n"))).await;
+    let failed = failures.borrow().clone();
+    let heading = if failed.is_empty() { "DONE" } else { "FAIL" };
+    publish(
+        &provider,
+        &format!("{heading}\n{}", log.borrow().join("\n")),
+    )
+    .await;
+    assert!(failed.is_empty(), "failed: {failed:#?}");
 }

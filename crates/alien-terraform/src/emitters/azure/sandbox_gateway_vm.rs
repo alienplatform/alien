@@ -287,50 +287,69 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
             ],
         ));
     }
-    // One run command per VM installs the image, the environment file and the unit, restarts the
-    // gateway and, on a VM that was serving, waits until the new container is ready and has caught
-    // up from its peer. The second VM's command depends on the first, so a setup re-run never has
-    // both gateways down.
-    for index in 0..GATEWAY_HOSTS.len() {
-        let vm = format!("{label}_{index}");
-        let peer_host = GATEWAY_HOSTS[1 - index];
-        let mut depends = vec![
-            format!(
-                "azurerm_role_assignment.{label}_{}",
-                CONFIG_SECRET.replace('-', "_")
-            ),
-            format!(
-                "azurerm_role_assignment.{label}_{}",
-                SANDBOX_EGRESS_REPLICA_SECRET.replace('-', "_")
-            ),
-        ];
-        if index > 0 {
-            depends.push(format!(
-                "azurerm_virtual_machine_run_command.{label}_{}",
-                index - 1
+    // Two run commands per VM, both with the same script body (`install_script`).
+    //
+    // `repair` acts only on a VM that has the gateway installed and is not serving, which is safe
+    // to restart whatever else is going on; it runs before every update, one VM at a time, so a
+    // setup re-run repairs an unhealthy VM while the other is serving and never touches a serving
+    // one. `install` installs the image, the environment file and the unit, restarts the gateway
+    // and, on a VM that was serving, waits until the new container is ready and has caught up from
+    // its peer. The install commands wait for both repairs, and the second VM's install waits for
+    // the first VM's, so a setup re-run never has both gateways down.
+    for (mode, name) in [
+        (ScriptMode::Repair, "repair-gateway"),
+        (ScriptMode::Install, "install-gateway"),
+    ] {
+        for index in 0..GATEWAY_HOSTS.len() {
+            let vm = format!("{label}_{index}");
+            let resource_label = mode.resource_label(&label, index);
+            let peer_host = GATEWAY_HOSTS[1 - index];
+            let mut depends = vec![
+                format!(
+                    "azurerm_role_assignment.{label}_{}",
+                    CONFIG_SECRET.replace('-', "_")
+                ),
+                format!(
+                    "azurerm_role_assignment.{label}_{}",
+                    SANDBOX_EGRESS_REPLICA_SECRET.replace('-', "_")
+                ),
+            ];
+            if index > 0 {
+                depends.push(format!(
+                    "azurerm_virtual_machine_run_command.{}",
+                    mode.resource_label(&label, index - 1)
+                ));
+            }
+            if mode == ScriptMode::Install {
+                for repaired in 0..GATEWAY_HOSTS.len() {
+                    depends.push(format!(
+                        "azurerm_virtual_machine_run_command.{}",
+                        ScriptMode::Repair.resource_label(&label, repaired)
+                    ));
+                }
+            }
+            fragment.resource_blocks.push(resource_block(
+                "azurerm_virtual_machine_run_command",
+                &resource_label,
+                [
+                    attr("name", Expression::String(name.into())),
+                    attr("location", expr::raw("var.azure_location")),
+                    attr(
+                        "virtual_machine_id",
+                        expr::traversal(["azurerm_linux_virtual_machine", &vm, "id"]),
+                    ),
+                    nested(block(
+                        "source",
+                        [attr(
+                            "script",
+                            install_script(&image, vault, &label, network, peer_host, mode),
+                        )],
+                    )),
+                    attr("tags", tags(ctx, "sandbox-gateway-vm")),
+                    attr("depends_on", expr::raw(format!("[{}]", depends.join(", ")))),
+                ],
             ));
         }
-        fragment.resource_blocks.push(resource_block(
-            "azurerm_virtual_machine_run_command",
-            &vm,
-            [
-                attr("name", Expression::String("install-gateway".into())),
-                attr("location", expr::raw("var.azure_location")),
-                attr(
-                    "virtual_machine_id",
-                    expr::traversal(["azurerm_linux_virtual_machine", &vm, "id"]),
-                ),
-                nested(block(
-                    "source",
-                    [attr(
-                        "script",
-                        install_script(&image, vault, &label, network, peer_host),
-                    )],
-                )),
-                attr("tags", tags(ctx, "sandbox-gateway-vm")),
-                attr("depends_on", expr::raw(format!("[{}]", depends.join(", ")))),
-            ],
-        ));
     }
     fragment.resource_blocks.push(resource_block(
         "tls_private_key",
@@ -338,6 +357,23 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
         [attr("algorithm", Expression::String("ED25519".into()))],
     ));
     Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScriptMode {
+    /// Restart a gateway that is installed but not serving; leave every other VM alone.
+    Repair,
+    /// Install or update the gateway on this VM.
+    Install,
+}
+
+impl ScriptMode {
+    fn resource_label(self, label: &str, index: usize) -> String {
+        match self {
+            Self::Repair => format!("{label}_repair_{index}"),
+            Self::Install => format!("{label}_{index}"),
+        }
+    }
 }
 
 fn unsupported(reason: &str) -> AlienError<ErrorData> {
@@ -398,18 +434,44 @@ fn install_script(
     label: &str,
     network: &str,
     peer_host: usize,
+    mode: ScriptMode,
 ) -> Expression {
+    let guard = match mode {
+        ScriptMode::Install => [
+            "if [ \"$serving\" = yes ] && [ \"$peer\" = no ]; then",
+            "  echo 'the peer gateway is not serving; not restarting the only serving gateway' >&2",
+            "  exit 1",
+            "fi",
+        ],
+        // Only a VM that has the gateway and is not serving is restarted here.
+        ScriptMode::Repair => [
+            "if [ \"$serving\" = yes ] || [ \"$installed\" = no ]; then",
+            "  exit 0",
+            "fi",
+            "",
+        ],
+    };
+    // An installed VM that was not serving is awaited only when the peer is serving to catch up
+    // from; with both away there is nothing to wait for.
+    let await_line = match mode {
+        ScriptMode::Install => "[ \"$serving\" = yes ] || exit 0",
+        ScriptMode::Repair => "[ \"$peer\" = yes ] || exit 0",
+    };
     let lines = [
         "#!/bin/bash",
         "set -u",
         "cloud-init status --wait >/dev/null 2>&1 || true",
         "health() { curl -sf -m 3 -o /dev/null \"http://$1:3129/health\"; }",
+        "installed=no",
+        "[ -f /etc/systemd/system/alien-egress-gateway.service ] && installed=yes",
         "serving=no",
         "health 127.0.0.1 && serving=yes",
-        "if [ \"$serving\" = yes ] && ! health %s; then",
-        "  echo 'the peer gateway is not serving; not restarting the only serving gateway' >&2",
-        "  exit 1",
-        "fi",
+        "peer=no",
+        "health %s && peer=yes",
+        guard[0],
+        guard[1],
+        guard[2],
+        guard[3],
         &format!("docker pull {image} || exit 1"),
         "umask 077",
         "cat > /etc/alien-egress-gateway.env <<'ENV'",
@@ -436,7 +498,7 @@ fn install_script(
         "systemctl daemon-reload",
         "systemctl enable alien-egress-gateway.service",
         "systemctl restart alien-egress-gateway.service",
-        "[ \"$serving\" = yes ] || exit 0",
+        await_line,
         "for i in $(seq 1 60); do health 127.0.0.1 && exit 0; sleep 5; done",
         "echo 'the new gateway did not become ready' >&2",
         "exit 1",
@@ -460,6 +522,10 @@ mod tests {
 
     /// The install script of the VM at `index`, as HCL.
     fn script(index: usize) -> String {
+        script_in(index, ScriptMode::Install)
+    }
+
+    fn script_in(index: usize, mode: ScriptMode) -> String {
         let body = hcl::Body::builder()
             .add_attribute((
                 "script",
@@ -469,6 +535,7 @@ mod tests {
                     "net_sandbox_gateway",
                     "net",
                     GATEWAY_HOSTS[1 - index],
+                    mode,
                 ),
             ))
             .build();
@@ -510,7 +577,9 @@ mod tests {
         let text = script(0);
         // The gateways used to log at error level only, which hid the refusals operators need.
         let env = text.find("/etc/alien-egress-gateway.env").unwrap();
-        let unit = text.find("alien-egress-gateway.service").unwrap();
+        let unit = text
+            .find("cat > /etc/systemd/system/alien-egress-gateway.service")
+            .unwrap();
         let line = text.find("RUST_LOG=warn").expect(&text);
         assert!(
             env < line && line < unit,
@@ -588,7 +657,33 @@ mod tests {
         );
         assert!(text.contains("3129/health"), "{text}");
         // A VM that was not serving (a fresh one: no configuration is published yet) is not awaited.
-        assert!(text.contains(r#"[ \"$serving\" = yes ] || exit 0"#), "{text}");
+        assert!(
+            text.contains(r#"[ \"$serving\" = yes ] || exit 0"#),
+            "{text}"
+        );
+    }
+
+    /// A setup re-run must repair an unhealthy VM while its peer serves, and must never restart
+    /// a serving gateway in the repair step.
+    #[test]
+    fn the_repair_script_restarts_only_an_installed_gateway_that_is_not_serving() {
+        let text = script_in(1, ScriptMode::Repair);
+        let leave = text
+            .find(r#"if [ \"$serving\" = yes ] || [ \"$installed\" = no ]; then"#)
+            .expect(&text);
+        let restart = text.find("systemctl restart").expect(&text);
+        assert!(
+            leave < restart,
+            "a serving or fresh VM leaves first:\n{text}"
+        );
+        assert!(text[leave..restart].contains("exit 0"), "{text}");
+        assert!(
+            !text.contains("not restarting the only serving gateway"),
+            "{text}"
+        );
+        // The repaired VM is awaited only when a serving peer is there to catch up from.
+        assert!(text.contains(r#"[ \"$peer\" = yes ] || exit 0"#), "{text}");
+        assert_eq!(text.matches("%s").count(), 5, "{text}");
     }
 
     #[test]

@@ -236,22 +236,25 @@ impl SandboxEgressManager {
         let body = serde_json::json!({"record":record});
         let deadline = tokio::time::Instant::now() + GRANT_BUDGET;
         let mut failure = unavailable("no gateway replica acknowledged the new grant");
-        loop {
-            let targets = match self.resolved_targets().await {
-                Ok(targets) if !targets.is_empty() => targets,
-                Ok(_) => Vec::new(),
-                Err(error) => {
-                    failure = error;
-                    Vec::new()
-                }
-            };
-            let min = self
-                .config
-                .replicas
-                .as_ref()
-                .map_or(0, |replicas| replicas.min_protocol);
-            let mut acknowledged = 0usize;
-            let sends = targets.iter().map(|target| {
+        // The deadline covers every step of the attempt: the address lookup, the protocol reads,
+        // the writes and the read-backs, not only the pauses between rounds.
+        let attempt = async {
+            loop {
+                let targets = match self.resolved_targets().await {
+                    Ok(targets) if !targets.is_empty() => targets,
+                    Ok(_) => Vec::new(),
+                    Err(error) => {
+                        failure = error;
+                        Vec::new()
+                    }
+                };
+                let min = self
+                    .config
+                    .replicas
+                    .as_ref()
+                    .map_or(0, |replicas| replicas.min_protocol);
+                let mut acknowledged = 0usize;
+                let sends = targets.iter().map(|target| {
                 let body = &body;
                 let issuer = &issuer;
                 async move {
@@ -310,22 +313,31 @@ impl SandboxEgressManager {
                     }
                 }
             });
-            for outcome in futures::future::join_all(sends).await {
-                match outcome {
-                    Ok(Some(_)) => acknowledged += 1,
-                    Ok(None) => {}
-                    // Old gateway or a refusal that retrying cannot fix: surface it at once.
-                    Err(error) => return Err(error),
+                for outcome in futures::future::join_all(sends).await {
+                    match outcome {
+                        Ok(Some(_)) => acknowledged += 1,
+                        Ok(None) => {}
+                        // Old gateway or a refusal that retrying cannot fix: surface it at once.
+                        Err(error) => return Err(error),
+                    }
                 }
+                if acknowledged > 0 {
+                    return Ok(record);
+                }
+                if tokio::time::Instant::now() + std::time::Duration::from_millis(500) >= deadline {
+                    let mut exhausted = failure.clone();
+                    exhausted.retryable = true;
+                    return Err(exhausted);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
-            if acknowledged > 0 {
-                return Ok(record);
-            }
-            if tokio::time::Instant::now() + std::time::Duration::from_millis(500) >= deadline {
+        };
+        match tokio::time::timeout_at(deadline, attempt).await {
+            Ok(result) => result,
+            Err(_) => {
                 failure.retryable = true;
-                return Err(failure);
+                Err(failure)
             }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     }
 
@@ -453,7 +465,7 @@ impl SandboxEgressManager {
             let last = attempt + 1 == attempts;
             let targets = match self.write_targets().await {
                 Ok(targets) => targets,
-                Err(error) if last => return Err(error),
+                Err(error) if last => return Err(exhausted(error)),
                 Err(_) => {
                     tokio::time::sleep(backoff(attempt)).await;
                     continue;
@@ -473,7 +485,7 @@ impl SandboxEgressManager {
                             "the egress gateway is older than this release needs; re-run setup to update the egress gateway",
                         ))
                     }
-                    Err(error) if last => return Err(error),
+                    Err(error) if last => return Err(exhausted(error)),
                     Err(_) => {
                         tokio::time::sleep(backoff(attempt)).await;
                         continue;
@@ -497,17 +509,21 @@ impl SandboxEgressManager {
                         let transient =
                             response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE;
                         let error = gateway_error(response).await;
-                        if !transient || error.code != "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE" || last
-                        {
+                        let passing =
+                            transient && error.code == "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE";
+                        if !passing {
                             return Err(error);
+                        }
+                        if last {
+                            return Err(exhausted(error));
                         }
                         acknowledged = false;
                         break;
                     }
                     Err(_) if last => {
-                        return Err(unavailable(
+                        return Err(exhausted(unavailable(
                             "gateway policy request failed after repeated attempts",
-                        ))
+                        )))
                     }
                     Err(_) => {
                         acknowledged = false;
@@ -540,7 +556,17 @@ impl SandboxEgressManager {
         let mut done: std::collections::HashSet<String> = Default::default();
         let mut failure = unavailable("a gateway replica did not acknowledge the revocation");
         for attempt in 0..attempts {
-            let (targets, complete) = self.revocation_targets().await?;
+            // A lookup that fails now may work on the next attempt (a replica is being replaced).
+            let (targets, complete) = match self.revocation_targets().await {
+                Ok(found) => found,
+                Err(error) => {
+                    failure = error;
+                    if attempt + 1 < attempts {
+                        tokio::time::sleep(backoff(attempt)).await;
+                    }
+                    continue;
+                }
+            };
             let mut pending = false;
             for target in &targets {
                 if done.contains(target) {
@@ -737,6 +763,13 @@ pub(crate) fn now_unix() -> Result<i64> {
         .map_err(|_| unavailable("system clock predates Unix epoch"))?
         .as_secs();
     i64::try_from(seconds).map_err(|_| unavailable("system clock is outside the supported range"))
+}
+/// A failure that persisted through every attempt is a condition that passes (a replica being
+/// replaced), so the caller may try again later. A refusal of the old protocol never goes
+/// through here.
+fn exhausted(mut error: AlienError<ErrorData>) -> AlienError<ErrorData> {
+    error.retryable = true;
+    error
 }
 fn unavailable(reason: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::SandboxEgressGatewayUnavailable {

@@ -859,6 +859,8 @@ async fn a_gateway_older_than_the_binding_needs_is_refused_with_a_rerun_setup_me
             .contains("re-run setup to update the egress gateway"),
         "{error}"
     );
+    // Retrying cannot fix an old gateway.
+    assert!(!error.retryable, "{error}");
 }
 
 /// A two-replica manager whose second replica listens on `127.0.0.2` only after `delay`
@@ -1080,8 +1082,86 @@ async fn an_update_still_needs_every_replica() {
     let (manager, _second, away) = two_replicas(&h, None).await;
     let policy: EgressPolicy =
         serde_json::from_value(serde_json::json!({"allow":["a.example.com"]})).unwrap();
-    assert!(manager.update("box-1", &policy).await.is_err());
+    let error = manager.update("box-1", &policy).await.unwrap_err();
+    // A replica that stays away through every attempt is a condition that passes.
+    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE", "{error}");
+    assert!(error.retryable, "{error}");
     away.abort();
+}
+
+/// A revocation whose replica lookup keeps failing is retryable too, and the lookup is retried
+/// inside the loop (the failure is not returned on the first attempt).
+#[tokio::test]
+async fn a_revocation_whose_replica_lookup_keeps_failing_is_retryable() {
+    let h = Harness::new().await;
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: String::new(),
+        addresses: vec!["not-an-address".into()],
+        port: h.manager.admin_url.port().unwrap(),
+        count: 1,
+        min_protocol: 0,
+    });
+    let manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        h.manager.admin_url.to_string(),
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let error = manager.delete("box-1").await.unwrap_err();
+    assert_eq!(error.code, "SANDBOX_EGRESS_GATEWAY_UNAVAILABLE", "{error}");
+    assert!(error.retryable, "{error}");
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(500),
+        "the lookup was retried with backoff: {:?}",
+        started.elapsed()
+    );
+}
+
+/// A replica that accepts the connection and never answers must not stretch a new grant past its
+/// budget: the deadline covers the protocol read, the write and the read-back, not only the pauses.
+#[tokio::test]
+async fn a_new_grant_against_a_replica_that_never_answers_stays_inside_the_budget() {
+    let h = Harness::new().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.2:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let blackhole = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            held.push(stream);
+        }
+    });
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: String::new(),
+        addresses: vec!["127.0.0.2".into()],
+        port,
+        count: 1,
+        min_protocol: 0,
+    });
+    let manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        format!("http://127.0.0.2:{port}"),
+    )
+    .unwrap();
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+    let started = std::time::Instant::now();
+    let error = manager
+        .create("box-1", &policy, now_unix().unwrap() + 600)
+        .await
+        .unwrap_err();
+    assert!(error.retryable, "{error}");
+    assert!(
+        started.elapsed() < super::GRANT_BUDGET + std::time::Duration::from_secs(2),
+        "the whole operation is bounded: {:?}",
+        started.elapsed()
+    );
+    blackhole.abort();
 }
 
 /// Two real gateway processes: a create while replica A is stopped succeeds, the sandbox reaches
