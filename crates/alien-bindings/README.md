@@ -90,7 +90,7 @@ Accepted limitations of this version:
   so Azure patches the OS and they sit in an availability set so a reboot takes one
   gateway down at a time. A running sandbox keeps its egress while one VM is down:
   the agent's proxy address is a loopback forwarder that dials each connection to
-  the last good replica, then the other (`alien-sandbox-agent` `proxy_failover`).
+  the last good replica, then the other (`alien-sandbox-agent` `proxy_failover`). A CONNECT that a replica closes before any answer byte is replayed once on the other replica (up to 32 KiB of the request is kept; any other request is never replayed). The gateway closes without a byte at a connection limit, so a replay can let a sandbox reach up to twice its per-identity limit (the limit is per replica); accepted.
   A new sandbox's first grant is accepted once one replica holds it (bounded to 20 s;
   the replica that was away starts empty, refuses until it has synced from its peer, so
   a missing grant only ever denies). `update_egress` needs both replicas and is refused
