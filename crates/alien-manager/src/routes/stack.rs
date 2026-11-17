@@ -660,10 +660,10 @@ async fn stack_import_as(
             && is_idempotent_import(&existing, &stack_state, &release.id, &req)
         {
             let (deployment_token, deployment_token_expires_at) =
-                    match response_token(&state, &subject, &req, &existing).await {
-                        Ok(token) => token,
-                        Err(response) => return response,
-                    };
+                match response_token(&state, &subject, &req, &existing).await {
+                    Ok(token) => token,
+                    Err(response) => return response,
+                };
             let Some(stack_settings) = existing.stack_settings else {
                 return ErrorData::internal("imported deployment is missing stack_settings")
                     .into_response();
@@ -2177,7 +2177,7 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
             alien_core::emits_package_scaffolding(
                 entry,
                 req.stack_settings.setup_management,
-                req.base_platform.unwrap_or(req.platform),
+                alien_core::SetupTarget::new(req.platform, req.base_platform),
             )
         })
         .map(|(resource_id, _)| resource_id.as_str())
@@ -2196,7 +2196,7 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
     runtime_owned.sort_unstable();
     if !runtime_owned.is_empty() {
         return Err(ErrorData::bad_request(format!(
-            "Setup registration includes resources that setup does not own for {} setup: {}",
+            "Setup registration includes resources that setup does not own for {} setup: {}. Regenerate and rerun the setup artifact.",
             req.stack_settings.setup_management.as_str(),
             runtime_owned.join(", ")
         )));
@@ -2511,7 +2511,7 @@ mod setup_update_authorization_tests {
                 alien_core::emits_package_scaffolding(
                     entry,
                     req.stack_settings.setup_management,
-                    Platform::Aws,
+                    alien_core::SetupTarget::new(req.platform, req.base_platform),
                 )
             })
             .map(|(id, entry)| ImportedResource {
@@ -3282,3 +3282,6 @@ mod first_setup_marker_tests {
         assert!(metadata.first_setup_machines_unselected);
     }
 }
+
+#[cfg(test)]
+mod registration_parity_tests;

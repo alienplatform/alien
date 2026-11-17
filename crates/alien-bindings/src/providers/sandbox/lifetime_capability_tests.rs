@@ -538,6 +538,10 @@ async fn aws_refuses_it_under_a_declared_ceiling_too() {
 #[tokio::test]
 async fn gcp_refuses_a_lifetime_no_sandbox_can_be_built_to() {
     let mut client = alien_gcp_clients::gcp::agent_platform::MockAgentPlatformApi::new();
+    // The caller's key is looked up by listing; nothing carries it.
+    client
+        .expect_list_sandboxes_by_display_names()
+        .returning(|_, _| Ok(Vec::new()));
     client.expect_get_sandbox().returning(|_, id| {
         Err(
             alien_error::AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {

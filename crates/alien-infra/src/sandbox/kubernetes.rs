@@ -336,6 +336,8 @@ impl KubernetesSandboxController {
             }));
         }
 
+        super::kubernetes_egress::release_gateway_service_policy(ctx, config, &namespace).await?;
+
         // The capability key outlives its pods otherwise, and a signing key nobody can use is
         // still a signing key sitting in the cluster. Best effort: one already gone is the
         // desired end state, and it must not strand the rest of the teardown.
@@ -498,6 +500,7 @@ impl KubernetesSandboxController {
             )
             .await?,
         );
+        renew_image_pull_secret(ctx, config, &namespace).await?;
         let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
 
         let pool = replenish_warm_pool(
@@ -619,7 +622,7 @@ async fn report_pods_without_network_ready_endpoint(
 const DEFAULT_WARM_POOL_SIZE: usize = 2;
 
 /// What one replenish pass found and did.
-struct WarmPool {
+pub(crate) struct WarmPool {
     /// Idle pods already waiting when the pass ran.
     idle: usize,
     /// Pods the pass added.
@@ -660,7 +663,76 @@ async fn confirm_runtime_class(
     Ok(())
 }
 
-async fn replenish_warm_pool(
+/// Reads the Operator's own Service and keeps its `ClusterIP:port` as the policy canary.
+///
+/// A sandbox pod proves its NetworkPolicy is enforced by finding this address unreachable. The
+/// Operator pod's address moves with every reschedule (and a pod proven against a dead address
+/// proves nothing); the Service's ClusterIP stays while the Service exists. The Service address is
+/// dropped by the policy on both kinds of network plugin: one that filters before the Service is
+/// translated to a pod, and one that filters after. Without the chart's Service name the literal
+/// address from an older chart is used. A Service that cannot be read is an error, not a pod
+/// without the proof.
+///
+/// The Service is the Operator's own, so it is read from the release namespace, which is not the
+/// sandbox namespace when `sandbox.namespace` places the pods elsewhere.
+pub(crate) async fn resolve_operator_address(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+) -> Result<()> {
+    let Ok(value) = std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) else {
+        return Ok(());
+    };
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message,
+            resource_id: Some(sandbox.id.clone()),
+        })
+    };
+    let (name, port) = value
+        .rsplit_once(':')
+        .filter(|(name, port)| !name.is_empty() && port.parse::<u16>().is_ok())
+        .ok_or_else(|| {
+            invalid(format!(
+                "{} must be <service>:<port>",
+                alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE
+            ))
+        })?;
+    let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+    let client = ctx
+        .service_provider
+        .get_kubernetes_service_client(ctx.get_kubernetes_config()?)
+        .await?;
+    let service =
+        client
+            .get_service(&namespace, name)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read the Operator's own Service '{name}'"),
+                resource_id: Some(sandbox.id.clone()),
+            })?;
+    let address = service
+        .spec
+        .and_then(|spec| spec.cluster_ip)
+        .and_then(|address| address.parse::<std::net::Ipv4Addr>().ok())
+        .ok_or_else(|| {
+            invalid(format!(
+                "the Operator's Service '{name}' needs an IPv4 ClusterIP for the sandbox network check"
+            ))
+        })?;
+    // Under the deprecated direct-egress policy only non-public ranges are blocked, so a
+    // publicly numbered Service address would stay reachable and no pod could prove its policy.
+    if matches!(sandbox.egress, alien_core::SandboxEgress::Allow)
+        && alien_core::is_public_ipv4(address)
+    {
+        return Err(invalid(format!(
+            "the Operator's Service '{name}' has the publicly numbered address {address}, which the direct-egress policy cannot block, so a sandbox pod could not prove its network policy; use a private Service range or egress 'internet'"
+        )));
+    }
+    super::kubernetes_spec::remember_operator_address(format!("{address}:{port}"));
+    Ok(())
+}
+
+pub(crate) async fn replenish_warm_pool(
     ctx: &ResourceControllerContext<'_>,
     sandbox: &Sandbox,
     namespace: &str,
@@ -722,11 +794,28 @@ async fn replenish_warm_pool(
     )
     .await?
     else {
-        return Ok(WarmPool {
-            idle: without_terminating(idle.items).len(),
-            created,
-        });
+        // The gateway is not up, so no pod can be built for this sandbox yet, and an idle pod
+        // made earlier (for another egress mode, or for a gateway address that is gone) cannot
+        // serve it. Take them out of the pool rather than leave them to be claimed.
+        retire_stale_idle_pods(
+            &client,
+            namespace,
+            &sandbox.id,
+            without_terminating(idle.items),
+        )
+        .await;
+        return Ok(WarmPool { idle: 0, created });
     };
+    // A session's only route to the internet is the gateway Service's ClusterIP, which the
+    // chart's policy cannot name (see `gateway_service_policy`), so the Operator admits it.
+    // A sandbox that no longer uses the gateway loses the policy it had.
+    let gateway = egress_environment
+        .iter()
+        .find(|variable| variable.name == "ALIEN_SANDBOX_EGRESS_GATEWAY")
+        .and_then(|variable| variable.value.as_deref())
+        .and_then(|value| value.rsplit_once(':'))
+        .and_then(|(address, _)| address.parse::<std::net::Ipv4Addr>().ok());
+    super::kubernetes_egress::sync_gateway_service_policy(ctx, sandbox, namespace, gateway).await?;
 
     let mut pod = idle_pool_pod_with_labels(
         sandbox,
@@ -737,11 +826,10 @@ async fn replenish_warm_pool(
         kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
     );
     placement.apply(&mut pod);
+    resolve_operator_address(ctx, sandbox).await?;
     super::kubernetes_spec::require_enforced_policy(
         &mut pod,
-        std::env::var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_ADDRESS)
-            .ok()
-            .as_deref(),
+        super::kubernetes_spec::operator_address().as_deref(),
     );
     if let Some(secret_name) = ensure_image_pull_secret(ctx, sandbox, namespace).await? {
         pod.spec
@@ -770,8 +858,9 @@ async fn replenish_warm_pool(
     let (stale, fresh) = split_idle_pods(idle.items, &template_hash);
     let excess = excess_idle_pods(fresh.clone(), target);
     let waiting = fresh.len() - excess.len();
-    retire_stale_idle_pods(&client, namespace, &sandbox.id, stale).await;
-    retire_stale_idle_pods(&client, namespace, &sandbox.id, excess).await;
+    // Stale pods go first, so a failed check in a pod from an older template never blocks the
+    // recovery after a rebuild; only pods of the current template are judged.
+    retire_then_judge(&client, namespace, &sandbox.id, stale, excess, &fresh).await?;
     let deficit = pool_deficit(target, waiting);
 
     // The broker builds a pod from this when a create finds the pool empty, so a create never
@@ -842,13 +931,8 @@ async fn ensure_image_pull_secret(
     if !image_is_from_manager(image, ctx.deployment_config.manager_url.as_deref()) {
         return Ok(None);
     }
-    let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
-        AlienError::new(ErrorData::ResourceControllerConfigError {
-            resource_id: sandbox.id.clone(),
-            message: "deployment_token is required to pull the sandbox image from the manager's registry".to_string(),
-        })
-    })?;
-    let name = format!("alien-sbx-{}-registry", sandbox.id);
+    let token = crate::kubernetes_registry::pull_credential(ctx, &sandbox.id).await?;
+    let name = format!("{}-registry", pull_secret_workload_name(&sandbox.id));
     let secrets = ctx
         .service_provider
         .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
@@ -858,12 +942,41 @@ async fn ensure_image_pull_secret(
         namespace,
         &name,
         image,
-        token,
+        &token,
         kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
         false,
     )
     .await?;
     Ok(Some(name))
+}
+
+/// Renews the pull Secret of a sandbox image from the manager's registry, the way a container's
+/// pull Secret is renewed: the credential the manager issues for it is short-lived, and a new pod
+/// reads whatever the Secret holds when it starts. Another registry's image has no Secret.
+async fn renew_image_pull_secret(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+) -> Result<()> {
+    let alien_core::SandboxCode::Image { image, .. } = &sandbox.code else {
+        return Ok(());
+    };
+    if !image_is_from_manager(image, ctx.deployment_config.manager_url.as_deref()) {
+        return Ok(());
+    }
+    crate::kubernetes_registry::refresh_pull_secret(
+        ctx,
+        namespace,
+        &pull_secret_workload_name(&sandbox.id),
+        &sandbox.id,
+        image,
+    )
+    .await
+}
+
+/// The name `refresh_pull_secret` derives the sandbox's pull Secret from (`<name>-registry`).
+fn pull_secret_workload_name(sandbox_id: &str) -> String {
+    format!("alien-sbx-{sandbox_id}")
 }
 
 /// Deletes the claimed pods of this sandbox whose session deadline has passed.
@@ -1219,6 +1332,105 @@ fn sandbox_namespace(config: &alien_core::KubernetesClientConfig) -> Result<Stri
     }
 }
 
+/// Retires the stale and excess idle pods, then reports a failed staged-agent check among the
+/// pods of the current template. Retiring comes first so that a failed pod from an older
+/// template cannot block the recovery after a rebuild.
+async fn retire_then_judge(
+    client: &std::sync::Arc<dyn alien_k8s_clients::PodApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    stale: Vec<k8s_openapi::api::core::v1::Pod>,
+    excess: Vec<k8s_openapi::api::core::v1::Pod>,
+    fresh: &[k8s_openapi::api::core::v1::Pod],
+) -> Result<()> {
+    retire_stale_idle_pods(client, namespace, sandbox_id, stale).await;
+    retire_stale_idle_pods(client, namespace, sandbox_id, excess).await;
+    match older_cli_image_message(sandbox_id, fresh) {
+        Some((message, missing_agent)) => {
+            let mut error = AlienError::new(ErrorData::CloudPlatformError {
+                message,
+                resource_id: Some(sandbox_id.to_string()),
+            });
+            // Only a staged agent that is missing stays terminal: rebuilding the image is the
+            // fix. Anything else (out of memory, a start error, a pull hiccup) can pass on a
+            // later tick, so upkeep must keep going.
+            error.retryable = !missing_agent;
+            Err(error)
+        }
+        None => Ok(()),
+    }
+}
+
+/// The message when a pool pod's `check-staged-agent` init container failed, `None` when no pod
+/// shows that, and whether the failure is the confirmed missing staged executable (not retryable). The image is blamed on an older alien CLI only when the failure says the staged
+/// executable is missing (its agent staged no file at `/opt/alien/alien-sandbox-agent`); any other
+/// failure reports the check container's own reason and message.
+pub(crate) fn older_cli_image_message(
+    sandbox_id: &str,
+    pods: &[k8s_openapi::api::core::v1::Pod],
+) -> Option<(String, bool)> {
+    use k8s_openapi::api::core::v1::ContainerState;
+    // (reason, exit code, message) of a failed current state.
+    fn failure(state: &ContainerState) -> Option<(String, Option<i32>, String)> {
+        if let Some(terminated) = state.terminated.as_ref().filter(|t| t.exit_code != 0) {
+            return Some((
+                terminated.reason.clone().unwrap_or_default(),
+                Some(terminated.exit_code),
+                terminated.message.clone().unwrap_or_default(),
+            ));
+        }
+        let waiting = state.waiting.as_ref()?;
+        let reason = waiting.reason.as_deref()?;
+        matches!(
+            reason,
+            "CreateContainerError" | "RunContainerError" | "StartError" | "CrashLoopBackOff"
+        )
+        .then(|| {
+            (
+                reason.to_string(),
+                None,
+                waiting.message.clone().unwrap_or_default(),
+            )
+        })
+    }
+    let agent = alien_core::sandbox_image::STAGED_AGENT_PATH;
+    let failures: Vec<_> = pods
+        .iter()
+        .filter_map(|pod| {
+            pod.status
+                .as_ref()
+                .and_then(|status| status.init_container_statuses.as_ref())
+        })
+        .flatten()
+        .filter(|status| status.name == super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER)
+        // Only the current state: an earlier, transient start failure (`last_state`) must not
+        // blame the image for the rest of the pod's life.
+        .filter_map(|status| status.state.as_ref().and_then(failure))
+        .collect();
+    let missing = |message: &str| {
+        let message = message.to_lowercase();
+        message.contains(agent) && message.contains("no such file or directory")
+    };
+    if failures.iter().any(|(_, _, message)| missing(message)) {
+        return Some((
+            format!(
+                "sandbox {sandbox_id}: this sandbox image was built by an older alien CLI; \
+                 rebuild and release it"
+            ),
+            true,
+        ));
+    }
+    failures.into_iter().next().map(|(reason, exit_code, message)| {
+        let exit = exit_code.map_or(String::new(), |code| format!(", exit code {code}"));
+        (
+            format!(
+                "sandbox {sandbox_id}: the check that runs the staged agent failed (reason {reason}{exit}): {message}"
+            ),
+            false,
+        )
+    })
+}
+
 /// The message for a pod the API server refused under Pod Security, or `None` for any other
 /// refusal. A root-boot sandbox needs a namespace that admits `baseline`; without this the pool
 /// would stay empty and the only trace would be a warning per tick.
@@ -1281,6 +1493,556 @@ fn count_session_pods(pods: Vec<k8s_openapi::api::core::v1::Pod>) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use k8s_openapi::api::core::v1::{
+        ContainerState, ContainerStateTerminated, ContainerStateWaiting, ContainerStatus, Pod,
+        PodStatus,
+    };
+
+    fn pod_with_init(name: &str, state: ContainerState) -> Pod {
+        Pod {
+            status: Some(PodStatus {
+                init_container_statuses: Some(vec![ContainerStatus {
+                    name: name.to_string(),
+                    state: Some(state),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn start_error() -> ContainerState {
+        start_error_with("")
+    }
+
+    fn start_error_with(message: &str) -> ContainerState {
+        ContainerState {
+            waiting: Some(ContainerStateWaiting {
+                reason: Some("StartError".to_string()),
+                message: Some(message.to_string()),
+            }),
+            ..Default::default()
+        }
+    }
+
+    const MISSING_AGENT: &str = "failed to create containerd task: OCI runtime create failed: \
+        runc create failed: unable to start container process: exec: \
+        \"/opt/alien/alien-sandbox-agent\": stat /opt/alien/alien-sandbox-agent: no such file or \
+        directory: unknown";
+
+    #[test]
+    fn a_missing_staged_agent_is_named_as_built_by_an_older_cli() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let message = super::older_cli_image_message(
+            "box",
+            &[pod_with_init(check, start_error_with(MISSING_AGENT))],
+        )
+        .expect("the check failing is recognised")
+        .0;
+        assert!(
+            message.contains(
+                "this sandbox image was built by an older alien CLI; rebuild and release it"
+            ),
+            "{message}"
+        );
+        let exited = ContainerState {
+            terminated: Some(ContainerStateTerminated {
+                exit_code: 128,
+                reason: Some("ContainerCannotRun".to_string()),
+                message: Some(MISSING_AGENT.to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let message = super::older_cli_image_message("box", &[pod_with_init(check, exited)])
+            .expect("exit 128 with the message is recognised")
+            .0;
+        assert!(message.contains("older alien CLI"), "{message}");
+    }
+
+    #[test]
+    fn any_other_check_failure_reports_the_containers_own_reason_and_message() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let message = super::older_cli_image_message(
+            "box",
+            &[pod_with_init(
+                check,
+                start_error_with("failed to pull and unpack image: connection refused"),
+            )],
+        )
+        .expect("a failed check is reported")
+        .0;
+        assert!(!message.contains("older alien CLI"), "{message}");
+        assert!(
+            message.contains("StartError") && message.contains("connection refused"),
+            "{message}"
+        );
+        let exited = ContainerState {
+            terminated: Some(ContainerStateTerminated {
+                exit_code: 137,
+                reason: Some("OOMKilled".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let message = super::older_cli_image_message("box", &[pod_with_init(check, exited)])
+            .expect("a failed check is reported")
+        .0;
+        assert!(!message.contains("older alien CLI"), "{message}");
+        assert!(
+            message.contains("OOMKilled") && message.contains("137"),
+            "{message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_check_in_an_old_template_pod_is_retired_and_does_not_block_recovery() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = deleted.clone();
+        let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
+        pods.expect_update_pod()
+            .returning(|_, _, pod| Ok(pod.clone()));
+        pods.expect_delete_pod().returning(move |_, name| {
+            seen.lock().unwrap().push(name.to_string());
+            Ok(())
+        });
+        let client: std::sync::Arc<dyn alien_k8s_clients::PodApi> = std::sync::Arc::new(pods);
+        let mut old = idle_with_hash("old", Some("old-template"));
+        old.status = pod_with_init(check, start_error_with(MISSING_AGENT)).status;
+        let (stale, fresh) = split_idle_pods(vec![old], "new-template");
+        let result = retire_then_judge(&client, "ns", "sbx", stale, Vec::new(), &fresh).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(*deleted.lock().unwrap(), ["old"]);
+
+        // A failed check in a pod of the current template is still reported.
+        let mut current = idle_with_hash("current", Some("new-template"));
+        current.status = pod_with_init(check, start_error_with(MISSING_AGENT)).status;
+        let (stale, fresh) = split_idle_pods(vec![current], "new-template");
+        assert!(
+            retire_then_judge(&client, "ns", "sbx", stale, Vec::new(), &fresh)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_missing_staged_agent_is_a_terminal_failure_of_the_check() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
+        pods.expect_update_pod()
+            .returning(|_, _, pod| Ok(pod.clone()));
+        pods.expect_delete_pod().returning(|_, _| Ok(()));
+        let client: std::sync::Arc<dyn alien_k8s_clients::PodApi> = std::sync::Arc::new(pods);
+
+        // A fresh pod whose check was out of memory may pass on a later tick.
+        let mut oom = idle_with_hash("oom", Some("new-template"));
+        oom.status = pod_with_init(
+            check,
+            ContainerState {
+                terminated: Some(ContainerStateTerminated {
+                    exit_code: 137,
+                    reason: Some("OOMKilled".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .status;
+        let (stale, fresh) = split_idle_pods(vec![oom], "new-template");
+        let error = retire_then_judge(&client, "ns", "sbx", stale, Vec::new(), &fresh)
+            .await
+            .expect_err("the failed check is reported");
+        assert!(error.retryable, "{error:?}");
+        assert!(error.to_string().contains("OOMKilled"), "{error}");
+
+        // A missing staged agent needs a rebuilt image: it stays terminal.
+        let mut missing = idle_with_hash("missing", Some("new-template"));
+        missing.status = pod_with_init(check, start_error_with(MISSING_AGENT)).status;
+        let (stale, fresh) = split_idle_pods(vec![missing], "new-template");
+        let error = retire_then_judge(&client, "ns", "sbx", stale, Vec::new(), &fresh)
+            .await
+            .expect_err("the missing agent is reported");
+        assert!(!error.retryable, "{error:?}");
+        assert!(error.to_string().contains("older alien CLI"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_sweep_of_retired_pods_deletes_what_it_finds() {
+        let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = deleted.clone();
+        let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
+        pods.expect_list_pods().returning(|_, _, _| {
+            Ok(k8s_openapi::List {
+                items: vec![idle_with_hash("stuck", Some("old"))],
+                ..Default::default()
+            })
+        });
+        pods.expect_delete_pod().returning(move |_, name| {
+            seen.lock().unwrap().push(name.to_string());
+            Ok(())
+        });
+        let client: std::sync::Arc<dyn alien_k8s_clients::PodApi> = std::sync::Arc::new(pods);
+        sweep_retired_pods(&client, "ns", "sbx", &retired_selector("sbx")).await;
+        assert_eq!(*deleted.lock().unwrap(), ["stuck"]);
+    }
+
+    #[test]
+    fn an_earlier_start_failure_of_the_check_does_not_blame_the_image() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let mut pod = pod_with_init(check, ContainerState::default());
+        pod.status
+            .as_mut()
+            .unwrap()
+            .init_container_statuses
+            .as_mut()
+            .unwrap()[0]
+            .last_state = Some(start_error());
+        assert!(super::older_cli_image_message("box", &[pod]).is_none());
+    }
+
+    #[test]
+    fn other_start_failures_are_not_blamed_on_the_image() {
+        // The staging step failing, or the check still running or passed, says nothing about it.
+        assert!(super::older_cli_image_message(
+            "box",
+            &[pod_with_init("stage-protected-files", start_error())]
+        )
+        .is_none());
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let passed = ContainerState {
+            terminated: Some(ContainerStateTerminated {
+                exit_code: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(super::older_cli_image_message("box", &[pod_with_init(check, passed)]).is_none());
+        assert!(super::older_cli_image_message("box", &[Pod::default()]).is_none());
+    }
+
+    /// An enrolled Operator has no deployment token: its registry authority is the pull
+    /// credential the manager issues for the deployment. The sandbox's pull Secret must be
+    /// built from that, the way containers and daemons build theirs.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn the_pull_secret_of_an_enrolled_operator_comes_from_the_manager_issued_credential() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_client_core::runtime_credentials::RuntimeCapability;
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource};
+        use std::sync::{Arc, Mutex};
+
+        let image = "manager.example/sbx/root:1";
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: image.to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "1Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+
+        let mut provider = crate::MockPlatformServiceProvider::new();
+        provider
+            .expect_runtime_registry_pull_credential()
+            .withf(|deployment| deployment == "dep-1")
+            .returning(|_| {
+                Ok(Some(RuntimeCapability {
+                    token: "pull-token".into(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+                }))
+            });
+        let written: Arc<Mutex<Option<k8s_openapi::api::core::v1::Secret>>> = Default::default();
+        let mut secrets = alien_k8s_clients::secrets::MockSecretsApi::new();
+        let sink = written.clone();
+        secrets.expect_create_secret().returning(move |_, secret| {
+            *sink.lock().unwrap() = Some(secret.clone());
+            Ok(secret.clone())
+        });
+        let secrets: Arc<dyn alien_k8s_clients::SecretsApi> = Arc::new(secrets);
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(secrets.clone()));
+
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(sandbox.clone()),
+            vec![EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        {
+            let config = harness.deployment_config_mut();
+            config.manager_url = Some("https://manager.example".into());
+            config.runtime_identity_audience = Some("https://manager.example".into());
+            config.deployment_token = None;
+        }
+        let ctx = harness.ctx();
+
+        let name = ensure_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect("an enrolled Operator pulls with the manager-issued credential")
+            .expect("an image from the manager's registry needs a pull Secret");
+        assert_eq!(name, "alien-sbx-sbx-registry");
+
+        let secret = written
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the Secret is written");
+        let docker_config = secret
+            .string_data
+            .as_ref()
+            .and_then(|data| data.get(".dockerconfigjson").cloned())
+            .or_else(|| {
+                secret.data.as_ref().and_then(|data| {
+                    data.get(".dockerconfigjson")
+                        .map(|bytes| String::from_utf8_lossy(&bytes.0).into_owned())
+                })
+            })
+            .expect("a docker config");
+        assert!(docker_config.contains("pull-token"), "{docker_config}");
+    }
+
+    /// The credential lasts well under the sandbox's lifetime, so each health tick writes the
+    /// manager's current one over the Secret: a pod started an hour later still pulls.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn the_health_tick_renews_the_pull_secret_with_the_credential_the_manager_issues_then() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_client_core::runtime_credentials::RuntimeCapability;
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource};
+        use std::sync::{Arc, Mutex};
+
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "manager.example/sbx/root:1".to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "1Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+
+        let issued = Arc::new(Mutex::new(vec!["second-token", "first-token"]));
+        let mut provider = crate::MockPlatformServiceProvider::new();
+        let queue = issued.clone();
+        provider
+            .expect_runtime_registry_pull_credential()
+            .returning(move |_| {
+                Ok(Some(RuntimeCapability {
+                    token: queue.lock().unwrap().pop().unwrap().into(),
+                    expires_at: chrono::Utc::now() + chrono::Duration::minutes(30),
+                }))
+            });
+        let live: Arc<Mutex<Option<k8s_openapi::api::core::v1::Secret>>> = Default::default();
+        let mut secrets = alien_k8s_clients::secrets::MockSecretsApi::new();
+        let created = live.clone();
+        secrets.expect_create_secret().returning(move |_, secret| {
+            let mut live = created.lock().unwrap();
+            if live.is_some() {
+                return Err(alien_error::AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceConflict {
+                        resource_type: "Secret".into(),
+                        resource_name: "alien-sbx-sbx-registry".into(),
+                        message: "AlreadyExists 409".into(),
+                    },
+                ));
+            }
+            let mut stored = secret.clone();
+            stored.metadata.resource_version = Some("1".into());
+            *live = Some(stored.clone());
+            Ok(stored)
+        });
+        let read = live.clone();
+        secrets
+            .expect_get_secret()
+            .returning(move |_, _| Ok(read.lock().unwrap().clone().unwrap()));
+        let updated = live.clone();
+        secrets
+            .expect_update_secret()
+            .returning(move |_, _, secret| {
+                *updated.lock().unwrap() = Some(secret.clone());
+                Ok(secret.clone())
+            });
+        let secrets: Arc<dyn alien_k8s_clients::SecretsApi> = Arc::new(secrets);
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(secrets.clone()));
+
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(sandbox.clone()),
+            vec![EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        {
+            let config = harness.deployment_config_mut();
+            config.manager_url = Some("https://manager.example".into());
+            config.runtime_identity_audience = Some("https://manager.example".into());
+            config.deployment_token = None;
+        }
+        let ctx = harness.ctx();
+        let held = || {
+            let secret = live.lock().unwrap().clone().expect("a Secret");
+            let data = secret.data.expect("data");
+            String::from_utf8_lossy(&data[".dockerconfigjson"].0).into_owned()
+        };
+
+        renew_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect("first renewal");
+        assert!(held().contains("first-token"), "{}", held());
+
+        renew_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect("second renewal");
+        assert!(held().contains("second-token"), "{}", held());
+    }
+
+    /// A credential the manager no longer issues is a failure of the sandbox with its reason,
+    /// not a Secret left to expire unnoticed.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn an_unavailable_pull_credential_fails_the_renewal_with_its_reason() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource};
+        use std::sync::Arc;
+
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "manager.example/sbx/root:1".to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "1Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut provider = crate::MockPlatformServiceProvider::new();
+        provider
+            .expect_runtime_registry_pull_credential()
+            .returning(|_| Ok(None));
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(sandbox.clone()),
+            vec![EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        {
+            let config = harness.deployment_config_mut();
+            config.manager_url = Some("https://manager.example".into());
+            config.runtime_identity_audience = Some("https://manager.example".into());
+        }
+        let ctx = harness.ctx();
+
+        let error = renew_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect_err("no credential, no renewal");
+        assert!(!error.retryable);
+        assert!(error.message.contains("Registry pull authority"), "{error}");
+    }
+    /// A manager that is briefly unreachable is not the end of the sandbox's upkeep: the tick
+    /// fails with the retryable flag the provider set, so the executor tries again instead of
+    /// parking the sandbox in a terminal RefreshFailed.
+    #[cfg(feature = "test-utils")]
+    #[tokio::test]
+    async fn a_retryable_pull_credential_failure_stays_retryable_in_the_renewal() {
+        use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, Resource};
+        use std::sync::Arc;
+
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "manager.example/sbx/root:1".to_string(),
+                bundled_from: None,
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "1Gi".to_string(),
+                disk: "10Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::None)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: Some(3600),
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut provider = crate::MockPlatformServiceProvider::new();
+        provider
+            .expect_runtime_registry_pull_credential()
+            .returning(|_| {
+                let mut unavailable = AlienError::new(ErrorData::AuthenticationFailed {
+                    message: "Cannot obtain bounded runtime authority".into(),
+                    method: None,
+                });
+                unavailable.retryable = true;
+                Err(unavailable)
+            });
+        let mut harness = KubernetesManifestTestHarness::new(
+            Resource::new(sandbox.clone()),
+            vec![EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_DEPLOYMENT_ID.into(),
+                value: "dep-1".into(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            }],
+        )
+        .with_service_provider(Arc::new(provider));
+        {
+            let config = harness.deployment_config_mut();
+            config.manager_url = Some("https://manager.example".into());
+            config.runtime_identity_audience = Some("https://manager.example".into());
+        }
+        let ctx = harness.ctx();
+
+        let error = renew_image_pull_secret(&ctx, &sandbox, "sandboxes")
+            .await
+            .expect_err("the manager is unreachable");
+        assert!(error.retryable, "{error:?}");
+        assert!(
+            error.message.contains("bounded runtime authority"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn a_pod_security_refusal_names_the_namespace_and_the_fix() {
         let refusal = AlienError::new(ErrorData::CloudPlatformError {
@@ -1314,7 +2076,6 @@ mod tests {
     }
 
     use super::*;
-    use k8s_openapi::api::core::v1::Pod;
 
     /// A deleted pod keeps its idle label until its grace period ends. It must not count toward
     /// the pool, or a pool of terminating pods would never be refilled.

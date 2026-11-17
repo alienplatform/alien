@@ -42,6 +42,16 @@ pub enum ErrorData {
     )]
     SandboxEgressGatewayUnavailable { reason: String },
 
+    /// The platform has no outbound allowlist to apply a requested policy to.
+    #[error(
+        code = "SANDBOX_EGRESS_ALLOWLIST_UNSUPPORTED",
+        message = "This sandbox platform does not support an outbound allowlist: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressAllowlistUnsupported { reason: String },
+
     /// The agent's self-check found an unsafe or unverified outbound path.
     #[error(
         code = "EGRESS_PATH_UNEXPECTED",
@@ -426,6 +436,27 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A sandbox was resumed, but what it held in memory was not kept.
+    ///
+    /// The container that answers after a resume is not the one that was paused, or nothing shows
+    /// it is. The sandbox exists and runs, holding only what its image provides: files written to
+    /// its disk since the image, running processes and in-memory state are gone. Repeating the
+    /// resume cannot bring them back, so this is not retryable; the caller decides whether to start
+    /// its work again on this sandbox or on a new one.
+    #[error(
+        code = "SANDBOX_MEMORY_LOST",
+        message = "Sandbox '{sandbox_id}' was resumed but its memory and running processes were not kept: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SandboxMemoryLost {
+        /// Provider-scoped id of the sandbox that restarted
+        sandbox_id: String,
+        /// Why the memory is not kept, without provider response text
+        reason: String,
+    },
+
     /// A sandbox came up without a restriction its declaration asked for.
     ///
     /// Distinct from a refused call: the data plane accepted the request and answered, and what
@@ -466,6 +497,23 @@ pub enum ErrorData {
         operation: String,
         /// What went wrong on the wire
         reason: String,
+    },
+
+    /// A file in a sandbox changed while it was being read in pages.
+    ///
+    /// Nothing is wrong with the sandbox: the read could not return one consistent version of the
+    /// file, and reading it again can. Distinct from `SandboxUnreachable`, which callers read as
+    /// "the sandbox is down". The path is a name the caller supplied, so it is not sensitive.
+    #[error(
+        code = "SANDBOX_FILE_CHANGED",
+        message = "File '{path}' changed while it was being read; read it again",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SandboxFileChanged {
+        /// Path of the file, as the caller gave it
+        path: String,
     },
 
     /// Feature is not enabled in the compiled binary.

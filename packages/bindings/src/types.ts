@@ -512,6 +512,9 @@ export interface CreateSandboxOptions {
    * Providers are not required to honor a requested creation id. Always read and persist the
    * `SandboxInstance.sandboxId` returned by `create` or `getOrCreate`; do not assume this value is
    * the id of the resulting sandbox.
+   *
+   * A key made only of digits is read as a sandbox id and is not deduplicated; use a key with a
+   * letter, such as `engine-<uuid>`.
    */
   sandboxId?: string
   /**
@@ -712,6 +715,16 @@ export interface Sandbox {
   /**
    * Resumes a paused sandbox. Requires `pauseResume`. Resolves once the sandbox can take a
    * command; a sandbox that has ended rejects with a non-retryable error.
+   *
+   * On Google Cloud it also checks that the container that answers is the one the sandbox
+   * started with, and rejects with the non-retryable `SANDBOX_MEMORY_LOST` when it is not: memory
+   * and running processes are gone, and the sandbox runs a fresh container. That includes a
+   * running sandbox that Google replaced without any pause. The check talks to the sandbox's
+   * agent, so the caller needs `sandbox/execute` as well as `sandbox/management`, and the image
+   * needs `/bin/sh`. A marker that cannot be read fails with `pauseMarkerFailed` or
+   * `pauseMarkerUnreadable`, never as lost memory. A resume of a sandbox that was never paused and
+   * whose first memory marker could not be written at create reports `SANDBOX_MEMORY_LOST`; pause
+   * first, or recreate. A workload that wipes `/dev/shm` or `/tmp` causes the same false report.
    */
   resume(sandboxId: string): Promise<void>
   /**

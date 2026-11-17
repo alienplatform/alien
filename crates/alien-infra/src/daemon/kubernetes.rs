@@ -13,7 +13,7 @@ use crate::core::{
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
-    daemon_public_endpoint_target, delete_kubernetes_public_endpoint, note_endpoint_wait,
+    daemon_public_endpoint_target, delete_kubernetes_public_endpoint,
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
@@ -325,24 +325,10 @@ impl KubernetesDaemonController {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
-            KubernetesEndpointAction::Waiting {
-                kind,
-                certificate_failed,
-                suggested_delay,
-                max_polls,
-            } => {
-                note_endpoint_wait(
-                    kind,
-                    certificate_failed,
-                    max_polls,
-                    &mut self.public_endpoint,
-                    &mut self._internal_stay_count,
-                )?;
-                Ok(HandlerAction::Stay {
-                    max_times: Some(max_polls),
-                    suggested_delay: Some(suggested_delay),
-                })
-            }
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: None,
+                suggested_delay: Some(suggested_delay),
+            }),
         }
     }
 
@@ -456,22 +442,11 @@ impl KubernetesDaemonController {
         // container controller: managed-TLS certificate rotations, LB/DNS
         // drift, and a deleted Service/route are otherwise never re-applied
         // until an unrelated config change triggers the Update flow.
-        if let KubernetesEndpointAction::Waiting {
-            kind,
-            certificate_failed,
-            suggested_delay,
-            max_polls,
-        } = self.reconcile_endpoint(ctx).await?
+        if let KubernetesEndpointAction::Waiting { suggested_delay } =
+            self.reconcile_endpoint(ctx).await?
         {
-            note_endpoint_wait(
-                kind,
-                certificate_failed,
-                max_polls,
-                &mut self.public_endpoint,
-                &mut self._internal_stay_count,
-            )?;
             return Ok(HandlerAction::Stay {
-                max_times: Some(max_polls),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             });
         }
@@ -731,24 +706,10 @@ impl KubernetesDaemonController {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
-            KubernetesEndpointAction::Waiting {
-                kind,
-                certificate_failed,
-                suggested_delay,
-                max_polls,
-            } => {
-                note_endpoint_wait(
-                    kind,
-                    certificate_failed,
-                    max_polls,
-                    &mut self.public_endpoint,
-                    &mut self._internal_stay_count,
-                )?;
-                Ok(HandlerAction::Stay {
-                    max_times: Some(max_polls),
-                    suggested_delay: Some(suggested_delay),
-                })
-            }
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: None,
+                suggested_delay: Some(suggested_delay),
+            }),
         }
     }
 
@@ -1969,5 +1930,47 @@ mod tests {
         assert!(!controller
             .needs_update(&harness.ctx())
             .expect("needs_update"));
+    }
+
+    /// See `check_certificate_wait`: the same wait, on first install and on update.
+    #[tokio::test]
+    async fn endpoint_waits_for_the_certificate_on_create_and_update() {
+        use crate::core::kubernetes_manifest_test_support::check_certificate_wait;
+        let config = Daemon::new("agent".to_string())
+            .code(DaemonCode::Image {
+                image: "registry.example.com/agent:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "default".into(),
+                port: 8080,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        for (state, status) in [
+            (
+                KubernetesDaemonState::ReconcilePublicEndpoint,
+                ResourceStatus::Provisioning,
+            ),
+            (
+                KubernetesDaemonState::ReconcilePublicEndpointAfterUpdate,
+                ResourceStatus::Updating,
+            ),
+        ] {
+            let controller = KubernetesDaemonController {
+                state,
+                ..manifest_test_controller()
+            };
+            check_certificate_wait(&mut harness, controller, "agent", status, |c, at| {
+                c.public_endpoint.wait_started_unix.insert(
+                    crate::kubernetes_public_endpoint::EndpointWait::Certificate,
+                    at,
+                );
+            })
+            .await;
+        }
     }
 }

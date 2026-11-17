@@ -105,6 +105,8 @@ pub(crate) struct KubernetesManifestTestHarness {
     deployment_config: DeploymentConfig,
     /// The cloud the cluster runs in, for controllers that also call that cloud's APIs.
     cloud: Option<ClientConfig>,
+    /// The API server to talk to; an address that does not resolve when unset.
+    server_url: Option<String>,
 }
 
 impl KubernetesManifestTestHarness {
@@ -144,7 +146,13 @@ impl KubernetesManifestTestHarness {
                 .external_bindings(ExternalBindings::default())
                 .build(),
             cloud: None,
+            server_url: None,
         }
+    }
+
+    pub(crate) fn with_server_url(mut self, url: String) -> Self {
+        self.server_url = Some(url);
+        self
     }
 
     /// Pulls every workload image from the site registry `registry`.
@@ -224,7 +232,10 @@ impl KubernetesManifestTestHarness {
 
     pub(crate) fn ctx(&self) -> ResourceControllerContext<'_> {
         let kubernetes = Box::new(KubernetesClientConfig::Manual {
-            server_url: "https://kubernetes.test".to_string(),
+            server_url: self
+                .server_url
+                .clone()
+                .unwrap_or_else(|| "https://kubernetes.test".to_string()),
             certificate_authority_data: None,
             insecure_skip_tls_verify: Some(true),
             client_certificate_data: None,
@@ -256,4 +267,114 @@ impl KubernetesManifestTestHarness {
             heartbeat_collector: HeartbeatCollector::default(),
         }
     }
+}
+
+/// Generated Kubernetes exposure (Ingress, managed TLS secret) with domain metadata for
+/// `resource_id`, at the given certificate status. The metadata carries certificate material
+/// only when `material` is set, as the manager does for an issued certificate.
+pub(crate) fn managed_certificate_config(
+    config: &mut DeploymentConfig,
+    resource_id: &str,
+    status: alien_core::CertificateStatus,
+    material: bool,
+) {
+    use alien_core::{
+        DnsRecordStatus, DomainMetadata, KubernetesCertificateMode, KubernetesExposureSettings,
+        KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesSettings,
+        ResourceDomainInfo,
+    };
+    config.stack_settings.kubernetes = Some(KubernetesSettings {
+        cluster: None,
+        exposure: Some(KubernetesExposureSettings::Generated {
+            route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                ingress_class_name: "traefik".into(),
+                ..Default::default()
+            }),
+            certificate: KubernetesCertificateMode::ManagedTlsSecret {
+                secret_name_template: "{resource}-tls".into(),
+            },
+        }),
+    });
+    config.domain_metadata = Some(DomainMetadata {
+        base_domain: "example.com".into(),
+        public_subdomain: "app".into(),
+        hosted_zone_id: "Z1".into(),
+        resources: std::collections::HashMap::from([(
+            resource_id.to_string(),
+            ResourceDomainInfo {
+                fqdn: format!("{resource_id}.example.com"),
+                certificate_id: "cert-1".into(),
+                certificate_status: status,
+                dns_status: DnsRecordStatus::Pending,
+                dns_error: None,
+                certificate_chain: material.then(|| "chain".to_string()),
+                private_key: material.then(|| "key".to_string()),
+                issued_at: material.then(|| "2026-01-01T00:00:00Z".to_string()),
+                endpoints: Default::default(),
+                aliases: Vec::new(),
+            },
+        )]),
+    });
+}
+
+/// Drives a controller that is in its public endpoint state (`controller`) through a managed
+/// certificate that is still being issued, as every Kubernetes workload controller must:
+/// it waits past the 60 polls other endpoint waits get, still waits well inside the saved
+/// 30-minute bound, fails with a timeout once the bound passes, and fails at once when issuance
+/// failed. `backdate` moves the saved start of the certificate wait to a unix time.
+pub(crate) async fn check_certificate_wait<C>(
+    harness: &mut KubernetesManifestTestHarness,
+    controller: C,
+    resource_id: &str,
+    status: alien_core::ResourceStatus,
+    backdate: impl Fn(&mut C, i64),
+) where
+    C: crate::core::ResourceController + Clone,
+{
+    use alien_core::CertificateStatus;
+    managed_certificate_config(
+        harness.deployment_config_mut(),
+        resource_id,
+        CertificateStatus::Pending,
+        false,
+    );
+    let mut controller = controller;
+    for poll in 0..80 {
+        controller
+            .step(&harness.ctx())
+            .await
+            .unwrap_or_else(|error| panic!("poll {poll} of a pending certificate: {error}"));
+        assert_eq!(controller.get_status(), status);
+    }
+
+    let now = chrono::Utc::now().timestamp();
+    backdate(&mut controller, now - 20 * 60);
+    controller
+        .step(&harness.ctx())
+        .await
+        .expect("still inside the certificate bound");
+    assert_eq!(controller.get_status(), status);
+
+    backdate(&mut controller, now - 31 * 60);
+    let error = controller
+        .step(&harness.ctx())
+        .await
+        .expect_err("the saved bound has passed");
+    assert!(error.to_string().contains("managed certificate"), "{error}");
+
+    // A failed issuance fails at once, naming the resource.
+    managed_certificate_config(
+        harness.deployment_config_mut(),
+        resource_id,
+        CertificateStatus::Failed,
+        false,
+    );
+    let error = controller
+        .step(&harness.ctx())
+        .await
+        .expect_err("issuance failed");
+    assert!(
+        error.to_string().contains("Certificate issuance failed"),
+        "{error}"
+    );
 }

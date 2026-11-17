@@ -35,6 +35,7 @@ fn sandbox_in_state(id: &str, state: &str) -> SandboxEnvironment {
         name: Some(sandbox_name(id)),
         display_name: None,
         state: Some(state.to_string()),
+        create_time: None,
         sandbox_environment_template: None,
         expire_time: None,
         connection_info: None,
@@ -75,6 +76,11 @@ fn ndjson(lines: &[serde_json::Value]) -> Vec<u8> {
         body.push(b'\n');
     }
     body
+}
+
+/// What the agent answers to a marker script that ran and succeeded.
+fn marker_script_reply() -> Vec<u8> {
+    ndjson(&[exit_frame(0)])
 }
 
 fn health_reply() -> Vec<u8> {
@@ -127,6 +133,8 @@ async fn create_awaits_running_probes_the_agent_and_pins_its_arguments() {
             engine == "eng1"
                 && request.sandbox_environment_template.as_deref() == Some(TEMPLATE)
                 && request.ttl.as_deref() == Some("3600s")
+                // Every new sandbox carries the pause contract in its name.
+                && request.display_name.as_deref() == Some("alienSandbox-pm1")
         })
         .times(1)
         .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") }))));
@@ -138,6 +146,12 @@ async fn create_awaits_running_probes_the_agent_and_pins_its_arguments() {
         .expect_execute()
         .withf(|_, sandbox, input| sandbox == "s1" && op_of(input) == "health")
         .returning(|_, _, _| Ok(health_reply()));
+    // The marker the sandbox is left with at create.
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| sandbox == "s1" && op_of(input) == "exec")
+        .times(1)
+        .returning(|_, _, _| Ok(marker_script_reply()));
 
     let sandbox = provider(client)
         .create(CreateSandboxRequest::default())
@@ -167,7 +181,10 @@ async fn create_waits_for_the_agent_and_deletes_the_sandbox_when_it_never_answer
             .expect_get_sandbox()
             .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
         let probes = AtomicUsize::new(0);
-        client.expect_execute().returning(move |_, _, _| {
+        client.expect_execute().returning(move |_, _, input| {
+            if op_of(input) != "health" {
+                return Ok(marker_script_reply());
+            }
             let seen = probes.fetch_add(1, Ordering::SeqCst);
             match answer_after {
                 Some(after) if seen >= after => Ok(health_reply()),
@@ -214,9 +231,13 @@ async fn a_requested_lifetime_reaches_the_create_body_and_cannot_raise_the_decla
         client
             .expect_get_sandbox()
             .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
-        client
-            .expect_execute()
-            .returning(|_, _, _| Ok(health_reply()));
+        client.expect_execute().returning(|_, _, input| {
+            Ok(if op_of(input) == "health" {
+                health_reply()
+            } else {
+                marker_script_reply()
+            })
+        });
 
         provider(client)
             .create(CreateSandboxRequest {
@@ -226,6 +247,33 @@ async fn a_requested_lifetime_reaches_the_create_body_and_cannot_raise_the_decla
             .await
             .expect("create succeeds");
     }
+}
+
+/// The first marker is best effort: when every write fails, create still returns the sandbox and
+/// does not delete it (another caller may already hold it by its key).
+#[tokio::test(start_paused = true)]
+async fn create_returns_the_sandbox_when_the_first_marker_cannot_be_written() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_create_sandbox()
+        .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") }))));
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_execute().returning(|_, _, input| {
+        if op_of(input) == "health" {
+            Ok(health_reply())
+        } else {
+            Err(execute_refused())
+        }
+    });
+    client.expect_delete_sandbox().never();
+
+    let instance = provider(client)
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("a failed first marker does not fail the create");
+    assert_eq!(instance.sandbox_id, "s1");
 }
 
 /// Delete-on-create-failure: a probe the agent never answers deletes the sandbox the caller never
@@ -285,7 +333,7 @@ async fn get_returns_none_when_the_sandbox_is_gone() {
         .returning(|_, _| Err(not_found()));
 
     let found = provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect("a gone sandbox is a valid answer");
     assert!(found.is_none(), "a not-found sandbox is None, not an error");
@@ -305,7 +353,7 @@ async fn get_does_not_report_a_running_sandbox_whose_agent_is_silent() {
         .returning(|_, _, _| Err(execute_refused()));
 
     let error = provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect_err("a running record with a silent agent is not a healthy sandbox");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
@@ -320,11 +368,11 @@ async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
     // The stale sandbox reads RUNNING but its agent is silent; the fresh one is healthy.
     client
         .expect_get_sandbox()
-        .withf(|_, sandbox| sandbox == "stale")
+        .withf(|_, sandbox| sandbox == "1002")
         .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
     client
         .expect_execute()
-        .withf(|_, sandbox, _| sandbox == "stale")
+        .withf(|_, sandbox, _| sandbox == "1002")
         .returning(|_, _, _| Err(execute_refused()));
 
     client.expect_create_sandbox().times(1).returning(|_, _| {
@@ -340,12 +388,16 @@ async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
         .expect_execute()
         .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "health")
         .returning(|_, _, _| Ok(health_reply()));
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "exec")
+        .returning(|_, _, _| Ok(marker_script_reply()));
 
     client.expect_delete_sandbox().never();
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("stale".to_string()),
+            sandbox_id: Some("1002".to_string()),
             ..Default::default()
         })
         .await
@@ -381,13 +433,13 @@ async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("booting".to_string()),
+            sandbox_id: Some("1003".to_string()),
             ..Default::default()
         })
         .await
         .expect("a booting sandbox is waited for and handed back");
 
-    assert_eq!(sandbox.sandbox.sandbox_id, "booting");
+    assert_eq!(sandbox.sandbox.sandbox_id, "1003");
     assert_eq!(sandbox.sandbox.state, SandboxState::Running);
     assert!(
         !sandbox.created,
@@ -401,7 +453,7 @@ async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second
 async fn get_or_create_replaces_a_paused_sandbox_without_touching_it() {
     let mut client = MockAgentPlatformApi::new();
     client.expect_get_sandbox().returning(|_, id| {
-        if id == "paused" {
+        if id == "1004" {
             Ok(sandbox_in_state(id, "STATE_PAUSED"))
         } else {
             Ok(sandbox_in_state(id, "STATE_RUNNING"))
@@ -416,11 +468,15 @@ async fn get_or_create_replaces_a_paused_sandbox_without_touching_it() {
         .expect_execute()
         .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "health")
         .returning(|_, _, _| Ok(health_reply()));
+    client
+        .expect_execute()
+        .withf(|_, sandbox, input| sandbox == "fresh" && op_of(input) == "exec")
+        .returning(|_, _, _| Ok(marker_script_reply()));
     client.expect_delete_sandbox().never();
 
     let resolved = provider(client)
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("paused".to_string()),
+            sandbox_id: Some("1004".to_string()),
             ..Default::default()
         })
         .await
@@ -452,7 +508,7 @@ async fn get_or_create_waits_out_a_wake_someone_else_started() {
 
     let sandbox = provider(client)
         .get_or_create(CreateSandboxRequest {
-            sandbox_id: Some("waking".to_string()),
+            sandbox_id: Some("1005".to_string()),
             ..Default::default()
         })
         .await
@@ -474,7 +530,7 @@ async fn generation_for_boot(boot_id: &'static str) -> u64 {
         .returning(move |_, _, _| Ok(health_reply_with_boot(boot_id)));
 
     provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect("a running sandbox")
         .expect("a present sandbox")
@@ -519,7 +575,7 @@ async fn get_refuses_an_agent_that_reports_an_empty_boot_id() {
         .returning(|_, _, _| Ok(health_reply_with_boot("")));
 
     let error = provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect_err("an empty boot id is no container identity");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
@@ -539,7 +595,7 @@ async fn get_refuses_an_agent_whose_health_omits_the_boot_id() {
     });
 
     let error = provider(client)
-        .get("s1")
+        .get("1001")
         .await
         .expect_err("a health reply without a boot id is not usable");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
@@ -553,7 +609,7 @@ async fn get_refuses_an_agent_whose_health_omits_the_boot_id() {
 #[tokio::test(start_paused = true)]
 async fn get_does_not_hang_on_a_wedged_agent() {
     let error = provider_from(Arc::new(WedgedAgent::default()))
-        .get("s1")
+        .get("1001")
         .await
         .expect_err("a wedged agent is unreachable, not a hang");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
@@ -640,9 +696,22 @@ impl AgentPlatformApi for WedgedAgent {
     async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
         unimplemented!()
     }
+    async fn list_sandboxes_by_display_names(
+        &self,
+        _engine: &str,
+        _display_names: &[String],
+    ) -> ClientResult<Vec<SandboxEnvironment>> {
+        unimplemented!()
+    }
     async fn delete_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<()> {
         self.deletes.fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+    async fn pause_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn resume_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
     }
     async fn snapshot(
         &self,
@@ -732,7 +801,7 @@ async fn a_state_word_outside_that_set_is_an_error_rather_than_a_guess() {
         });
 
         let error = provider(client)
-            .get("s1")
+            .get("1001")
             .await
             .expect_err("an unreadable state must not become a sandbox");
 
@@ -1519,17 +1588,672 @@ async fn a_relayed_agent_404_is_a_refusal_not_a_gone_sandbox() {
 
 // ---- pause / resume / snapshot ----------------------------------------------------------------
 
-/// The capability row says no pause, and the provider agrees without calling the API: a resume
-/// that reports success on a fresh container must never reach a caller as a kept sandbox.
+/// A refused call as the real client reports it: the transport's `HttpResponseError` under the
+/// client's `RequestFailed`.
+fn http_error(status: u16, message: &str) -> AlienError<AgentPlatformErrorData> {
+    AlienError::new(alien_client_core::ErrorData::HttpResponseError {
+        message: format!("Request failed with HTTP {status}"),
+        url: "https://example.invalid/sandbox".to_string(),
+        http_status: status,
+        http_request_text: None,
+        http_response_text: Some(
+            serde_json::json!({ "error": { "code": status, "message": message } }).to_string(),
+        ),
+    })
+    .context(AgentPlatformErrorData::RequestFailed {
+        operation: "resume sandbox".to_string(),
+        message: "s1".to_string(),
+    })
+}
+
+/// What a fake Agent Platform holds for one sandbox: the state the API reports and the boot id its
+/// agent answers with.
+struct PausableSandbox {
+    state: std::sync::Mutex<&'static str>,
+    boot_id: std::sync::Mutex<&'static str>,
+    /// The pause marker's contents; a replaced container starts without it.
+    file: std::sync::Mutex<Option<Vec<u8>>>,
+    /// Makes reading the marker fail the way an agent that is not ready does.
+    fail_marker_reads: std::sync::atomic::AtomicBool,
+    /// The marker file is there but `cat` cannot read it.
+    marker_unreadable: std::sync::atomic::AtomicBool,
+    /// The sandbox was created with the pause contract: its display name carries the tag.
+    tagged: std::sync::atomic::AtomicBool,
+    /// The image has no shell, so a marker script exits 127.
+    no_shell: std::sync::atomic::AtomicBool,
+    /// Every marker write fails (neither `/dev/shm` nor `/tmp` is writable, or the agent drops it).
+    fail_marker_writes: std::sync::atomic::AtomicBool,
+}
+
+impl PausableSandbox {
+    fn running(boot_id: &'static str) -> Arc<Self> {
+        Arc::new(Self {
+            state: std::sync::Mutex::new("STATE_RUNNING"),
+            boot_id: std::sync::Mutex::new(boot_id),
+            file: std::sync::Mutex::new(None),
+            fail_marker_reads: std::sync::atomic::AtomicBool::new(false),
+            marker_unreadable: std::sync::atomic::AtomicBool::new(false),
+            tagged: std::sync::atomic::AtomicBool::new(false),
+            no_shell: std::sync::atomic::AtomicBool::new(false),
+            fail_marker_writes: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    /// What the sandbox's agent answers to the envelope `input`.
+    fn agent_reply(&self, input: &[u8]) -> ClientResult<Vec<u8>> {
+        let value: serde_json::Value = serde_json::from_slice(input).unwrap();
+        match op_of(input).as_str() {
+            "health" => Ok(health_reply_with_boot(*self.boot_id.lock().unwrap())),
+            // The marker travels as a shell command, so the fake reads the script the way a
+            // shell would: the paths it names must be outside the session root, and what it
+            // prints is what a real `cat` would.
+            "exec" => {
+                let script = value["command"][2].as_str().expect("a /bin/sh -c script");
+                if self.no_shell.load(Ordering::SeqCst) {
+                    return Ok(ndjson(&[exit_frame(127)]));
+                }
+                if self.fail_marker_reads.load(Ordering::SeqCst) && script.contains("cat ") {
+                    return Err(http_error(503, "the agent is not ready"));
+                }
+                if self.fail_marker_writes.load(Ordering::SeqCst) && script.contains("printf %s '")
+                {
+                    return Ok(ndjson(&[exit_frame(1)]));
+                }
+                let paths: Vec<&str> = script
+                    .split_whitespace()
+                    .filter(|word| word.contains(".alien-pause-generation"))
+                    .collect();
+                assert!(!paths.is_empty(), "{script}");
+                assert!(
+                    paths
+                        .iter()
+                        .all(|p| p.starts_with("/dev/shm/") || p.starts_with("/tmp/")),
+                    "the marker must stay out of the workload's folder: {script}"
+                );
+                let output: String = if let Some(rest) = script.split("printf %s '").nth(1) {
+                    let generation = rest.split('\'').next().unwrap();
+                    *self.file.lock().unwrap() = Some(generation.as_bytes().to_vec());
+                    String::new()
+                } else if script.contains("cat ") {
+                    match self.file.lock().unwrap().as_ref() {
+                        Some(_) if self.marker_unreadable.load(Ordering::SeqCst) => {
+                            "unreadable".to_string()
+                        }
+                        Some(contents) => {
+                            format!("gen:{}", String::from_utf8(contents.clone()).unwrap())
+                        }
+                        None => "none".to_string(),
+                    }
+                } else {
+                    *self.file.lock().unwrap() = None;
+                    "ok".to_string()
+                };
+                Ok(ndjson(&[stdout_frame(0, output.as_bytes()), exit_frame(0)]))
+            }
+            other => panic!("fake agent: unexpected op {other}"),
+        }
+    }
+
+    /// The state a sandbox paused by `pause` is in: the marker holds `boot_id`'s generation.
+    fn paused_with_marker(&self) {
+        let boot_id = *self.boot_id.lock().unwrap();
+        *self.file.lock().unwrap() =
+            Some(generation_from_boot_id(boot_id).to_string().into_bytes());
+        self.set_state("STATE_PAUSED");
+    }
+
+    /// A container that replaced this one: another boot id, and nothing the old one wrote.
+    fn replace_container(&self, boot_id: &'static str) {
+        *self.boot_id.lock().unwrap() = boot_id;
+        *self.file.lock().unwrap() = None;
+    }
+
+    fn set_state(&self, state: &'static str) {
+        *self.state.lock().unwrap() = state;
+    }
+}
+
+/// A client whose `:pause` and `:resume` move the fake between states, with `boot_after_resume` the
+/// boot id the agent answers with once it has been resumed.
+fn pausing_client(
+    fake: &Arc<PausableSandbox>,
+    boot_after_resume: &'static str,
+) -> MockAgentPlatformApi {
+    let mut client = MockAgentPlatformApi::new();
+    let state = fake.clone();
+    client
+        .expect_get_sandbox()
+        .returning(move |_, id| Ok(pausable_sandbox_record(&state, id)));
+    let agent = fake.clone();
+    client
+        .expect_execute()
+        .returning(move |_, _, input| agent.agent_reply(input));
+    let paused = fake.clone();
+    client.expect_pause_sandbox().returning(move |_, _| {
+        paused.set_state("STATE_PAUSED");
+        Ok(done_op(serde_json::json!({})))
+    });
+    let resumed = fake.clone();
+    client.expect_resume_sandbox().returning(move |_, _| {
+        resumed.set_state("STATE_RUNNING");
+        if *resumed.boot_id.lock().unwrap() != boot_after_resume {
+            resumed.replace_container(boot_after_resume);
+        }
+        Ok(done_op(serde_json::json!({})))
+    });
+    client
+}
+
+/// The record Google would return for the fake: tagged when it was created with the contract.
+fn pausable_sandbox_record(fake: &PausableSandbox, id: &str) -> SandboxEnvironment {
+    let mut record = sandbox_in_state(id, *fake.state.lock().unwrap());
+    if fake.tagged.load(Ordering::SeqCst) {
+        record.display_name = Some("alienSandbox-pm1".to_string());
+    }
+    record
+}
+
+#[test]
+fn the_capability_row_offers_pause_and_resume() {
+    assert!(SandboxCapabilities::gcp_agent_platform().pause_resume);
+}
+
+/// A pause is `:pause` to `STATE_PAUSED`, and a resume that finds the container it paused returns.
 #[tokio::test]
-async fn pause_and_resume_are_refused_as_unsupported() {
-    assert!(!SandboxCapabilities::gcp_agent_platform().pause_resume);
-    let provider = provider(MockAgentPlatformApi::new());
-    for error in [
-        provider.pause("s1").await.expect_err("pause is refused"),
-        provider.resume("s1").await.expect_err("resume is refused"),
-    ] {
-        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+async fn pause_then_resume_keeps_the_generation() {
+    let fake = PausableSandbox::running("boot-a");
+    let provider = provider(pausing_client(&fake, "boot-a"));
+    let before = provider
+        .get("1234567890123456789")
+        .await
+        .unwrap()
+        .unwrap()
+        .generation;
+
+    provider.pause("1234567890123456789").await.expect("pause");
+    assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
+    provider
+        .resume("1234567890123456789")
+        .await
+        .expect("resume");
+
+    let after = provider.get("1234567890123456789").await.unwrap().unwrap();
+    assert_eq!(after.state, SandboxState::Running);
+    assert_eq!(after.generation, before, "the same container is back");
+}
+
+/// The regression guard: a container the service replaced under a stable sandbox name must never
+/// reach a caller as a kept one.
+#[tokio::test]
+async fn a_resume_that_finds_a_new_container_is_an_error_not_a_kept_sandbox() {
+    let fake = PausableSandbox::running("boot-a");
+    let provider = provider(pausing_client(&fake, "boot-b"));
+
+    provider.pause("s1").await.expect("pause");
+    let lost = provider
+        .resume("s1")
+        .await
+        .expect_err("a fresh container is not a resume");
+
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+    assert!(!lost.retryable, "a retry cannot bring the memory back");
+    assert!(
+        lost.message.contains("memory") && lost.message.contains("restarted"),
+        "{}",
+        lost.message
+    );
+}
+
+/// The marker lives in the sandbox, so a resume in another process compares the same thing: a
+/// sandbox paused by one binding is resumed by a second that never saw the pause, and a container
+/// replaced in between is still caught.
+#[tokio::test]
+async fn a_resume_in_another_process_still_compares_with_the_pause() {
+    for (boot_after, kept) in [("boot-a", true), ("boot-b", false)] {
+        let fake = PausableSandbox::running("boot-a");
+        let client: Arc<dyn AgentPlatformApi> = Arc::new(pausing_client(&fake, boot_after));
+
+        provider_from(client.clone())
+            .pause("s1")
+            .await
+            .expect("pause in the first process");
+        let outcome = provider_from(client).resume("s1").await;
+
+        assert_eq!(outcome.is_ok(), kept, "{outcome:?}");
+        if let Err(lost) = outcome {
+            assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+            assert!(!lost.retryable);
+        }
+    }
+}
+
+/// A sandbox with no pause marker was not paused by this binding, or lost its filesystem: its
+/// memory cannot be confirmed kept, so a resume does not claim it.
+#[tokio::test]
+async fn a_resume_without_a_pause_marker_is_not_reported_as_kept() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.set_state("STATE_PAUSED");
+    let lost = provider(pausing_client(&fake, "boot-a"))
+        .resume("s1")
+        .await
+        .expect_err("nothing says the memory was kept");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+    assert!(!lost.retryable);
+}
+
+/// A caller holding lifecycle access only is refused by `:execute`; the error names the permission
+/// sets it is missing, and nothing is paused without the memory check.
+#[tokio::test]
+async fn pause_and_resume_without_execute_access_name_the_missing_permission() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_execute().returning(|_, _, _| {
+        Err(http_error(
+            403,
+            "Permission denied on aiplatform.sandboxEnvironments.execute",
+        ))
+    });
+    client.expect_pause_sandbox().never();
+    let provider = provider(client);
+
+    let paused = provider.pause("s1").await.expect_err("no execute access");
+    assert_eq!(paused.code, "SANDBOX_COMMAND_FAILED", "{paused}");
+    assert!(!paused.retryable, "{paused}");
+    assert!(
+        paused.message.contains("sandbox/execute"),
+        "{}",
+        paused.message
+    );
+    assert!(
+        paused.message.contains("sandbox/management"),
+        "{}",
+        paused.message
+    );
+
+    let resumed = provider.resume("s1").await.expect_err("no execute access");
+    assert!(
+        resumed.message.contains("sandbox/execute"),
+        "{}",
+        resumed.message
+    );
+}
+
+/// Two callers resuming one paused sandbox both get it back: the first does not take the marker
+/// away from the second.
+#[tokio::test]
+async fn two_resumes_of_one_paused_sandbox_both_succeed() {
+    let fake = PausableSandbox::running("boot-a");
+    let client: Arc<dyn AgentPlatformApi> = Arc::new(pausing_client(&fake, "boot-a"));
+    provider_from(client.clone())
+        .pause("s1")
+        .await
+        .expect("pause");
+    // The second caller read the state while the sandbox was still paused, so it is not the
+    // "running on entry" case that tolerates a missing marker.
+    provider_from(client.clone())
+        .resume("s1")
+        .await
+        .expect("first resume");
+    fake.set_state("STATE_PAUSED");
+    provider_from(client)
+        .resume("s1")
+        .await
+        .expect("second resume");
+}
+
+/// A marker that cannot be read is not a missing marker: the sandbox may well have kept its memory,
+/// and saying it lost it would be a false report. The failure passes through as it is.
+#[tokio::test]
+async fn a_resume_whose_marker_read_fails_does_not_claim_lost_memory() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.paused_with_marker();
+    fake.fail_marker_reads.store(true, Ordering::SeqCst);
+    let error = provider(pausing_client(&fake, "boot-a"))
+        .resume("s1")
+        .await
+        .expect_err("the marker could not be read");
+    assert_ne!(error.code, "SANDBOX_MEMORY_LOST", "{error}");
+}
+
+/// A sandbox made with the pause contract that Google replaces with a new container, then woken
+/// by a request, is running on entry to `resume` with nothing in `/dev/shm`. The tag, which lives
+/// outside the container, is what says a marker should be there: the loss is reported.
+#[tokio::test]
+async fn a_tagged_sandbox_woken_into_a_replaced_container_is_lost_on_resume() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    fake.paused_with_marker();
+    // A request woke it into a new container before `resume` was called.
+    fake.replace_container("boot-b");
+    fake.set_state("STATE_RUNNING");
+    let lost = provider(pausing_client(&fake, "boot-b"))
+        .resume("1234567890123456789")
+        .await
+        .expect_err("the container was replaced");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+}
+
+/// The tag says a marker belongs there; a running sandbox with no marker and no pause at all is
+/// reported lost by a routine `resume`.
+#[tokio::test]
+async fn a_tagged_running_sandbox_with_no_marker_is_lost_without_any_pause() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    let lost = provider(pausing_client(&fake, "boot-a"))
+        .resume("1234567890123456789")
+        .await
+        .expect_err("the marker is absent");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+    assert!(!lost.retryable);
+}
+
+/// Documents the trade-off of a best-effort first marker: when every write at create fails, create
+/// still returns the sandbox, and a later routine `resume` on the healthy running sandbox reports
+/// SANDBOX_MEMORY_LOST because the tag promises a marker that was never written.
+#[tokio::test]
+async fn a_create_whose_marker_write_failed_reports_lost_on_the_next_resume() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    fake.fail_marker_writes.store(true, Ordering::SeqCst);
+    let mut client = pausing_client(&fake, "boot-a");
+    client.expect_create_sandbox().returning(|_, _| {
+        Ok(done_op(
+            serde_json::json!({ "name": sandbox_name("1234567890123456789") }),
+        ))
+    });
+    let provider = provider(client);
+    let created = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds without the marker");
+    assert_eq!(created.sandbox_id, "1234567890123456789");
+    assert!(fake.file.lock().unwrap().is_none(), "no marker was written");
+    let lost = provider
+        .resume(&created.sandbox_id)
+        .await
+        .expect_err("the marker never existed");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+}
+
+/// A tagged sandbox that is running and untouched is kept: its marker matches.
+#[tokio::test]
+async fn a_tagged_sandbox_that_kept_its_container_resumes() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    // The marker `create` leaves.
+    *fake.file.lock().unwrap() = Some(generation_from_boot_id("boot-a").to_string().into_bytes());
+    let provider = provider(pausing_client(&fake, "boot-a"));
+    provider.resume("1234567890123456789").await.expect("kept");
+    provider.pause("1234567890123456789").await.expect("pause");
+    provider
+        .resume("1234567890123456789")
+        .await
+        .expect("kept across a pause");
+}
+
+/// A sandbox made before the contract, running, with no marker: nothing was promised, a no-op.
+/// (`a_resume_of_a_running_sandbox_is_a_no_op` is the same sandbox without a tag.)
+#[tokio::test]
+async fn an_untagged_sandbox_paused_by_an_older_path_keeps_the_old_answer() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.set_state("STATE_PAUSED");
+    // No marker and no tag: paused outside this binding, so memory cannot be confirmed.
+    let lost = provider(pausing_client(&fake, "boot-a"))
+        .resume("1234567890123456789")
+        .await
+        .expect_err("not confirmable");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+}
+
+/// An image whose marker script cannot run (no shell) is never read as a replaced container: the
+/// script would not run in the replacement either, so nothing was found out. Pause says so by name.
+#[tokio::test]
+async fn a_marker_script_that_cannot_run_is_not_memory_lost() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    fake.no_shell.store(true, Ordering::SeqCst);
+    let provider = provider(pausing_client(&fake, "boot-a"));
+    let resume = provider
+        .resume("1234567890123456789")
+        .await
+        .expect_err("the marker cannot be read");
+    assert_eq!(resume.code, "SANDBOX_COMMAND_FAILED", "{resume}");
+    assert!(resume.to_string().contains("/bin/sh"), "{resume}");
+    let pause = provider
+        .pause("1234567890123456789")
+        .await
+        .expect_err("the marker cannot be left");
+    assert_eq!(pause.code, "SANDBOX_COMMAND_FAILED", "{pause}");
+}
+
+/// A marker that exists but cannot be read is not an absent marker: it must not be taken for a
+/// replaced container, and it must not be taken for a kept one.
+#[tokio::test]
+async fn a_resume_whose_marker_is_unreadable_is_neither_kept_nor_lost() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.paused_with_marker();
+    fake.marker_unreadable.store(true, Ordering::SeqCst);
+    let error = provider(pausing_client(&fake, "boot-a"))
+        .resume("s1")
+        .await
+        .expect_err("the marker could not be read");
+    assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+    assert_ne!(error.code, "SANDBOX_MEMORY_LOST", "{error}");
+}
+
+/// A 403 that is not a missing permission (an API that is not enabled) is not described as one.
+#[tokio::test]
+async fn a_403_that_is_not_a_missing_permission_is_not_labelled_as_one() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_execute().returning(|_, _, _| {
+        Err(http_error(
+            403,
+            "Vertex AI API has not been used in project 1 before or it is disabled",
+        ))
+    });
+    let error = provider(client)
+        .pause("s1")
+        .await
+        .expect_err("the agent call is refused");
+    assert!(!error.to_string().contains("sandbox/execute"), "{error}");
+}
+
+/// A resume of a sandbox that is simply running, and was never paused, changes nothing.
+#[tokio::test]
+async fn a_resume_of_a_running_sandbox_is_a_no_op() {
+    let fake = PausableSandbox::running("boot-a");
+    let mut client = pausing_client(&fake, "boot-a");
+    client.checkpoint();
+    {
+        let state = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *state.state.lock().unwrap())));
+        let agent = fake.clone();
+        client
+            .expect_execute()
+            .returning(move |_, _, input| agent.agent_reply(input));
+    }
+    client.expect_resume_sandbox().never();
+    provider(client)
+        .resume("s1")
+        .await
+        .expect("nothing was paused, so nothing is lost");
+}
+
+/// Two pauses of one sandbox: the one whose `:pause` is refused because the other's was accepted
+/// waits for the pause instead of reporting that it failed.
+#[tokio::test]
+async fn a_pause_that_loses_the_race_waits_for_the_winner() {
+    let fake = PausableSandbox::running("boot-a");
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let state = fake.clone();
+        let reads = Arc::new(AtomicUsize::new(0));
+        client.expect_get_sandbox().returning(move |_, id| {
+            // Running for the first read; after the refused `:pause` the other pause shows.
+            match reads.fetch_add(1, Ordering::SeqCst) {
+                0 => {}
+                1 => state.set_state("STATE_PAUSING"),
+                _ => state.set_state("STATE_PAUSED"),
+            }
+            Ok(sandbox_in_state(id, *state.state.lock().unwrap()))
+        });
+        let agent = fake.clone();
+        client
+            .expect_execute()
+            .returning(move |_, _, input| agent.agent_reply(input));
+    }
+    client
+        .expect_pause_sandbox()
+        .returning(|_, _| Err(http_error(400, "Sandbox environment is already pausing")));
+    provider(client)
+        .pause("s1")
+        .await
+        .expect("the pause already under way is waited for");
+}
+
+/// A resume whose agent never answers reports the resume, not a create.
+#[tokio::test(start_paused = true)]
+async fn a_resume_whose_agent_never_answers_is_reported_under_resume() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(http_error(503, "not ready")));
+    let error = provider(client)
+        .resume("s1")
+        .await
+        .expect_err("the agent never serves");
+    assert!(error.to_string().contains("sandbox.resume"), "{error}");
+    assert!(!error.to_string().contains("sandbox.create"), "{error}");
+}
+
+/// `:resume` is refused with a 400 while the pause is under way; that is waited out.
+#[tokio::test]
+async fn a_resume_refused_during_pausing_is_retried() {
+    let fake = PausableSandbox::running("boot-a");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *fake.state.lock().unwrap())));
+    }
+    {
+        let fake = fake.clone();
+        client
+            .expect_execute()
+            .returning(move |_, _, input| fake.agent_reply(input));
+    }
+    {
+        let fake = fake.clone();
+        let calls = calls.clone();
+        client.expect_resume_sandbox().returning(move |_, _| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(http_error(
+                    400,
+                    "Sandbox environment is pausing and cannot be resumed",
+                ));
+            }
+            fake.set_state("STATE_RUNNING");
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    fake.paused_with_marker();
+
+    provider(client)
+        .resume("s1")
+        .await
+        .expect("the refusal during pausing is retried");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+/// A request that reached the paused sandbox first started the wake; the 503 says so, and the
+/// resume waits for it instead of failing.
+#[tokio::test]
+async fn a_503_while_paused_is_a_wake_in_progress_and_is_waited_out() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.paused_with_marker();
+    let probes = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        let reads = Arc::new(AtomicUsize::new(0));
+        client.expect_get_sandbox().returning(move |_, id| {
+            // The wake completes a few reads after the refusal.
+            if reads.fetch_add(1, Ordering::SeqCst) >= 3 {
+                fake.set_state("STATE_RUNNING");
+            }
+            Ok(sandbox_in_state(id, *fake.state.lock().unwrap()))
+        });
+    }
+    client.expect_resume_sandbox().times(1).returning(|_, _| {
+        Err(http_error(
+            503,
+            "Sandbox environment is paused; resume has been initiated",
+        ))
+    });
+    {
+        let probes = probes.clone();
+        let fake = fake.clone();
+        client.expect_execute().returning(move |_, _, input| {
+            // The proxy answers the same 503 until the agent is back.
+            if probes.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(http_error(
+                    503,
+                    "Sandbox environment is paused; resume has been initiated",
+                ));
+            }
+            fake.agent_reply(input)
+        });
+    }
+
+    provider(client)
+        .resume("s1")
+        .await
+        .expect("a wake in progress is waited out");
+}
+
+/// A 400 that is not the pausing refusal, and any other failure, is the caller's to see.
+#[tokio::test]
+async fn a_resume_the_service_refuses_for_another_reason_is_reported() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_PAUSED")));
+    client
+        .expect_resume_sandbox()
+        .returning(|_, _| Err(http_error(403, "permission denied")));
+
+    let refused = provider(client).resume("s1").await.expect_err("refused");
+    assert_eq!(refused.code, "SANDBOX_COMMAND_FAILED", "{refused}");
+}
+
+/// Pausing a sandbox that is not there, or already ended, says so without calling `:pause`.
+#[tokio::test]
+async fn pause_of_a_gone_or_ended_sandbox_is_refused_without_a_call() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(|_, id| {
+        if id == "gone" {
+            Err(not_found())
+        } else {
+            Ok(sandbox_in_state(id, "STATE_STOPPED"))
+        }
+    });
+    client.expect_pause_sandbox().never();
+    let provider = provider(client);
+    for id in ["gone", "ended"] {
+        let refused = provider.pause(id).await.expect_err("nothing to pause");
+        assert_eq!(refused.code, "SANDBOX_COMMAND_FAILED", "{refused}");
     }
 }
 
@@ -2369,4 +3093,1526 @@ async fn terminate_drops_the_grants_of_a_sandbox_that_is_gone() {
     let grants = provider.grants.lock().unwrap();
     assert_eq!(grants.len(), 1, "{grants:?}");
     assert!(grants.contains_key(&("s2".to_string(), 8080)));
+}
+
+// ---- get_or_create and get by a caller's own key ----------------------------------------------
+
+/// An in-memory engine that behaves the way Google does for these calls: it mints numeric ids,
+/// keeps the display name it was given, orders sandboxes by creation time, answers 404 for an id
+/// that is gone, and answers 400 for an id that is not numeric.
+#[derive(Debug, Default)]
+struct FakeEngine {
+    state: std::sync::Mutex<FakeEngineState>,
+    /// The first this-many `list` calls answer as if nothing existed yet: two callers that both
+    /// looked before either created.
+    blind_lists: AtomicUsize,
+    /// The next this-many `list` calls fail.
+    failing_lists: AtomicUsize,
+    /// The first this-many `list` calls answer before any failure starts.
+    lists_before_failures: AtomicUsize,
+    /// The next this-many probes of one sandbox get no answer: its agent is still booting.
+    silent_probes: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    /// How far Google's clock is behind this host's: sandboxes are stamped that much earlier than
+    /// the host's `now`, as when the host clock runs ahead.
+    google_behind: std::sync::Mutex<chrono::Duration>,
+    /// Sandboxes the list still shows as running after they stopped: a stop between a list and a read.
+    stale_listed: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+#[derive(Debug, Default)]
+struct FakeEngineState {
+    next: u64,
+    sandboxes: Vec<FakeSandbox>,
+    created_with: Vec<Option<String>>,
+    /// Listing lag of the next creates, in order: a sandbox is listed only once this long after its
+    /// create call (found live: a create shows in the list two to nine seconds after its request).
+    create_lags: std::collections::VecDeque<Duration>,
+}
+
+#[derive(Debug)]
+struct FakeSandbox {
+    id: String,
+    display: Option<String>,
+    state: String,
+    created: chrono::DateTime<chrono::Utc>,
+    listed_from: tokio::time::Instant,
+}
+
+impl FakeEngine {
+    fn names(&self) -> Vec<Option<String>> {
+        self.state.lock().unwrap().created_with.clone()
+    }
+    fn live_ids(&self) -> Vec<String> {
+        self.state
+            .lock()
+            .unwrap()
+            .sandboxes
+            .iter()
+            .filter(|sandbox| sandbox.state == "STATE_RUNNING")
+            .map(|sandbox| sandbox.id.clone())
+            .collect()
+    }
+    fn set_state(&self, id: &str, new_state: &str) {
+        for sandbox in self.state.lock().unwrap().sandboxes.iter_mut() {
+            if sandbox.id == id {
+                sandbox.state = new_state.to_string();
+            }
+        }
+    }
+    fn hide_state_from_list(&self, id: &str) {
+        self.stale_listed.lock().unwrap().insert(id.to_string());
+    }
+    fn lag_creates(&self, lags: &[u64]) {
+        self.state
+            .lock()
+            .unwrap()
+            .create_lags
+            .extend(lags.iter().map(|ms| Duration::from_millis(*ms)));
+    }
+    fn record(sandbox: &FakeSandbox) -> SandboxEnvironment {
+        let mut record = sandbox_in_state(&sandbox.id, &sandbox.state);
+        record.display_name = sandbox.display.clone();
+        record.create_time = Some(
+            sandbox
+                .created
+                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        );
+        record
+    }
+}
+
+#[async_trait]
+impl AgentPlatformApi for FakeEngine {
+    async fn create_sandbox(
+        &self,
+        _engine: &str,
+        request: SandboxCreateRequest,
+    ) -> ClientResult<Operation> {
+        let mut state = self.state.lock().unwrap();
+        state.next += 1;
+        let id = (7_000_000_000_000_000_000u64 + state.next).to_string();
+        state.created_with.push(request.display_name.clone());
+        let lag = state.create_lags.pop_front().unwrap_or_default();
+        state.sandboxes.push(FakeSandbox {
+            id: id.clone(),
+            display: request.display_name,
+            state: "STATE_RUNNING".to_string(),
+            created: super::wall_now() - *self.google_behind.lock().unwrap(),
+            listed_from: tokio::time::Instant::now() + lag,
+        });
+        Ok(done_op(serde_json::json!({ "name": sandbox_name(&id) })))
+    }
+    async fn get_sandbox(&self, _engine: &str, sandbox: &str) -> ClientResult<SandboxEnvironment> {
+        assert!(
+            sandbox.chars().all(|c| c.is_ascii_digit()),
+            "Google answers 400 for a non-numeric id, and a caller's key must never reach it: {sandbox}"
+        );
+        let state = self.state.lock().unwrap();
+        state
+            .sandboxes
+            .iter()
+            .find(|candidate| candidate.id == sandbox)
+            .map(Self::record)
+            .ok_or_else(not_found)
+    }
+    async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
+        if self
+            .blind_lists
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok()
+        {
+            return Ok(Vec::new());
+        }
+        let spared = self
+            .lists_before_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+            .is_ok();
+        if !spared
+            && self
+                .failing_lists
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+        {
+            return Err(execute_refused());
+        }
+        let now = tokio::time::Instant::now();
+        let state = self.state.lock().unwrap();
+        // Newest first, so a caller that trusts the listing order picks the wrong one.
+        Ok(state
+            .sandboxes
+            .iter()
+            .rev()
+            .filter(|sandbox| sandbox.listed_from <= now)
+            .map(|sandbox| {
+                let mut record = Self::record(sandbox);
+                if self.stale_listed.lock().unwrap().contains(&sandbox.id) {
+                    record.state = Some("STATE_RUNNING".to_string());
+                }
+                record
+            })
+            .collect())
+    }
+    async fn list_sandboxes_by_display_names(
+        &self,
+        engine: &str,
+        display_names: &[String],
+    ) -> ClientResult<Vec<SandboxEnvironment>> {
+        Ok(self
+            .list_sandboxes(engine)
+            .await?
+            .into_iter()
+            .filter(|sandbox| {
+                sandbox
+                    .display_name
+                    .as_deref()
+                    .is_some_and(|name| display_names.iter().any(|n| n == name))
+            })
+            .collect())
+    }
+    async fn delete_sandbox(&self, _engine: &str, sandbox: &str) -> ClientResult<()> {
+        self.state
+            .lock()
+            .unwrap()
+            .sandboxes
+            .retain(|candidate| candidate.id != sandbox);
+        Ok(())
+    }
+    async fn execute(&self, _engine: &str, sandbox: &str, input: &[u8]) -> ClientResult<Vec<u8>> {
+        if let Some(left) = self.silent_probes.lock().unwrap().get_mut(sandbox) {
+            if *left > 0 {
+                *left -= 1;
+                return Err(execute_refused());
+            }
+        }
+        // A command (the marker script at create) succeeds; anything else is the health probe.
+        if op_of(input) != "health" {
+            return Ok(marker_script_reply());
+        }
+        Ok(health_reply())
+    }
+    async fn create_engine(&self, _display_name: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn delete_engine(&self, _engine: &str) -> ClientResult<()> {
+        unimplemented!()
+    }
+    async fn list_engines(&self) -> ClientResult<Vec<ReasoningEngine>> {
+        unimplemented!()
+    }
+    async fn create_template(
+        &self,
+        _engine: &str,
+        _template: SandboxEnvironmentTemplate,
+    ) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn get_template(
+        &self,
+        _engine: &str,
+        _template: &str,
+    ) -> ClientResult<SandboxEnvironmentTemplate> {
+        unimplemented!()
+    }
+    async fn delete_template(&self, _engine: &str, _template: &str) -> ClientResult<()> {
+        unimplemented!()
+    }
+    async fn list_templates(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironmentTemplate>> {
+        unimplemented!()
+    }
+    async fn pause_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn resume_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn snapshot(
+        &self,
+        _engine: &str,
+        _sandbox: &str,
+        _display_name: &str,
+    ) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn get_operation(&self, _name: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+}
+
+fn keyed(key: &str) -> CreateSandboxRequest {
+    CreateSandboxRequest {
+        sandbox_id: Some(key.to_string()),
+        ..Default::default()
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_second_get_or_create_with_the_same_key_finds_the_first() {
+    let engine = Arc::new(FakeEngine::default());
+    let first = provider_from(engine.clone())
+        .get_or_create(keyed("engine-1111"))
+        .await
+        .unwrap();
+    let second = provider_from(engine.clone())
+        .get_or_create(keyed("engine-1111"))
+        .await
+        .unwrap();
+    assert!(first.created);
+    assert!(!second.created, "the key already names a sandbox");
+    assert_eq!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(engine.live_ids().len(), 1, "one sandbox, not two");
+}
+
+#[tokio::test(start_paused = true)]
+async fn different_keys_get_different_sandboxes() {
+    let engine = Arc::new(FakeEngine::default());
+    let a = provider_from(engine.clone())
+        .get_or_create(keyed("a"))
+        .await
+        .unwrap();
+    let b = provider_from(engine.clone())
+        .get_or_create(keyed("b"))
+        .await
+        .unwrap();
+    assert!(b.created);
+    assert_ne!(a.sandbox.sandbox_id, b.sandbox.sandbox_id);
+}
+
+/// The key goes to Google only as its hash, never raw: it is caller-supplied, and the display name
+/// is what a later list matches on.
+#[tokio::test(start_paused = true)]
+async fn the_raw_key_never_reaches_google() {
+    let engine = Arc::new(FakeEngine::default());
+    let key = "engine-5f3a";
+    provider_from(engine.clone())
+        .get_or_create(keyed(key))
+        .await
+        .unwrap();
+    for name in engine.names() {
+        let name = name.expect("a keyed create is stamped");
+        assert!(!name.contains("engine") && !name.contains('"'), "{name}");
+        assert!(
+            name.ends_with(&format!("{}-pm1", request_key(key))),
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn get_by_key_finds_it() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let created = sut.get_or_create(keyed("lookup")).await.unwrap();
+    let found = sut.get("lookup").await.unwrap().expect("found by key");
+    assert_eq!(found.sandbox_id, created.sandbox.sandbox_id);
+    let by_id = sut
+        .get(&created.sandbox.sandbox_id)
+        .await
+        .unwrap()
+        .expect("found by id");
+    assert_eq!(by_id.sandbox_id, found.sandbox_id);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unknown_key_or_numeric_id_is_none_not_an_error() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine);
+    assert!(sut.get("never-created").await.unwrap().is_none());
+    assert!(sut.get("123456789").await.unwrap().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminated_sandboxes_are_ignored() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let first = sut.get_or_create(keyed("gone")).await.unwrap();
+    engine.set_state(&first.sandbox.sandbox_id, "STATE_DELETING");
+    assert!(
+        sut.get("gone").await.unwrap().is_none(),
+        "a terminating sandbox is not live"
+    );
+    let second = sut.get_or_create(keyed("gone")).await.unwrap();
+    assert!(
+        second.created,
+        "a terminated sandbox does not answer the key"
+    );
+    assert_ne!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
+}
+
+#[tokio::test(start_paused = true)]
+async fn after_terminate_the_key_and_the_id_are_none() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let created = sut.get_or_create(keyed("done")).await.unwrap();
+    sut.terminate(&created.sandbox.sandbox_id).await.unwrap();
+    assert!(sut.get("done").await.unwrap().is_none());
+    assert!(sut
+        .get(&created.sandbox.sandbox_id)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+/// A numeric id naming an existing sandbox keeps working as it did.
+#[tokio::test(start_paused = true)]
+async fn a_numeric_id_that_names_a_sandbox_is_found_as_before() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let created = sut.create(CreateSandboxRequest::default()).await.unwrap();
+    let resolved = sut.get_or_create(keyed(&created.sandbox_id)).await.unwrap();
+    assert!(!resolved.created);
+    assert_eq!(resolved.sandbox.sandbox_id, created.sandbox_id);
+}
+
+/// Found live: a second caller looks while the first one's sandbox is listed and running but its
+/// agent has not started answering. That sandbox is waited for, not passed over for a second one,
+/// which is the duplicate the pair would then have to converge away from.
+#[tokio::test(start_paused = true)]
+async fn a_sandbox_whose_agent_is_still_booting_is_waited_for_not_replaced() {
+    let engine = Arc::new(FakeEngine::default());
+    let first = provider_from(engine.clone())
+        .get_or_create(keyed("booting-key"))
+        .await
+        .unwrap();
+    engine
+        .silent_probes
+        .lock()
+        .unwrap()
+        .insert(first.sandbox.sandbox_id.clone(), 3);
+    let second = provider_from(engine.clone())
+        .get_or_create(keyed("booting-key"))
+        .await
+        .unwrap();
+    assert!(
+        !second.created,
+        "the first caller's sandbox answers the key"
+    );
+    assert_eq!(second.sandbox.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(engine.live_ids().len(), 1);
+}
+
+/// Runs one `get_or_create` per entry of `starts` (milliseconds after the first), each through its
+/// own provider, all at once.
+async fn race(engine: &Arc<FakeEngine>, key: &str, starts: &[u64]) -> Vec<Result<ResolvedSandbox>> {
+    let callers = starts.iter().map(|start| {
+        let engine = engine.clone();
+        let (key, start) = (key.to_string(), *start);
+        async move {
+            tokio::time::sleep(Duration::from_millis(start)).await;
+            provider_from(engine).get_or_create(keyed(&key)).await
+        }
+    });
+    futures::future::join_all(callers).await
+}
+
+/// What every racing caller must end with: one live sandbox, one `created`, and every caller holding
+/// that sandbox.
+fn assert_converged(engine: &FakeEngine, results: &[Result<ResolvedSandbox>]) {
+    let live = engine.live_ids();
+    assert_eq!(
+        live.len(),
+        1,
+        "exactly one live sandbox for the key: {live:?}"
+    );
+    let created = results
+        .iter()
+        .filter(|r| r.as_ref().unwrap().created)
+        .count();
+    assert_eq!(created, 1, "exactly one caller created it");
+    for result in results {
+        assert_eq!(
+            result.as_ref().unwrap().sandbox.sandbox_id,
+            live[0],
+            "every caller holds the sandbox that is still live"
+        );
+    }
+}
+
+/// Two callers both looked before either created, so each made a sandbox. The newer one is
+/// terminated and both callers end with the oldest.
+#[tokio::test(start_paused = true)]
+async fn a_race_of_two_converges_on_the_oldest_sandbox() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lag_creates(&[40, 40]);
+    let results = race(&engine, "race", &[0, 5]).await;
+    assert_eq!(
+        engine.names().len(),
+        2,
+        "both callers created: this is a real duplicate race"
+    );
+    assert_converged(&engine, &results);
+    assert!(
+        results[0].as_ref().unwrap().created,
+        "the older one kept its own"
+    );
+}
+
+/// Two sandboxes for one key, one made before the tag existed and one tagged: the key resolves to
+/// the oldest whichever kind it is, and the newer one yields.
+#[tokio::test(start_paused = true)]
+async fn the_oldest_wins_when_one_duplicate_is_tagged_and_one_is_not() {
+    for plain_is_older in [true, false] {
+        let engine = Arc::new(FakeEngine::default());
+        let tagged = provider_from(engine.clone())
+            .get_or_create(keyed("mixed"))
+            .await
+            .unwrap()
+            .sandbox
+            .sandbox_id;
+        let tagged_name = engine.names()[0].clone().expect("a display name");
+        let plain_name = tagged_name
+            .strip_suffix("-pm1")
+            .expect("tagged at create")
+            .to_string();
+        let long_ago = super::wall_now() - chrono::Duration::hours(1);
+        let plain_id = {
+            let mut state = engine.state.lock().unwrap();
+            let plain_id = "7000000000000000999".to_string();
+            if !plain_is_older {
+                state.sandboxes[0].created = long_ago;
+            }
+            state.sandboxes.push(FakeSandbox {
+                id: plain_id.clone(),
+                display: Some(plain_name),
+                state: "STATE_RUNNING".to_string(),
+                created: if plain_is_older {
+                    long_ago
+                } else {
+                    super::wall_now()
+                },
+                listed_from: tokio::time::Instant::now(),
+            });
+            plain_id
+        };
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        let found = provider_from(engine.clone())
+            .get_or_create(keyed("mixed"))
+            .await
+            .unwrap();
+        let oldest = if plain_is_older { plain_id } else { tagged };
+        assert_eq!(found.sandbox.sandbox_id, oldest, "plain_is_older={plain_is_older}");
+        assert!(!found.created);
+    }
+}
+
+/// The review's three-caller case. A is the oldest and is listed late; B and C are listed fast. C's
+/// first look at the key sees B, which is older than C and is itself about to yield to A. A caller
+/// that yields to B at once holds a sandbox that is then deleted.
+#[tokio::test(start_paused = true)]
+async fn three_racers_with_an_older_sandbox_listed_late_all_end_with_one_live_sandbox() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lag_creates(&[120, 5, 5]);
+    let results = race(&engine, "three", &[0, 10, 20]).await;
+    assert_converged(&engine, &results);
+    assert!(
+        results[0].as_ref().unwrap().created,
+        "A, the oldest, kept its own"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn five_racers_with_uneven_listing_lag_converge() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lag_creates(&[90, 10, 70, 5, 30]);
+    let results = race(&engine, "five", &[0, 3, 6, 9, 12]).await;
+    assert_converged(&engine, &results);
+}
+
+/// A caller that arrives while the oldest sandbox for the key is still inside its contention window
+/// does not hand it out at once: an older one may still appear and make it yield.
+#[tokio::test(start_paused = true)]
+async fn a_caller_waits_out_the_window_of_a_fresh_sandbox_before_returning_it() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lag_creates(&[100, 0]);
+    let first = provider_from(engine.clone());
+    let older = tokio::spawn(async move { first.get_or_create(keyed("fresh")).await });
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    // The first caller's own sandbox is not listed yet (lag 100 ms) so this caller creates one
+    // too; the older one then shows and wins for both.
+    let newer = provider_from(engine.clone())
+        .get_or_create(keyed("fresh"))
+        .await
+        .unwrap();
+    let older = older.await.unwrap().unwrap();
+    assert_eq!(older.sandbox.sandbox_id, newer.sandbox.sandbox_id);
+    assert_eq!(engine.live_ids(), vec![older.sandbox.sandbox_id]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_race_converges_while_the_older_agent_is_still_booting() {
+    let engine = Arc::new(FakeEngine::default());
+    // Both sandboxes are listed late, so neither caller sees the other on its first look and each
+    // creates: a real duplicate. The older one's agent is still booting when the newer caller
+    // re-checks and has to wait for it.
+    engine.lag_creates(&[40, 40]);
+    let older_id = (7_000_000_000_000_000_000u64 + 1).to_string();
+    engine
+        .silent_probes
+        .lock()
+        .unwrap()
+        .insert(older_id.clone(), 3);
+    let results = race(&engine, "race-boot", &[0, 5]).await;
+    assert_eq!(engine.names().len(), 2, "both callers created");
+    assert_converged(&engine, &results);
+    assert_eq!(engine.live_ids(), vec![older_id]);
+}
+
+/// The re-check after a create is retried; a failure that clears does not change the answer.
+#[tokio::test(start_paused = true)]
+async fn a_failed_recheck_is_retried() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lists_before_failures.store(1, Ordering::SeqCst);
+    engine.failing_lists.store(2, Ordering::SeqCst);
+    let resolved = provider_from(engine.clone())
+        .get_or_create(keyed("retry"))
+        .await
+        .unwrap();
+    assert!(resolved.created);
+    assert_eq!(engine.live_ids(), vec![resolved.sandbox.sandbox_id]);
+}
+
+/// When the re-check cannot be answered, nothing says an older sandbox is absent: the caller gets
+/// an error, never `created = true` for a sandbox that may be a duplicate. The sandbox is kept,
+/// because another caller may already have yielded to it, and a retry finds it by the key.
+#[tokio::test(start_paused = true)]
+async fn an_unanswered_recheck_is_an_error_not_a_created_sandbox() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lists_before_failures.store(1, Ordering::SeqCst);
+    engine.failing_lists.store(1_000, Ordering::SeqCst);
+    let sut = provider_from(engine.clone());
+    let error = sut.get_or_create(keyed("no-recheck")).await.unwrap_err();
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+    assert!(error.retryable, "the caller may retry");
+    let kept = engine.live_ids();
+    assert_eq!(kept.len(), 1, "the sandbox is not deleted: {kept:?}");
+
+    engine.failing_lists.store(0, Ordering::SeqCst);
+    let retry = sut.get_or_create(keyed("no-recheck")).await.unwrap();
+    assert!(
+        !retry.created,
+        "the retry finds the kept sandbox by the key"
+    );
+    assert_eq!(retry.sandbox.sandbox_id, kept[0]);
+}
+
+/// A sandbox whose agent stopped answering still holds the key. The key resolves to its id, so a
+/// caller that has only the key can terminate it; get_or_create names it and makes no second one.
+#[tokio::test(start_paused = true)]
+async fn a_wedged_agent_does_not_lock_the_key() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let created = sut.get_or_create(keyed("wedged")).await.unwrap();
+    let id = created.sandbox.sandbox_id.clone();
+    engine
+        .silent_probes
+        .lock()
+        .unwrap()
+        .insert(id.clone(), usize::MAX / 2);
+
+    let found = sut
+        .get("wedged")
+        .await
+        .unwrap()
+        .expect("the key still resolves");
+    assert_eq!(
+        found.sandbox_id, id,
+        "get(key) names the sandbox even though its agent is silent"
+    );
+
+    let error = sut.get_or_create(keyed("wedged")).await.unwrap_err();
+    assert!(
+        error.to_string().contains(&id) || format!("{error:?}").contains(&id),
+        "the error names the sandbox to terminate: {error:?}"
+    );
+    assert_eq!(
+        engine.live_ids(),
+        vec![id.clone()],
+        "no second sandbox was made"
+    );
+
+    sut.terminate(&id).await.unwrap();
+    assert!(sut.get("wedged").await.unwrap().is_none());
+    assert!(sut.get_or_create(keyed("wedged")).await.unwrap().created);
+}
+
+/// A host clock a few seconds ahead of Google's makes a sandbox look older than it is. The caller
+/// that arrives mid-race would then see the window over early and hand the sandbox out while an
+/// older one is still unlisted. The allowance keeps its wait past the window.
+#[tokio::test(start_paused = true)]
+async fn a_host_clock_ahead_of_googles_does_not_shorten_the_wait() {
+    let engine = Arc::new(FakeEngine::default());
+    *engine.google_behind.lock().unwrap() = chrono::Duration::seconds(4);
+    let first = provider_from(engine.clone())
+        .create(keyed("skewed"))
+        .await
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    let found = provider_from(engine.clone())
+        .get_or_create(keyed("skewed"))
+        .await
+        .unwrap();
+    assert_eq!(found.sandbox.sandbox_id, first.sandbox_id);
+    assert!(
+        started.elapsed() >= CONTENTION_WINDOW,
+        "waited {:?}, less than the window itself",
+        started.elapsed()
+    );
+}
+
+/// The creating caller's decision is counted from the moment its create returned, not from the
+/// request: a slow create must not shorten the time older sandboxes have to be listed.
+#[tokio::test(start_paused = true)]
+async fn the_window_of_a_creator_starts_when_its_create_returns() {
+    let engine = Arc::new(FakeEngine::default());
+    let started = tokio::time::Instant::now();
+    provider_from(engine.clone())
+        .get_or_create(keyed("anchor"))
+        .await
+        .unwrap();
+    // The first look takes no time, so the decision comes one window after the create.
+    assert!(started.elapsed() >= CONTENTION_WINDOW);
+}
+
+/// A paused sandbox is live and owns its key in both calls: `get` and `get_or_create` agree, and
+/// no second sandbox is made beside it.
+#[tokio::test(start_paused = true)]
+async fn a_paused_sandbox_owns_its_key_in_get_and_get_or_create() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let first = sut.get_or_create(keyed("paused")).await.unwrap();
+    engine.set_state(&first.sandbox.sandbox_id, "STATE_PAUSED");
+
+    let got = sut.get("paused").await.unwrap().expect("found by key");
+    assert_eq!(got.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(got.state, SandboxState::Paused);
+
+    let resolved = sut.get_or_create(keyed("paused")).await.unwrap();
+    assert!(!resolved.created);
+    assert_eq!(resolved.sandbox.sandbox_id, first.sandbox.sandbox_id);
+    assert_eq!(resolved.sandbox.state, SandboxState::Paused);
+    assert_eq!(engine.state.lock().unwrap().sandboxes.len(), 1);
+}
+
+/// A failed re-check names the sandbox in a structured field, not only in the text.
+#[tokio::test(start_paused = true)]
+async fn a_failed_recheck_names_the_sandbox_in_the_error_context() {
+    let engine = Arc::new(FakeEngine::default());
+    engine.lists_before_failures.store(1, Ordering::SeqCst);
+    engine.failing_lists.store(1_000, Ordering::SeqCst);
+    let error = provider_from(engine.clone())
+        .get_or_create(keyed("ctx"))
+        .await
+        .unwrap_err();
+    let kept = engine.live_ids();
+    assert_eq!(
+        error.context.as_ref().and_then(|c| c.get("sandboxId")),
+        Some(&serde_json::Value::String(kept[0].clone()))
+    );
+}
+
+/// More than one sandbox older than the window is a duplicate that nothing deletes, and is
+/// reported; sandboxes still inside the window are a race in progress and are not.
+#[tokio::test(start_paused = true)]
+async fn duplicates_older_than_the_window_are_reported() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    sut.create(keyed("dup")).await.unwrap();
+    sut.create(keyed("dup")).await.unwrap();
+    let both = sut
+        .request_key_candidates("dup", GET_OR_CREATE)
+        .await
+        .unwrap();
+    assert!(duplicates_past_the_window(&both).is_empty(), "both fresh");
+    tokio::time::sleep(CONTENTION_WINDOW + Duration::from_secs(1)).await;
+    let both = sut
+        .request_key_candidates("dup", GET_OR_CREATE)
+        .await
+        .unwrap();
+    assert_eq!(duplicates_past_the_window(&both).len(), 2);
+}
+
+/// A sandbox that ends during the wait is not handed out as a running one.
+#[tokio::test(start_paused = true)]
+async fn a_created_sandbox_that_expired_during_the_wait_is_not_returned() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let mut request = keyed("short-lived");
+    request.timeout_ms = Some(10_000);
+    let call = tokio::spawn(async move { sut.get_or_create(request).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    engine.set_state(
+        &(7_000_000_000_000_000_000u64 + 1).to_string(),
+        "STATE_TERMINATED",
+    );
+    let result = call.await.unwrap();
+    assert!(
+        result.is_err(),
+        "an expired sandbox is not reported as created and running: {result:?}"
+    );
+}
+
+/// A lifetime shorter than the contention window is not waited out: the sandbox would end first.
+#[tokio::test(start_paused = true)]
+async fn the_wait_stays_inside_a_short_lifetime() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let mut request = keyed("short-wait");
+    request.timeout_ms = Some(10_000);
+    let started = tokio::time::Instant::now();
+    sut.get_or_create(request).await.unwrap();
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "waited {:?}",
+        started.elapsed()
+    );
+}
+
+/// `get(key)` skips a sandbox that stops between the list and the read.
+#[tokio::test(start_paused = true)]
+async fn get_by_key_skips_a_sandbox_that_stopped_after_the_list() {
+    let engine = Arc::new(FakeEngine::default());
+    let sut = provider_from(engine.clone());
+    let older = sut.get_or_create(keyed("stops")).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    let newer_id = {
+        // a second live sandbox for the same key (a missed duplicate)
+        let created = provider_from(engine.clone())
+            .create(keyed("stops"))
+            .await
+            .unwrap();
+        created.sandbox_id
+    };
+    engine.hide_state_from_list(&older.sandbox.sandbox_id);
+    engine.set_state(&older.sandbox.sandbox_id, "STATE_TERMINATED");
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    let found = sut
+        .get("stops")
+        .await
+        .unwrap()
+        .expect("the live one answers");
+    assert_eq!(found.sandbox_id, newer_id);
+}
+
+/// Refreshing the marker replaces it in one step: a resume that reads it during the refresh sees
+/// the old or the new generation, never "none" (which would read as a replaced container).
+#[tokio::test]
+async fn refreshing_the_pause_marker_never_leaves_it_absent() {
+    let scripts = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let scripts = scripts.clone();
+        client.expect_execute().returning(move |_, _, input| {
+            let value: serde_json::Value = serde_json::from_slice(input).unwrap();
+            scripts
+                .lock()
+                .unwrap()
+                .push(value["command"][2].as_str().unwrap().to_string());
+            Ok(ndjson(&[exit_frame(0)]))
+        });
+    }
+    let provider = provider(client);
+    provider
+        .write_pause_marker(PAUSE, "s1", 7)
+        .await
+        .expect("the marker is written");
+    let script = scripts.lock().unwrap().pop().expect("a script ran");
+
+    let shm = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let script = script
+        .replace("/dev/shm", "@SHM@")
+        .replace("/tmp", "@TMP@")
+        .replace("@SHM@", shm.path().to_str().unwrap())
+        .replace("@TMP@", tmp.path().to_str().unwrap());
+    let marker = shm.path().join(PAUSE_MARKER_NAME);
+    let run = |script: &str| {
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    run(&script);
+    assert!(marker.exists());
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let absent = Arc::new(AtomicUsize::new(0));
+    let reader = {
+        let (stop, absent, marker) = (stop.clone(), absent.clone(), marker.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                match std::fs::read_to_string(&marker) {
+                    Ok(text) if text.is_empty() => {
+                        absent.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        absent.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        })
+    };
+    for _ in 0..150 {
+        run(&script);
+    }
+    stop.store(true, Ordering::SeqCst);
+    reader.join().unwrap();
+    assert_eq!(absent.load(Ordering::SeqCst), 0, "the marker was absent or empty");
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "7");
+}
+
+/// Another pause finished between this one's state read and its health probe: the probe woke the
+/// sandbox (503) and the call must not fail; the sandbox is paused again.
+#[tokio::test]
+async fn a_pause_whose_probe_wakes_the_sandbox_pauses_it_again() {
+    let fake = PausableSandbox::running("boot-a");
+    let probes = Arc::new(AtomicUsize::new(0));
+    let pauses = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *fake.state.lock().unwrap())));
+    }
+    {
+        let fake = fake.clone();
+        let probes = probes.clone();
+        client.expect_execute().returning(move |_, _, input| {
+            if op_of(input) == "health" && probes.fetch_add(1, Ordering::SeqCst) == 0 {
+                // The other pause landed; this request wakes the sandbox.
+                fake.set_state("STATE_RUNNING");
+                return Err(http_error(503, "paused; resume has been initiated"));
+            }
+            fake.agent_reply(input)
+        });
+    }
+    {
+        let fake = fake.clone();
+        let pauses = pauses.clone();
+        client.expect_pause_sandbox().returning(move |_, _| {
+            pauses.fetch_add(1, Ordering::SeqCst);
+            fake.set_state("STATE_PAUSED");
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    provider(client).pause("s1").await.expect("paused again");
+    assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
+    assert_eq!(pauses.load(Ordering::SeqCst), 1);
+}
+
+/// The probe succeeds, then another pause lands: the marker write wakes the sandbox and gets the
+/// 503. The call must not leave with an error and the sandbox awake; it pauses again.
+#[tokio::test]
+async fn a_pause_whose_marker_write_wakes_the_sandbox_pauses_it_again() {
+    let fake = PausableSandbox::running("boot-a");
+    let failed_once = Arc::new(AtomicUsize::new(0));
+    let pauses = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *fake.state.lock().unwrap())));
+    }
+    {
+        let fake = fake.clone();
+        let failed_once = failed_once.clone();
+        client.expect_execute().returning(move |_, _, input| {
+            if op_of(input) != "health" && failed_once.fetch_add(1, Ordering::SeqCst) == 0 {
+                fake.set_state("STATE_RUNNING");
+                return Err(http_error(503, "paused; resume has been initiated"));
+            }
+            fake.agent_reply(input)
+        });
+    }
+    {
+        let fake = fake.clone();
+        let pauses = pauses.clone();
+        client.expect_pause_sandbox().returning(move |_, _| {
+            pauses.fetch_add(1, Ordering::SeqCst);
+            fake.set_state("STATE_PAUSED");
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    provider(client).pause("s1").await.expect("paused again");
+    assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
+    assert!(failed_once.load(Ordering::SeqCst) >= 2, "the marker write was retried");
+    assert_eq!(pauses.load(Ordering::SeqCst), 1);
+}
+
+/// The other pause is already done when the probe fails: the goal is reached, so it is a no-op.
+#[tokio::test]
+async fn a_pause_whose_probe_fails_on_an_already_paused_sandbox_is_done() {
+    let fake = PausableSandbox::running("boot-a");
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client.expect_get_sandbox().returning(move |_, id| {
+            // Running for the first read, paused from the second on.
+            if reads.fetch_add(1, Ordering::SeqCst) >= 1 {
+                fake.set_state("STATE_PAUSED");
+            }
+            Ok(sandbox_in_state(id, *fake.state.lock().unwrap()))
+        });
+    }
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(http_error(503, "paused; resume has been initiated")));
+    client.expect_pause_sandbox().never();
+    provider(client).pause("s1").await.expect("already paused");
+}
+
+/// The probe's wake is followed by a stale `PAUSED` read, then the truth: running. The pause is
+/// not reported done on the stale read.
+#[tokio::test]
+async fn a_stale_paused_read_after_a_waking_probe_does_not_end_the_pause() {
+    let fake = PausableSandbox::running("boot-a");
+    let probes = Arc::new(AtomicUsize::new(0));
+    let pauses = Arc::new(AtomicUsize::new(0));
+    // Reads after the first probe: PAUSED (stale), then RUNNING (the wake started).
+    let stale = Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        let stale = stale.clone();
+        client.expect_get_sandbox().returning(move |_, id| {
+            let next = stale.lock().unwrap().pop();
+            if let Some(state) = next {
+                fake.set_state(state);
+            }
+            Ok(sandbox_in_state(id, *fake.state.lock().unwrap()))
+        });
+    }
+    {
+        let fake = fake.clone();
+        let probes = probes.clone();
+        let stale = stale.clone();
+        client.expect_execute().returning(move |_, _, input| {
+            if op_of(input) == "health" && probes.fetch_add(1, Ordering::SeqCst) == 0 {
+                *stale.lock().unwrap() = vec!["STATE_RUNNING", "STATE_PAUSED"];
+                return Err(http_error(503, "paused; resume has been initiated"));
+            }
+            fake.agent_reply(input)
+        });
+    }
+    {
+        let fake = fake.clone();
+        let pauses = pauses.clone();
+        client.expect_pause_sandbox().returning(move |_, _| {
+            pauses.fetch_add(1, Ordering::SeqCst);
+            fake.set_state("STATE_PAUSED");
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    provider(client).pause("s1").await.expect("paused");
+    assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
+    assert_eq!(pauses.load(Ordering::SeqCst), 1);
+}
+
+/// A sandbox that wakes after every `:pause` is an error after three attempts, not an Ok.
+#[tokio::test]
+async fn a_sandbox_that_keeps_waking_fails_the_pause_after_three_attempts() {
+    let fake = PausableSandbox::running("boot-a");
+    let pauses = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *fake.state.lock().unwrap())));
+    }
+    {
+        let fake = fake.clone();
+        client
+            .expect_execute()
+            .returning(move |_, _, input| fake.agent_reply(input));
+    }
+    {
+        let pauses = pauses.clone();
+        client.expect_pause_sandbox().returning(move |_, _| {
+            // Accepted, but something wakes the sandbox at once: it stays running.
+            pauses.fetch_add(1, Ordering::SeqCst);
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    let error = provider(client).pause("s1").await.expect_err("did not hold");
+    assert!(
+        error.to_string().contains("pause did not hold"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(pauses.load(Ordering::SeqCst), 3);
+}
+
+// ---- output cap and oversized replies ---------------------------------------------------------
+
+/// The refusal Agent Platform returns for a reply above its size limit, as the client reports it:
+/// HTTP 400 `FAILED_PRECONDITION` becomes a conflict carrying Google's message.
+fn reply_too_large_error() -> AlienError<AgentPlatformErrorData> {
+    AlienError::new(alien_client_core::ErrorData::RemoteResourceConflict {
+        resource_type: "sandbox".to_string(),
+        resource_name: "s1".to_string(),
+        message: "Response size too large. Received at least 2000341 bytes.".to_string(),
+    })
+    .context(AgentPlatformErrorData::ExecuteFailed {
+        sandbox: "s1".to_string(),
+        message: "the API rejected or cut short the request".to_string(),
+    })
+}
+
+fn short_command() -> RunCommandRequest {
+    RunCommandRequest {
+        command: "/bin/echo".to_string(),
+        args: vec![],
+        cwd: None,
+        env: BTreeMap::new(),
+        timeout: Duration::from_secs(5),
+    }
+}
+
+/// The synchronous envelope carries the per-stream reply budget, so the agent cuts the output to
+/// fit; the job envelope does not (a job keeps all of it), and every poll carries it so each reply
+/// fits. Mutation check: send the budget on `jobStart` and the job half fails.
+#[tokio::test]
+async fn the_reply_budget_cuts_exec_and_pages_job_polls() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(3).returning(|_, _, input| {
+        let body: serde_json::Value = serde_json::from_slice(input).expect("json");
+        let budget = &body["replyBudget"];
+        match body["op"].as_str().unwrap() {
+            "exec" => {
+                assert_eq!(budget, &serde_json::json!(GCP_STREAM_REPLY_BUDGET));
+                Ok(ndjson(&[exit_frame(0)]))
+            }
+            "jobStart" => {
+                assert!(budget.is_null(), "a job is not cut: {body}");
+                Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap())
+            }
+            "jobPoll" => {
+                assert_eq!(budget, &serde_json::json!(GCP_STREAM_REPLY_BUDGET));
+                Ok(
+                    serde_json::to_vec(&serde_json::json!({"running": false, "exitCode": 0}))
+                        .unwrap(),
+                )
+            }
+            other => panic!("unexpected op {other}"),
+        }
+    });
+    let sandbox = provider(client);
+    let _: Vec<_> = sandbox
+        .run_command("s1", short_command())
+        .await
+        .expect("runs")
+        .collect()
+        .await;
+    let job = sandbox
+        .start_job("s1", short_command())
+        .await
+        .expect("job starts");
+    sandbox
+        .poll_job("s1", &job.job_id, None)
+        .await
+        .expect("polls");
+}
+
+/// The worst reply the agent can build under the budget: both streams spent to the byte on
+/// frames of the given size, each charged as the agent charges it (its JSON and a separator,
+/// base64-encoded once more). Returns the sync reply and a job poll reply holding every frame.
+fn worst_replies(data_bytes_per_frame: usize) -> (usize, usize) {
+    let mut frames = Vec::new();
+    let mut seq = 0u64;
+    for name in ["stdout", "stderr"] {
+        let mut remaining = GCP_STREAM_REPLY_BUDGET;
+        loop {
+            let frame = serde_json::json!({
+                "t": name,
+                "seq": seq,
+                "data": BASE64.encode(vec![0xffu8; data_bytes_per_frame]),
+            });
+            // The agent's own charge, so this cannot drift from what it enforces.
+            let agent_frame = alien_sandbox_agent::exec::Frame::Stdout {
+                seq,
+                data: BASE64.encode(vec![0xffu8; data_bytes_per_frame]),
+            };
+            let agent_frame = if name == "stderr" {
+                alien_sandbox_agent::exec::Frame::Stderr {
+                    seq,
+                    data: BASE64.encode(vec![0xffu8; data_bytes_per_frame]),
+                }
+            } else {
+                agent_frame
+            };
+            let cost = alien_sandbox_agent::exec::frame_wire_cost(&agent_frame);
+            if cost > remaining {
+                break;
+            }
+            remaining -= cost;
+            seq += 1;
+            frames.push(frame);
+        }
+    }
+    frames.push(exit_frame(0));
+
+    let sync = serde_json::to_vec(&serde_json::json!({
+        "outputs": [{ "mimeType": "application/json", "data": BASE64.encode(ndjson(&frames)) }]
+    }))
+    .unwrap()
+    .len();
+    let poll = serde_json::to_vec(&serde_json::json!({
+        "outputs": [{ "mimeType": "application/json", "data": BASE64.encode(serde_json::to_vec(
+            &serde_json::json!({ "running": false, "frames": frames, "exitCode": 0, "truncated": true })
+        ).unwrap()) }]
+    }))
+    .unwrap()
+    .len();
+    (sync, poll)
+}
+
+/// The budget exists so the worst reply stays under the proxy's limit, on `exec` and on a single
+/// `jobPoll` that returns every frame, for frames of any size (one byte per line up to the
+/// agent's 64 KiB reads). Mutation check: raise `GCP_STREAM_REPLY_BUDGET` to 1.1 MB and this fails.
+#[test]
+fn the_worst_reply_under_the_budget_fits_the_proxy_limit_with_margin() {
+    for data in [1, 16, 256, 4096, 65_536] {
+        let (sync, poll) = worst_replies(data);
+        for (path, size) in [("exec", sync), ("jobPoll", poll)] {
+            assert!(
+                size * 10 < GCP_REPLY_LIMIT_BYTES * 9,
+                "{path} with {data}-byte frames: reply is {size} bytes, limit {GCP_REPLY_LIMIT_BYTES}"
+            );
+        }
+    }
+}
+
+/// A reply the proxy could not return is a clear, non-retryable failure, never an unknown outcome.
+#[tokio::test]
+async fn an_oversized_exec_reply_is_not_an_unknown_outcome() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(reply_too_large_error()));
+    let error = match provider(client).run_command("s1", short_command()).await {
+        Err(error) => error,
+        Ok(_) => panic!("the oversized reply must fail"),
+    };
+    assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+    assert!(!error.retryable, "{error}");
+    assert!(error.to_string().contains("too large"), "{error}");
+}
+
+/// The same on the job path, where it used to read "the job is no longer watched".
+#[tokio::test(start_paused = true)]
+async fn an_oversized_job_poll_is_not_an_unknown_outcome() {
+    let polls = AtomicUsize::new(0);
+    let (client, _cancels) = cancel_watching_client_answering(move || {
+        if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(serde_json::to_vec(&serde_json::json!({"running": true, "frames": []})).unwrap())
+        } else {
+            Err(reply_too_large_error())
+        }
+    });
+    let sandbox = provider(client);
+    let frames: Vec<_> = sandbox
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    let Some(Err(error)) = frames.last() else {
+        panic!("the failed poll reaches the caller: {frames:?}");
+    };
+    assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+    assert!(!error.retryable, "{error}");
+}
+
+/// A job whose output the agent returns in several budgeted replies, drained by a reader that
+/// takes four seconds per frame, ran for its whole timeout and exited 0. The drain outlasts the
+/// poll deadline's grace, and the command must still report its exit, not a timeout. Mutation
+/// check: drop the deadline extension in `job_poll_step` and this reports `timeoutExceeded`.
+#[tokio::test(start_paused = true)]
+async fn a_job_still_draining_buffered_output_is_not_timed_out() {
+    let polls = AtomicUsize::new(0);
+    let (client, _cancels) = cancel_watching_client_answering(move || {
+        let n = polls.fetch_add(1, Ordering::SeqCst);
+        let body = if n < 20 {
+            serde_json::json!({"running": true, "frames": [stdout_frame(n as u64, b"x")]})
+        } else {
+            serde_json::json!({"running": false, "frames": [], "exitCode": 0})
+        };
+        Ok(serde_json::to_vec(&body).unwrap())
+    });
+    let sandbox = provider(client);
+    let mut request = long_command();
+    request.timeout = Duration::from_secs(31);
+    let mut frames = sandbox
+        .run_command("s1", request)
+        .await
+        .expect("the job starts");
+    let mut seen = Vec::new();
+    while let Some(item) = frames.next().await {
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        seen.push(item);
+    }
+    assert!(
+        matches!(seen.last(), Some(Ok(CommandOutput::Exit { code: 0, .. }))),
+        "{seen:?}"
+    );
+    assert_eq!(seen.len(), 21);
+}
+
+/// An agent that has reported the command finished (with its exit code) while pages of output
+/// remain is only waiting to be read. A reader slower than the deadline must still get every page
+/// and the real exit code, and the job is never cancelled. Mutation check: drop the `draining`
+/// guard in `job_poll_step` and this reports `timeoutExceeded`.
+#[tokio::test(start_paused = true)]
+async fn a_finished_job_with_pages_left_is_drained_past_the_deadline() {
+    let polls = AtomicUsize::new(0);
+    let (client, mut cancels) = cancel_watching_client_answering(move || {
+        let n = polls.fetch_add(1, Ordering::SeqCst);
+        let body = if n < 5 {
+            serde_json::json!({
+                "running": true, "finished": true, "exitCode": 7,
+                "frames": [stdout_frame(n as u64, b"x")]
+            })
+        } else {
+            serde_json::json!({"running": false, "finished": true, "frames": [], "exitCode": 7})
+        };
+        Ok(serde_json::to_vec(&body).unwrap())
+    });
+    let sandbox = provider(client);
+    let mut request = long_command();
+    request.timeout = Duration::from_secs(31);
+    let mut frames = sandbox
+        .run_command("s1", request)
+        .await
+        .expect("the job starts");
+    let mut seen = Vec::new();
+    while let Some(item) = frames.next().await {
+        // Far past the deadline plus grace, per page.
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        seen.push(item);
+    }
+    assert!(
+        matches!(seen.last(), Some(Ok(CommandOutput::Exit { code: 7, .. }))),
+        "{seen:?}"
+    );
+    assert_eq!(seen.len(), 6, "{seen:?}");
+    drop(frames);
+    assert!(
+        cancels.try_recv().is_err(),
+        "a finished job is never cancelled"
+    );
+}
+
+/// The agent reports a finished job's outcome while pages remain, but the public poll hands it out
+/// only with the last page, so a caller that stops at the first `exit` or `error` misses nothing.
+/// Mutation check: drop the `settled` filter in `poll_job` and the first poll carries the exit.
+#[tokio::test]
+async fn a_public_poll_reports_the_outcome_only_when_no_pages_remain() {
+    let polls = AtomicUsize::new(0);
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(3).returning(move |_, _, _| {
+        let body = match polls.fetch_add(1, Ordering::SeqCst) {
+            n @ 0..=1 => serde_json::json!({
+                "running": true, "finished": true, "exitCode": 7, "truncated": true,
+                "frames": [stdout_frame(n as u64, b"x")]
+            }),
+            _ => serde_json::json!({
+                "running": false, "finished": true, "exitCode": 7, "truncated": true,
+                "frames": [stdout_frame(2, b"x")]
+            }),
+        };
+        Ok(serde_json::to_vec(&body).unwrap())
+    });
+    let sandbox = provider(client);
+    let mut seq = None;
+    for _ in 0..2 {
+        let poll = sandbox.poll_job("s1", "j1", seq).await.expect("polls");
+        assert!(
+            poll.running && poll.exit.is_none() && poll.error.is_none(),
+            "{poll:?}"
+        );
+        assert_eq!(poll.frames.len(), 1);
+        seq = Some(seq.map_or(0, |s| s + 1));
+    }
+    let last = sandbox.poll_job("s1", "j1", seq).await.expect("polls");
+    assert!(!last.running);
+    assert_eq!(last.frames.len(), 1);
+    assert!(
+        matches!(
+            last.exit,
+            Some(JobExit {
+                code: 7,
+                truncated: true
+            })
+        ),
+        "{last:?}"
+    );
+}
+
+/// A file larger than one reply is read in pages and joined, and an agent without paging, which
+/// answers with the whole file and no size, still reads.
+#[tokio::test]
+async fn read_file_pages_a_large_file() {
+    let file: Vec<u8> = (0..(GCP_READ_PAGE_BYTES * 2 + 17))
+        .map(|i| (i % 251) as u8)
+        .collect();
+    let served = file.clone();
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().returning(move |_, _, input| {
+        let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+        assert_eq!(body["op"], "readFile");
+        let offset = body["offset"].as_u64().unwrap() as usize;
+        let length = body["length"].as_u64().unwrap() as usize;
+        let end = (offset + length).min(served.len());
+        Ok(serde_json::to_vec(&serde_json::json!({
+            "contentsBase64": BASE64.encode(&served[offset..end]),
+            "totalBytes": served.len(),
+            "version": "1-1.000000000-stable",
+        }))
+        .unwrap())
+    });
+    let read = provider(client)
+        .read_file("s1", "big")
+        .await
+        .expect("reads");
+    assert_eq!(read, file);
+}
+
+/// What a mock agent serves for one `readFile` call: the file's bytes and its identity.
+type FileVersion = (Vec<u8>, &'static str);
+
+/// A client whose agent serves `versions[n]` to the n-th call (the last one repeats), answering
+/// each page from that version's bytes at the asked offset. Returns the client and the offsets
+/// asked for.
+fn paging_client(
+    versions: Vec<FileVersion>,
+) -> (
+    MockAgentPlatformApi,
+    std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+) {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = asked.clone();
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().returning(move |_, _, input| {
+        let body: serde_json::Value = serde_json::from_slice(input).unwrap();
+        let offset = body["offset"].as_u64().unwrap() as usize;
+        let length = body["length"].as_u64().unwrap() as usize;
+        let mut log = log.lock().unwrap();
+        let (file, version) = &versions[log.len().min(versions.len() - 1)];
+        log.push(offset);
+        let start = offset.min(file.len());
+        let end = (offset + length).min(file.len());
+        Ok(serde_json::to_vec(&serde_json::json!({
+            "contentsBase64": BASE64.encode(&file[start..end]),
+            "totalBytes": file.len(),
+            "version": version,
+        }))
+        .unwrap())
+    });
+    (client, asked)
+}
+
+fn big_file(fill: u8) -> Vec<u8> {
+    vec![fill; GCP_READ_PAGE_BYTES * 2 + 5]
+}
+
+/// A file replaced by rename between pages is read again from the start, so the result is one
+/// version and never page one of the old file joined to the rest of the new one.
+#[tokio::test]
+async fn read_file_restarts_once_when_the_file_is_replaced_between_pages() {
+    let (client, asked) = paging_client(vec![(big_file(1), "old"), (big_file(2), "new")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, big_file(2));
+    assert_eq!(
+        *asked.lock().unwrap(),
+        vec![
+            0,
+            GCP_READ_PAGE_BYTES,
+            0,
+            GCP_READ_PAGE_BYTES,
+            GCP_READ_PAGE_BYTES * 2
+        ]
+    );
+}
+
+/// A file that shrinks below the offset between pages is not returned as an old prefix: the
+/// read restarts and returns the smaller file whole.
+#[tokio::test]
+async fn read_file_restarts_when_the_file_shrinks_below_the_offset() {
+    let small = vec![9u8; 10];
+    let (client, _) = paging_client(vec![(big_file(1), "old"), (small.clone(), "new")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, small);
+}
+
+/// A file that keeps changing fails with a retryable error after the one restart.
+#[tokio::test]
+async fn read_file_fails_retryably_when_the_file_keeps_changing() {
+    let (client, _) = paging_client(vec![
+        (big_file(1), "a"),
+        (big_file(2), "b"),
+        (big_file(3), "c"),
+        (big_file(4), "d"),
+    ]);
+    let error = provider(client)
+        .read_file("s1", "f")
+        .await
+        .expect_err("changing file");
+    assert!(error.retryable, "{error:?}");
+    assert_eq!(error.code, "SANDBOX_FILE_CHANGED", "{error}");
+    assert!(error.to_string().contains("'f'"), "{error}");
+}
+
+/// A file that does not change is read in one pass, one call per page, with no restart.
+#[tokio::test]
+async fn read_file_of_a_stable_file_does_not_restart() {
+    let (client, asked) = paging_client(vec![(big_file(7), "same")]);
+    let read = provider(client).read_file("s1", "f").await.expect("reads");
+    assert_eq!(read, big_file(7));
+    assert_eq!(asked.lock().unwrap().len(), 3);
+}
+
+/// The page size is what keeps a page's reply under the proxy's limit: raw bytes are base64-encoded
+/// in the agent's JSON and again in the reply, 16/9 of the raw size, and the page must leave at
+/// least a 20% margin under `GCP_REPLY_LIMIT_BYTES`. Changing the constant must change this test.
+#[test]
+fn read_page_size_leaves_a_margin_under_the_reply_limit() {
+    assert_eq!(GCP_READ_PAGE_BYTES, 900_000);
+    let on_the_wire = GCP_READ_PAGE_BYTES.div_ceil(3) * 4;
+    let on_the_wire = on_the_wire.div_ceil(3) * 4;
+    assert!(
+        on_the_wire * 12 <= GCP_REPLY_LIMIT_BYTES * 10,
+        "{on_the_wire} bytes on the wire leaves under a 20% margin below {GCP_REPLY_LIMIT_BYTES}"
+    );
+}
+
+#[tokio::test]
+async fn read_file_from_an_agent_without_paging_takes_the_whole_reply() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_execute().times(1).returning(|_, _, _| {
+        Ok(
+            serde_json::to_vec(&serde_json::json!({ "contentsBase64": BASE64.encode(b"all") }))
+                .unwrap(),
+        )
+    });
+    assert_eq!(provider(client).read_file("s1", "f").await.unwrap(), b"all");
+}
+
+/// A file read that the proxy refuses for size names the file and the paged-read cause, not the
+/// output budget, which has nothing to do with it.
+#[tokio::test]
+async fn an_oversized_file_reply_names_paged_reads_not_the_output_budget() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(reply_too_large_error()));
+    let error = provider(client)
+        .read_file("s1", "big")
+        .await
+        .expect_err("refused");
+    let text = error.to_string();
+    assert!(text.contains("paged reads"), "{text}");
+    assert!(!text.contains("output budget"), "{text}");
 }

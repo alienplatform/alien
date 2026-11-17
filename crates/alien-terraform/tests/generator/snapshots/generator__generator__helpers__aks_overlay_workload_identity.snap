@@ -213,6 +213,7 @@ locals {
   deployment_region            = var.azure_location
   deployment_management_config = null
   advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_requests_network  = nonsensitive(sensitive(try(local.advanced_settings.network, null) != null))
   kubernetes_exposure = {
     mode = "disabled"
   }

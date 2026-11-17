@@ -157,17 +157,7 @@ fn build_policy(
             },
             NetworkPolicyEgressRule {
                 // Only the cluster DNS pods, never arbitrary private UDP/TCP 53.
-                to: Some(vec![NetworkPolicyPeer {
-                    namespace_selector: Some(selector(BTreeMap::from([(
-                        "kubernetes.io/metadata.name".into(),
-                        "kube-system".into(),
-                    )]))),
-                    pod_selector: Some(selector(BTreeMap::from([(
-                        "k8s-app".into(),
-                        "kube-dns".into(),
-                    )]))),
-                    ..Default::default()
-                }]),
+                to: Some(cluster_dns_peers()),
                 ports: Some(vec![port(53, "UDP"), port(53, "TCP")]),
             },
         ];
@@ -207,6 +197,23 @@ fn build_policy(
             egress,
         }),
     }
+}
+
+/// The pods that answer a cluster's DNS: CoreDNS or kube-dns, and on clusters running NodeLocal
+/// DNSCache with a CNI that redirects the DNS Service address to the node's cache pod, that cache.
+/// A CNI judges the destination after the redirect, so the cache pod must be allowed by selector.
+fn cluster_dns_peers() -> Vec<NetworkPolicyPeer> {
+    ["kube-dns", "node-local-dns"]
+        .into_iter()
+        .map(|app| NetworkPolicyPeer {
+            namespace_selector: Some(selector(BTreeMap::from([(
+                "kubernetes.io/metadata.name".into(),
+                "kube-system".into(),
+            )]))),
+            pod_selector: Some(selector(BTreeMap::from([("k8s-app".into(), app.into())]))),
+            ..Default::default()
+        })
+        .collect()
 }
 
 /// Clusters with NodeLocal DNSCache point pods at a link-local resolver, which the public
