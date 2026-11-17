@@ -303,6 +303,13 @@ async fn a_protected_helm_release_verifies_and_changes_to_it_fail() {
             manager_url: Some(url.clone()),
             token: None,
             token_file: None,
+            offline: false,
+            setup: None,
+            template: None,
+            fingerprint: None,
+            channel: None,
+            signer_list: Vec::new(),
+            release: Vec::new(),
         },
         None,
     )

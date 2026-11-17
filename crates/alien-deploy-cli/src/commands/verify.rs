@@ -38,7 +38,7 @@ const CLOUDFORMATION: &str = "cloudformation";
 
 #[derive(Args, Debug, Clone)]
 #[command(about = "Check that this install runs only what the vendor signed")]
-#[command(group(clap::ArgGroup::new("install").required(true).args(["stack", "terraform", "helm"])))]
+#[command(group(clap::ArgGroup::new("install").required(true).args(["stack", "terraform", "helm", "offline"])))]
 pub struct VerifyArgs {
     /// The CloudFormation stack of the install.
     #[arg(long)]
@@ -101,6 +101,41 @@ pub struct VerifyArgs {
     /// The chart directory, exactly as downloaded (extract the archive first).
     #[arg(long, value_name = "DIR", requires = "helm")]
     pub chart: Option<std::path::PathBuf>,
+
+    /// Check local files against signed files, with no cloud or network reads: review a
+    /// template before you apply it. Pass `--setup` and `--template` (a CloudFormation file, or
+    /// the directory of a Terraform module or Helm chart, exactly as downloaded), `--fingerprint`
+    /// and `--channel` of the project, and the signed statements as files: `--signer-list` for
+    /// each signer list version and `--release` for each release (the `signedStacks` entry for
+    /// the template's platform, as the control plane serves it). Prints what was checked,
+    /// including the renderer version and who may manage the install; the customer's own
+    /// parameters aren't checked, since nothing is installed.
+    #[arg(long, requires_all = ["setup", "template", "fingerprint", "channel"])]
+    pub offline: bool,
+
+    /// Offline: which setup the template is.
+    #[arg(long, value_enum, requires = "offline")]
+    pub setup: Option<super::verify_offline::OfflineSetup>,
+
+    /// Offline: the template file or directory.
+    #[arg(long, value_name = "PATH", requires = "offline")]
+    pub template: Option<std::path::PathBuf>,
+
+    /// Offline: the project's signing fingerprint (`SHA256:...`), as the vendor published it.
+    #[arg(long, requires = "offline")]
+    pub fingerprint: Option<String>,
+
+    /// Offline: the release channel the install follows.
+    #[arg(long, requires = "offline")]
+    pub channel: Option<String>,
+
+    /// Offline: a signed signer list statement (a file); repeat for each version.
+    #[arg(long, value_name = "FILE", requires = "offline")]
+    pub signer_list: Vec<std::path::PathBuf>,
+
+    /// Offline: a signed release statement (a file); repeat for each release.
+    #[arg(long, value_name = "FILE", requires = "offline")]
+    pub release: Vec<std::path::PathBuf>,
 
     /// Where to fetch the vendor's signed releases. Defaults to the one this
     /// CLI was built for. What it returns is checked, not trusted.
@@ -187,7 +222,7 @@ fn install_of(stack_id: &str, prefix: &str) -> Result<InstallId> {
     })
 }
 
-fn failed(message: impl Into<String>) -> AlienError<ErrorData> {
+pub(crate) fn failed(message: impl Into<String>) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::VerifyFailed {
         message: message.into(),
     })
@@ -770,6 +805,27 @@ pub async fn verify_command(
     args: VerifyArgs,
     embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
+    if args.offline {
+        let (Some(setup), Some(template), Some(fingerprint), Some(channel)) = (
+            args.setup,
+            args.template.clone(),
+            args.fingerprint.clone(),
+            args.channel.clone(),
+        ) else {
+            return Err(failed(
+                "--offline needs --setup, --template, --fingerprint and --channel",
+            ));
+        };
+        return super::verify_offline::verify_offline(&super::verify_offline::OfflineInputs {
+            setup,
+            template,
+            fingerprint,
+            channel,
+            signer_lists: args.signer_list.clone(),
+            releases: args.release.clone(),
+        })
+        .await;
+    }
     let token = resolve_optional_token(
         args.token.clone(),
         args.token_file.as_ref(),
