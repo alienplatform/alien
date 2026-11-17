@@ -4,12 +4,16 @@
 */
 
 import * as z from "zod";
+import { QueueDeadLetterSchema } from "./queue-dead-letter-schema.js";
 
 /**
  * @description Represents a message queue resource with minimal, portable semantics.\nQueue integrates with platform-native services (AWS SQS, GCP Pub/Sub, Azure Service Bus).
  */
 export const QueueSchema = z.object({
-    "id": z.string().describe("Identifier for the queue. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters.")
+    get "deadLetter"(){
+                return z.union([QueueDeadLetterSchema, z.null()]).optional()
+              },
+"id": z.string().describe("Identifier for the queue. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters.")
     }).describe("Represents a message queue resource with minimal, portable semantics.\nQueue integrates with platform-native services (AWS SQS, GCP Pub/Sub, Azure Service Bus).")
 
 export type Queue = z.infer<typeof QueueSchema>

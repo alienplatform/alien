@@ -441,6 +441,7 @@ export type { PublicEndpointTargetSettings } from "./zod/public-endpoint-target-
 export type { PushProgress } from "./zod/push-progress-schema.js";
 export type { QueueBatchConfig } from "./zod/queue-batch-config-schema.js";
 export type { QueueBinding } from "./zod/queue-binding-schema.js";
+export type { QueueDeadLetter } from "./zod/queue-dead-letter-schema.js";
 export type { QueueHeartbeatData } from "./zod/queue-heartbeat-data-schema.js";
 export type { QueueHeartbeatStatus } from "./zod/queue-heartbeat-status-schema.js";
 export type { QueueMessage } from "./zod/queue-message-schema.js";
@@ -1009,6 +1010,7 @@ export { PublicEndpointTargetSettingsSchema } from "./zod/public-endpoint-target
 export { PushProgressSchema } from "./zod/push-progress-schema.js";
 export { QueueBatchConfigSchema } from "./zod/queue-batch-config-schema.js";
 export { QueueBindingSchema } from "./zod/queue-binding-schema.js";
+export { QueueDeadLetterSchema } from "./zod/queue-dead-letter-schema.js";
 export { QueueHeartbeatDataSchema } from "./zod/queue-heartbeat-data-schema.js";
 export { QueueHeartbeatStatusSchema } from "./zod/queue-heartbeat-status-schema.js";
 export { QueueMessageSchema } from "./zod/queue-message-schema.js";
