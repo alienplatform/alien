@@ -3166,7 +3166,13 @@ platform = "aws"
     }
 
     #[tokio::test]
-    async fn initialize_declares_the_setup_capabilities() {
+    async fn initialize_declares_the_setup_capabilities_on_every_key_cloud() {
+        for platform in ["aws", "gcp", "azure"] {
+            initialize_declares_the_setup_capabilities(platform).await;
+        }
+    }
+
+    async fn initialize_declares_the_setup_capabilities(platform: &str) {
         let server = MockServer::start_async().await;
         let base_url = server.base_url();
         let resolve = server
@@ -3197,7 +3203,7 @@ platform = "aws"
             file,
             r#"
 name = "subdomain-app"
-platform = "aws"
+platform = "{platform}"
 "#
         )
         .expect("config should be written");
@@ -3219,10 +3225,25 @@ platform = "aws"
 
         assert!(
             error.to_string().contains("stop after initialize"),
-            "{error:?}"
+            "{platform}: {error:?}"
         );
         resolve.assert_async().await;
         initialize.assert_async().await;
+    }
+
+    /// Only a run that performs the setup declares it can create keys; a pull-model install
+    /// only starts a local Operator.
+    #[test]
+    fn setup_capabilities_are_declared_only_by_a_push_setup_run() {
+        let settings = |model| StackSettings {
+            deployment_model: model,
+            ..Default::default()
+        };
+        assert_eq!(
+            setup_capabilities_for(&settings(DeploymentModel::Push)),
+            vec!["create-keys".to_string()]
+        );
+        assert!(setup_capabilities_for(&settings(DeploymentModel::Pull)).is_empty());
     }
 
     /// The rendered install holds the one-use code, and no deployment token
@@ -7228,6 +7249,18 @@ fn kubernetes_resource_prefix(token: &str, name: &str) -> String {
     format!("k{}", hex::encode(&hash.finalize()[..12]))
 }
 
+/// What this run's setup can do. A pull-model install only starts a local Operator, which does
+/// not create keys, so it declares nothing and a platform keeps refusing a stack with keys.
+fn setup_capabilities_for(stack_settings: &StackSettings) -> Vec<String> {
+    if stack_settings.deployment_model != DeploymentModel::Push {
+        return Vec::new();
+    }
+    alien_cli_common::SETUP_CAPABILITIES
+        .iter()
+        .map(|capability| capability.to_string())
+        .collect()
+}
+
 async fn initialize_deployment(
     client: &ServerClient,
     token: &str,
@@ -7262,11 +7295,9 @@ async fn initialize_deployment(
         // The Kubernetes CLI installs the Operator with Helm. Runtime work
         // starts inside that Operator, so this must use Helm's setup handoff.
         setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
-        // Without this a platform refuses a stack with encryption keys.
-        setup_capabilities: alien_cli_common::SETUP_CAPABILITIES
-            .iter()
-            .map(|capability| capability.to_string())
-            .collect(),
+        // Without this a platform refuses a stack with encryption keys. Only a run that
+        // performs the setup itself (push) can create them.
+        setup_capabilities: setup_capabilities_for(stack_settings),
         // Lets the manager show the exact `helm uninstall` command at teardown.
         helm_release,
     };
