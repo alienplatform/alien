@@ -699,7 +699,9 @@ async fn replenish_warm_pool(
             resource_id: Some(sandbox.id.clone()),
         })?;
 
-    sweep_then_check_image(
+    // A pod whose retire write succeeded but whose delete failed is in no pool and would run
+    // forever; every tick deletes the ones it finds.
+    sweep_retired_pods(
         &client,
         namespace,
         &sandbox.id,
@@ -709,9 +711,8 @@ async fn replenish_warm_pool(
             deployment_label_key,
             deployment_label_value
         ),
-        &idle.items,
     )
-    .await?;
+    .await;
 
     let mut created = 0;
     let Some(egress_environment) = super::kubernetes_egress::bootstrap_environment(
@@ -769,8 +770,9 @@ async fn replenish_warm_pool(
     let (stale, fresh) = split_idle_pods(idle.items, &template_hash);
     let excess = excess_idle_pods(fresh.clone(), target);
     let waiting = fresh.len() - excess.len();
-    retire_stale_idle_pods(&client, namespace, &sandbox.id, stale).await;
-    retire_stale_idle_pods(&client, namespace, &sandbox.id, excess).await;
+    // Stale pods go first, so a failed check in a pod from an older template never blocks the
+    // recovery after a rebuild; only pods of the current template are judged.
+    retire_then_judge(&client, namespace, &sandbox.id, stale, excess, &fresh).await?;
     let deficit = pool_deficit(target, waiting);
 
     // The broker builds a pod from this when a create finds the pool empty, so a create never
@@ -1218,19 +1220,20 @@ fn sandbox_namespace(config: &alien_core::KubernetesClientConfig) -> Result<Stri
     }
 }
 
-/// Deletes retired pods first, then reports an image the pool pods show to be built by an older
-/// CLI. The sweep runs even when the image is refused: a retired pod left behind would run forever.
-async fn sweep_then_check_image(
+/// Retires the stale and excess idle pods, then reports a failed staged-agent check among the
+/// pods of the current template. Retiring comes first so that a failed pod from an older
+/// template cannot block the recovery after a rebuild.
+async fn retire_then_judge(
     client: &std::sync::Arc<dyn alien_k8s_clients::PodApi>,
     namespace: &str,
     sandbox_id: &str,
-    retired_selector: &str,
-    idle: &[k8s_openapi::api::core::v1::Pod],
+    stale: Vec<k8s_openapi::api::core::v1::Pod>,
+    excess: Vec<k8s_openapi::api::core::v1::Pod>,
+    fresh: &[k8s_openapi::api::core::v1::Pod],
 ) -> Result<()> {
-    // A pod whose retire write succeeded but whose delete failed is in no pool and would run
-    // forever; every tick deletes the ones it finds.
-    sweep_retired_pods(client, namespace, sandbox_id, retired_selector).await;
-    match older_cli_image_message(sandbox_id, idle) {
+    retire_stale_idle_pods(client, namespace, sandbox_id, stale).await;
+    retire_stale_idle_pods(client, namespace, sandbox_id, excess).await;
+    match older_cli_image_message(sandbox_id, fresh) {
         Some(message) => Err(AlienError::new(ErrorData::CloudPlatformError {
             message,
             resource_id: Some(sandbox_id.to_string()),
@@ -1239,45 +1242,66 @@ async fn sweep_then_check_image(
     }
 }
 
-/// The message when a pool pod's `check-staged-agent` init container could not run the staged
-/// agent: the image was built by an alien CLI from before the directory mount, so its agent
-/// staged no file at `/opt/alien/alien-sandbox-agent`. `None` when no pod shows that.
+/// The message when a pool pod's `check-staged-agent` init container failed, `None` when no pod
+/// shows that. The image is blamed on an older alien CLI only when the failure says the staged
+/// executable is missing (its agent staged no file at `/opt/alien/alien-sandbox-agent`); any other
+/// failure reports the check container's own reason and message.
 pub(crate) fn older_cli_image_message(
     sandbox_id: &str,
     pods: &[k8s_openapi::api::core::v1::Pod],
 ) -> Option<String> {
-    let failed = |state: &k8s_openapi::api::core::v1::ContainerState| {
-        state
-            .terminated
-            .as_ref()
-            .is_some_and(|terminated| terminated.exit_code != 0)
-            || state.waiting.as_ref().is_some_and(|waiting| {
-                matches!(
-                    waiting.reason.as_deref(),
-                    Some(
-                        "CreateContainerError"
-                            | "RunContainerError"
-                            | "StartError"
-                            | "CrashLoopBackOff"
-                    )
-                )
-            })
+    use k8s_openapi::api::core::v1::ContainerState;
+    // (reason, exit code, message) of a failed current state.
+    fn failure(state: &ContainerState) -> Option<(String, Option<i32>, String)> {
+        if let Some(terminated) = state.terminated.as_ref().filter(|t| t.exit_code != 0) {
+            return Some((
+                terminated.reason.clone().unwrap_or_default(),
+                Some(terminated.exit_code),
+                terminated.message.clone().unwrap_or_default(),
+            ));
+        }
+        let waiting = state.waiting.as_ref()?;
+        let reason = waiting.reason.as_deref()?;
+        matches!(
+            reason,
+            "CreateContainerError" | "RunContainerError" | "StartError" | "CrashLoopBackOff"
+        )
+        .then(|| {
+            (
+                reason.to_string(),
+                None,
+                waiting.message.clone().unwrap_or_default(),
+            )
+        })
+    }
+    let agent = alien_core::sandbox_image::STAGED_AGENT_PATH;
+    let failures: Vec<_> = pods
+        .iter()
+        .filter_map(|pod| {
+            pod.status
+                .as_ref()
+                .and_then(|status| status.init_container_statuses.as_ref())
+        })
+        .flatten()
+        .filter(|status| status.name == super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER)
+        // Only the current state: an earlier, transient start failure (`last_state`) must not
+        // blame the image for the rest of the pod's life.
+        .filter_map(|status| status.state.as_ref().and_then(failure))
+        .collect();
+    let missing = |message: &str| {
+        let message = message.to_lowercase();
+        message.contains(agent) && message.contains("no such file or directory")
     };
-    let hit = pods.iter().any(|pod| {
-        pod.status
-            .as_ref()
-            .and_then(|status| status.init_container_statuses.as_ref())
-            .into_iter()
-            .flatten()
-            .filter(|status| status.name == super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER)
-            // Only the current state: an earlier, transient start failure (`last_state`) must not
-            // blame the image for the rest of the pod's life.
-            .any(|status| status.state.as_ref().is_some_and(failed))
-    });
-    hit.then(|| {
-        format!(
+    if failures.iter().any(|(_, _, message)| missing(message)) {
+        return Some(format!(
             "sandbox {sandbox_id}: this sandbox image was built by an older alien CLI; rebuild \
              and release it"
+        ));
+    }
+    failures.into_iter().next().map(|(reason, exit_code, message)| {
+        let exit = exit_code.map_or(String::new(), |code| format!(", exit code {code}"));
+        format!(
+            "sandbox {sandbox_id}: the check that runs the staged agent failed (reason {reason}{exit}): {message}"
         )
     })
 }
@@ -1364,20 +1388,32 @@ mod tests {
     }
 
     fn start_error() -> ContainerState {
+        start_error_with("")
+    }
+
+    fn start_error_with(message: &str) -> ContainerState {
         ContainerState {
             waiting: Some(ContainerStateWaiting {
                 reason: Some("StartError".to_string()),
-                ..Default::default()
+                message: Some(message.to_string()),
             }),
             ..Default::default()
         }
     }
 
+    const MISSING_AGENT: &str = "failed to create containerd task: OCI runtime create failed: \
+        runc create failed: unable to start container process: exec: \
+        \"/opt/alien/alien-sandbox-agent\": stat /opt/alien/alien-sandbox-agent: no such file or \
+        directory: unknown";
+
     #[test]
-    fn an_image_that_cannot_run_the_staged_agent_is_named_as_built_by_an_older_cli() {
+    fn a_missing_staged_agent_is_named_as_built_by_an_older_cli() {
         let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
-        let message = super::older_cli_image_message("box", &[pod_with_init(check, start_error())])
-            .expect("the check failing is recognised");
+        let message = super::older_cli_image_message(
+            "box",
+            &[pod_with_init(check, start_error_with(MISSING_AGENT))],
+        )
+        .expect("the check failing is recognised");
         assert!(
             message.contains(
                 "this sandbox image was built by an older alien CLI; rebuild and release it"
@@ -1387,16 +1423,83 @@ mod tests {
         let exited = ContainerState {
             terminated: Some(ContainerStateTerminated {
                 exit_code: 128,
+                reason: Some("ContainerCannotRun".to_string()),
+                message: Some(MISSING_AGENT.to_string()),
                 ..Default::default()
             }),
             ..Default::default()
         };
-        assert!(super::older_cli_image_message("box", &[pod_with_init(check, exited)]).is_some());
+        let message = super::older_cli_image_message("box", &[pod_with_init(check, exited)])
+            .expect("exit 128 with the message is recognised");
+        assert!(message.contains("older alien CLI"), "{message}");
+    }
+
+    #[test]
+    fn any_other_check_failure_reports_the_containers_own_reason_and_message() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let message = super::older_cli_image_message(
+            "box",
+            &[pod_with_init(
+                check,
+                start_error_with("failed to pull and unpack image: connection refused"),
+            )],
+        )
+        .expect("a failed check is reported");
+        assert!(!message.contains("older alien CLI"), "{message}");
+        assert!(
+            message.contains("StartError") && message.contains("connection refused"),
+            "{message}"
+        );
+        let exited = ContainerState {
+            terminated: Some(ContainerStateTerminated {
+                exit_code: 137,
+                reason: Some("OOMKilled".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let message = super::older_cli_image_message("box", &[pod_with_init(check, exited)])
+            .expect("a failed check is reported");
+        assert!(!message.contains("older alien CLI"), "{message}");
+        assert!(
+            message.contains("OOMKilled") && message.contains("137"),
+            "{message}"
+        );
     }
 
     #[tokio::test]
-    async fn the_sweep_of_retired_pods_runs_when_the_image_is_refused() {
+    async fn a_failed_check_in_an_old_template_pod_is_retired_and_does_not_block_recovery() {
         let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen = deleted.clone();
+        let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
+        pods.expect_update_pod()
+            .returning(|_, _, pod| Ok(pod.clone()));
+        pods.expect_delete_pod().returning(move |_, name| {
+            seen.lock().unwrap().push(name.to_string());
+            Ok(())
+        });
+        let client: std::sync::Arc<dyn alien_k8s_clients::PodApi> = std::sync::Arc::new(pods);
+        let mut old = idle_with_hash("old", Some("old-template"));
+        old.status = pod_with_init(check, start_error_with(MISSING_AGENT)).status;
+        let (stale, fresh) = split_idle_pods(vec![old], "new-template");
+        let result = retire_then_judge(&client, "ns", "sbx", stale, Vec::new(), &fresh).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(*deleted.lock().unwrap(), ["old"]);
+
+        // A failed check in a pod of the current template is still reported.
+        let mut current = idle_with_hash("current", Some("new-template"));
+        current.status = pod_with_init(check, start_error_with(MISSING_AGENT)).status;
+        let (stale, fresh) = split_idle_pods(vec![current], "new-template");
+        assert!(
+            retire_then_judge(&client, "ns", "sbx", stale, Vec::new(), &fresh)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_sweep_of_retired_pods_deletes_what_it_finds() {
         let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let seen = deleted.clone();
         let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
@@ -1411,15 +1514,7 @@ mod tests {
             Ok(())
         });
         let client: std::sync::Arc<dyn alien_k8s_clients::PodApi> = std::sync::Arc::new(pods);
-        let result = sweep_then_check_image(
-            &client,
-            "ns",
-            "sbx",
-            &retired_selector("sbx"),
-            &[pod_with_init(check, start_error())],
-        )
-        .await;
-        assert!(result.is_err(), "the older image is still reported");
+        sweep_retired_pods(&client, "ns", "sbx", &retired_selector("sbx")).await;
         assert_eq!(*deleted.lock().unwrap(), ["stuck"]);
     }
 

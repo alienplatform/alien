@@ -32,7 +32,9 @@ async fn a_deployment_is_capped_to_the_free_quota_on_real_azure() {
     let config = AzureClientConfig::from_std_env().await.unwrap();
     let location = config.region.clone().unwrap();
     let provider = DefaultPlatformServiceProvider::default();
-    let client = provider.get_azure_cognitive_services_client(&config).unwrap();
+    let client = provider
+        .get_azure_cognitive_services_client(&config)
+        .unwrap();
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let prefix = format!("capl{}", &suffix[..6]);
     let holder = format!("{prefix}-holder");
@@ -56,7 +58,9 @@ async fn a_deployment_is_capped_to_the_free_quota_on_real_azure() {
                 &CognitiveServicesAccountCreateParameters {
                     location: location.clone(),
                     kind: "AIServices".to_string(),
-                    sku: CognitiveServicesSku { name: "S0".to_string() },
+                    sku: CognitiveServicesSku {
+                        name: "S0".to_string(),
+                    },
                     properties: CognitiveServicesAccountCreateProperties {
                         custom_sub_domain_name: holder.clone(),
                     },
@@ -134,7 +138,9 @@ async fn a_deployment_is_capped_to_the_free_quota_on_real_azure() {
         }
         eprintln!(
             "HEARTBEAT {:?}",
-            run.last_heartbeats().last().map(|h| format!("{:?}", h.data))
+            run.last_heartbeats()
+                .last()
+                .map(|h| format!("{:?}", h.data))
         );
         assert_eq!(seen["gpt-4.1"], 25, "capped to the free quota");
         assert_eq!(seen["model-router"], 50);
