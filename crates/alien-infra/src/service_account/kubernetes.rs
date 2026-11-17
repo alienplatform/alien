@@ -237,12 +237,15 @@ fn observed_identity(
         // up (or recorded) as a plain Kubernetes ServiceAccount: it has no cloud identity yet,
         // and only the installation's setup can create one. Say so, so it is neither a bare
         // "missing annotation" nor a grant that is silently left out.
-        None => Err(AlienError::new(ErrorData::SetupRerunRequired {
+        None => {
+            let profile = permission_profile_from_service_account_id(config.id());
+            Err(AlienError::new(ErrorData::SetupRerunRequired {
             resource_id: config.id().to_string(),
             message: format!(
-                "this release grants the service account {namespace}/{name} permissions on {base_platform}, but the account has no cloud identity ({annotation} is not set). Run the installation's setup again (for example helm upgrade with the cloud role for this account) so it gets one"
+                "this release grants the service account {namespace}/{name} permissions on {base_platform}, but the account has no cloud identity ({annotation} is not set). Setup creates that identity, so run the installation's setup again; with Helm, create the cloud role for this account and set the Helm value serviceAccounts.{profile}.annotations.\"{annotation}\" to it, then helm upgrade"
             ),
-        })),
+        }))
+        }
     }
 }
 
