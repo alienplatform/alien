@@ -663,10 +663,19 @@ impl TestWorkerController {
             }
         }
 
+        // Real Ready handlers return an explicit heartbeat delay (30 s for the Kubernetes
+        // ones); a fixture can ask for one so loop pacing tests see a realistic cadence.
+        let heartbeat = ctx
+            .desired_resource_config::<Worker>()
+            .ok()
+            .and_then(|worker| worker.environment.get("SIMULATE_READY_DELAY_SECS").cloned())
+            .and_then(|seconds| seconds.parse::<u64>().ok())
+            .map(Duration::from_secs);
+
         // The system will automatically know if config changed and transition to update
         Ok(HandlerAction::Continue {
             state: Ready,
-            suggested_delay: None,
+            suggested_delay: heartbeat,
         })
     }
 

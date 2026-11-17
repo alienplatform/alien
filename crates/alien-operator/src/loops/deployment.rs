@@ -2408,8 +2408,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -2573,6 +2573,14 @@ mod tests {
 
     /// An installed Test deployment whose `worker` fails its first health refresh.
     async fn installed_refresh_fixture() -> (OperatorState, tempfile::TempDir) {
+        installed_refresh_fixture_with_ready_delay(None).await
+    }
+
+    /// `ready_delay_secs`: the heartbeat delay every worker's Ready handler returns
+    /// (real Kubernetes handlers return 30 s); `None` returns no delay.
+    async fn installed_refresh_fixture_with_ready_delay(
+        ready_delay_secs: Option<u64>,
+    ) -> (OperatorState, tempfile::TempDir) {
         alien_deployment::set_ephemeral_secrets_digest_key();
         let directory = tempfile::tempdir().unwrap();
         let key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -2590,6 +2598,12 @@ mod tests {
                 ("SIMULATE_OBSERVED_REFRESH_FAIL_ONCE".into(), "true".into()),
             ]))
             .build();
+        let ready_delay_env: HashMap<String, String> = ready_delay_secs
+            .map(|secs| ("SIMULATE_READY_DELAY_SECS".to_string(), secs.to_string()))
+            .into_iter()
+            .collect();
+        let mut worker = worker;
+        worker.environment.extend(ready_delay_env.clone());
         let mut stack =
             alien_core::Stack::new("site".into()).add(worker, alien_core::ResourceLifecycle::Live);
         for index in 0..8 {
@@ -2598,6 +2612,7 @@ mod tests {
                     image: "test:1".into(),
                 })
                 .permissions("default".into())
+                .environment(ready_delay_env.clone())
                 .build();
             stack = stack.add(worker, alien_core::ResourceLifecycle::Live);
         }
@@ -2670,6 +2685,53 @@ mod tests {
         assert_eq!(delay(2_000), Duration::from_secs(5));
         assert_eq!(delay(30_000), Duration::from_secs(30));
         assert_eq!(delay(300_000), Duration::from_secs(60));
+    }
+
+    /// Controllers that ask for 30 s (the Kubernetes Ready handlers do) give a check
+    /// every 30 s: about 20 in ten minutes, not 120.
+    #[tokio::test(start_paused = true)]
+    async fn controllers_asking_for_thirty_seconds_give_about_twenty_checks_in_ten_minutes() {
+        let (state, _directory) = installed_refresh_fixture_with_ready_delay(Some(30)).await;
+        state
+            .db
+            .write_daily_identity(&crate::daily_identity::DailyIdentityState {
+                manager_url: "https://manager.example".into(),
+                audience: "https://manager.example".into(),
+                deployment_id: "dep_site".into(),
+                current: "ax_day_v1_fixture".into(),
+                pending: None,
+                pending_started_at: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                enrolled_code_hash: None,
+                pending_enrollment: None,
+                previous: None,
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state);
+        let waits = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+        let observed = Arc::clone(&waits);
+        let task = tokio::spawn(run_deployment_loop_observed(
+            Arc::clone(&state),
+            move |delay| observed.lock().unwrap().push(delay),
+        ));
+        tokio::time::sleep(Duration::from_secs(602)).await;
+        let waits_now = waits.lock().unwrap().clone();
+        state.cancel.cancel();
+        task.await.unwrap();
+        assert!(
+            (19..=22).contains(&waits_now.len()),
+            "{} checks in ten simulated minutes: {waits_now:?}",
+            waits_now.len()
+        );
+        assert!(
+            // The fixture's first worker dips into RefreshFailed once: two closer checks.
+            waits_now
+                .iter()
+                .skip(2)
+                .all(|wait| *wait == Duration::from_secs(30)),
+            "{waits_now:?}"
+        );
     }
 
     /// A healthy installed deployment: the loop checks it at the controllers'
