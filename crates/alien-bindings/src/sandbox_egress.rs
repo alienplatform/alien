@@ -539,8 +539,8 @@ impl SandboxEgressManager {
         unreachable!("every final attempt returns")
     }
 
-    /// Delete a grant on every replica that answers, right away. An unreachable replica never
-    /// stops the delete reaching the others: the reachable replicas are already clean when this
+    /// Delete a grant on every replica that answers, right away. An unreachable or refusing
+    /// replica never stops the delete reaching the others: the reachable replicas are already clean when this
     /// returns a retryable error for the ones that have not acknowledged. A replica that was away
     /// takes the tombstone from its peers before it serves again (it starts empty and refuses until
     /// synchronized, or catches up on its next pass).
@@ -568,6 +568,7 @@ impl SandboxEgressManager {
                 }
             };
             let mut pending = false;
+            let mut refusal = None;
             for target in &targets {
                 if done.contains(target) {
                     continue;
@@ -597,11 +598,19 @@ impl SandboxEgressManager {
                         failure = gateway_error(response).await;
                         pending = true;
                     }
-                    // Any other answer (401, 400, ...) is a refusal that retrying cannot fix.
-                    Ok(response) => return Err(gateway_error(response).await),
+                    // Any other answer (401, 400, ...) is a refusal that retrying cannot fix. The
+                    // remaining replicas still get the revocation this round; the first refusal
+                    // is returned after them.
+                    Ok(response) => {
+                        let error = gateway_error(response).await;
+                        refusal.get_or_insert(error);
+                    }
                     // A connection failure or timeout passes too.
                     Err(_) => pending = true,
                 }
+            }
+            if let Some(error) = refusal {
+                return Err(error);
             }
             if !pending && complete {
                 return Ok(());
