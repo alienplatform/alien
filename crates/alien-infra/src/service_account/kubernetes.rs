@@ -185,44 +185,67 @@ impl KubernetesServiceAccountController {
             }));
         }
 
-        let identity = match ctx.deployment_config.base_platform {
-            Some(base_platform) => {
-                let annotation = match base_platform {
-                    Platform::Aws => "eks.amazonaws.com/role-arn",
-                    Platform::Gcp => "iam.gke.io/gcp-service-account",
-                    Platform::Azure => "azure.workload.identity/client-id",
-                    _ => {
-                        return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
-                            resource_id: config.id().to_string(),
-                            message: format!(
-                                "Unsupported Kubernetes base platform: {base_platform:?}"
-                            ),
-                        }));
-                    }
-                };
-                account
-                    .metadata
-                    .annotations
-                    .as_ref()
-                    .and_then(|annotations| annotations.get(annotation))
-                    .filter(|value| !value.is_empty())
-                    .cloned()
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::ResourceControllerConfigError {
-                            resource_id: config.id().to_string(),
-                            message: format!(
-                                "ServiceAccount {namespace}/{name} is missing {annotation}"
-                            ),
-                        })
-                    })?
-            }
-            None => name.clone(),
-        };
+        let identity = observed_identity(
+            ctx.deployment_config.base_platform,
+            config,
+            &namespace,
+            &name,
+            account.metadata.annotations.as_ref(),
+        )?;
 
         self.name = Some(name);
         self.namespace = Some(namespace);
         self.identity = Some(identity);
         Ok(())
+    }
+}
+
+/// The identity a Helm-owned ServiceAccount carries: the cloud identity annotated on it, or the
+/// account's own name when there is no base cloud or its profile grants nothing on it.
+fn observed_identity(
+    base_platform: Option<Platform>,
+    config: &ServiceAccount,
+    namespace: &str,
+    name: &str,
+    annotations: Option<&std::collections::BTreeMap<String, String>>,
+) -> Result<String> {
+    let Some(base_platform) = base_platform else {
+        return Ok(name.to_string());
+    };
+    let annotation = match base_platform {
+        Platform::Aws => "eks.amazonaws.com/role-arn",
+        Platform::Gcp => "iam.gke.io/gcp-service-account",
+        Platform::Azure => "azure.workload.identity/client-id",
+        _ => {
+            return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id().to_string(),
+                message: format!("Unsupported Kubernetes base platform: {base_platform:?}"),
+            }));
+        }
+    };
+    match annotations
+        .and_then(|annotations| annotations.get(annotation))
+        .filter(|value| !value.is_empty())
+    {
+        Some(identity) => Ok(identity.clone()),
+        // A profile that grants nothing on the base cloud has no cloud identity to carry: the
+        // account is a plain Kubernetes ServiceAccount.
+        None if !crate::core::service_account_grants_on(config, base_platform) => {
+            Ok(name.to_string())
+        }
+        // The release grants this account something on the base cloud, but the account was set
+        // up (or recorded) as a plain Kubernetes ServiceAccount: it has no cloud identity yet,
+        // and only the installation's setup can create one. Say so, so it is neither a bare
+        // "missing annotation" nor a grant that is silently left out.
+        None => {
+            let profile = permission_profile_from_service_account_id(config.id());
+            Err(AlienError::new(ErrorData::SetupRerunRequired {
+            resource_id: config.id().to_string(),
+            message: format!(
+                "this release grants the service account {namespace}/{name} permissions on {base_platform}, but the account has no cloud identity ({annotation} is not set). Setup creates that identity, so run the installation's setup again; with Helm, create the cloud role for this account and set the Helm value serviceAccounts.{profile}.annotations.\"{annotation}\" to it, then helm upgrade"
+            ),
+        }))
+        }
     }
 }
 
@@ -238,4 +261,70 @@ fn namespace(config: &KubernetesClientConfig, resource_id: &str) -> Result<Strin
             message: "Kubernetes namespace is required for ServiceAccount observation".to_string(),
         })
     })
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    fn account(permission_set: Option<&str>) -> ServiceAccount {
+        let mut profile = alien_core::PermissionProfile::new();
+        if let Some(id) = permission_set {
+            profile
+                .0
+                .entry("*".to_string())
+                .or_default()
+                .push(alien_core::PermissionSetReference::from_name(id));
+        }
+        ServiceAccount::from_permission_profile("p-sa".to_string(), &profile, |id| {
+            alien_permissions::get_permission_set(id).cloned()
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_grantless_account_has_its_own_name_as_identity() {
+        let identity =
+            observed_identity(Some(Platform::Aws), &account(None), "ns", "app-p", None).unwrap();
+        assert_eq!(identity, "app-p");
+    }
+
+    #[test]
+    fn an_annotated_account_keeps_its_cloud_identity() {
+        let annotations = BTreeMap::from([(
+            "eks.amazonaws.com/role-arn".to_string(),
+            "arn:aws:iam::1:role/x".to_string(),
+        )]);
+        for permission_set in [None, Some("storage/data-read")] {
+            let identity = observed_identity(
+                Some(Platform::Aws),
+                &account(permission_set),
+                "ns",
+                "app-p",
+                Some(&annotations),
+            )
+            .unwrap();
+            assert_eq!(identity, "arn:aws:iam::1:role/x");
+        }
+    }
+
+    #[test]
+    fn an_account_with_grants_and_no_annotation_is_refused() {
+        let error = observed_identity(
+            Some(Platform::Aws),
+            &account(Some("storage/data-read")),
+            "ns",
+            "app-p",
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("eks.amazonaws.com/role-arn"),
+            "{}",
+            error.message
+        );
+        assert_eq!(error.code, "SETUP_RERUN_REQUIRED");
+        assert!(error.message.contains("setup again"), "{}", error.message);
+    }
 }

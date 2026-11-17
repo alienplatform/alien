@@ -7,7 +7,7 @@ use alien_core::{
     daemon_runtime_environment_contract, kubernetes_base_platform_runtime_environment_plan,
     public_url_host, render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
-    worker_runtime_environment_contract, Container, Daemon, EnvironmentVariable,
+    worker_runtime_environment_contract, ClientConfig, Container, Daemon, EnvironmentVariable,
     EnvironmentVariableType, Resource, ResourceRef, ResourceStatus, RuntimeEnvironmentBindingEntry,
     RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
     ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
@@ -664,6 +664,25 @@ impl EnvironmentVariableBuilder {
             return Ok(());
         }
 
+        // Without a base cloud client the cloud values below render as absent. That is right
+        // for a containers-only stack; when the stack has resources that need the cloud it
+        // would roll out pods without AWS_REGION and friends, so the step fails (retryable)
+        // and the pods stay as they are.
+        if let (ClientConfig::Kubernetes(_), Some(base_platform)) =
+            (&ctx.client_config, ctx.deployment_config.base_platform)
+        {
+            if crate::core::executor::stack_needs_base_cloud(
+                ctx.desired_stack,
+                ctx.platform,
+                Some(base_platform),
+                &ctx.deployment_config.stack_settings,
+            ) {
+                return Err(AlienError::new(ErrorData::BaseCloudUnavailable {
+                    required_platform: base_platform,
+                }));
+            }
+        }
+
         for (name, value) in render_runtime_environment_entries(
             kubernetes_base_platform_runtime_environment_plan(ctx.deployment_config.base_platform),
             renderer,
@@ -897,6 +916,60 @@ mod tests {
         KubernetesRouteProfile, KubernetesSettings, KubernetesTlsSecretRef,
     };
     use serde_json::json;
+
+    /// With a base cloud but no client for it (plain Kubernetes), a containers-only prepared
+    /// stack renders its environment without the cloud values; once the prepared stack holds
+    /// a resource that needs the cloud (the `secrets` vault a mutation adds) it fails, so pods
+    /// are never rolled out without AWS_REGION and friends.
+    #[cfg(feature = "kubernetes")]
+    #[test]
+    fn plain_kubernetes_env_rendering_fails_only_when_the_prepared_stack_needs_the_cloud() {
+        let container = || {
+            alien_core::Resource::new(
+                alien_core::Container::new("web".to_string())
+                    .code(alien_core::ContainerCode::Image {
+                        image: "registry.example.com/web:1".to_string(),
+                    })
+                    .cpu(alien_core::ResourceSpec {
+                        min: "100m".to_string(),
+                        desired: "500m".to_string(),
+                    })
+                    .memory(alien_core::ResourceSpec {
+                        min: "128Mi".to_string(),
+                        desired: "512Mi".to_string(),
+                    })
+                    .permissions("default".to_string())
+                    .build(),
+            )
+        };
+        let render = |harness: &KubernetesManifestTestHarness| {
+            let ctx = harness.ctx();
+            EnvironmentVariableBuilder::new(&HashMap::new())
+                .add_container_runtime_env_vars(&ctx, "web")
+                .map(|_| ())
+        };
+
+        let mut containers_only = KubernetesManifestTestHarness::new(container(), vec![]);
+        containers_only.deployment_config_mut().base_platform = Some(alien_core::Platform::Aws);
+        render(&containers_only).expect("a containers-only stack runs as plain Kubernetes");
+
+        let mut with_vault = KubernetesManifestTestHarness::new(container(), vec![])
+            .with_stack_resource(
+                alien_core::Resource::new(alien_core::Vault::new("secrets".to_string()).build()),
+                alien_core::ResourceLifecycle::Frozen,
+            );
+        with_vault.deployment_config_mut().base_platform = Some(alien_core::Platform::Aws);
+        let error = render(&with_vault).expect_err("the vault needs the cloud");
+        assert_eq!(error.code, "BASE_CLOUD_UNAVAILABLE");
+
+        // Without a base cloud the same vault is realized in the cluster.
+        let without_base = KubernetesManifestTestHarness::new(container(), vec![])
+            .with_stack_resource(
+                alien_core::Resource::new(alien_core::Vault::new("secrets".to_string()).build()),
+                alien_core::ResourceLifecycle::Frozen,
+            );
+        render(&without_base).expect("no base cloud: nothing needs it");
+    }
 
     #[cfg(feature = "local")]
     mod local_deployer_secrets {

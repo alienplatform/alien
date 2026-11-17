@@ -26,6 +26,7 @@ use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
 use alien_error::{AlienError, Context};
 use alien_infra::ClientConfigExt;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
@@ -253,14 +254,92 @@ async fn run_deployment_pass(state: &OperatorState, interval: Duration) -> Durat
                 // A running deployment takes a health step every pass; the
                 // terminal-state log reports when its outcome changes.
                 debug!(steps = steps, "Deployment pass completed");
+                if let Err(error) = clear_base_cloud_pass_error(state).await {
+                    warn!(error = %error, "Could not clear the earlier base cloud error");
+                }
             }
             interval.max(suggested_delay)
         }
         Err(e) => {
             error!(error = %e, "Deployment failed");
+            if let Err(report_error) = record_pass_error(state, &e).await {
+                warn!(error = %report_error, "Could not record the deployment error");
+            }
             interval
         }
     }
+}
+
+/// Make an error raised outside the step loop visible in the deployment's state, so
+/// it reaches the manager and the API. Errors inside the step loop already do: they
+/// fail the deployment. The status is kept, so the next pass retries.
+async fn record_pass_error(state: &OperatorState, error: &AlienError<ErrorData>) -> Result<()> {
+    let Some(observed) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    record_pass_error_from(state, observed, error).await
+}
+
+/// Save the error on top of `observed`, only if the state is still exactly `observed`. A
+/// target the sync loop accepted in between wins; the next pass reports the error again.
+async fn record_pass_error_from(
+    state: &OperatorState,
+    observed: DeploymentState,
+    error: &AlienError<ErrorData>,
+) -> Result<()> {
+    let mut current = observed.clone();
+    if current.target_release.is_none()
+        || current.status.is_failed()
+        || matches!(current.status, DeploymentStatus::Running)
+    {
+        return Ok(());
+    }
+    let recorded = error.clone().into_generic();
+    if current.error.as_ref().map(|e| (&e.code, &e.message))
+        == Some((&recorded.code, &recorded.message))
+    {
+        return Ok(());
+    }
+    current.error = Some(recorded);
+    if state
+        .db
+        .compare_and_set_deployment_state(&observed, &current)
+        .await?
+    {
+        state.db.request_sync();
+    }
+    Ok(())
+}
+
+/// Error codes `record_pass_error` stores for the base cloud: the deployment could not start a
+/// pass because the cloud client was not usable.
+const BASE_CLOUD_PASS_ERROR_CODES: [&str; 2] = ["BASE_CLOUD_UNAVAILABLE", "BASE_CLOUD_UNREACHABLE"];
+
+/// Once a pass runs again, a base cloud error recorded by an earlier pass is stale: remove it
+/// so the deployment does not keep showing a problem that is gone. A failed deployment keeps
+/// its error; that one belongs to the failure.
+async fn clear_base_cloud_pass_error(state: &OperatorState) -> Result<()> {
+    let Some(observed) = state.db.get_deployment_state().await? else {
+        return Ok(());
+    };
+    let mut current = observed.clone();
+    let stale = !current.status.is_failed()
+        && current
+            .error
+            .as_ref()
+            .is_some_and(|error| BASE_CLOUD_PASS_ERROR_CODES.contains(&error.code.as_str()));
+    if !stale {
+        return Ok(());
+    }
+    current.error = None;
+    if state
+        .db
+        .compare_and_set_deployment_state(&observed, &current)
+        .await?
+    {
+        state.db.request_sync();
+    }
+    Ok(())
 }
 
 /// Run deployment steps continuously until synced or long delay.
@@ -413,9 +492,17 @@ pub(crate) async fn run_deployment_continuously(
     .await?;
 
     // Resolve client config once (it doesn't change between steps)
+    let base_platform = enriched_config.base_platform.or(state.config.base_platform);
     let client_config = resolve_client_config(
         current.platform,
-        enriched_config.base_platform.or(state.config.base_platform),
+        base_platform,
+        step_needs_base_cloud(
+            &current,
+            &target_release.stack,
+            &enriched_config,
+            base_platform,
+        )
+        .await,
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -631,9 +718,16 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
         Some(&release.stack),
     )
     .await?;
+    let base_platform = config.base_platform.or(state.config.base_platform);
     let client_config = resolve_client_config(
         current.platform,
-        config.base_platform.or(state.config.base_platform),
+        base_platform,
+        deployment_needs_base_cloud(
+            &current,
+            &release.stack,
+            &config.stack_settings,
+            base_platform,
+        ),
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -705,9 +799,16 @@ async fn renew_installed_credentials(state: &OperatorState) -> Result<()> {
         Some(&config_release.stack),
     )
     .await?;
+    let base_platform = config.base_platform.or(state.config.base_platform);
     let client_config = resolve_client_config(
         current.platform,
-        config.base_platform.or(state.config.base_platform),
+        base_platform,
+        deployment_needs_base_cloud(
+            &current,
+            &config_release.stack,
+            &config.stack_settings,
+            base_platform,
+        ),
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -1084,10 +1185,174 @@ pub(super) async fn enrich_config(
     Ok(config)
 }
 
+/// How long a failed base cloud client resolution is remembered. Resolving the AWS
+/// region from IMDS waits for a timeout, and every deployment pass would pay it again.
+const BASE_CLOUD_RETRY_AFTER: Duration = Duration::from_secs(300);
+
+static BASE_CLOUD_FAILURE: std::sync::Mutex<Option<(Platform, std::time::Instant, String)>> =
+    std::sync::Mutex::new(None);
+
+/// The last base cloud client this process built. Once the Operator has had a working
+/// cloud client it never drops to plain Kubernetes: a later failure to resolve it again
+/// keeps using this one, so pods are not rolled out without their cloud environment.
+static BASE_CLOUD_LAST_GOOD: std::sync::Mutex<Option<(Platform, ClientConfig)>> =
+    std::sync::Mutex::new(None);
+
+fn last_good_base_cloud(base_platform: Platform) -> Option<ClientConfig> {
+    BASE_CLOUD_LAST_GOOD
+        .lock()
+        .ok()
+        .and_then(|good| good.clone())
+        .filter(|(platform, _)| *platform == base_platform)
+        .map(|(_, cloud)| cloud)
+}
+
+/// Whether this deployment needs the base cloud's API, decided by what its STACK needs and
+/// what is recorded, never by what the pod's environment happens to hold: the prepared stack
+/// when the pending step stored one (it has the preflight mutations), else the release's
+/// stack, through the one rule the manager and the controllers use
+/// (`alien_infra::stack_needs_base_cloud`). Recorded state wins: a resource whose controller
+/// is the base cloud's keeps needing it, whatever the stack says now.
+pub(super) fn deployment_needs_base_cloud(
+    current: &DeploymentState,
+    release_stack: &alien_core::Stack,
+    stack_settings: &alien_core::StackSettings,
+    base_platform: Option<Platform>,
+) -> bool {
+    let Some(base) = base_platform else {
+        return false;
+    };
+    let stack = current
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+        .unwrap_or(release_stack);
+    alien_infra::stack_needs_base_cloud(stack, current.platform, Some(base), stack_settings)
+        || current
+            .stack_state
+            .as_ref()
+            .is_some_and(|state| alien_infra::state_needs_base_cloud(state, base))
+}
+
+/// `deployment_needs_base_cloud` for a pass that may run the pending step. That step adds
+/// resources through the preflight mutations (a vault, a service account), so before the
+/// client is chosen the stack is prepared the way the step prepares it, with the plain
+/// Kubernetes client: compile-time checks and mutations need no cloud, and the advisory runtime
+/// checks report "unknown" without one. The predicate then runs on the prepared stack. If
+/// preparing fails, the raw stack decides and the pending step reports the real error.
+async fn step_needs_base_cloud(
+    current: &DeploymentState,
+    release_stack: &alien_core::Stack,
+    config: &alien_core::DeploymentConfig,
+    base_platform: Option<Platform>,
+) -> bool {
+    if deployment_needs_base_cloud(current, release_stack, &config.stack_settings, base_platform)
+    {
+        return true;
+    }
+    let Some(base) = base_platform else {
+        return false;
+    };
+    let unprepared = current.platform == Platform::Kubernetes
+        && matches!(
+            current.status,
+            alien_core::DeploymentStatus::Pending | alien_core::DeploymentStatus::PreflightsFailed
+        )
+        && current
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.prepared_stack.as_ref())
+            .is_none();
+    if !unprepared {
+        return false;
+    }
+    let mut prepared_config = config.clone();
+    let plain = ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+        namespace: None,
+        additional_headers: None,
+    }));
+    match alien_deployment::prepare_target_stack(
+        current,
+        release_stack.clone(),
+        &mut prepared_config,
+        &plain,
+    )
+    .await
+    {
+        Ok(prepared) => alien_infra::stack_needs_base_cloud(
+            &prepared.mutated_stack,
+            current.platform,
+            Some(base),
+            &prepared_config.stack_settings,
+        ),
+        Err(error) => {
+            debug!(error = %error, "Preparing the stack ahead of the pending step failed; the step reports it");
+            false
+        }
+    }
+}
+
+/// The base cloud client, built through the SDK's default chain exactly as an install that
+/// always needed it does (environment, IRSA, Pod Identity, the node's instance role). When it
+/// cannot be built the pass fails with a retryable `BASE_CLOUD_UNAVAILABLE` naming what to set;
+/// it never falls back to plain Kubernetes. A failure is remembered for a while so each pass
+/// does not wait out a timeout again, and a client that was ever built is kept meanwhile.
+async fn base_cloud_client(base_platform: Platform) -> Result<ClientConfig> {
+    let recent_failure = BASE_CLOUD_FAILURE
+        .lock()
+        .ok()
+        .and_then(|failure| failure.clone())
+        .filter(|(platform, at, _)| {
+            *platform == base_platform && at.elapsed() < BASE_CLOUD_RETRY_AFTER
+        });
+    if let Some((_, _, message)) = recent_failure {
+        return match last_good_base_cloud(base_platform) {
+            Some(cloud) => Ok(cloud),
+            None => Err(AlienError::new(ErrorData::BaseCloudUnreachable { message })),
+        };
+    }
+    match ClientConfig::from_std_env(base_platform).await {
+        Ok(cloud) => {
+            if let Ok(mut failure) = BASE_CLOUD_FAILURE.lock() {
+                *failure = None;
+            }
+            if let Ok(mut good) = BASE_CLOUD_LAST_GOOD.lock() {
+                *good = Some((base_platform, cloud.clone()));
+            }
+            Ok(cloud)
+        }
+        Err(error) => {
+            let last_good = last_good_base_cloud(base_platform);
+            warn!(
+                base_platform = %base_platform,
+                error = %error,
+                retry_after_secs = BASE_CLOUD_RETRY_AFTER.as_secs(),
+                "Base cloud client unavailable; {}",
+                if last_good.is_some() {
+                    "keeping the last working one"
+                } else {
+                    "trying again later"
+                }
+            );
+            let message = format!(
+                "This deployment needs its {base_platform} base cloud, but the Operator could not resolve its region or credentials ({error}). Set the region in the Helm values (basePlatformConfig) and give the Operator's service account a cloud identity (an IRSA role or EKS Pod Identity association on AWS, Workload Identity on GCP, Azure Workload Identity on Azure) or run it on a node role that has the access, then restart the Operator pod: it reads them only when it starts. Or install this deployment with Terraform instead"
+            );
+            if let Ok(mut failure) = BASE_CLOUD_FAILURE.lock() {
+                *failure = Some((base_platform, std::time::Instant::now(), message.clone()));
+            }
+            match last_good {
+                Some(cloud) => Ok(cloud),
+                None => Err(AlienError::new(ErrorData::BaseCloudUnreachable { message })),
+            }
+        }
+    }
+}
+
 /// Resolve client config based on platform
 pub(super) async fn resolve_client_config(
     platform: Platform,
     base_platform: Option<Platform>,
+    needs_base_cloud: bool,
     data_dir: &str,
     namespace: Option<String>,
     _sync_config: Option<&crate::config::SyncConfig>,
@@ -1098,21 +1363,16 @@ pub(super) async fn resolve_client_config(
                     namespace,
                     additional_headers: None,
             };
-            if let Some(base_platform) = base_platform {
-                let cloud = ClientConfig::from_std_env(base_platform)
-                    .await
-                    .context(ErrorData::ConfigurationError {
-                        message: format!(
-                            "Failed to create {} base client config for Kubernetes deployment",
-                            base_platform
-                        ),
-                    })?;
-                Ok(ClientConfig::KubernetesCloud {
+            // The base cloud is a label for the cluster unless the deployment needs its API
+            // (`needs_base_cloud`, decided from the stack by the caller). Then the cloud client
+            // is built as it always was and a failure is a retryable error; otherwise the
+            // deployment runs as plain Kubernetes and builds no cloud client at all.
+            match base_platform.filter(|_| needs_base_cloud) {
+                Some(base_platform) => Ok(ClientConfig::KubernetesCloud {
                     kubernetes: Box::new(kubernetes),
-                    cloud: Box::new(cloud),
-                })
-            } else {
-                Ok(ClientConfig::Kubernetes(Box::new(kubernetes)))
+                    cloud: Box::new(base_cloud_client(base_platform).await?),
+                }),
+                None => Ok(ClientConfig::Kubernetes(Box::new(kubernetes))),
             }
         }
         Platform::Local => {
@@ -1138,6 +1398,382 @@ pub(super) async fn resolve_client_config(
                     ),
                 })
         }
+    }
+}
+
+#[cfg(test)]
+mod base_cloud_client_tests {
+    use super::{resolve_client_config, BASE_CLOUD_FAILURE, BASE_CLOUD_LAST_GOOD};
+    use alien_core::{ClientConfig, Platform};
+
+    fn reset_cache() {
+        *BASE_CLOUD_FAILURE.lock().unwrap() = None;
+        *BASE_CLOUD_LAST_GOOD.lock().unwrap() = None;
+    }
+
+    fn resolve(base: Platform) -> ClientConfig {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(resolve_client_config(
+                Platform::Kubernetes,
+                Some(base),
+                true,
+                "/tmp/unused",
+                Some("alien".to_string()),
+                None,
+            ))
+            .expect("a missing base cloud must not stop the deployment")
+    }
+
+    fn configured_aws(sts: &str, token_file: &str) -> Vec<(&'static str, Option<String>)> {
+        vec![
+            ("AWS_REGION", Some("us-east-1".into())),
+            // Pod Identity: the credentials come from an endpoint, and the account id is
+            // looked up with them.
+            (
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+                Some("http://127.0.0.1:9/creds".into()),
+            ),
+            (
+                "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+                Some(token_file.into()),
+            ),
+            ("AWS_ROLE_ARN", None),
+            ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
+            ("AWS_ACCESS_KEY_ID", None),
+            ("AWS_SECRET_ACCESS_KEY", None),
+            ("AWS_ACCOUNT_ID", None),
+            ("AWS_EC2_METADATA_DISABLED", Some("true".into())),
+            (
+                "AWS_SERVICE_OVERRIDES_ENDPOINTS",
+                Some(format!("{{\"sts\":\"{sts}\"}}")),
+            ),
+        ]
+    }
+
+    fn try_resolve(base: Platform) -> alien_error::Result<ClientConfig, crate::error::ErrorData> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(resolve_client_config(
+                Platform::Kubernetes,
+                Some(base),
+                true,
+                "/tmp/unused",
+                Some("alien".to_string()),
+                None,
+            ))
+    }
+
+    /// A Pod Identity endpoint is set on the pod, but the call fails (right after a restart, a
+    /// timeout, a token file not mounted yet). That is not "not configured": the pass fails
+    /// and is retried, and nothing switches to plain Kubernetes. Once the call works again
+    /// the cloud client is built.
+    #[test]
+    fn a_failing_sign_in_on_a_configured_install_is_retried_not_dropped() {
+        let directory = tempfile::tempdir().unwrap();
+        let token = directory.path().join("token");
+        std::fs::write(&token, "token").unwrap();
+        let token = token.to_str().unwrap().to_string();
+        let down = configured_aws("http://127.0.0.1:9", &token);
+        temp_env::with_vars(down, || {
+            reset_cache();
+            let error = try_resolve(Platform::Aws).expect_err(
+                "a configured install whose sign-in fails must not become plain Kubernetes",
+            );
+            assert!(error.message.contains("base cloud"), "{}", error.message);
+            assert_eq!(error.code, "BASE_CLOUD_UNAVAILABLE");
+            // Still failing inside the retry window: the same error, no new wait.
+            assert!(try_resolve(Platform::Aws).is_err());
+            // The retry window passes and the identity service answers (access keys stand in
+            // for a working sign-in, an account id avoids the lookup).
+            *BASE_CLOUD_FAILURE.lock().unwrap() = None;
+            temp_env::with_vars(
+                [
+                    ("AWS_CONTAINER_CREDENTIALS_FULL_URI", None::<&str>),
+                    ("AWS_ACCESS_KEY_ID", Some("AKIAEXAMPLE")),
+                    ("AWS_SECRET_ACCESS_KEY", Some("secret")),
+                    ("AWS_ACCOUNT_ID", Some("123456789012")),
+                ],
+                || {
+                    let config = try_resolve(Platform::Aws).expect("recovered");
+                    assert!(
+                        matches!(config, ClientConfig::KubernetesCloud { .. }),
+                        "{config:?}"
+                    );
+                },
+            );
+        });
+        reset_cache();
+    }
+
+    /// A stack that needs nothing from the base cloud runs as plain Kubernetes whatever the
+    /// pod holds: no cloud call is made, even with a region and keys set.
+    #[test]
+    fn a_stack_that_needs_no_cloud_builds_no_cloud_client() {
+        for base in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            temp_env::with_vars(
+                [
+                    ("AWS_REGION", Some("us-east-1")),
+                    ("AWS_ACCESS_KEY_ID", Some("AKIAEXAMPLE")),
+                    ("AWS_SECRET_ACCESS_KEY", Some("secret")),
+                    ("GCE_METADATA_HOST", Some("127.0.0.1:9")),
+                    ("AWS_EC2_METADATA_DISABLED", Some("true")),
+                ],
+                || {
+                    reset_cache();
+                    let started = std::time::Instant::now();
+                    let config = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(resolve_client_config(
+                            Platform::Kubernetes,
+                            Some(base),
+                            false,
+                            "/tmp/unused",
+                            Some("alien".to_string()),
+                            None,
+                        ))
+                        .expect("plain Kubernetes");
+                    assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+                    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+                },
+            );
+        }
+    }
+
+    /// A stack that needs the cloud and an install with no identity or region at all fails with
+    /// the retryable, actionable error. It never becomes plain Kubernetes.
+    #[test]
+    fn a_stack_that_needs_the_cloud_without_an_identity_fails_clearly() {
+        temp_env::with_vars(
+            [
+                ("AWS_REGION", None::<&str>),
+                ("AWS_DEFAULT_REGION", None),
+                ("AWS_ACCESS_KEY_ID", None),
+                ("AWS_SECRET_ACCESS_KEY", None),
+                ("AWS_ROLE_ARN", None),
+                ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
+                ("AWS_PROFILE", None),
+                ("AWS_CONTAINER_CREDENTIALS_FULL_URI", None),
+                ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", None),
+                ("AWS_EC2_METADATA_DISABLED", Some("true")),
+            ],
+            || {
+                reset_cache();
+                let error = try_resolve(Platform::Aws).expect_err("must fail");
+                assert_eq!(error.code, "BASE_CLOUD_UNAVAILABLE");
+                assert!(error.retryable);
+                assert!(error.message.contains("IRSA"), "{}", error.message);
+            },
+        );
+        reset_cache();
+    }
+
+    /// The decision is the stack's, plus recorded state: a resource whose controller is the
+    /// base cloud's keeps needing it even when the stack alone would not.
+    #[test]
+    fn recorded_cloud_state_keeps_needing_the_cloud() {
+        use alien_core::{DeploymentState, StackResourceState, StackState};
+        let stack = alien_core::Stack::new("app".to_string()).build();
+        let settings = alien_core::StackSettings::default();
+        let mut current = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: alien_core::DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        assert!(!super::deployment_needs_base_cloud(
+            &current,
+            &stack,
+            &settings,
+            Some(Platform::Aws)
+        ));
+        let mut stack_state = StackState::new(Platform::Kubernetes);
+        let mut resource = StackResourceState::new_pending(
+            "service-account".into(),
+            alien_core::Resource::new(alien_core::ServiceAccount::new("sa".into()).build()),
+            Some(alien_core::ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        resource.controller_platform = Some(Platform::Aws);
+        stack_state.resources.insert("sa".to_string(), resource);
+        current.stack_state = Some(stack_state);
+        assert!(super::deployment_needs_base_cloud(
+            &current,
+            &stack,
+            &settings,
+            Some(Platform::Aws)
+        ));
+        assert!(!super::deployment_needs_base_cloud(
+            &current, &stack, &settings, None
+        ));
+    }
+
+    /// A vault the preflight mutations add exists only on the prepared stack. A first pass on
+    /// a base cloud with nothing recorded must prepare the stack before choosing its client, or
+    /// the pending step runs with plain Kubernetes and the vault fails there.
+    #[test]
+    fn a_vault_added_by_the_preflights_gets_the_cloud_client_at_pending() {
+        use alien_core::{
+            DeploymentState, EnvironmentVariablesSnapshot, ResourceEntry, ResourceLifecycle,
+            Worker, WorkerCode,
+        };
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("profile".to_string())
+            .build();
+        let stack = alien_core::Stack::new("app".to_string())
+            .add_entry(ResourceEntry {
+                display_name: None,
+                description: None,
+                config: alien_core::Resource::new(worker),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            })
+            .permissions(alien_core::permissions::PermissionsConfig {
+                profiles: [(
+                    "profile".to_string(),
+                    alien_core::permissions::PermissionProfile::new(),
+                )]
+                .into_iter()
+                .collect(),
+                management: alien_core::permissions::ManagementPermissions::Auto,
+            })
+            .build();
+        // Runtime monitoring makes a Worker on Kubernetes read its secrets from the vault.
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .monitoring(alien_core::OtlpConfig {
+                logs_endpoint: "https://example.com/v1/logs".to_string(),
+                logs_auth_header: "authorization=Bearer test".to_string(),
+                metrics_endpoint: None,
+                metrics_auth_header: None,
+                resource_attributes: Default::default(),
+            })
+            .build();
+        let current = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: alien_core::DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let decide = |base| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(super::step_needs_base_cloud(&current, &stack, &config, base))
+        };
+        assert!(
+            !super::deployment_needs_base_cloud(
+                &current,
+                &stack,
+                &config.stack_settings,
+                Some(Platform::Aws)
+            ),
+            "the stack as written has no vault"
+        );
+        assert!(decide(Some(Platform::Aws)), "the prepared stack has one");
+        assert!(!decide(None), "no base cloud: nothing to build");
+    }
+
+    /// Once the Operator has built the base cloud client it keeps using it: a later
+    /// failure to resolve the cloud identity does not replace it with plain Kubernetes.
+    #[test]
+    fn a_working_base_cloud_client_is_never_dropped() {
+        let directory = tempfile::tempdir().unwrap();
+        let token = directory.path().join("token");
+        std::fs::write(&token, "token").unwrap();
+        let token = token.to_str().unwrap().to_string();
+        let working = [
+            ("AWS_ACCESS_KEY_ID", Some("AKIAEXAMPLE".to_string())),
+            ("AWS_SECRET_ACCESS_KEY", Some("secret".to_string())),
+            ("AWS_REGION", Some("us-east-1".to_string())),
+            ("AWS_ACCOUNT_ID", Some("123456789012".to_string())),
+        ];
+        let broken = configured_aws("http://127.0.0.1:9", &token);
+        temp_env::with_vars(working, || {
+            reset_cache();
+            let config = try_resolve(Platform::Aws).unwrap();
+            assert!(
+                matches!(config, ClientConfig::KubernetesCloud { .. }),
+                "{config:?}"
+            );
+            temp_env::with_vars(broken, || {
+                *BASE_CLOUD_FAILURE.lock().unwrap() = None;
+                let config = try_resolve(Platform::Aws).unwrap();
+                assert!(
+                    matches!(config, ClientConfig::KubernetesCloud { .. }),
+                    "{config:?}"
+                );
+            });
+        });
+        reset_cache();
+    }
+
+    /// A Kubernetes deployment whose base cloud has no project, region or credentials
+    /// still gets a Kubernetes client: nothing in a plain Kubernetes stack needs the cloud.
+    #[test]
+    fn a_base_cloud_without_credentials_runs_as_plain_kubernetes() {
+        // `with_vars` holds a process-wide lock and restores the variables, so this cannot
+        // race another test that sets environment variables.
+        temp_env::with_vars(
+            [
+                ("GCP_PROJECT_ID", None),
+                ("GOOGLE_CLOUD_PROJECT", None),
+                ("GOOGLE_APPLICATION_CREDENTIALS", None),
+                ("GCP_SERVICE_ACCOUNT_KEY", None),
+                ("GOOGLE_SERVICE_ACCOUNT_KEY", None),
+                // Don't wait for a metadata server that is not there.
+                ("GCE_METADATA_HOST", Some("127.0.0.1:9")),
+            ],
+            || {
+                reset_cache();
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let config = runtime
+                    .block_on(resolve_client_config(
+                        Platform::Kubernetes,
+                        Some(Platform::Gcp),
+                        false,
+                        "/tmp/unused",
+                        Some("alien".to_string()),
+                        None,
+                    ))
+                    .expect("a missing base cloud must not stop the deployment");
+                assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+            },
+        );
     }
 }
 
@@ -2348,6 +2984,125 @@ mod tests {
             .iter()
             .any(|v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN
                 || v.name == alien_core::ENV_ALIEN_COMMANDS_URL));
+    }
+
+    /// An error raised before the step loop (client setup, enrichment) leaves no step to
+    /// fail. It is recorded in the deployment state, so the manager and the API show it
+    /// instead of a deployment that waits with nothing to explain why.
+    #[tokio::test]
+    async fn an_error_before_the_step_loop_is_recorded_in_the_deployment_state() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        let mut current = state.db.get_deployment_state().await.unwrap().unwrap();
+        current.status = DeploymentStatus::Pending;
+        current.error = None;
+        current.target_release = current.current_release.clone();
+        assert!(
+            current.target_release.is_some(),
+            "the fixture has a release"
+        );
+        state.db.set_deployment_state(&current).await.unwrap();
+
+        let error = AlienError::new(ErrorData::ConfigurationError {
+            message: "No region for the base cloud".to_string(),
+        });
+        record_pass_error(&state, &error).await.unwrap();
+
+        let recorded = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(
+            recorded.status,
+            DeploymentStatus::Pending,
+            "it keeps retrying"
+        );
+        let message = recorded
+            .error
+            .clone()
+            .expect("the error is visible")
+            .message;
+        assert!(
+            message.contains("No region for the base cloud"),
+            "{message}"
+        );
+
+        // A Running deployment keeps its health reporting; the error is not recorded there.
+        let mut running = recorded;
+        running.status = DeploymentStatus::Running;
+        running.error = None;
+        state.db.set_deployment_state(&running).await.unwrap();
+        record_pass_error(&state, &error).await.unwrap();
+        let unchanged = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(unchanged.error.is_none());
+    }
+
+    /// A target accepted between reading the state and saving the error is kept: the error
+    /// write is dropped instead of restoring the older target.
+    #[tokio::test]
+    async fn an_error_never_overwrites_a_target_accepted_meanwhile() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        let mut observed = state.db.get_deployment_state().await.unwrap().unwrap();
+        observed.status = DeploymentStatus::Pending;
+        observed.error = None;
+        observed.target_release = observed.current_release.clone();
+        state.db.set_deployment_state(&observed).await.unwrap();
+
+        // Sync accepts a newer target after the pass read `observed`.
+        let mut newer = observed.clone();
+        newer.status = DeploymentStatus::UpdatePending;
+        state.db.set_deployment_state(&newer).await.unwrap();
+
+        let error = AlienError::new(ErrorData::ConfigurationError {
+            message: "No region for the base cloud".to_string(),
+        });
+        record_pass_error_from(&state, observed, &error)
+            .await
+            .unwrap();
+        let after = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert_eq!(after.status, DeploymentStatus::UpdatePending);
+        assert!(after.error.is_none());
+    }
+
+    /// The base cloud error an earlier pass recorded is removed once a pass runs again; any
+    /// other error, and the error of a failed deployment, stay.
+    #[tokio::test]
+    async fn a_base_cloud_error_is_cleared_once_the_deployment_moves_on() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        let mut current = state.db.get_deployment_state().await.unwrap().unwrap();
+        current.status = DeploymentStatus::Pending;
+        current.target_release = current.current_release.clone();
+        state.db.set_deployment_state(&current).await.unwrap();
+
+        let error = AlienError::new(ErrorData::BaseCloudUnreachable {
+            message: "the cloud identity could not be used".to_string(),
+        });
+        record_pass_error(&state, &error).await.unwrap();
+        let recorded = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(recorded.error.is_some());
+
+        clear_base_cloud_pass_error(&state).await.unwrap();
+        let cleared = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(cleared.error.is_none(), "{:?}", cleared.error);
+
+        // An unrelated error stays.
+        let other = AlienError::new(ErrorData::ConfigurationError {
+            message: "something else".to_string(),
+        });
+        record_pass_error(&state, &other).await.unwrap();
+        clear_base_cloud_pass_error(&state).await.unwrap();
+        let kept = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(kept.error.is_some());
+
+        // A failed deployment keeps the error that belongs to its failure.
+        let mut failed = kept;
+        failed.status = DeploymentStatus::InitialSetupFailed;
+        failed.error = Some(
+            AlienError::new(ErrorData::BaseCloudUnreachable {
+                message: "x".to_string(),
+            })
+            .into_generic(),
+        );
+        state.db.set_deployment_state(&failed).await.unwrap();
+        clear_base_cloud_pass_error(&state).await.unwrap();
+        let still = state.db.get_deployment_state().await.unwrap().unwrap();
+        assert!(still.error.is_some());
     }
 
     /// An installed Test deployment whose `worker` fails its first health refresh.

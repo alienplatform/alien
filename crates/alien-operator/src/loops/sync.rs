@@ -209,6 +209,12 @@ pub(super) async fn refresh_running_secrets(
     let client_config = super::deployment::resolve_client_config(
         current.platform,
         base_platform,
+        super::deployment::deployment_needs_base_cloud(
+            current,
+            prepared,
+            &Default::default(),
+            base_platform,
+        ),
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -1110,9 +1116,33 @@ async fn observe_running_deployment(
     state: &OperatorState,
     deployment_id: &str,
 ) -> crate::error::Result<Vec<ObservedInventoryBatch>> {
+    // Observation needs the cloud only when the installed deployment does.
+    let needs_base_cloud = match state.db.get_deployment_state().await? {
+        Some(current) => {
+            let settings = state
+                .db
+                .get_deployment_config()
+                .await?
+                .map(|config| config.stack_settings)
+                .unwrap_or_default();
+            let stack = current
+                .runtime_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.prepared_stack.clone())
+                .unwrap_or_else(|| alien_core::Stack::new("unknown".to_string()).build());
+            super::deployment::deployment_needs_base_cloud(
+                &current,
+                &stack,
+                &settings,
+                state.config.base_platform,
+            )
+        }
+        None => false,
+    };
     let client_config = super::deployment::resolve_client_config(
         state.config.platform,
         state.config.base_platform,
+        needs_base_cloud,
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),

@@ -613,6 +613,18 @@ pub enum ErrorData {
         found_platform: Platform,
     },
 
+    /// A Kubernetes deployment needs its base cloud, but the Operator has no client for it.
+    #[error(
+        code = "BASE_CLOUD_UNAVAILABLE",
+        message = "This deployment needs its {required_platform:?} base cloud, but the Operator could not resolve the cloud region or credentials. In the Helm values set basePlatform and its region (basePlatformConfig.aws.region, basePlatformConfig.gcp.projectId and region, or basePlatformConfig.azure subscriptionId, tenantId and location), and give the Operator's service account a cloud identity: an IRSA role or EKS Pod Identity association on AWS, Workload Identity on GCP, Azure Workload Identity on Azure. Then restart the Operator pod: it reads its cloud identity and region only when it starts, so it does not notice the change by itself. Or install this deployment with Terraform instead",
+        retryable = "true",
+        internal = "false"
+    )]
+    BaseCloudUnavailable {
+        /// The base cloud the deployment needs
+        required_platform: Platform,
+    },
+
     /// Resource controller configuration error.
     #[error(
         code = "RESOURCE_CONTROLLER_CONFIG_ERROR",

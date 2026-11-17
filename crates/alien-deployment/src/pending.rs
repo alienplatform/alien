@@ -141,21 +141,21 @@ async fn prepare_setup_update(
     Ok(metadata)
 }
 
-/// Handle Pending → InitialSetup transition
-///
-/// This step:
-/// 1. Initializes stack state with platform-specific settings
-/// 2. Collects environment information from the cloud platform
-/// 3. Runs preflight checks (mutations are applied in subsequent phases)
-pub async fn handle_pending(
-    current: DeploymentState,
-    target_stack: Stack,
-    mut config: DeploymentConfig,
-    client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
-) -> Result<DeploymentStepResult> {
-    info!("Handling Pending status");
+/// The pending step's stack preparation: gate answers, declines, the preflight mutations and
+/// checks. Everything the step decides from the stack (does it need the base cloud) is decided
+/// on this result, so callers that must choose their client first can run it ahead of the step.
+pub struct PreparedTarget {
+    pub stack_state: StackState,
+    pub mutated_stack: Stack,
+    pub persisted_gate_answers: alien_core::GateAnswers,
+}
 
+pub async fn prepare_target_stack(
+    current: &DeploymentState,
+    target_stack: Stack,
+    config: &mut DeploymentConfig,
+    client_config: &alien_core::ClientConfig,
+) -> Result<PreparedTarget> {
     // Azure automatic management must hand off to an installed identity;
     // bootstrap credentials are never a runtime fallback for this mode.
     if current.platform == Platform::Azure
@@ -184,13 +184,6 @@ pub async fn handle_pending(
         current.platform
     );
 
-    // Step 2: Collect environment information. Kubernetes deployments may run
-    // on base cloud infrastructure; collect the base cloud environment while
-    // keeping the deployment stack platform as Kubernetes.
-    let environment_info =
-        collect_deployment_environment_info(current.platform, config.base_platform, &client_config)
-            .await?;
-
     // Step 2.5: Record the frozen-gate answers, then drop gated setup
     // resources the deployer declined, BEFORE the mutations: a declined
     // frozen resource never existed, and leaving it in would derive grants
@@ -217,7 +210,7 @@ pub async fn handle_pending(
             target_stack.clone(),
             &stack_state,
             &config,
-            &client_config,
+            client_config,
             None, // No old stack for initial deployment
             None,
             Some(alien_core::InitialSetupAuthority::DirectSetup),
@@ -237,6 +230,52 @@ pub async fn handle_pending(
         &frozen_gating,
         current.platform,
     )?;
+
+    Ok(PreparedTarget {
+        stack_state,
+        mutated_stack,
+        persisted_gate_answers,
+    })
+}
+
+/// Handle Pending → InitialSetup transition
+///
+/// This step:
+/// 1. Initializes stack state with platform-specific settings
+/// 2. Collects environment information from the cloud platform
+/// 3. Runs preflight checks (mutations are applied in subsequent phases)
+pub async fn handle_pending(
+    current: DeploymentState,
+    target_stack: Stack,
+    mut config: DeploymentConfig,
+    client_config: alien_core::ClientConfig,
+    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+) -> Result<DeploymentStepResult> {
+    info!("Handling Pending status");
+
+    let PreparedTarget {
+        stack_state,
+        mutated_stack,
+        persisted_gate_answers,
+    } = prepare_target_stack(&current, target_stack, &mut config, &client_config).await?;
+
+    // Step 4a: Collect environment information on the PREPARED stack, so the answer to
+    // "does this stack need the base cloud" sees the mutations' resources and not the
+    // declined ones. Kubernetes deployments may run
+    // on base cloud infrastructure; collect the base cloud environment while
+    // keeping the deployment stack platform as Kubernetes.
+    let environment_info = collect_deployment_environment_info(
+        current.platform,
+        config.base_platform,
+        &client_config,
+        alien_infra::stack_needs_base_cloud(
+            &mutated_stack,
+            current.platform,
+            config.base_platform,
+            &config.stack_settings,
+        ),
+    )
+    .await?;
 
     // Step 4: Store prepared stack and inject environment variables
     let mut runtime_metadata = alien_core::RuntimeMetadata {
@@ -718,25 +757,53 @@ async fn collect_deployment_environment_info(
     platform: Platform,
     base_platform: Option<Platform>,
     client_config: &ClientConfig,
+    stack_needs_base_cloud: bool,
 ) -> Result<Option<EnvironmentInfo>> {
     if !should_collect_environment_info(platform, base_platform) {
         return Ok(None);
     }
 
-    let (environment_platform, environment_client_config) =
-        environment_collection_context(platform, base_platform, client_config)?;
-    let environment_info =
+    // The Operator runs a Kubernetes stack as plain Kubernetes when it could not build the base
+    // cloud's client (`ClientConfig::Kubernetes`). That is fine while the stack has no resource on
+    // the base cloud: there is no cloud environment to collect. When the stack needs the cloud,
+    // say what is missing instead of a bare "client config missing".
+    if let (Some(base), ClientConfig::Kubernetes(_)) = (base_platform, client_config) {
+        if !stack_needs_base_cloud {
+            info!(
+                base_platform = ?base,
+                "Base cloud client unavailable and the stack has no resource on it; \
+                 skipping base cloud environment collection"
+            );
+            return Ok(None);
+        }
+        return Err(AlienError::new(
+            alien_infra::ErrorData::BaseCloudUnavailable {
+                required_platform: base,
+            },
+        ))
+        .context(ErrorData::EnvironmentInfoCollectionFailed {
+            platform: format!("{:?}", base),
+            reason: "The base cloud client is unavailable".to_string(),
+        });
+    }
+
+    let collected = async {
+        let (environment_platform, environment_client_config) =
+            environment_collection_context(platform, base_platform, client_config)?;
         crate::helpers::collect_environment_info(environment_platform, &environment_client_config)
             .await
             .context(ErrorData::EnvironmentInfoCollectionFailed {
                 platform: format!("{:?}", environment_platform),
                 reason: "Failed to collect cloud environment details".to_string(),
-            })?;
+            })
+    }
+    .await;
+    let environment_info = match collected {
+        Ok(info) => info,
+        Err(error) => return Err(error),
+    };
 
-    info!(
-        "Collected environment info for platform {:?}",
-        environment_platform
-    );
+    info!("Collected environment info for the base platform");
 
     Ok(Some(environment_info))
 }
@@ -2065,6 +2132,7 @@ mod tests {
             Platform::Kubernetes,
             Some(Platform::Test),
             &client_config,
+            false,
         )
         .await
         .expect("cloud-backed Kubernetes should collect its base environment");
@@ -2073,10 +2141,14 @@ mod tests {
 
     #[tokio::test]
     async fn machines_skips_environment_collection() {
-        let environment_info =
-            collect_deployment_environment_info(Platform::Machines, None, &ClientConfig::Test)
-                .await
-                .expect("machines should not require a cloud client config");
+        let environment_info = collect_deployment_environment_info(
+            Platform::Machines,
+            None,
+            &ClientConfig::Test,
+            false,
+        )
+        .await
+        .expect("machines should not require a cloud client config");
 
         assert!(environment_info.is_none());
     }
@@ -2088,10 +2160,64 @@ mod tests {
             additional_headers: None,
         }));
         let environment_info =
-            collect_deployment_environment_info(Platform::Kubernetes, None, &client_config)
+            collect_deployment_environment_info(Platform::Kubernetes, None, &client_config, false)
                 .await
                 .expect("external Kubernetes has no backing cloud environment");
 
         assert!(environment_info.is_none());
+    }
+
+    fn plain_kubernetes() -> ClientConfig {
+        ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+            namespace: Some("alien-test".to_string()),
+            additional_headers: None,
+        }))
+    }
+
+    #[tokio::test]
+    async fn a_base_cloud_without_a_client_is_skipped_when_the_stack_has_no_cloud_resource() {
+        let info = collect_deployment_environment_info(
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &plain_kubernetes(),
+            false,
+        )
+        .await
+        .expect("a containers-only stack runs as plain Kubernetes");
+        assert!(info.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_base_cloud_without_a_client_fails_with_what_to_set_when_the_stack_needs_it() {
+        let error = collect_deployment_environment_info(
+            Platform::Kubernetes,
+            Some(Platform::Aws),
+            &plain_kubernetes(),
+            true,
+        )
+        .await
+        .expect_err("a stack with cloud resources needs the cloud");
+        let json = serde_json::to_string(&error).unwrap();
+        assert!(json.contains("BASE_CLOUD_UNAVAILABLE"), "{json}");
+        assert!(json.contains("basePlatformConfig.aws.region"), "{json}");
+    }
+
+    /// A failed environment collection with a cloud client is an error whatever the stack
+    /// needs: it is never swallowed, so one failed call cannot leave the environment unrecorded
+    /// for good. Only the plain Kubernetes client skips it (a stack with nothing on the cloud).
+    #[tokio::test]
+    async fn a_failed_collection_with_a_cloud_client_is_never_swallowed() {
+        // The client config carries no config for the base cloud: collection fails.
+        let broken = ClientConfig::Test;
+        for needs in [false, true] {
+            collect_deployment_environment_info(
+                Platform::Kubernetes,
+                Some(Platform::Aws),
+                &broken,
+                needs,
+            )
+            .await
+            .expect_err("a failed collection is an error");
+        }
     }
 }

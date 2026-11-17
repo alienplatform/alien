@@ -41,6 +41,15 @@ pub enum ErrorData {
     )]
     ReleaseRefused { reason: String },
 
+    /// The deployment needs its base cloud but the Operator could not build its client.
+    #[error(
+        code = "BASE_CLOUD_UNAVAILABLE",
+        message = "{message}",
+        retryable = "true",
+        internal = "false"
+    )]
+    BaseCloudUnreachable { message: String },
+
     #[error(
         code = "CONFIGURATION_ERROR",
         message = "{message}",
