@@ -2101,3 +2101,45 @@ fn every_sandbox_egress_mode_renders_the_network_policy_probe() {
         );
     }
 }
+
+/// The Operator can read the cluster DNS Service and nothing else in `kube-system`: one named
+/// Service, `get` only, bound to the Operator's account, named per install.
+#[test]
+fn the_operator_can_read_only_the_cluster_dns_service() {
+    let chart = render(
+        &sandbox_with_linked_app_as(Some(0)),
+        StackSettings::default(),
+    );
+    let values = "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n";
+    let rendered = super::test_utils::helm_template_in_namespace(
+        &chart.files,
+        Some(values),
+        "acme",
+        "customer-aa-one",
+    );
+    rendered.assert_ok("cluster DNS RBAC render");
+    let documents = rendered_documents(&rendered);
+    let find = |kind: &str| {
+        documents
+            .iter()
+            .find(|document| {
+                document["kind"] == kind
+                    && document["metadata"]["namespace"] == "kube-system"
+                    && document["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.contains("kube-dns"))
+            })
+            .unwrap_or_else(|| panic!("the cluster DNS {kind} in kube-system"))
+            .clone()
+    };
+    let role = find("Role");
+    let binding = find("RoleBinding");
+    let rules: serde_yaml::Value = serde_yaml::from_str(
+        "- apiGroups: [\"\"]\n  resources: [services]\n  resourceNames: [kube-dns]\n  verbs: [get]\n",
+    )
+    .unwrap();
+    assert_eq!(role["rules"], rules);
+    assert_eq!(binding["roleRef"]["name"], role["metadata"]["name"]);
+    assert_eq!(binding["subjects"][0]["namespace"], "customer-aa-one");
+    assert!(role["metadata"]["name"].as_str().unwrap().len() <= 63);
+}

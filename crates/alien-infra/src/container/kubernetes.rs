@@ -4830,6 +4830,47 @@ mod tests {
         assert_eq!(dns.hits_async().await, 1);
     }
 
+    /// An install made before the Operator could read the cluster DNS Service is refused the
+    /// read. Its gateway keeps the cluster's resolver rather than failing to deploy.
+    #[tokio::test]
+    async fn a_gateway_keeps_the_cluster_resolver_when_the_dns_service_is_not_readable() {
+        unsafe {
+            std::env::set_var(
+                crate::sandbox::kubernetes_egress::CLUSTER_DOMAIN_ENV,
+                "corp.example",
+            )
+        };
+        use httpmock::Method::GET;
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/api/v1/namespaces/kube-system/services/kube-dns");
+                then.status(403).json_body(serde_json::json!({
+                    "kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403
+                }));
+            })
+            .await;
+        let gateway = gateway_container(
+            "example.invalid/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        );
+        let harness = KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
+        let state = secrets_vault_state();
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        point_at(&mut ctx, &server);
+        let pod = manifest_test_controller()
+            .build_deployment(&gateway, "gateway", "test-ns", "gateway-sa", None, None, &ctx)
+            .await
+            .expect("a refused read leaves the default resolver")
+            .spec
+            .expect("deployment spec")
+            .template
+            .spec
+            .expect("pod spec");
+        assert!(pod.dns_policy.is_none() && pod.dns_config.is_none());
+    }
+
     /// A gateway on an image that reads mounted files gets the vault's configuration Secret and
     /// replica-secret Secret mounted by the kubelet, and the controller reads neither: it only
     /// creates the replica secret before the pods need it. An earlier image still gets the

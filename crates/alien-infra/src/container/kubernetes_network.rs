@@ -295,10 +295,15 @@ impl KubernetesContainerController {
             Err(error)
                 if matches!(
                     error.error,
-                    Some(ClientError::RemoteResourceNotFound { .. })
+                    Some(
+                        ClientError::RemoteResourceNotFound { .. }
+                            | ClientError::RemoteAccessDenied { .. }
+                    )
                 ) =>
             {
-                return Ok(())
+                // An install made before the Operator could read this Service keeps the
+                // cluster resolver until its chart is upgraded.
+                return Ok(());
             }
             Err(error) => {
                 return Err(error.context(ErrorData::CloudPlatformError {
