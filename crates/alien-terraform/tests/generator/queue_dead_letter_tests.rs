@@ -112,3 +112,34 @@ fn azure_queues_without_a_dead_letter_keep_todays_settings() {
     assert!(!text.contains("forward_dead_lettered_messages_to"));
     assert_eq!(text.matches("max_delivery_count = 10").count(), 2);
 }
+
+#[test]
+fn gcp_subscription_gets_a_dead_letter_policy_and_minimal_service_agent_grants() {
+    let module = render(
+        &stack(true, ResourceLifecycle::Frozen),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    let text = normalized(&module);
+    assert!(text.contains("dead_letter_policy"), "{text}");
+    assert!(text.contains("max_delivery_attempts = 7"), "{text}");
+    // Publisher on the target topic and subscriber on the source subscription, nothing wider.
+    assert_eq!(text.matches("roles/pubsub.publisher").count(), 1, "{text}");
+    assert_eq!(text.matches("roles/pubsub.subscriber").count(), 1, "{text}");
+    assert!(!text.contains("google_project_iam"), "{text}");
+    assert!(text.contains("gcp-sa-pubsub.iam.gserviceaccount.com"), "{text}");
+    assert_terraform_valid(&module, "GCP queue with a dead-letter target");
+}
+
+#[test]
+fn gcp_queues_without_a_dead_letter_render_no_policy_or_service_agent_grant() {
+    let module = render(
+        &stack(false, ResourceLifecycle::Frozen),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    let text = normalized(&module);
+    assert!(!text.contains("dead_letter_policy"));
+    assert!(!text.contains("gcp-sa-pubsub"));
+    assert!(!text.contains("roles/pubsub.subscriber"));
+}
