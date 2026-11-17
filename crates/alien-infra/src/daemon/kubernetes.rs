@@ -1306,9 +1306,10 @@ impl KubernetesDaemonController {
             volumes: (!security.volumes.is_empty()).then_some(security.volumes),
             containers: vec![container],
             restart_policy: Some("Always".to_string()),
-            // Kubernetes would otherwise add `<SERVICE>_PORT`-style variables for every Service
-            // in the namespace. They can shadow the workload's own variables (a `PROTOCOL_PORT`
-            // setting becomes `tcp://10.0.0.1:8000`); Alien's bindings carry each address.
+            // Kubernetes would otherwise inject `<SERVICE>_SERVICE_HOST`, `<SERVICE>_PORT_<n>_TCP*`
+            // and similar variables for every Service in the namespace. A workload sets its own
+            // variables explicitly, which Kubernetes does not overwrite; Alien's bindings carry each
+            // address, so the extra variables only add names a workload can collide with.
             enable_service_links: Some(false),
             image_pull_secrets,
             // Honor the configured stop grace period during pod shutdown
