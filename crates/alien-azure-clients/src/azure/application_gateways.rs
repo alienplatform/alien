@@ -340,7 +340,7 @@ mod tests {
     #[tokio::test]
     async fn a_changed_gateway_is_a_conflict_error() {
         let server = MockServer::start_async().await;
-        server
+        let refused = server
             .mock_async(|when, then| {
                 when.method(PUT).path(gateway_path());
                 then.status(412).json_body(json!({"error": {
@@ -367,5 +367,7 @@ mod tests {
             ),
             "got {error:?}"
         );
+        // The same etag would be refused again, so the client must not resend it.
+        assert_eq!(refused.hits_async().await, 1);
     }
 }
