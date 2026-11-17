@@ -956,7 +956,7 @@ async fn signing_from_first_release_to_recovery() {
             project: PROJECT.to_string(),
             install: None,
             sequence: restored.current().version + 1,
-            not_after: Some(chrono::Utc::now() + chrono::Duration::days(30)),
+            not_after: None,
             signer_list_version: restored.current().version,
             body,
         }
