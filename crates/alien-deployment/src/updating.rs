@@ -473,7 +473,16 @@ pub async fn handle_update_pending(
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let pending_prepared_release_id = target_release_id.map(str::to_string);
+    // What this release no longer asks for but the installed identities still hold. The update
+    // runs; the next setup update removes it, so the platform can recommend one.
+    let setup_cleanup_recommended = old_stack_for_comparison
+        .as_deref()
+        .map(|installed| {
+            alien_preflights::compatibility::narrowing::leftover_grants(installed, &mutated_stack)
+        })
+        .unwrap_or_default();
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
+    runtime_metadata.setup_cleanup_recommended = setup_cleanup_recommended;
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
     runtime_metadata.pending_prepared_release_id = pending_prepared_release_id;
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
@@ -2214,10 +2223,8 @@ mod aws_handoff_tests {
                     resource.config = Resource::new(
                         ServiceAccount::from_permission_profile(
                             "execution-sa".into(),
-                            &PermissionProfile::new().resource(
-                                "objects",
-                                ["storage/data-read", "storage/data-write"],
-                            ),
+                            &PermissionProfile::new()
+                                .resource("objects", ["storage/data-read", "storage/data-write"]),
                             |id| alien_permissions::get_permission_set(id).cloned(),
                         )
                         .unwrap(),

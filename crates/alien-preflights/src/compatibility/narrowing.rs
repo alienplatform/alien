@@ -87,3 +87,27 @@ fn profile_has_resource_grants(stack: &Stack, account_id: &str) -> bool {
         .and_then(|profile| stack.permissions.profiles.get(profile))
         .is_some_and(|profile| profile.0.keys().any(|scope| scope != "*"))
 }
+
+/// The permission profiles and frozen service accounts of `new` that grant less than `old`
+/// does, named for a "setup update recommended" notice. The installed identities keep what
+/// the release no longer asks for until the next setup update removes it.
+pub fn leftover_grants(old: &Stack, new: &Stack) -> Vec<String> {
+    let mut leftovers = Vec::new();
+    for (name, new_profile) in &new.permissions.profiles {
+        if let Some(old_profile) = old.permissions.profiles.get(name) {
+            if old_profile != new_profile && profile_narrowed(old_profile, new_profile) {
+                leftovers.push(format!("permission profile '{name}'"));
+            }
+        }
+    }
+    for (id, new_entry) in new.resources() {
+        if let Some(old_entry) = old.resources.get(id) {
+            if old_entry.config != new_entry.config
+                && service_account_narrowed(new, &old_entry.config, &new_entry.config)
+            {
+                leftovers.push(format!("service account '{id}'"));
+            }
+        }
+    }
+    leftovers
+}

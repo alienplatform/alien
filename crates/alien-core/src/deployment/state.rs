@@ -237,6 +237,13 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_setup_required: Option<CloudSetupRequired>,
 
+    /// Setup-owned grants the installed identities still hold although the last prepared
+    /// release no longer asks for them, one entry per permission profile or service account.
+    /// The release runs without setup; the next setup update removes them. Replaced on every
+    /// preparation, so it is empty once nothing is left over.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_cleanup_recommended: Vec<String>,
+
     /// The Helm release the Operator reported it runs as.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_helm_release: Option<InstalledHelmRelease>,

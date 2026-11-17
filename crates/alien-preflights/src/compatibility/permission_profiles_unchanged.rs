@@ -1206,7 +1206,10 @@ mod tests {
             };
         }
         let mut stack = Stack::new("s".to_string()).build();
-        stack.permissions.profiles.insert("api".to_string(), profile);
+        stack
+            .permissions
+            .profiles
+            .insert("api".to_string(), profile);
         stack
     }
 

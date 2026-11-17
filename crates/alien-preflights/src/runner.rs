@@ -2091,7 +2091,10 @@ mod setup_update_authorization_tests {
             let mut stack = Stack::new("stack".to_string())
                 .add(account, alien_core::ResourceLifecycle::Frozen)
                 .build();
-            stack.permissions.profiles.insert("api".to_string(), profile);
+            stack
+                .permissions
+                .profiles
+                .insert("api".to_string(), profile);
             stack
         };
         let installed = stack(&[

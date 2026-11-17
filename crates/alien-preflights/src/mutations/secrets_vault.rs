@@ -3036,9 +3036,48 @@ mod tests {
                 .await
                 .unwrap();
             eprintln!("RESULT {platform:?} frozen errors: {:?}", fz.errors);
-            eprintln!("RESULT {platform:?} api-sa installed: {:?}", installed.resources["api-sa"].config.downcast_ref::<alien_core::ServiceAccount>().map(|a| (a.stack_permission_sets.iter().map(|s| s.id.clone()).collect::<Vec<_>>(), a.resource_permission_sets.iter().map(|(k,v)| (k.clone(), v.iter().map(|s| s.id.clone()).collect::<Vec<_>>())).collect::<Vec<_>>())));
-            eprintln!("RESULT {platform:?} api-sa updated: {:?}", updated.resources["api-sa"].config.downcast_ref::<alien_core::ServiceAccount>().map(|a| (a.stack_permission_sets.iter().map(|s| s.id.clone()).collect::<Vec<_>>(), a.resource_permission_sets.iter().map(|(k,v)| (k.clone(), v.iter().map(|s| s.id.clone()).collect::<Vec<_>>())).collect::<Vec<_>>())));
-            eprintln!("RESULT {platform:?} vault in updated: {}", updated.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID));
+            eprintln!(
+                "RESULT {platform:?} api-sa installed: {:?}",
+                installed.resources["api-sa"]
+                    .config
+                    .downcast_ref::<alien_core::ServiceAccount>()
+                    .map(|a| (
+                        a.stack_permission_sets
+                            .iter()
+                            .map(|s| s.id.clone())
+                            .collect::<Vec<_>>(),
+                        a.resource_permission_sets
+                            .iter()
+                            .map(|(k, v)| (
+                                k.clone(),
+                                v.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
+                            ))
+                            .collect::<Vec<_>>()
+                    ))
+            );
+            eprintln!(
+                "RESULT {platform:?} api-sa updated: {:?}",
+                updated.resources["api-sa"]
+                    .config
+                    .downcast_ref::<alien_core::ServiceAccount>()
+                    .map(|a| (
+                        a.stack_permission_sets
+                            .iter()
+                            .map(|s| s.id.clone())
+                            .collect::<Vec<_>>(),
+                        a.resource_permission_sets
+                            .iter()
+                            .map(|(k, v)| (
+                                k.clone(),
+                                v.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
+                            ))
+                            .collect::<Vec<_>>()
+                    ))
+            );
+            eprintln!(
+                "RESULT {platform:?} vault in updated: {}",
+                updated.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID)
+            );
             for result in [
                 PermissionProfilesUnchangedCheck
                     .check_with_config(&installed, &updated, &config, platform)
