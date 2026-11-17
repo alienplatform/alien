@@ -12,7 +12,12 @@ use crate::{ErrorData, Result};
 use alien_core::{ComputeCluster, ResourceStatus};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
+use std::time::Duration;
 use tracing::warn;
+
+/// How long one membership tick may run. The tick keeps the lease while it runs, and a retry or
+/// a delete is refused while the lease is held, so a stuck cloud call must not hold it for long.
+pub const MEMBERSHIP_TICK_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Whether a deployment in this state gets a membership tick.
 ///
@@ -54,12 +59,37 @@ pub async fn run_membership_tick(
     transport: &dyn DeploymentLoopTransport,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<()> {
-    let result = runner::run_with_lease_renewal(
+    run_membership_tick_within(
+        MEMBERSHIP_TICK_TIMEOUT,
         deployment_id,
         transport,
         sync_membership(state, config, client_config, service_provider),
     )
-    .await;
+    .await
+}
+
+/// Runs `sync` under the lease with a time limit; a tick that does not finish in time is
+/// dropped and reported like any other failure.
+async fn run_membership_tick_within(
+    limit: Duration,
+    deployment_id: &str,
+    transport: &dyn DeploymentLoopTransport,
+    sync: impl std::future::Future<Output = Result<()>>,
+) -> Result<()> {
+    let result = match tokio::time::timeout(
+        limit,
+        runner::run_with_lease_renewal(deployment_id, transport, sync),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(AlienError::new(ErrorData::StackExecutionFailed {
+            message: format!(
+                "Updating the admitted machines did not finish within {} seconds",
+                limit.as_secs()
+            ),
+        })),
+    };
     if let Err(error) = &result {
         warn!(%deployment_id, %error, "Could not update the machines the deployment's cluster admits; keeping the list as it is");
     }
@@ -107,7 +137,10 @@ mod tests {
     use super::*;
     use alien_core::{Platform, Resource, StackResourceState, StackState, Storage};
 
-    fn state(status: DeploymentStatus, resources: &[(&str, bool, ResourceStatus)]) -> DeploymentState {
+    fn state(
+        status: DeploymentStatus,
+        resources: &[(&str, bool, ResourceStatus)],
+    ) -> DeploymentState {
         let mut stack_state = StackState::new(Platform::Aws);
         for (id, is_cluster, resource_status) in resources {
             let config = if *is_cluster {
@@ -136,6 +169,41 @@ mod tests {
             protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
             runtime_metadata: None,
         }
+    }
+
+    /// A transport that only renews: the tick never reconciles a step.
+    struct RenewOnly;
+
+    #[async_trait::async_trait]
+    impl DeploymentLoopTransport for RenewOnly {
+        async fn reconcile_step(
+            &self,
+            _: &str,
+            _: &DeploymentState,
+            _: &crate::DeploymentConfig,
+            _: bool,
+            _: Option<u64>,
+            _: Vec<alien_core::ResourceHeartbeat>,
+            _: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<crate::transport::StepReconcileResult, AlienError> {
+            unreachable!("a membership tick never checkpoints")
+        }
+    }
+
+    /// A cloud call that never returns must not hold the lease for good: a retry or a delete is
+    /// refused while the lease is held.
+    #[tokio::test(start_paused = true)]
+    async fn a_tick_that_does_not_finish_is_dropped_and_reported() {
+        let limit = Duration::from_secs(30);
+        let started = tokio::time::Instant::now();
+        let error = run_membership_tick_within(limit, "dep_test", &RenewOnly, async {
+            std::future::pending::<()>().await;
+            Ok(())
+        })
+        .await
+        .expect_err("a stuck tick must end");
+        assert_eq!(started.elapsed(), limit);
+        assert!(error.message.contains("did not finish within 30 seconds"));
     }
 
     #[test]

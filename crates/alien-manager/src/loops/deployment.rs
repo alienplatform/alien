@@ -971,6 +971,12 @@ impl DeploymentLoop {
             target_release_id,
         );
         recorded_state.current_release = current_release.clone();
+        // A failed update that only refreshes the machines its cluster admits. Whatever goes
+        // wrong before that refresh is logged and the lease released: nothing here may replace
+        // the update's own error or write a checkpoint.
+        let membership_only = options.require_heartbeats_enabled
+            && status == DeploymentStatus::UpdateFailed
+            && alien_deployment::membership_tick_wanted(&recorded_state);
         if let Some(next_status) = alien_deployment::destroy_without_runtime(&recorded_state) {
             info!(
                 deployment_id = %deployment_id,
@@ -1036,6 +1042,15 @@ impl DeploymentLoop {
             Ok(resolved) => resolved,
             Err(e) => {
                 let e = crate::providers::credential_errors::classify_credential_error(e);
+                if membership_only {
+                    warn!(
+                        deployment_id = %deployment_id,
+                        error_code = %e.code,
+                        error = %e,
+                        "Credentials unavailable; not updating the machines the failed deployment's cluster admits"
+                    );
+                    return Ok(None);
+                }
                 let now = chrono::Utc::now();
                 let retry_remaining = credential_error_retry_remaining(&deployment, &e, now);
                 let waiting_for_driver = should_wait_for_credential_handoff(status, &deployment);
@@ -1212,6 +1227,9 @@ impl DeploymentLoop {
                     error = %error,
                     "Management identity unavailable for a setup render"
                 );
+                if membership_only {
+                    return Ok(None);
+                }
                 return self
                     .checkpoint_phase_failure(PhaseFailure {
                         deployment: &deployment,
@@ -1258,6 +1276,9 @@ impl DeploymentLoop {
                     error = %error,
                     "Held values could not be loaded for the deployment"
                 );
+                if membership_only {
+                    return Ok(None);
+                }
                 return self
                     .checkpoint_phase_failure(PhaseFailure {
                         deployment: &deployment,
@@ -1429,15 +1450,7 @@ impl DeploymentLoop {
             )
             .await;
             if state.status == DeploymentStatus::UpdateFailed {
-                if had_credential_retry {
-                    self.checkpoint_without_step(
-                        &deployment_id,
-                        session,
-                        recorded_state,
-                        execution_claim,
-                    )
-                    .await?;
-                }
+                // Nothing is checkpointed, not even a cleared credential-retry window.
                 return tick.map(|()| None).map_err(|e| e.into_generic());
             }
         }
@@ -3832,6 +3845,65 @@ mod tests {
             let saved: AlienError =
                 serde_json::from_value(record.error.expect("saved error")).unwrap();
             assert_eq!(saved.source.expect("resolver error").message, cause.message);
+        }
+
+        /// A failed update whose machine list is refreshed on the heartbeat must keep the
+        /// update's own error when something goes wrong before the refresh can start: no
+        /// credentials, no management identity. Nothing is checkpointed, not even a credential
+        /// retry window.
+        #[tokio::test]
+        async fn a_failed_update_keeps_its_error_when_the_membership_refresh_cannot_start() {
+            for platform in [Platform::Local, Platform::Azure] {
+                let fixture = Fixture::new_for_platform(
+                    DeploymentStatus::UpdateFailed,
+                    transient_error(),
+                    platform,
+                )
+                .await;
+                if platform == Platform::Azure {
+                    without_azure_management(&fixture);
+                }
+                let original = serde_json::to_value(AlienError::new(GenericError {
+                    message: "the update failed".to_string(),
+                }))
+                .unwrap();
+                fixture
+                    .db
+                    .execute(&format!(
+                        "UPDATE deployments SET error = '{}'",
+                        original.to_string().replace('\'', "''")
+                    ))
+                    .await
+                    .unwrap();
+                let before = fixture.record().await;
+                let writes = fixture.writes().await;
+                let runner = fixture.runner();
+
+                // The record the loop receives carries an open credential retry window, which a
+                // checkpoint would write back.
+                fixture
+                    .process_with(&runner, |record| {
+                        record.runtime_metadata.as_mut().unwrap().credential_retry =
+                            Some(alien_core::CredentialRetry {
+                                started_at: Utc::now(),
+                                status: DeploymentStatus::UpdateFailed,
+                            });
+                    })
+                    .await;
+
+                let after = fixture.record().await;
+                assert_eq!(after.status, "update-failed", "{platform:?}");
+                assert_eq!(after.error, Some(original), "{platform:?}");
+                assert!(
+                    after.runtime_metadata.unwrap().credential_retry.is_none(),
+                    "{platform:?}: no retry window may be written"
+                );
+                assert_eq!(after.updated_at, before.updated_at, "{platform:?}");
+                assert!(
+                    fixture.writes().await - writes <= 2,
+                    "{platform:?}: only acquire and release may write"
+                );
+            }
         }
 
         fn config_naming_slots(
