@@ -58,6 +58,9 @@ pub struct KubernetesWorkerController {
     /// Consecutive healthy checks since the resource failed a health check.
     #[serde(default)]
     pub(crate) recovery_checks: u32,
+    /// When the last healthy check counted towards recovery.
+    #[serde(default)]
+    pub(crate) last_recovery_check_unix: Option<i64>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
@@ -510,6 +513,7 @@ impl KubernetesWorkerController {
                         // Still rolling out: check again without using the retry budget.
                         self.zero_ready_observed = false;
                         self.recovery_checks = 0;
+                        self.last_recovery_check_unix = None;
                         return Ok(HandlerAction::Stay {
                             max_times: None,
                             suggested_delay: Some(Duration::from_secs(10)),
@@ -1268,7 +1272,12 @@ impl KubernetesWorkerController {
                 state: Ready,
                 suggested_delay,
             }) => {
-                if recovery_check(&mut self.recovery_checks, true) {
+                if recovery_check(
+                    &mut self.recovery_checks,
+                    &mut self.last_recovery_check_unix,
+                    true,
+                    chrono::Utc::now().timestamp(),
+                ) {
                     Ok(HandlerAction::Continue {
                         state: Ready,
                         suggested_delay,
@@ -1281,7 +1290,12 @@ impl KubernetesWorkerController {
                 }
             }
             other => {
-                recovery_check(&mut self.recovery_checks, false);
+                recovery_check(
+                    &mut self.recovery_checks,
+                    &mut self.last_recovery_check_unix,
+                    false,
+                    0,
+                );
                 other
             }
         }
@@ -1384,6 +1398,7 @@ impl KubernetesWorkerController {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            last_recovery_check_unix: None,
             _internal_stay_count: None,
         }
     }
@@ -1804,7 +1819,9 @@ mod tests {
             .expect_err("the new version never rolled out");
         assert_eq!(error.code, "RESOURCE_DRIFT");
         assert!(
-            error.message.contains("previous version is still serving"),
+            error
+                .message
+                .contains("previous version may still be serving"),
             "{}",
             error.message
         );
@@ -1868,6 +1885,7 @@ mod tests {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            last_recovery_check_unix: None,
             _internal_stay_count: None,
         };
 
@@ -1910,6 +1928,7 @@ mod tests {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            last_recovery_check_unix: None,
             _internal_stay_count: None,
         };
 

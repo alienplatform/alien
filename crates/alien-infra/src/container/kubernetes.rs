@@ -226,6 +226,9 @@ pub struct KubernetesContainerController {
     /// Consecutive healthy checks since the resource failed a health check.
     #[serde(default)]
     pub(crate) recovery_checks: u32,
+    /// When the last healthy check counted towards recovery.
+    #[serde(default)]
+    pub(crate) last_recovery_check_unix: Option<i64>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
     /// Tracks the env-Secret checksum so `needs_update` can detect secret
@@ -1074,6 +1077,7 @@ impl KubernetesContainerController {
                         // the retry budget; the bound is the rollout's own time limit.
                         self.zero_ready_observed = false;
                         self.recovery_checks = 0;
+                        self.last_recovery_check_unix = None;
                         return Ok(HandlerAction::Stay {
                             max_times: None,
                             suggested_delay: Some(Duration::from_secs(10)),
@@ -2231,7 +2235,12 @@ impl KubernetesContainerController {
                 state: Ready,
                 suggested_delay,
             }) => {
-                if recovery_check(&mut self.recovery_checks, true) {
+                if recovery_check(
+                    &mut self.recovery_checks,
+                    &mut self.last_recovery_check_unix,
+                    true,
+                    chrono::Utc::now().timestamp(),
+                ) {
                     Ok(HandlerAction::Continue {
                         state: Ready,
                         suggested_delay,
@@ -2244,7 +2253,12 @@ impl KubernetesContainerController {
                 }
             }
             other => {
-                recovery_check(&mut self.recovery_checks, false);
+                recovery_check(
+                    &mut self.recovery_checks,
+                    &mut self.last_recovery_check_unix,
+                    false,
+                    0,
+                );
                 other
             }
         }
@@ -2407,6 +2421,7 @@ mod output_tests {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            last_recovery_check_unix: None,
             _internal_stay_count: None,
         };
 
@@ -2479,6 +2494,7 @@ mod output_tests {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            last_recovery_check_unix: None,
             _internal_stay_count: None,
         };
 
@@ -2550,6 +2566,7 @@ impl KubernetesContainerController {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            last_recovery_check_unix: None,
             _internal_stay_count: None,
         }
     }
@@ -3850,7 +3867,9 @@ mod tests {
                 assert_eq!(error.code, "RESOURCE_DRIFT");
                 assert!(
                     error.message.contains("did not finish within")
-                        && error.message.contains("previous version is still serving"),
+                        && error
+                            .message
+                            .contains("previous version may still be serving"),
                     "{}",
                     error.message
                 );
@@ -3977,6 +3996,13 @@ mod tests {
             assert_eq!(controller.get_status(), ResourceStatus::RefreshFailed);
             let result = controller.step(&ctx).await;
             assert!(result.is_ok(), "{result:?}");
+            // A step right after another does not count: the executor can step quickly.
+            let again = controller.step(&ctx).await;
+            assert!(again.is_ok(), "{again:?}");
+            // Pretend the counted check was a while ago.
+            controller.last_recovery_check_unix = controller
+                .last_recovery_check_unix
+                .map(|t| t - crate::kubernetes_workload_heartbeat::RECOVERY_CHECK_MIN_GAP_SECS);
         }
         assert_eq!(controller.get_status(), ResourceStatus::Running);
     }
@@ -4349,6 +4375,7 @@ mod tests {
             zero_ready_observed: false,
             rollout_watch: None,
             recovery_checks: 0,
+            last_recovery_check_unix: None,
             _internal_stay_count: None,
         };
         let harness =

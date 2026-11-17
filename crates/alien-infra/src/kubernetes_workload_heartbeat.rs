@@ -55,6 +55,10 @@ pub(crate) fn deployment_progress_deadline_exceeded(deployment: &Deployment) -> 
                     && condition.reason.as_deref() == Some("ProgressDeadlineExceeded")
             })
         })
+        // The condition belongs to the generation Kubernetes last observed. After a new spec
+        // is applied it describes the previous rollout until the controller observes the new one.
+        && deployment.status.as_ref().and_then(|s| s.observed_generation).unwrap_or(0)
+            >= deployment.metadata.generation.unwrap_or(1)
 }
 
 /// Whether Kubernetes is still rolling out a new revision of the Deployment, judged from its
@@ -220,20 +224,38 @@ pub(crate) fn statefulset_stalled_rollout(
 
 pub(crate) fn stalled_rollout_message(secs: i64) -> String {
     format!(
-        "the rollout of the new version did not finish within {secs} s; the previous version is still serving"
+        "the rollout of the new version did not finish within {secs} s; the previous version may still be serving"
     )
 }
 
-/// Counts consecutive healthy checks of a `RefreshFailed` resource. Returns true once there
-/// are `RECOVERY_HEALTHY_CHECKS` in a row; any unhealthy check starts the count again.
-pub(crate) fn recovery_check(healthy_checks: &mut u32, healthy: bool) -> bool {
+/// Minimum seconds between two healthy checks that count towards recovery. The executor can
+/// step a resource several times in quick succession; those must not add up to 30 s of health.
+pub(crate) const RECOVERY_CHECK_MIN_GAP_SECS: i64 = 10;
+
+/// Counts consecutive healthy checks of a `RefreshFailed` resource, at least
+/// `RECOVERY_CHECK_MIN_GAP_SECS` apart. Returns true once there are `RECOVERY_HEALTHY_CHECKS` in
+/// a row; any unhealthy check starts the count again.
+pub(crate) fn recovery_check(
+    healthy_checks: &mut u32,
+    last_counted_unix: &mut Option<i64>,
+    healthy: bool,
+    now_unix: i64,
+) -> bool {
     if !healthy {
         *healthy_checks = 0;
+        *last_counted_unix = None;
         return false;
     }
+    if last_counted_unix
+        .is_some_and(|last| now_unix.saturating_sub(last) < RECOVERY_CHECK_MIN_GAP_SECS)
+    {
+        return false;
+    }
+    *last_counted_unix = Some(now_unix);
     *healthy_checks += 1;
     if *healthy_checks >= RECOVERY_HEALTHY_CHECKS {
         *healthy_checks = 0;
+        *last_counted_unix = None;
         true
     } else {
         false
@@ -675,17 +697,52 @@ mod tests {
     }
 
     #[test]
-    fn recovery_needs_consecutive_healthy_checks() {
-        let mut count = 0;
-        assert!(!recovery_check(&mut count, true));
-        assert!(!recovery_check(&mut count, true));
-        assert!(!recovery_check(&mut count, false));
-        assert_eq!(count, 0);
+    fn recovery_needs_consecutive_healthy_checks_spaced_apart() {
+        let (mut count, mut last) = (0, None);
+        let mut now = 1_000;
+        assert!(!recovery_check(&mut count, &mut last, true, now));
+        now += 10;
+        assert!(!recovery_check(&mut count, &mut last, true, now));
+        now += 10;
+        assert!(!recovery_check(&mut count, &mut last, false, now));
+        assert_eq!((count, last), (0, None));
         for _ in 0..RECOVERY_HEALTHY_CHECKS - 1 {
-            assert!(!recovery_check(&mut count, true));
+            now += 10;
+            assert!(!recovery_check(&mut count, &mut last, true, now));
         }
-        assert!(recovery_check(&mut count, true));
+        now += 10;
+        assert!(recovery_check(&mut count, &mut last, true, now));
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn recovery_checks_in_quick_succession_count_once() {
+        let (mut count, mut last) = (0, None);
+        for _ in 0..10 {
+            assert!(!recovery_check(&mut count, &mut last, true, 5_000));
+        }
+        assert_eq!(count, 1);
+        assert!(!recovery_check(&mut count, &mut last, true, 5_009));
+        assert_eq!(count, 1);
+        assert!(!recovery_check(&mut count, &mut last, true, 5_010));
+        assert_eq!(count, 2);
+        assert!(recovery_check(&mut count, &mut last, true, 5_020));
+    }
+
+    #[test]
+    fn a_stale_progress_deadline_condition_from_the_previous_generation_is_ignored() {
+        let deployment: Deployment = serde_json::from_value(serde_json::json!({
+            "metadata": {"generation": 6},
+            "spec": {"replicas": 2, "selector": {}, "template": {}},
+            "status": {"observedGeneration": 5, "replicas": 2, "updatedReplicas": 0, "readyReplicas": 0,
+                "conditions": [{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded"}]}
+        }))
+        .unwrap();
+        assert!(deployment_stalled_rollout(&deployment).is_none());
+        assert!(deployment_rollout(&deployment).is_some());
+        let mut observed = deployment.clone();
+        observed.status.as_mut().unwrap().observed_generation = Some(6);
+        assert!(deployment_stalled_rollout(&observed).is_some());
     }
 
     /// Reads Deployment objects captured from a real cluster (`kubectl get deploy -o json`).
