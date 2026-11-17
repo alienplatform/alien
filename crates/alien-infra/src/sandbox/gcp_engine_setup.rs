@@ -47,6 +47,12 @@ pub(crate) struct EngineSetupRecord {
     pub engine_grants: Vec<(String, String)>,
 }
 
+/// Text in the signer's description that only this deployment's setup writes; it is how a
+/// retry tells its own earlier signer from an account somebody else made under the same name.
+pub(crate) fn signer_marker(resource_prefix: &str, sandbox_id: &str) -> String {
+    format!("Alien setup owner: {resource_prefix}/{sandbox_id}.")
+}
+
 /// Account id of the signing identity: readable, at most 30 characters, deterministic.
 pub(crate) fn preview_signer_account_id(resource_prefix: &str, sandbox_id: &str) -> String {
     let full = format!("{resource_prefix}-{sandbox_id}-preview")
@@ -164,7 +170,7 @@ pub(crate) async fn set_up_engine_access(
             "{account_id}@{}.iam.gserviceaccount.com",
             gcp_config.project_id
         );
-        record.signer_created = Some(email.clone());
+        let marker = signer_marker(ctx.resource_prefix, &sandbox.id);
         let created = iam
             .create_service_account(
                 account_id.clone(),
@@ -175,8 +181,7 @@ pub(crate) async fn set_up_engine_access(
                             .description(format!(
                                 "Signs the short-lived credential the Agent Platform edge checks \
                                  for preview. Holds the execute verb on this deployment's engine \
-                                 and nothing else. Resource prefix: {}.",
-                                ctx.resource_prefix
+                                 and nothing else. {marker}"
                             ))
                             .build(),
                     )
@@ -184,12 +189,41 @@ pub(crate) async fn set_up_engine_access(
             )
             .await;
         match created {
-            Ok(_) => {}
+            Ok(_) => {
+                record.signer_created = Some(email.clone());
+            }
             Err(error)
                 if matches!(
                     error.error,
                     Some(alien_client_core::ErrorData::RemoteResourceConflict { .. })
-                ) => {}
+                ) =>
+            {
+                // Taken over only when it carries this deployment's marker, which proves an
+                // earlier attempt of this setup made it. Teardown deletes only what is recorded.
+                let existing = iam.get_service_account(email.clone()).await.context(
+                    ErrorData::CloudPlatformError {
+                        message: format!("Failed to read the existing service account {email}"),
+                        resource_id: Some(sandbox.id.clone()),
+                    },
+                )?;
+                if existing
+                    .description
+                    .as_deref()
+                    .is_some_and(|description| description.contains(&marker))
+                {
+                    record.signer_created = Some(email.clone());
+                } else {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "service account {email} already exists and this deployment did \
+                             not create it. Setup will not take it over, because destroying \
+                             the deployment would delete it. Delete it, or install from the \
+                             Terraform setup package, which imports it."
+                        ),
+                        resource_id: Some(sandbox.id.clone()),
+                    }));
+                }
+            }
             Err(error) => {
                 return Err(
                     ResourcePermissionsHelper::gcp_service_account_creation_error(

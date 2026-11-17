@@ -988,9 +988,9 @@ impl AzurePermissionsHelper {
         apply: bool,
     ) -> Result<()> {
         let Some(ManagementSelfAssignmentRefs {
-            resource_refs,
-            all_wildcard_refs,
-            self_refs,
+            mut resource_refs,
+            mut all_wildcard_refs,
+            mut self_refs,
         }) = management_self_assignment_refs(ctx.desired_stack, resource_id, resource_type)
         else {
             return Ok(());
@@ -1002,6 +1002,28 @@ impl AzurePermissionsHelper {
 
         let management_principal_id = match Self::get_management_uami_principal_id(ctx)? {
             Some(id) => id,
+            None if resource_type == "sandbox" && ctx.is_direct_setup_run() => {
+                // No remote management resource: the credentials running this setup run the
+                // controller afterwards, as they do for a Terraform package, which binds the
+                // applying principal to the disk-image set and nothing else. Without it the
+                // controller's first disk-image listing is refused with a 403.
+                let named = |reference: &alien_core::permissions::PermissionSetReference| {
+                    matches!(
+                        reference,
+                        alien_core::permissions::PermissionSetReference::Name(name)
+                            if name == "sandbox/images"
+                    )
+                };
+                resource_refs.retain(named);
+                all_wildcard_refs.clear();
+                self_refs.retain(named);
+                if resource_refs.is_empty() {
+                    return Ok(());
+                }
+                ctx.service_provider
+                    .get_azure_caller_principal_id(ctx.get_azure_config()?)
+                    .await?
+            }
             None => {
                 warn!(
                     resource_id = %resource_id,

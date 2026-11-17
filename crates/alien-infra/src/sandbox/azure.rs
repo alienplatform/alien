@@ -3184,6 +3184,52 @@ mod direct_setup_tests {
         })
     }
 
+    /// (assignment id, principal, role definition) of every role assignment written.
+    type Assigned = Arc<std::sync::Mutex<Vec<(String, String, String)>>>;
+
+    /// An authorization API where nothing exists yet and every write succeeds and is recorded.
+    fn recording_authorization(assigned: Assigned) -> MockAuthorizationApi {
+        use alien_azure_clients::models::authorization_role_assignments::RoleAssignment;
+        use alien_azure_clients::models::authorization_role_definitions::RoleDefinition;
+        let seen = assigned;
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_get_role_assignment_by_id()
+            .returning(|_| {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "RoleAssignment".to_string(),
+                        resource_name: "a".to_string(),
+                    },
+                ))
+            });
+        authorization
+            .expect_get_role_definition()
+            .returning(|_, id| {
+                Err(AlienError::new(
+                    alien_client_core::ErrorData::RemoteResourceNotFound {
+                        resource_type: "RoleDefinition".to_string(),
+                        resource_name: id,
+                    },
+                ))
+            });
+        authorization
+            .expect_create_or_update_role_definition()
+            .returning(|_, _, definition: &RoleDefinition| Ok(definition.clone()));
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .returning(move |id, assignment: &RoleAssignment| {
+                let properties = assignment.properties.as_ref().expect("properties");
+                seen.lock().unwrap().push((
+                    id,
+                    properties.principal_id.clone(),
+                    properties.role_definition_id.clone(),
+                ));
+                Ok(assignment.clone())
+            });
+        authorization
+    }
+
     async fn executor(
         controller: AzureSandboxController,
         groups: MockSandboxGroupsApi,
@@ -3195,7 +3241,8 @@ mod direct_setup_tests {
             groups,
             setup_run,
             egress,
-            MockAuthorizationApi::new(),
+            recording_authorization(Assigned::default()),
+            false,
             false,
         )
         .await
@@ -3208,6 +3255,7 @@ mod direct_setup_tests {
         egress: SandboxEgress,
         authorization: MockAuthorizationApi,
         with_profile: bool,
+        management_images: bool,
     ) -> SingleControllerExecutor {
         let authorization: Arc<dyn alien_azure_clients::authorization::AuthorizationApi> =
             Arc::new(authorization);
@@ -3220,6 +3268,9 @@ mod direct_setup_tests {
         provider
             .expect_get_azure_authorization_client()
             .returning(move |_| Ok(authorization.clone()));
+        provider
+            .expect_get_azure_caller_principal_id()
+            .returning(|_| Ok("applier-oid".to_string()));
         provider
             .expect_get_azure_sandbox_data_plane_client()
             .returning(|_, _, _| {
@@ -3256,6 +3307,14 @@ mod direct_setup_tests {
             .permission_profile(
                 "runtime",
                 alien_core::permissions::PermissionProfile::new().resource("box_one", ["sandbox/execute"]),
+            );
+        }
+        if management_images {
+            builder = builder.management_permissions(
+                alien_core::permissions::ManagementPermissions::Extend(
+                    alien_core::permissions::PermissionProfile::new()
+                        .resource("box_one", ["sandbox/images"]),
+                ),
             );
         }
         builder.build().await.unwrap()
@@ -3357,7 +3416,10 @@ mod direct_setup_tests {
             .returning(move |_| Ok(groups.clone()));
         provider
             .expect_get_azure_authorization_client()
-            .returning(|_| Ok(Arc::new(MockAuthorizationApi::new())));
+            .returning(|_| Ok(Arc::new(recording_authorization(Assigned::default()))));
+        provider
+            .expect_get_azure_caller_principal_id()
+            .returning(|_| Ok("applier-oid".to_string()));
         // The group's Ready tick may list sandboxes; a disk-image call is the failure.
         provider
             .expect_get_azure_sandbox_data_plane_client()
@@ -3502,6 +3564,70 @@ mod direct_setup_tests {
         assert_ne!(executor.status(), ResourceStatus::Running);
     }
 
+    /// Every role assignment a direct setup makes for a sandbox, with scope, principal and role:
+    /// the execute set to the profile's identity on the group, and the disk-image set to the
+    /// applying principal when no remote management identity exists, as the package binds it.
+    #[tokio::test]
+    async fn a_direct_setup_assigns_the_workload_and_the_applier_their_roles_on_the_group() {
+        use std::sync::Mutex;
+
+        let made = Arc::new(AtomicBool::new(false));
+        let made_by_create = made.clone();
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_create_or_update_sandbox_group()
+            .returning(move |_, _, _| {
+                made_by_create.store(true, Ordering::SeqCst);
+                Ok(group("Succeeded"))
+            });
+        groups.expect_get_sandbox_group().returning(move |_, _| {
+            if made.load(Ordering::SeqCst) {
+                Ok(group("Succeeded"))
+            } else {
+                Err(not_found())
+            }
+        });
+        let assigned: Assigned = Arc::new(Mutex::new(Vec::new()));
+        let authorization = recording_authorization(assigned.clone());
+        let mut executor = executor_with_authorization(
+            AzureSandboxController::default(),
+            groups,
+            true,
+            SandboxEgress::None,
+            authorization,
+            true,
+            true,
+        )
+        .await;
+        drive(&mut executor).await;
+        assert_eq!(
+            executor.internal_state::<AzureSandboxController>().unwrap().state,
+            AzureSandboxState::Ready
+        );
+        let assigned = assigned.lock().unwrap();
+        let group_scope = "/resourceGroups/default-resource-group/providers/Microsoft.App/sandboxGroups/test-prefix-box-one/";
+        for (id, _, _) in assigned.iter() {
+            assert!(id.contains(group_scope), "assignment {id} is not on the group");
+        }
+        let principals: Vec<&str> = assigned.iter().map(|(_, p, _)| p.as_str()).collect();
+        assert!(
+            principals.contains(&"principal-1"),
+            "the execute identity holds a role on the group: {assigned:?}"
+        );
+        assert!(
+            principals.contains(&"applier-oid"),
+            "the applying principal holds the disk-image role on the group: {assigned:?}"
+        );
+        assert_eq!(
+            assigned.len(),
+            2,
+            "exactly one assignment per grant, nothing else: {assigned:?}"
+        );
+        let roles: std::collections::BTreeSet<&str> =
+            assigned.iter().map(|(_, _, r)| r.as_str()).collect();
+        assert_eq!(roles.len(), 2, "two different roles: {assigned:?}");
+    }
+
     /// An internet-egress group connects to subnets only the package creates, so a direct setup
     /// says so rather than creating a group that cannot reach them.
     #[tokio::test]
@@ -3634,6 +3760,7 @@ mod direct_setup_tests {
             SandboxEgress::None,
             authorization,
             true,
+            false,
         )
         .await;
         executor.delete().expect("delete is accepted");
