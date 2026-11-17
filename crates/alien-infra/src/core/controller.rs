@@ -788,6 +788,17 @@ pub trait ResourceController: Send + Sync + Debug {
         false
     }
 
+    /// Brings the list of machines a cluster admits up to date with the cloud, and does
+    /// nothing else. The deployment loop calls it for a deployment whose update or refresh
+    /// failed, where no step runs, so a machine that replaces a lost one is still admitted.
+    ///
+    /// It takes `&self` and returns nothing: it cannot change the controller's state, and it
+    /// must not start, retry or undo any work, change a group's size, or send anything to the
+    /// cluster except the list itself. Controllers without such a list keep this default.
+    async fn sync_membership(&self, _context: &ResourceControllerContext<'_>) -> Result<()> {
+        Ok(())
+    }
+
     /// Whether a Running resource must continue its controller state machine
     /// during convergence phases. Most Ready resources are periodic health
     /// checks and should only run in the dedicated Running pass.

@@ -397,9 +397,9 @@ impl SqliteDeploymentStore {
                     Self::WORK_STATUSES.contains(status)
                         || Self::SETUP_TEARDOWN_STATUSES.contains(status)
                         || *status == Self::RUNNING_STATUS
-                        // The heartbeat loop requests Running alongside RefreshFailed.
+                        // The heartbeat loop requests Running alongside RefreshFailed and UpdateFailed.
                         // Work-only acquisition must still require an explicit retry.
-                        || (*status == "refresh-failed"
+                        || ((*status == "refresh-failed" || *status == "update-failed")
                             && statuses.iter().any(|status| status == Self::RUNNING_STATUS))
                 })
                 .collect();
@@ -452,7 +452,7 @@ impl SqliteDeploymentStore {
                 && (Self::WORK_STATUSES.contains(&status)
                     || Self::SETUP_TEARDOWN_STATUSES.contains(&status)
                     || status == Self::RUNNING_STATUS
-                    || (status == "refresh-failed"
+                    || ((status == "refresh-failed" || status == "update-failed")
                         && statuses
                             .iter()
                             .any(|candidate| candidate == Self::RUNNING_STATUS)))

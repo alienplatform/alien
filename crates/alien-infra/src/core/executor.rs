@@ -2235,6 +2235,65 @@ impl StackExecutor {
         })
     }
 
+    /// Lets every resource that keeps a list of the machines it admits bring that list up to
+    /// date, and does nothing else (see [`ResourceController::sync_membership`]).
+    ///
+    /// It is for a deployment whose update or refresh failed, where no step runs. The state is
+    /// taken by reference and nothing is returned from it: no resource is planned, stepped or
+    /// marked, so the failed resource, its retry bookkeeping and the deployment status stay as
+    /// they were. A resource whose sync fails does not stop the others; the first error is
+    /// returned after all have run.
+    pub async fn sync_membership(&self, state: &StackState) -> Result<()> {
+        let heartbeat_collector = HeartbeatCollector::default();
+        let mut first_error = None;
+        for (resource_id, resource) in &state.resources {
+            if self.preserved_resources.contains(resource_id)
+                || !matches!(
+                    resource.status,
+                    ResourceStatus::Running
+                        | ResourceStatus::RefreshFailed
+                        | ResourceStatus::UpdateFailed
+                )
+            {
+                continue;
+            }
+            let Some(controller) = resource.get_internal_controller()? else {
+                continue;
+            };
+            let controller_platform = controller_platform_for_state(state.platform, resource);
+            let client_config = self
+                .client_config
+                .config_for_platform(controller_platform)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigMismatch {
+                        required_platform: controller_platform,
+                        found_platform: self.client_config.platform(),
+                    })
+                })?;
+            let context = ResourceControllerContext {
+                desired_config: &resource.config,
+                platform: controller_platform,
+                client_config,
+                state,
+                resource_prefix: &state.resource_prefix,
+                registry: &self.resource_registry,
+                desired_stack: &self.desired_stack,
+                service_provider: &self.service_provider,
+                deployment_config: &self.deployment_config,
+                initial_setup_authority: self.initial_setup_authority,
+                heartbeat_collector: heartbeat_collector.clone(),
+            };
+            if let Err(error) = controller.sync_membership(&context).await {
+                warn!(%resource_id, %error, "Could not update the machines a cluster admits");
+                first_error.get_or_insert(error);
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     /// Continues controller states registered by an external setup engine
     /// without planning structural changes. Logical Kubernetes compute pools are
     /// initialized here because cloud setup engines do not provision them.

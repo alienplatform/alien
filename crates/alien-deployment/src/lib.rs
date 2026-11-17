@@ -10,6 +10,8 @@ pub use deleting::{destroy_without_runtime, installed_durable_resource_ids};
 mod error;
 mod helpers;
 mod initial_setup;
+mod membership;
+pub use membership::{membership_tick_wanted, run_membership_tick, sync_membership};
 pub use initial_setup::{retry_failed_setup_resources, setup_run_has_pending_update};
 pub mod loop_contract;
 pub mod manager_api_transport;

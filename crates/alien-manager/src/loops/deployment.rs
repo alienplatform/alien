@@ -1413,6 +1413,35 @@ impl DeploymentLoop {
         }));
 
         let mut config = config;
+
+        // A failed update takes no step, and a failed cluster takes a step that does
+        // nothing, so neither would refresh the machines the cluster admits. That is
+        // all this tick does: it writes nothing to the deployment, and a request to
+        // retry is never read here (such a deployment takes the normal step below).
+        if options.require_heartbeats_enabled && alien_deployment::membership_tick_wanted(&state) {
+            let tick = alien_deployment::run_membership_tick(
+                &state,
+                &config,
+                &client_config,
+                &deployment_id,
+                &transport,
+                service_provider.clone(),
+            )
+            .await;
+            if state.status == DeploymentStatus::UpdateFailed {
+                if had_credential_retry {
+                    self.checkpoint_without_step(
+                        &deployment_id,
+                        session,
+                        recorded_state,
+                        execution_claim,
+                    )
+                    .await?;
+                }
+                return tick.map(|()| None).map_err(|e| e.into_generic());
+            }
+        }
+
         let runner_result = if options.require_heartbeats_enabled {
             alien_deployment::runner::run_running_refresh_step_loop(
                 &mut state,
@@ -3701,7 +3730,7 @@ mod tests {
                             max_steps: 1,
                             require_heartbeats_enabled: matches!(
                                 self.record().await.status.as_str(),
-                                "running" | "refresh-failed"
+                                "running" | "refresh-failed" | "update-failed"
                             ),
                         },
                     )
