@@ -240,6 +240,45 @@ impl GcpAgentPlatformEngineController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<GcpAgentPlatformEngine>()?;
 
+        // A destroy that arrives before the create operation was collected holds only the
+        // operation name. This controller started that operation, so the engine it produces is
+        // ours: wait for it, record the id, and let the delete below remove it. Skipping it
+        // would report Deleted while the cloud finishes creating a billed engine.
+        if self.engine_id.is_none() {
+            if let Some(op_name) = self.pending_operation.clone() {
+                let client = ctx
+                    .service_provider
+                    .get_gcp_agent_platform_client(ctx.get_gcp_config()?)?;
+                let operation = client.get_operation(&op_name).await.context(
+                    ErrorData::CloudPlatformError {
+                        message: format!("Failed to poll engine operation '{op_name}'"),
+                        resource_id: Some(config.id.clone()),
+                    },
+                )?;
+                if operation.done != Some(true) {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(150),
+                        suggested_delay: Some(Duration::from_secs(2)),
+                    });
+                }
+                self.pending_operation = None;
+                if let Some(OperationResult::Response { response }) = operation.result {
+                    let engine = serde_json::from_value::<ReasoningEngine>(response)
+                        .into_alien_error()
+                        .context(ErrorData::CloudPlatformError {
+                            message: "engine create operation returned an unreadable resource"
+                                .to_string(),
+                            resource_id: Some(config.id.clone()),
+                        })?;
+                    if let Some(name) = engine.name {
+                        self.engine_id = Some(last_segment(&name).to_string());
+                        self.created_here = true;
+                    }
+                }
+                // A failed create produced no engine: nothing to remove.
+            }
+        }
+
         let owned = self.owns_engine_deletion(ctx, &config.id)?;
         // The ownership lookup runs only for a deployment installed by direct setup: a package
         // install's engine is never ours, and the management identity has no list permission, so
@@ -663,6 +702,32 @@ mod tests {
             .run_until_terminal()
             .await
             .expect("delete runs to terminal");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// Destroy before the create operation was collected: only the operation name is in state.
+    /// The engine the operation produces is deleted, not orphaned.
+    #[tokio::test]
+    async fn delete_with_only_a_pending_create_operation_deletes_the_resulting_engine() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_get_operation()
+            .returning(|_| Ok(done_engine_op("eng-77")));
+        m.expect_delete_engine()
+            .withf(|engine| engine == "eng-77")
+            .times(1)
+            .returning(|_| Ok(()));
+        let controller = GcpAgentPlatformEngineController {
+            pending_operation: Some("projects/p/locations/us-central1/operations/op1".into()),
+            ..Default::default()
+        };
+        let mut executor = build_executor_with(
+            provider_with(Arc::new(m)),
+            ResourceLifecycle::Frozen,
+            controller,
+        )
+        .await;
+        executor.delete().expect("delete is accepted");
+        executor.run_until_terminal().await.expect("terminal");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
     }
 

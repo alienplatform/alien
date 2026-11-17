@@ -39,6 +39,7 @@ struct PlannedRoleAssignment {
     role_definition_id: String,
     permission_set_id: String,
     failure_message: String,
+    principal_type: RoleAssignmentPropertiesPrincipalType,
 }
 
 impl AzurePermissionsHelper {
@@ -387,6 +388,7 @@ impl AzurePermissionsHelper {
                         binding.permission_set_id
                     ),
                     permission_set_id: binding.permission_set_id,
+                    principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
                 }
             })
             .collect();
@@ -514,6 +516,7 @@ impl AzurePermissionsHelper {
                         binding.permission_set_id
                     ),
                     permission_set_id: binding.permission_set_id,
+                    principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
                 }
             })
             .collect();
@@ -820,6 +823,25 @@ impl AzurePermissionsHelper {
         principal_id: &str,
         role_definition_id: &str,
     ) -> Result<String> {
+        Self::create_role_assignment_as(
+            authorization_client,
+            scope,
+            role_assignment_id,
+            principal_id,
+            role_definition_id,
+            RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+        )
+        .await
+    }
+
+    async fn create_role_assignment_as(
+        authorization_client: &Arc<dyn AuthorizationApi>,
+        scope: &str,
+        role_assignment_id: &str,
+        principal_id: &str,
+        role_definition_id: &str,
+        principal_type: RoleAssignmentPropertiesPrincipalType,
+    ) -> Result<String> {
         let scope = format!("/{}", scope.trim_matches('/'));
         let full_assignment_id = Self::role_assignment_resource_id(&scope, role_assignment_id);
         let role_assignment = RoleAssignment {
@@ -830,7 +852,7 @@ impl AzurePermissionsHelper {
                 principal_id: principal_id.to_string(),
                 role_definition_id: role_definition_id.to_string(),
                 scope: Some(scope),
-                principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
+                principal_type,
                 condition: None,
                 condition_version: None,
                 delegated_managed_identity_resource_id: None,
@@ -844,9 +866,36 @@ impl AzurePermissionsHelper {
             }),
         };
 
-        let result = authorization_client
+        let mut result = authorization_client
             .create_or_update_role_assignment_by_id(full_assignment_id.clone(), &role_assignment)
             .await;
+
+        // Assignment ids are numbered by position, so a changed grant list can land a different
+        // role on an id that already holds one. Azure refuses to change the role, principal or
+        // scope of an existing assignment: remove the old one, then create the new one.
+        if let Err(error) = &result {
+            if Self::is_role_assignment_update_refused(error) {
+                warn!(
+                    role_assignment_id = %full_assignment_id,
+                    "Azure refused to change an existing role assignment; replacing it"
+                );
+                authorization_client
+                    .delete_role_assignment_by_id(full_assignment_id.clone())
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to remove the previous role assignment '{full_assignment_id}' before replacing it"
+                        ),
+                        resource_id: Some(role_assignment_id.to_string()),
+                    })?;
+                result = authorization_client
+                    .create_or_update_role_assignment_by_id(
+                        full_assignment_id.clone(),
+                        &role_assignment,
+                    )
+                    .await;
+            }
+        }
 
         if let Err(error) = result {
             if Self::is_existing_role_assignment_conflict(&error) {
@@ -881,6 +930,15 @@ impl AzurePermissionsHelper {
         Ok(full_assignment_id)
     }
 
+    /// Azure's answer to changing the role, principal or scope of an assignment id in use
+    /// (`RoleAssignmentUpdateNotPermitted`).
+    fn is_role_assignment_update_refused(error: &AlienError<CloudClientErrorData>) -> bool {
+        let text = format!("{error} {:?}", error.error).to_ascii_lowercase();
+        text.contains("roleassignmentupdatenotpermitted")
+            || text.contains("not allowed to be updated")
+            || text.contains("cannot be updated")
+    }
+
     fn is_existing_role_assignment_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
         matches!(
             error.error.as_ref(),
@@ -909,12 +967,13 @@ impl AzurePermissionsHelper {
             let resource_id = resource_id.to_string();
 
             async move {
-                Self::create_role_assignment_at_scope(
+                Self::create_role_assignment_as(
                     &authorization_client,
                     &assignment.scope,
                     &assignment.role_assignment_id,
                     &assignment.principal_id,
                     &assignment.role_definition_id,
+                    assignment.principal_type,
                 )
                 .await
                 .context(ErrorData::CloudPlatformError {
@@ -1000,6 +1059,7 @@ impl AzurePermissionsHelper {
             return Ok(());
         }
 
+        let mut management_principal_type = RoleAssignmentPropertiesPrincipalType::ServicePrincipal;
         let management_principal_id = match Self::get_management_uami_principal_id(ctx)? {
             Some(id) => id,
             None if resource_type == "sandbox" && ctx.is_direct_setup_run() => {
@@ -1019,6 +1079,15 @@ impl AzurePermissionsHelper {
                 self_refs.retain(named);
                 if resource_refs.is_empty() {
                     return Ok(());
+                }
+                // The caller may be a signed-in user: Azure refuses a user's object ID that
+                // is declared a service principal.
+                if ctx
+                    .service_provider
+                    .get_azure_caller_is_user(ctx.get_azure_config()?)
+                    .await?
+                {
+                    management_principal_type = RoleAssignmentPropertiesPrincipalType::User;
                 }
                 ctx.service_provider
                     .get_azure_caller_principal_id(ctx.get_azure_config()?)
@@ -1058,6 +1127,7 @@ impl AzurePermissionsHelper {
             permission_context,
             &legacy_refs,
             &management_principal_id,
+            &management_principal_type,
             &role_definition_scope,
             "mgmt-res-role-assign",
         )?;
@@ -1068,6 +1138,7 @@ impl AzurePermissionsHelper {
             permission_context,
             &self_refs,
             &management_principal_id,
+            &management_principal_type,
             &role_definition_scope,
             "mgmt-res-role-assign-v2",
         )?;
@@ -1215,6 +1286,7 @@ impl AzurePermissionsHelper {
         permission_context: &PermissionContext,
         refs: &[alien_core::permissions::PermissionSetReference],
         management_principal_id: &str,
+        management_principal_type: &RoleAssignmentPropertiesPrincipalType,
         role_definition_scope: &Scope,
         id_namespace: &str,
     ) -> Result<(Vec<(String, AzureCustomRole)>, Vec<PlannedRoleAssignment>)> {
@@ -1302,6 +1374,7 @@ impl AzurePermissionsHelper {
                         binding.permission_set_id
                     ),
                     permission_set_id: binding.permission_set_id,
+                    principal_type: management_principal_type.clone(),
                 }
             })
             .collect();
@@ -1904,6 +1977,84 @@ mod tests {
         );
     }
 
+    /// A changed grant list lands a different role on an assignment id that already holds one.
+    /// Azure refuses the in-place change: the old assignment is deleted and the new one made.
+    #[tokio::test]
+    async fn a_role_change_on_an_existing_assignment_id_replaces_the_assignment() {
+        let mut authorization = MockAuthorizationApi::new();
+        let mut attempt = 0;
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(2)
+            .returning(move |_, _| {
+                attempt += 1;
+                if attempt == 1 {
+                    Err(AlienError::new(CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "role assignment".to_string(),
+                        resource_name: "assignment-123".to_string(),
+                        message: "RoleAssignmentUpdateNotPermitted: Tenant ID, application ID, principal ID, and scope are not allowed to be updated.".to_string(),
+                    }))
+                } else {
+                    Ok(RoleAssignment {
+                        id: None,
+                        name: None,
+                        type_: None,
+                        properties: None,
+                    })
+                }
+            });
+        authorization
+            .expect_delete_role_assignment_by_id()
+            .times(1)
+            .returning(|_| Ok(None));
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+
+        AzurePermissionsHelper::create_role_assignment_at_scope(
+            &authorization,
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            "assignment-123",
+            "principal-123",
+            "role-definition-new",
+        )
+        .await
+        .expect("the changed grant replaces the old assignment");
+    }
+
+    /// A user's object ID must be declared a User, as the token says.
+    #[tokio::test]
+    async fn the_principal_type_is_sent_as_given() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .withf(|_, assignment| {
+                assignment
+                    .properties
+                    .as_ref()
+                    .map(|p| p.principal_type.clone())
+                    == Some(RoleAssignmentPropertiesPrincipalType::User)
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(RoleAssignment {
+                    id: None,
+                    name: None,
+                    type_: None,
+                    properties: None,
+                })
+            });
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+        AzurePermissionsHelper::create_role_assignment_as(
+            &authorization,
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            "assignment-123",
+            "user-oid",
+            "role-definition-123",
+            RoleAssignmentPropertiesPrincipalType::User,
+        )
+        .await
+        .expect("creates");
+    }
+
     #[tokio::test]
     async fn unrelated_role_assignment_conflict_is_propagated() {
         let mut authorization = MockAuthorizationApi::new();
@@ -1962,6 +2113,7 @@ mod tests {
                 role_definition_id: "role-definition-123".to_string(),
                 permission_set_id: "storage/data-write".to_string(),
                 failure_message: "Failed to create first role assignment".to_string(),
+                principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
             },
             PlannedRoleAssignment {
                 scope: failure_scope.to_string(),
@@ -1970,6 +2122,7 @@ mod tests {
                 role_definition_id: "role-definition-456".to_string(),
                 permission_set_id: "storage/trigger-management".to_string(),
                 failure_message: "Failed to create second role assignment".to_string(),
+                principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
             },
         ];
         let mut role_assignment_ids = Vec::new();

@@ -342,8 +342,19 @@ impl GcpServiceAccountController {
         self.service_account_email = None;
         self.service_account_unique_id = None;
 
-        if self.owns_deployment_custom_roles(ctx, &config.id) {
-            ResourcePermissionsHelper::delete_gcp_custom_roles(ctx).await?;
+        match self.custom_role_cleanup(ctx, &config.id) {
+            CustomRoleCleanup::Mine => {
+                ResourcePermissionsHelper::delete_gcp_custom_roles(ctx).await?;
+            }
+            // The cleanup owner waits for the accounts deleting beside it, which read the same
+            // state in this step and so each saw another account still alive.
+            CustomRoleCleanup::WaitForPeers => {
+                return Ok(HandlerAction::Stay {
+                    max_times: Some(150),
+                    suggested_delay: Some(std::time::Duration::from_secs(2)),
+                });
+            }
+            CustomRoleCleanup::NotMine => {}
         }
 
         Ok(HandlerAction::Continue {
@@ -404,24 +415,76 @@ impl GcpServiceAccountController {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum CustomRoleCleanup {
+    Mine,
+    WaitForPeers,
+    NotMine,
+}
+
+/// Pure decision behind [`GcpServiceAccountController::custom_role_cleanup`].
+fn decide_custom_role_cleanup(
+    this_id: &str,
+    peers: &[(&str, ResourceStatus)],
+    has_remote_stack_management: bool,
+) -> CustomRoleCleanup {
+    if has_remote_stack_management {
+        return CustomRoleCleanup::NotMine;
+    }
+    let alive: Vec<&(&str, ResourceStatus)> = peers
+        .iter()
+        .filter(|(_, status)| *status != ResourceStatus::Deleted)
+        .collect();
+    if alive.is_empty() {
+        return CustomRoleCleanup::Mine;
+    }
+    if alive
+        .iter()
+        .any(|(_, status)| *status != ResourceStatus::Deleting)
+    {
+        return CustomRoleCleanup::NotMine;
+    }
+    if alive.iter().all(|(id, _)| *id < this_id) {
+        CustomRoleCleanup::WaitForPeers
+    } else {
+        CustomRoleCleanup::NotMine
+    }
+}
+
 // Separate impl block for helper methods
 impl GcpServiceAccountController {
     /// Whether this deletion is the one that removes the deployment's custom roles. Setup that
     /// Alien ran itself has no remote stack management resource whose delete does it, and a
     /// setup package removes its own roles. The roles are shared by every profile, so the last
     /// service account to go removes them, after its own bindings.
-    fn owns_deployment_custom_roles(
+    ///
+    /// Accounts deleted in the same step all read the others as still alive. When every other
+    /// account is being deleted too, the one with the greatest id owns the cleanup and waits
+    /// until the rest are Deleted. An account that is neither Deleting nor Deleted (still
+    /// running, or failed to delete) keeps the roles in place.
+    fn custom_role_cleanup(
         &self,
         ctx: &ResourceControllerContext<'_>,
         this_id: &str,
-    ) -> bool {
-        ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-            && !ctx.state.resources.iter().any(|(id, resource)| {
-                resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
-                    || (id != this_id
-                        && resource.resource_type == ServiceAccount::RESOURCE_TYPE.as_ref()
-                        && resource.status != ResourceStatus::Deleted)
+    ) -> CustomRoleCleanup {
+        if ctx.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+            return CustomRoleCleanup::NotMine;
+        }
+        let peers: Vec<(&str, ResourceStatus)> = ctx
+            .state
+            .resources
+            .iter()
+            .filter(|(id, resource)| {
+                id.as_str() != this_id
+                    && resource.resource_type == ServiceAccount::RESOURCE_TYPE.as_ref()
             })
+            .map(|(id, resource)| (id.as_str(), resource.status))
+            .collect();
+        let has_remote_stack_management =
+            ctx.state.resources.values().any(|r| {
+                r.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+            });
+        decide_custom_role_cleanup(this_id, &peers, has_remote_stack_management)
     }
 
     async fn sync_stack_role_bindings(&self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
@@ -899,6 +962,36 @@ fn emit_gcp_service_account_heartbeat(
 
 #[cfg(test)]
 mod tests {
+    use super::{decide_custom_role_cleanup, CustomRoleCleanup};
+
+    #[test]
+    fn accounts_deleting_together_have_one_cleanup_owner() {
+        use alien_core::ResourceStatus::{Deleted, Deleting, Running};
+        // Same step: both read the other as Deleting. Exactly one owns the cleanup.
+        let a = decide_custom_role_cleanup("a-sa", &[("b-sa", Deleting)], false);
+        let b = decide_custom_role_cleanup("b-sa", &[("a-sa", Deleting)], false);
+        assert_eq!(a, CustomRoleCleanup::NotMine);
+        assert_eq!(b, CustomRoleCleanup::WaitForPeers);
+        // Once the peers are gone, the owner cleans up.
+        assert_eq!(
+            decide_custom_role_cleanup("b-sa", &[("a-sa", Deleted)], false),
+            CustomRoleCleanup::Mine
+        );
+        // A running account keeps the roles; so does a remote management resource.
+        assert_eq!(
+            decide_custom_role_cleanup("b-sa", &[("a-sa", Running)], false),
+            CustomRoleCleanup::NotMine
+        );
+        assert_eq!(
+            decide_custom_role_cleanup("b-sa", &[], true),
+            CustomRoleCleanup::NotMine
+        );
+        assert_eq!(
+            decide_custom_role_cleanup("only-sa", &[], false),
+            CustomRoleCleanup::Mine
+        );
+    }
+
     use super::*;
 
     /// Deleting the last service account of a direct Google Cloud setup removes the custom

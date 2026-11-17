@@ -3463,6 +3463,9 @@ mod direct_setup_tests {
             .expect_get_azure_caller_principal_id()
             .returning(|_| Ok("applier-oid".to_string()));
         provider
+            .expect_get_azure_caller_is_user()
+            .returning(|_| Ok(false));
+        provider
             .expect_get_azure_sandbox_data_plane_client()
             .returning(|_, _, _| {
                 let mut client = MockSandboxDataPlaneApi::new();
@@ -3612,6 +3615,9 @@ mod direct_setup_tests {
         provider
             .expect_get_azure_caller_principal_id()
             .returning(|_| Ok("applier-oid".to_string()));
+        provider
+            .expect_get_azure_caller_is_user()
+            .returning(|_| Ok(false));
         // The group's Ready tick may list sandboxes; a disk-image call is the failure.
         provider
             .expect_get_azure_sandbox_data_plane_client()
