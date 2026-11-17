@@ -51,8 +51,13 @@ pub enum JobOutcome {
 pub struct JobSnapshot {
     /// Output frames after the polled sequence; `Stdout`/`Stderr` only.
     pub frames: Vec<Frame>,
-    /// `None` while the job is still running.
+    /// `None` while the job is still running. Set as soon as the command has ended, even when
+    /// `more` says output is still waiting: the command's ending and the reading of its output are
+    /// separate facts.
     pub outcome: Option<JobOutcome>,
+    /// Buffered frames did not fit this reply and are left for the next poll. The outcome is
+    /// final but the job is not yet fully read.
+    pub more: bool,
 }
 
 /// One job's buffered state, shared between its collector task and every poll.
@@ -155,23 +160,58 @@ impl JobRegistry {
     /// output that was truncated, not a frame lost in transit. The terminal `truncated` flag is
     /// what reports it; a caller must not treat a gap as a frame still to come.
     pub fn poll(&self, id: &str, since_seq: Option<u64>) -> Option<JobSnapshot> {
+        self.poll_within(id, since_seq, None)
+    }
+
+    /// [`poll`](Self::poll) for a caller whose transport limits one reply.
+    ///
+    /// `reply_budget` is the encoded bytes each stream's frames may add to this reply. Frames that
+    /// do not fit are left for the next poll, in order and with nothing dropped. The outcome is
+    /// reported as soon as the command has ended, with `more` set while frames remain, so a caller
+    /// knows the command is over and only has output left to drain. The terminal result counts as
+    /// delivered only once the last frame has been returned. The first frame always fits, so a
+    /// poll always makes progress.
+    pub fn poll_within(
+        &self,
+        id: &str,
+        since_seq: Option<u64>,
+        reply_budget: Option<usize>,
+    ) -> Option<JobSnapshot> {
         let job = Arc::clone(self.lock().get(id)?);
         let mut buffer = job.buffer.lock().expect("no panic holds a job lock");
-        let frames = buffer
-            .frames
-            .iter()
-            .filter(|frame| match frame_seq(frame) {
+        let mut remaining = reply_budget.map(|bytes| [bytes, bytes]);
+        let mut frames = Vec::new();
+        let mut deferred = false;
+        for frame in &buffer.frames {
+            let wanted = match frame_seq(frame) {
                 Some(seq) => since_seq.is_none_or(|since| seq > since),
                 None => false,
-            })
-            .cloned()
-            .collect();
+            };
+            if !wanted {
+                continue;
+            }
+            if let Some(remaining) = remaining.as_mut() {
+                let stream = usize::from(matches!(frame, Frame::Stderr { .. }));
+                let cost = crate::exec::frame_wire_cost(frame);
+                if cost > remaining[stream] && !frames.is_empty() {
+                    deferred = true;
+                    break;
+                }
+                remaining[stream] = remaining[stream].saturating_sub(cost);
+            }
+            frames.push(frame.clone());
+        }
         let outcome = buffer.outcome.clone();
-        // The caller has now seen the terminal result, so the cap may reclaim this slot.
-        if outcome.is_some() {
+        // The caller has now seen the terminal result and all output, so the cap may reclaim
+        // this slot.
+        if outcome.is_some() && !deferred {
             buffer.terminal_delivered = true;
         }
-        Some(JobSnapshot { frames, outcome })
+        Some(JobSnapshot {
+            frames,
+            outcome,
+            more: deferred,
+        })
     }
 
     /// Signals a job to cancel, killing its process group. Returns whether the job existed.
@@ -346,6 +386,7 @@ mod tests {
             timeout_ms,
             cwd: None,
             env: BTreeMap::new(),
+            reply_budget: None,
         }
     }
 
@@ -749,6 +790,72 @@ mod tests {
                 .frames
                 .is_empty(),
             "nothing follows the last kept frame, whatever numbers truncation skipped"
+        );
+    }
+
+    /// A finished job whose output does not fit one reply reports its outcome right away, marked
+    /// `more`, so the caller knows only output is left; the outcome counts as delivered only once
+    /// the last page has gone out.
+    #[tokio::test]
+    async fn a_finished_job_reports_its_outcome_while_pages_remain() {
+        let registry = JobRegistry::new();
+        let id = start(
+            &registry,
+            &[
+                "/bin/sh",
+                "-c",
+                "for i in 1 2 3 4 5 6; do echo line$i; done; exit 3",
+            ],
+            10_000,
+        );
+        while !registry.is_finished(&id) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // A budget of one byte admits one frame per poll.
+        let mut since = None;
+        let mut text = String::new();
+        let mut polls = 0;
+        loop {
+            let snapshot = registry
+                .poll_within(&id, since, Some(1))
+                .expect("the job exists");
+            polls += 1;
+            assert!(
+                matches!(snapshot.outcome, Some(JobOutcome::Exited { code: 3, .. })),
+                "the outcome is reported on every poll once the command ended"
+            );
+            if let Some(last) = seqs(&snapshot.frames).last() {
+                since = Some(*last);
+            }
+            text.push_str(&stdout_text(&snapshot.frames));
+            if !snapshot.more {
+                break;
+            }
+            assert!(
+                !registry
+                    .lock()
+                    .get(&id)
+                    .unwrap()
+                    .buffer
+                    .lock()
+                    .unwrap()
+                    .terminal_delivered,
+                "not delivered while frames remain"
+            );
+            assert!(polls < 50, "the drain must end");
+        }
+        assert!(polls > 1, "the output needed several polls");
+        assert_eq!(text.split_whitespace().count(), 6);
+        assert!(
+            registry
+                .lock()
+                .get(&id)
+                .unwrap()
+                .buffer
+                .lock()
+                .unwrap()
+                .terminal_delivered
         );
     }
 

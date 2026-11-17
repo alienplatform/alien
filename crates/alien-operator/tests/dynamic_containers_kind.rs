@@ -408,6 +408,14 @@ async fn two_independent_containers_update_and_delete() {
         assert_eq!(pod.automount_service_account_token, Some(false));
         assert!(pod.image_pull_secrets.is_none());
         assert_eq!(pod.security_context.as_ref().unwrap().fs_group, Some(65532));
+        assert_eq!(
+            pod.security_context
+                .as_ref()
+                .unwrap()
+                .fs_group_change_policy
+                .as_deref(),
+            Some("OnRootMismatch")
+        );
         let app = &pod.containers[0];
         assert_eq!(
             app.security_context.as_ref().unwrap().run_as_user,

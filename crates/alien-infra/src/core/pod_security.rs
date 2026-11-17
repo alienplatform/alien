@@ -103,6 +103,7 @@ pub fn pod_security(
         type_: "RuntimeDefault".to_string(),
         ..Default::default()
     };
+    let fs_group = group.or_else(|| user.is_none().then_some(DEFAULT_FS_GROUP));
     Ok(PodSecurity {
         pod: Some(PodSecurityContext {
             run_as_non_root: Some(true),
@@ -112,7 +113,10 @@ pub fn pod_security(
             // images: 65532). Give volumes that group so persistent storage is writable. When the
             // stack names a user, fsGroup stays as declared: a group-writable data directory is
             // rejected by some databases.
-            fs_group: group.or_else(|| user.is_none().then_some(DEFAULT_FS_GROUP)),
+            fs_group,
+            // Re-applying group bits at every mount breaks images that check file modes on
+            // their data volume after a restart.
+            fs_group_change_policy: fs_group.map(|_| "OnRootMismatch".to_string()),
             seccomp_profile: Some(seccomp.clone()),
             ..Default::default()
         }),
@@ -418,6 +422,10 @@ mod tests {
         let pod = security.pod.unwrap();
         assert_eq!(pod.run_as_non_root, Some(true));
         assert_eq!(pod.fs_group, Some(65532));
+        assert_eq!(
+            pod.fs_group_change_policy.as_deref(),
+            Some("OnRootMismatch")
+        );
         assert_eq!(pod.seccomp_profile.unwrap().type_, "RuntimeDefault");
         let container = security.container.unwrap();
         assert_eq!(container.allow_privilege_escalation, Some(false));

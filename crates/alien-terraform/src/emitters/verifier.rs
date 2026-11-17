@@ -1198,12 +1198,19 @@ fn verifier_function_network(ctx: &EmitContext<'_>) -> Option<Expression> {
             | NetworkSettings::ByoVpcGcp { .. } => Some(expr::jsonencode(expr::object([
                 (
                     "subnetIds",
-                    crate::emitters::gcp::network::subnet_self_links(label, &network.settings),
+                    crate::emitters::gcp::network::subnet_self_links(
+                        label,
+                        &network.settings,
+                        ctx.targets_kubernetes,
+                    ),
                 ),
                 ("securityGroupIds", Expression::Array(Vec::new())),
                 (
                     "egress",
-                    crate::emitters::gcp::network::function_egress(&network.settings),
+                    crate::emitters::gcp::network::function_egress(
+                        &network.settings,
+                        ctx.targets_kubernetes,
+                    ),
                 ),
             ]))),
             _ => None,
