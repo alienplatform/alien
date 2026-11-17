@@ -236,7 +236,7 @@ pub(crate) fn deployment_stalled_rollout(deployment: &Deployment) -> Option<i64>
 }
 
 /// Whether every replica of the workload is updated and ready on the current generation.
-fn workload_fully_ready(workload: &KubernetesWorkload) -> bool {
+pub(crate) fn workload_fully_ready(workload: &KubernetesWorkload) -> bool {
     match workload {
         KubernetesWorkload::Deployment(deployment) => {
             let Some(status) = &deployment.status else {
