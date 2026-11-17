@@ -320,8 +320,8 @@ fn profile_grants_on(profile: &alien_core::PermissionProfile, platform: Platform
 /// Evaluate it on the PREPARED stack (after the preflight mutations, with declined gated
 /// resources dropped): a mutation can add a Frozen resource (the `secrets` vault), and a
 /// declined one is gone. Pending, the controllers and the pod environment all use this one
-/// answer. `stack_settings` carries what the stack alone does not: a public endpoint whose
-/// certificate is imported into ACM needs the cloud's API.
+/// answer. `stack_settings` carries what the stack alone does not: a resource with a public endpoint
+/// whose certificate is imported into ACM needs the cloud's API.
 pub fn stack_needs_base_cloud(
     stack: &alien_core::Stack,
     stack_platform: Platform,
@@ -331,7 +331,13 @@ pub fn stack_needs_base_cloud(
     let Some(base) = base_platform.filter(|_| stack_platform == Platform::Kubernetes) else {
         return false;
     };
-    if base == Platform::Aws && imports_certificates_into_acm(stack_settings) {
+    // Importing the certificate into ACM only happens for a resource with a public endpoint.
+    if base == Platform::Aws
+        && imports_certificates_into_acm(stack_settings)
+        && stack.resources().any(|(_, entry)| {
+            crate::kubernetes_public_endpoint::resource_has_public_endpoint(&entry.config)
+        })
+    {
         return true;
     }
     // A stack that is not prepared yet has profiles and no service accounts: its profiles
@@ -683,13 +689,38 @@ mod controller_platform_tests {
             }))
             .expect("stack settings")
         };
-        let stack = stack_with(Vec::new());
-        let needs = |settings: &alien_core::StackSettings, base| {
-            stack_needs_base_cloud(&stack, Platform::Kubernetes, base, settings)
+        let container = |endpoints: serde_json::Value| -> Resource {
+            let container: alien_core::Container = serde_json::from_value(serde_json::json!({
+                "id": "web", "code": {"type": "image", "image": "pause:3.9"},
+                "cpu": {"desired": "0.1", "min": "0.1"}, "memory": {"desired": "64Mi", "min": "64Mi"},
+                "permissions": "", "stateful": false, "publicEndpoints": endpoints,
+                "commandsEnabled": false, "environment": {}, "ephemeralStorage": "1Gi",
+                "kubernetesSecretMounts": [], "links": [], "ports": [],
+            }))
+            .expect("container");
+            Resource::new(container)
+        };
+        let stack_of = |endpoints: serde_json::Value| {
+            stack_with(vec![(container(endpoints), ResourceLifecycle::Live)])
+        };
+        let public =
+            stack_of(serde_json::json!([{"name": "web", "port": 8080, "protocol": "http"}]));
+        let private = stack_of(serde_json::json!([]));
+        let needs = |stack: &Stack, settings: &alien_core::StackSettings, base| {
+            stack_needs_base_cloud(stack, Platform::Kubernetes, base, settings)
         };
         let acm = settings(serde_json::json!({"mode": "managedAcmImport"}));
-        assert!(needs(&acm, Some(Platform::Aws)), "an ACM import calls AWS");
-        assert!(!needs(&acm, None));
+        assert!(
+            needs(&public, &acm, Some(Platform::Aws)),
+            "an ACM import calls AWS"
+        );
+        assert!(!needs(&public, &acm, None));
+        assert!(
+            !needs(&private, &acm, Some(Platform::Aws)),
+            "no public endpoint: nothing is imported, so no cloud call"
+        );
+        let stack = &public;
+        let needs = |settings: &alien_core::StackSettings, base| needs(stack, settings, base);
         let secret = settings(serde_json::json!({"mode": "none"}));
         assert!(!needs(&secret, Some(Platform::Aws)));
     }

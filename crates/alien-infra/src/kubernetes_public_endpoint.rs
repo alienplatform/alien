@@ -1315,6 +1315,33 @@ async fn delete_managed_acm_certificate(
     }))
 }
 
+/// A Worker is public when it declares any public endpoint.
+fn worker_serves_public_endpoint(public_endpoints: &[alien_core::WorkerPublicEndpoint]) -> bool {
+    !public_endpoints.is_empty()
+}
+
+/// The port of the first HTTP endpoint. A Container or Daemon is public exactly when it has one.
+fn http_endpoint_port(public_endpoints: &[alien_core::PublicEndpoint]) -> Option<u16> {
+    public_endpoints
+        .iter()
+        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+        .map(|endpoint| endpoint.port)
+}
+
+/// Whether this resource gets a public endpoint (the `public` flag of its endpoint target):
+/// the one rule the endpoint planner and the base cloud check both use.
+pub(crate) fn resource_has_public_endpoint(resource: &alien_core::Resource) -> bool {
+    if let Some(container) = resource.downcast_ref::<alien_core::Container>() {
+        http_endpoint_port(&container.public_endpoints).is_some()
+    } else if let Some(daemon) = resource.downcast_ref::<alien_core::Daemon>() {
+        http_endpoint_port(&daemon.public_endpoints).is_some()
+    } else if let Some(worker) = resource.downcast_ref::<alien_core::Worker>() {
+        worker_serves_public_endpoint(&worker.public_endpoints)
+    } else {
+        false
+    }
+}
+
 pub(crate) fn worker_public_endpoint_target<'a>(
     resource_id: &'a str,
     workload_name: &'a str,
@@ -1332,7 +1359,7 @@ pub(crate) fn worker_public_endpoint_target<'a>(
         service_port: 80,
         target_port: 8080,
         health_check_path: health_check_path.map(ToString::to_string),
-        public: !public_endpoints.is_empty(),
+        public: worker_serves_public_endpoint(public_endpoints),
         public_endpoints: public_endpoints
             .iter()
             .map(|endpoint| alien_core::PublicEndpoint {
@@ -1358,10 +1385,7 @@ pub(crate) fn daemon_public_endpoint_target<'a>(
     public_endpoints: &'a [alien_core::PublicEndpoint],
     health_check_path: Option<&str>,
 ) -> Result<KubernetesPublicEndpointTarget<'a>> {
-    let http_endpoint = public_endpoints
-        .iter()
-        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http);
-    let http_port = http_endpoint.map(|endpoint| endpoint.port);
+    let http_port = http_endpoint_port(public_endpoints);
 
     Ok(KubernetesPublicEndpointTarget {
         resource_id,
@@ -1391,10 +1415,7 @@ pub(crate) fn container_public_endpoint_target<'a>(
     public_endpoints: &'a [alien_core::PublicEndpoint],
     health_check_path: Option<&str>,
 ) -> Result<KubernetesPublicEndpointTarget<'a>> {
-    let http_endpoint = public_endpoints
-        .iter()
-        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http);
-    let http_port = http_endpoint.map(|endpoint| endpoint.port);
+    let http_port = http_endpoint_port(public_endpoints);
 
     Ok(KubernetesPublicEndpointTarget {
         resource_id,
