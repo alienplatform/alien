@@ -630,6 +630,107 @@ async fn waits_on_one_target_are_bounded_and_another_target_is_unaffected() {
     other.abort();
 }
 
+/// A credential that is not bound to a target may send any target id. A wait
+/// for a target the deployment does not have is answered at once and holds no
+/// slot, so invented ids cannot fill the process, however many are sent.
+#[tokio::test]
+async fn a_wait_for_a_target_the_deployment_does_not_have_is_answered_at_once() {
+    let server = pull_server().await;
+    let lease_client = client(&server);
+    let started = Instant::now();
+    let invented: Vec<_> = (0..50)
+        .map(|i| {
+            let mut request = lease_request(&server, 20);
+            request.target = alien_commands::types::CommandTarget::new(
+                format!("invented-{i}"),
+                alien_commands::types::CommandTargetType::Daemon,
+            );
+            let c = lease_client.clone();
+            tokio::spawn(async move { c.acquire(&request).await })
+        })
+        .collect();
+    // Every one is answered empty at once; none is parked.
+    for waiter in invented {
+        let answer = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("answered at once")
+            .unwrap()
+            .unwrap();
+        assert!(answer.is_empty());
+    }
+    assert_eq!(server.command_server.open_lease_waits(), 0);
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    // The real target still waits.
+    let request = lease_request(&server, 3);
+    let waiting = {
+        let c = lease_client.clone();
+        tokio::spawn(async move { c.acquire(&request).await })
+    };
+    wait_for_open_waits(&server, 1).await;
+    waiting.abort();
+}
+
+/// One deployment's waits over many targets stop at the deployment's cap, and
+/// another deployment still waits.
+#[tokio::test]
+async fn waits_of_one_deployment_are_bounded_over_all_its_targets() {
+    let server = TestCommandServer::builder()
+        .with_pull_mode()
+        .with_max_open_lease_waits_per_deployment(3)
+        .build()
+        .await;
+    let mut targets = Vec::new();
+    for i in 0..6 {
+        let id = format!("daemon-{i}");
+        server
+            .registry
+            .register_target(&id, alien_commands::types::CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        targets.push(alien_commands::types::CommandTarget::new(
+            id,
+            alien_commands::types::CommandTargetType::Daemon,
+        ));
+    }
+    let hold = |deployment: &str, target: &alien_commands::types::CommandTarget| {
+        let command_server = server.command_server.clone();
+        let request = LeaseRequest {
+            deployment_id: deployment.to_string(),
+            target: target.clone(),
+            max_leases: 1,
+            lease_seconds: 60,
+            wait_seconds: 5,
+        };
+        tokio::spawn(async move {
+            command_server
+                .acquire_lease_for_bound_target(&request.deployment_id, &request, None)
+                .await
+        })
+    };
+    let mut held: Vec<_> = targets[..3]
+        .iter()
+        .map(|t| hold(DEPLOYMENT_ID, t))
+        .collect();
+    wait_for_open_waits(&server, 3).await;
+
+    // Three more targets of the same deployment: answered at once, no slot.
+    let started = Instant::now();
+    for target in &targets[3..] {
+        let answer = hold(DEPLOYMENT_ID, target).await.unwrap().unwrap();
+        assert!(answer.leases.is_empty());
+    }
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(server.command_server.open_lease_waits(), 3);
+
+    // Another deployment is unaffected.
+    held.push(hold("other-deployment", &targets[0]));
+    wait_for_open_waits(&server, 4).await;
+    for waiter in held {
+        waiter.abort();
+    }
+}
+
 /// Eight waiters on one target: one stream of wake key reads, and one create
 /// costs a few scans, not eight each.
 #[tokio::test]
