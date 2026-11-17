@@ -40,6 +40,7 @@ pub mod service_account_impersonate_validation;
 pub mod single_exposed_port_check;
 pub mod single_queue_trigger;
 pub mod stack_inputs;
+pub mod queue_dead_letter;
 pub mod storage_cors;
 pub mod storage_lifecycle_rules;
 pub mod storage_notifications;
@@ -81,6 +82,7 @@ pub use service_account_impersonate_validation::ServiceAccountImpersonateValidat
 pub use single_exposed_port_check::SingleExposedPortCheck;
 pub use single_queue_trigger::SingleQueueTriggerCheck;
 pub use stack_inputs::{StackInputPlatformsCheck, StackInputsDefinitionCheck};
+pub use queue_dead_letter::QueueDeadLetterCheck;
 pub use storage_cors::StorageCorsCheck;
 pub use storage_lifecycle_rules::StorageLifecycleRulesCheck;
 pub use storage_notifications::StorageNotificationsCheck;
