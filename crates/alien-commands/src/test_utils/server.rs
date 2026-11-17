@@ -525,6 +525,7 @@ pub struct TestCommandServerBuilder {
     fault_injection: bool,
     max_open_lease_waits: Option<usize>,
     max_open_lease_waits_per_target: Option<usize>,
+    max_open_lease_waits_per_deployment: Option<usize>,
     lease_wait_probe_interval: Option<std::time::Duration>,
 }
 
@@ -537,6 +538,7 @@ impl TestCommandServerBuilder {
             fault_injection: false,
             max_open_lease_waits: None,
             max_open_lease_waits_per_target: None,
+            max_open_lease_waits_per_deployment: None,
             lease_wait_probe_interval: None,
         }
     }
@@ -550,6 +552,12 @@ impl TestCommandServerBuilder {
     /// Limit the lease requests the server holds open for one target.
     pub fn with_max_open_lease_waits_per_target(mut self, max: usize) -> Self {
         self.max_open_lease_waits_per_target = Some(max);
+        self
+    }
+
+    /// Limit the lease requests the server holds open for one deployment.
+    pub fn with_max_open_lease_waits_per_deployment(mut self, max: usize) -> Self {
+        self.max_open_lease_waits_per_deployment = Some(max);
         self
     }
 
@@ -687,6 +695,9 @@ impl TestCommandServerBuilder {
         }
         if let Some(max) = self.max_open_lease_waits_per_target {
             command_server = command_server.with_max_open_lease_waits_per_target(max);
+        }
+        if let Some(max) = self.max_open_lease_waits_per_deployment {
+            command_server = command_server.with_max_open_lease_waits_per_deployment(max);
         }
         if let Some(interval) = self.lease_wait_probe_interval {
             command_server = command_server.with_lease_wait_probe_interval(interval);

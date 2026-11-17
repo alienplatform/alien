@@ -146,6 +146,19 @@ pub fn receiver_request_decision(
     )
 }
 
+/// Whether `subject` holds a receive capability for exactly `target`. Such a
+/// credential is bound to its target, so the target is known to exist; every
+/// other credential may name any target id when it asks to lease.
+pub fn is_bound_to_target(subject: &Subject, target: &CommandTarget) -> bool {
+    matches!(
+        &subject.scope,
+        Scope::Commands {
+            capability: CommandCapability::Receive { target: held },
+            ..
+        } if subject.role == Role::CommandCapability && held == target
+    )
+}
+
 /// Decide dispatch/read access when the subject carries a commands scope.
 ///
 /// `None` means the subject is not commands-scoped and the caller should apply

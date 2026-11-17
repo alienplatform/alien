@@ -1262,7 +1262,8 @@ async fn finalize(
             config.lease_wait_probe_interval_secs.max(1),
         ))
         .with_max_open_lease_waits(config.max_open_lease_waits)
-        .with_max_open_lease_waits_per_target(config.max_open_lease_waits_per_target),
+        .with_max_open_lease_waits_per_target(config.max_open_lease_waits_per_target)
+        .with_max_open_lease_waits_per_deployment(config.max_open_lease_waits_per_deployment),
     );
 
     // --- AppState ---

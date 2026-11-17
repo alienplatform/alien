@@ -22,8 +22,17 @@ pub const DEFAULT_MAX_OPEN_LEASE_WAITS: usize = 5_000;
 /// Open waiting lease requests one manager process holds for a single
 /// (deployment, target) by default. A receiver needs one; the rest leave room
 /// for a restart that overlaps its old connection. Over the cap a request is
-/// answered at once, so one credential cannot take every slot.
+/// answered at once. The target id is whatever the caller sends, so this cap
+/// alone does not bound a deployment: see the per-deployment cap.
 pub const DEFAULT_MAX_OPEN_LEASE_WAITS_PER_TARGET: usize = 8;
+
+/// Open waiting lease requests one manager process holds for a single
+/// deployment, over all its targets, by default. A deployment has a few
+/// receivers, each needing one wait (a few more while a restart overlaps its
+/// old connection), so this is well under the process cap and bounds what one
+/// deployment's credentials can take, whatever target ids they send. Over the
+/// cap a request is answered at once.
+pub const DEFAULT_MAX_OPEN_LEASE_WAITS_PER_DEPLOYMENT: usize = 64;
 
 /// How often the waiters of one target read its wake key, all together. Covers
 /// commands queued through another manager replica, whose in-process signal
@@ -31,6 +40,14 @@ pub const DEFAULT_MAX_OPEN_LEASE_WAITS_PER_TARGET: usize = 8;
 pub const DEFAULT_LEASE_WAIT_PROBE_INTERVAL: Duration = Duration::from_secs(1);
 
 type Key = (String, String);
+
+/// The caps a registration is checked against.
+#[derive(Clone, Copy)]
+pub(crate) struct WaitLimits {
+    pub process: usize,
+    pub deployment: usize,
+    pub target: usize,
+}
 
 /// What the waiters of one target share.
 pub(crate) struct Shared {
@@ -64,6 +81,8 @@ struct Slot {
 #[derive(Default)]
 struct State {
     slots: HashMap<Key, Slot>,
+    /// Open waits per deployment.
+    by_deployment: HashMap<String, usize>,
     open: usize,
 }
 
@@ -81,17 +100,30 @@ impl LeaseWaiters {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Register a waiter, or `None` when `max_open` waits are already open in
-    /// this process or `max_per_target` on this key.
+    /// Register a waiter, or `None` when `limits.process` waits are already
+    /// open in this process, `limits.deployment` for this deployment or
+    /// `limits.target` on this key. Nothing but counters is touched.
     pub(crate) fn register(
         self: &Arc<Self>,
         deployment_id: &str,
         target_resource_id: &str,
-        max_open: usize,
-        max_per_target: usize,
+        limits: WaitLimits,
     ) -> Option<LeaseWait> {
+        let WaitLimits {
+            process: max_open,
+            deployment: max_per_deployment,
+            target: max_per_target,
+        } = limits;
         let mut state = self.lock();
         if state.open >= max_open {
+            return None;
+        }
+        if state
+            .by_deployment
+            .get(deployment_id)
+            .is_some_and(|open| *open >= max_per_deployment)
+            || max_per_deployment == 0
+        {
             return None;
         }
         let key = (deployment_id.to_string(), target_resource_id.to_string());
@@ -106,6 +138,10 @@ impl LeaseWaiters {
             return None;
         }
         state.open += 1;
+        *state
+            .by_deployment
+            .entry(deployment_id.to_string())
+            .or_insert(0) += 1;
         let slot = state.slots.entry(key.clone()).or_insert_with(|| Slot {
             shared: Arc::new(Shared {
                 notify: Notify::new(),
@@ -230,6 +266,12 @@ impl Drop for LeaseWait {
     fn drop(&mut self) {
         let mut state = self.registry.lock();
         state.open -= 1;
+        if let Some(open) = state.by_deployment.get_mut(&self.key.0) {
+            *open -= 1;
+            if *open == 0 {
+                state.by_deployment.remove(&self.key.0);
+            }
+        }
         if let Some(slot) = state.slots.get_mut(&self.key) {
             slot.waiters -= 1;
             if slot.waiters == 0 {
@@ -243,12 +285,21 @@ impl Drop for LeaseWait {
 mod tests {
     use super::*;
 
+    /// Limits with the deployment cap out of the way.
+    fn limits(process: usize, target: usize) -> WaitLimits {
+        WaitLimits {
+            process,
+            deployment: usize::MAX,
+            target,
+        }
+    }
+
     #[test]
     fn entry_is_removed_when_the_last_waiter_leaves() {
         let waiters = Arc::new(LeaseWaiters::default());
-        let a = waiters.register("dep", "queue", 10, 10).unwrap();
-        let b = waiters.register("dep", "queue", 10, 10).unwrap();
-        let other = waiters.register("dep", "other", 10, 10).unwrap();
+        let a = waiters.register("dep", "queue", limits(10, 10)).unwrap();
+        let b = waiters.register("dep", "queue", limits(10, 10)).unwrap();
+        let other = waiters.register("dep", "other", limits(10, 10)).unwrap();
         assert_eq!(waiters.open_keys(), 2);
         drop(a);
         assert_eq!(waiters.open_keys(), 2);
@@ -261,23 +312,52 @@ mod tests {
     #[test]
     fn registration_is_refused_over_the_cap() {
         let waiters = Arc::new(LeaseWaiters::default());
-        let first = waiters.register("dep", "queue", 1, 1).unwrap();
-        assert!(waiters.register("dep", "other", 1, 1).is_none());
+        let first = waiters.register("dep", "queue", limits(1, 1)).unwrap();
+        assert!(waiters.register("dep", "other", limits(1, 1)).is_none());
         drop(first);
-        assert!(waiters.register("dep", "other", 1, 1).is_some());
+        assert!(waiters.register("dep", "other", limits(1, 1)).is_some());
     }
 
     #[test]
     fn registration_is_refused_over_the_per_target_cap() {
         let waiters = Arc::new(LeaseWaiters::default());
         let held: Vec<_> = (0..2)
-            .map(|_| waiters.register("dep", "queue", 100, 2).unwrap())
+            .map(|_| waiters.register("dep", "queue", limits(100, 2)).unwrap())
             .collect();
-        assert!(waiters.register("dep", "queue", 100, 2).is_none());
+        assert!(waiters.register("dep", "queue", limits(100, 2)).is_none());
         // Another target and another deployment are unaffected.
-        assert!(waiters.register("dep", "other", 100, 2).is_some());
-        assert!(waiters.register("dep2", "queue", 100, 2).is_some());
+        assert!(waiters.register("dep", "other", limits(100, 2)).is_some());
+        assert!(waiters.register("dep2", "queue", limits(100, 2)).is_some());
         drop(held);
-        assert!(waiters.register("dep", "queue", 100, 2).is_some());
+        assert!(waiters.register("dep", "queue", limits(100, 2)).is_some());
+    }
+
+    #[test]
+    fn invented_targets_cannot_exceed_the_deployment_cap() {
+        let waiters = Arc::new(LeaseWaiters::default());
+        let limits = WaitLimits {
+            process: 1_000,
+            deployment: 3,
+            target: 8,
+        };
+        let held: Vec<_> = (0..3)
+            .map(|i| {
+                waiters
+                    .register("dep", &format!("invented-{i}"), limits)
+                    .unwrap()
+            })
+            .collect();
+        assert!(waiters.register("dep", "invented-3", limits).is_none());
+        assert!(waiters.register("dep", "invented-0", limits).is_none());
+        // Another deployment still waits.
+        let other = waiters.register("dep2", "invented-0", limits).unwrap();
+        assert_eq!(waiters.open_waits(), 4);
+        // A slot freed by one wait leaving is reusable, and the count returns
+        // to nothing when all are gone.
+        drop(held);
+        assert!(waiters.register("dep", "invented-9", limits).is_some());
+        drop(other);
+        assert_eq!(waiters.open_waits(), 0);
+        assert!(waiters.lock().by_deployment.is_empty());
     }
 }

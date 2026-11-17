@@ -273,6 +273,7 @@ async fn setup_with_repository(repository: &str, configure_routing: bool) -> Tes
         lease_wait_probe_interval_secs: 1,
         max_open_lease_waits: 5_000,
         max_open_lease_waits_per_target: 8,
+        max_open_lease_waits_per_deployment: 64,
         otlp_endpoint: None,
         base_url: Some(manager_url.clone()),
         releases_url: None,
