@@ -1747,6 +1747,7 @@ async fn prepare_import_stack(
         .resources
         .iter()
         .any(|resource| resource.id == "enable-cloud-quotas");
+    let stack_settings = &settings_with_imported_cluster_namespace(req, stack_settings);
     prepare_setup_stack(
         source_stack,
         &PrepareSetupStack {
@@ -1762,6 +1763,40 @@ async fn prepare_import_stack(
         stack_settings,
     )
     .await
+}
+
+/// The Kubernetes namespace the setup installed into, when the registered settings name none.
+///
+/// A Terraform module registers `kubernetes.cluster.ownership` only; the namespace it chose is in
+/// the imported `kubernetes` resource. The Operator's chart always runs the cluster in its Helm
+/// release namespace, so a baseline prepared with the default namespace would read as a change
+/// to the setup-owned cluster at the Operator's first update.
+fn settings_with_imported_cluster_namespace(
+    req: &StackImportRequest,
+    settings: &StackSettings,
+) -> StackSettings {
+    let mut settings = settings.clone();
+    let Some(cluster) = settings
+        .kubernetes
+        .as_mut()
+        .and_then(|kubernetes| kubernetes.cluster.as_mut())
+        .filter(|cluster| cluster.namespace.is_none())
+    else {
+        return settings;
+    };
+    cluster.namespace = req
+        .resources
+        .iter()
+        .find(|resource| resource.resource_type == alien_core::KubernetesCluster::RESOURCE_TYPE)
+        .and_then(|resource| {
+            serde_json::from_value::<alien_core::import::data::KubernetesClusterImportData>(
+                resource.import_data.clone(),
+            )
+            .ok()
+        })
+        .map(|data| data.namespace)
+        .filter(|namespace| !namespace.is_empty());
+    settings
 }
 
 /// The message of the innermost error in the chain. A wrapper such as "Mutation execution

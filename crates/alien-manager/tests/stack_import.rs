@@ -4895,7 +4895,9 @@ async fn a_rerun_without_the_flag_mints_nothing_and_has_no_token() {
     let response: StackImportResponse = serde_json::from_value(json).unwrap();
     assert!(response.deployment_token_expires_at.is_none());
     // What it always got, never a new setup key.
-    assert!(response.deployment_token.is_none_or(|key| !key.starts_with("ax_setup_")));
+    assert!(response
+        .deployment_token
+        .is_none_or(|key| !key.starts_with("ax_setup_")));
 }
 
 #[tokio::test]
@@ -4930,9 +4932,8 @@ async fn another_groups_install_credential_mints_nothing() {
     let (_, json) = post_import(&fixture, Some(&other_token), &opt_in(body)).await;
     // Whatever the other group's import does for itself, it is not handed a
     // key for the first group's deployment, and the live key is untouched.
-    let other: StackImportResponse = serde_json::from_value(json).unwrap_or_else(|_| {
-        panic!("the other group imports its own deployment")
-    });
+    let other: StackImportResponse = serde_json::from_value(json)
+        .unwrap_or_else(|_| panic!("the other group imports its own deployment"));
     assert_ne!(other.deployment_id, minted.deployment_id);
     assert!(other.deployment_token_expires_at.is_none());
     assert!(setup_key_is_live(&fixture, &key).await);
@@ -4960,7 +4961,9 @@ async fn an_opt_in_without_an_identity_verifier_gets_the_response_it_always_got(
     assert_eq!(status, StatusCode::CREATED, "{json:#}");
     let response: StackImportResponse = serde_json::from_value(json).unwrap();
     assert!(response.deployment_token_expires_at.is_none());
-    let key = response.deployment_token.expect("the install key, as before");
+    let key = response
+        .deployment_token
+        .expect("the install key, as before");
     assert!(!key.starts_with("ax_setup_"));
 }
 
@@ -5008,4 +5011,145 @@ async fn verified_template_network_with_two_zones_imports() {
     network["importData"] = delivered;
     let (status, json) = post_import_json(&fixture, Some(&fixture.dg_token), body).await;
     assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+}
+
+/// What the Operator's chart configuration does with the cluster settings the manager rendered
+/// (`configmap_tpl` in alien-helm): the namespace is always the Helm release's, and a missing
+/// ownership reads as external.
+fn operator_stack_settings(registered: &StackSettings, release_namespace: &str) -> StackSettings {
+    let mut settings = registered.clone();
+    let kubernetes = settings
+        .kubernetes
+        .get_or_insert(alien_core::KubernetesSettings {
+            cluster: None,
+            exposure: None,
+        });
+    let cluster = kubernetes
+        .cluster
+        .get_or_insert(alien_core::KubernetesClusterSettings {
+            ownership: KubernetesClusterOwnership::External,
+            namespace: None,
+            cloud: None,
+        });
+    cluster.namespace = Some(release_namespace.to_string());
+    settings
+}
+
+/// A Terraform setup onto an existing cluster, in a namespace of the installer's choosing:
+/// the module registers `kubernetes.cluster.ownership` only, and the imported `kubernetes`
+/// resource carries the namespace. The Operator's first step is an update of the release the
+/// manager delivers; it must accept what setup installed.
+#[tokio::test]
+async fn existing_cluster_import_then_the_operators_first_update_is_accepted() {
+    let fixture =
+        make_fixture_for_platform(Platform::Kubernetes, Some(stack_with_worker("worker"))).await;
+    let mut body = eks_cluster_import_request("acme-k8s", "us-east-1");
+    body.stack_settings.kubernetes = Some(alien_core::KubernetesSettings {
+        cluster: Some(alien_core::KubernetesClusterSettings {
+            ownership: KubernetesClusterOwnership::Existing,
+            namespace: None,
+            cloud: None,
+        }),
+        exposure: None,
+    });
+    body.resources
+        .retain(|resource| resource.id != "default-network");
+    for resource in &mut body.resources {
+        if resource.id == "kubernetes" {
+            resource.import_data = serde_json::to_value(KubernetesClusterImportData {
+                provider: KubernetesClusterProvider::Eks,
+                ownership: KubernetesClusterOwnership::Existing,
+                namespace: "alien-e2e".to_string(),
+                cluster_name: Some("alien-e2e".to_string()),
+                cluster_id: None,
+                cloud_metadata_ready: Some(true),
+                azure_application_gateway_for_containers: None,
+            })
+            .unwrap();
+        }
+    }
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "body = {:#}", json);
+    let parsed: StackImportResponse = serde_json::from_value(json).unwrap();
+    let persisted = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &parsed.deployment_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let installed = persisted
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+        .expect("prepared stack")
+        .clone();
+    let installed_cluster = installed
+        .resources
+        .get("kubernetes")
+        .unwrap()
+        .config
+        .downcast_ref::<KubernetesCluster>()
+        .unwrap()
+        .clone();
+    eprintln!("INSTALLED kubernetes = {installed_cluster:#?}");
+
+    let config = alien_core::DeploymentConfig::builder()
+        .stack_settings(operator_stack_settings(
+            &persisted.stack_settings.clone().unwrap(),
+            "alien-e2e",
+        ))
+        .base_platform(Platform::Aws)
+        .maybe_management_config(body.management_config.clone())
+        .external_bindings(Default::default())
+        .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .allow_frozen_changes(false)
+        .build();
+    let result = alien_preflights::runner::PreflightRunner::new()
+        .run_deployment_time_preflights(
+            stack_with_worker("worker"),
+            persisted.stack_state.as_ref().unwrap(),
+            &config,
+            &alien_core::ClientConfig::Test,
+            Some(&installed),
+            None,
+            None,
+        )
+        .await;
+    if let Err(error) = &result {
+        eprintln!("OPERATOR UPDATE ERROR: {error:?}");
+    }
+    result.expect("the Operator's first update passes the compatibility checks");
+
+    // A genuine change to the setup-owned cluster is still refused.
+    let mut changed = config.clone();
+    changed
+        .stack_settings
+        .kubernetes
+        .as_mut()
+        .and_then(|kubernetes| kubernetes.cluster.as_mut())
+        .unwrap()
+        .cloud = Some(alien_core::KubernetesCloudReference {
+        cluster_name: Some("another-cluster".to_string()),
+        ..Default::default()
+    });
+    let refused = alien_preflights::runner::PreflightRunner::new()
+        .run_deployment_time_preflights(
+            stack_with_worker("worker"),
+            persisted.stack_state.as_ref().unwrap(),
+            &changed,
+            &alien_core::ClientConfig::Test,
+            Some(&installed),
+            None,
+            None,
+        )
+        .await
+        .expect_err("a changed cluster reference needs setup");
+    assert!(format!("{refused:?}").contains("'kubernetes' was modified"));
 }
