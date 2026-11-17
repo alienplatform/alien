@@ -2721,6 +2721,23 @@ fn verify_collector_selector_upgrade(temp: &Path, current_chart: &Path, namespac
         args.push("--set=remoteOperator.enabled=false".to_string());
         args.push("--set=heartbeat.collection.nodes.enabled=false".to_string());
         run_ok("helm", &args, None);
+        if !remote_enabled {
+            // The runtime fixture image only sleeps, so nothing plays the Operator that
+            // creates the Secret it owns. The node collector reads its token from there.
+            run_ok(
+                "kubectl",
+                [
+                    "create",
+                    "secret",
+                    "generic",
+                    &format!("{release}-operator"),
+                    "--namespace",
+                    namespace,
+                    "--from-literal=collector-token=collector-upgrade",
+                ],
+                None,
+            );
+        }
         args[0] = "upgrade".to_string();
         args.push(format!("--set=remoteOperator.enabled={remote_enabled}"));
         args.push("--set=logCollector.mode=nodeAgent".to_string());
