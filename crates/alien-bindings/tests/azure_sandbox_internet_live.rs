@@ -930,6 +930,54 @@ while time.time() < end:
 print("XFER", now(), "end total bytes", total, "attempts", attempt, flush=True)
 "#;
 
+/// Clients as real software uses them, for the whole roll: Python `requests` over HTTPS through the
+/// proxy (each second), a CONNECT with a 20 KiB header (every 5 s) and a streamed (chunked) POST
+/// (every 5 s). One `REQ` line per change of outcome, per slow call (> 3 s) and every 30 s a count.
+const CLIENT_PROBE: &str = r#"
+import base64, os, socket, sys, time, urllib.parse
+import requests
+seconds = int(sys.argv[1])
+env = urllib.parse.urlparse(os.environ["HTTPS_PROXY"])
+basic = base64.b64encode(f"{env.username}:{env.password}".encode()).decode()
+def now(): return int(time.time())
+def get():
+    return str(requests.get("https://example.com", timeout=30).status_code)
+def padded_connect():
+    s = socket.create_connection((env.hostname, env.port), timeout=30)
+    s.settimeout(30)
+    s.sendall(f"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nX-Pad: {'a' * 20000}\r\nProxy-Authorization: Basic {basic}\r\n\r\n".encode())
+    line = s.recv(200).split(b"\r\n")[0].decode(errors="replace")
+    s.close()
+    return line
+def post():
+    def body():
+        for _ in range(32):
+            yield b"x" * 65536
+            time.sleep(0.05)
+    r = requests.post("https://speed.cloudflare.com/__up", data=body(), timeout=60)
+    return str(r.status_code)
+kinds = {"requests-get": get, "connect-20KiB-header": padded_connect, "streamed-post-2MiB": post}
+last, counts = {}, {}
+end, tick, lastsum = time.time() + seconds, 0, time.time()
+while time.time() < end:
+    for kind, fn in kinds.items():
+        if kind != "requests-get" and tick % 5: continue
+        t = time.time()
+        try: out = fn()
+        except Exception as e: out = "ERR " + type(e).__name__ + " " + str(e)[:70]
+        took = time.time() - t
+        counts[(kind, out)] = counts.get((kind, out), 0) + 1
+        if last.get(kind) != out or took > 3:
+            print("REQ", now(), kind, out, round(took, 1), flush=True)
+            last[kind] = out
+    if time.time() - lastsum > 30:
+        lastsum = time.time()
+        print("REQ", now(), "counts", sorted(counts.items()), flush=True)
+    tick += 1
+    time.sleep(1)
+print("REQ", now(), "end counts", sorted(counts.items()), flush=True)
+"#;
+
 /// A running sandbox across a setup re-run that installs a new gateway image. The operator runs the
 /// re-run from outside and drives three stages through the vault secret `gw-replace-signal`
 /// (`ready` -> `vm0-back` -> `done`). Measured, all with times on one clock:
@@ -956,12 +1004,7 @@ async fn live_gateway_replace() {
             .as_secs()
     };
     let note = |line: String| log.borrow_mut().push(line);
-    let policy = || {
-        Some(allow(&[
-            "example.com",
-            "speed.cloudflare.com",
-        ]))
-    };
+    let policy = || Some(allow(&["example.com", "speed.cloudflare.com"]));
 
     let outcome = std::panic::AssertUnwindSafe(async {
         let make = || async {
@@ -1131,7 +1174,50 @@ async fn live_gateway_replace() {
             finished.set(true);
             stage
         };
-        let (stage, ()) = futures::join!(probes, transfer);
+        let clients = async {
+            let stream = sandbox
+                .run_command(
+                    &id,
+                    RunCommandRequest {
+                        command: "python3".to_string(),
+                        args: ["-c", CLIENT_PROBE, "3000"]
+                            .iter()
+                            .map(|arg| arg.to_string())
+                            .collect(),
+                        cwd: None,
+                        env: BTreeMap::new(),
+                        timeout: Duration::from_secs(3100),
+                    },
+                )
+                .await;
+            let mut stream = match stream {
+                Ok(stream) => stream,
+                Err(error) => return note(format!("clients: RUN-ERROR {error}")),
+            };
+            let mut pending = String::new();
+            loop {
+                tokio::select! {
+                    frame = stream.next() => match frame {
+                        Some(Ok(CommandOutput::Stdout { data, .. })) => {
+                            pending.push_str(&String::from_utf8_lossy(&data));
+                            while let Some(at) = pending.find('\n') {
+                                let line: String = pending.drain(..=at).collect();
+                                note(format!("clients: {}", line.trim_end()));
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(error)) => return note(format!("clients: stream error {error}")),
+                        None => return note("clients: command ended".to_string()),
+                    },
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                        if finished.get() {
+                            return note("clients: stopped by the operator's `done`".to_string());
+                        }
+                    }
+                }
+            }
+        };
+        let (stage, (), ()) = futures::join!(probes, transfer, clients);
         if stage != "done" {
             return Err("no `done` signal".to_string());
         }

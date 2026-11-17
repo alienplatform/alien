@@ -5,8 +5,10 @@
 //! the agent listens on loopback and, for each new connection, dials the replicas in turn: the
 //! last one that worked first, then the other, with a connect timeout, so a stopped, rebooting or
 //! blackholed replica costs at most one timeout and the next connection goes straight to the
-//! healthy one. Bytes are relayed unchanged; the forwarder adds no credentials (the proxy token is
-//! in the command's own environment).
+//! healthy one. A CONNECT that a replica accepts and then closes or resets before any answer
+//! byte is replayed once on the other replica (see `relay_connect`). Every other byte is relayed
+//! unchanged; the forwarder adds no credentials (the proxy token is in the command's own
+//! environment).
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -53,19 +55,26 @@ impl Replicas {
 
     /// Dials the preferred replica, then the others, for `PASSES` passes. Remembers the winner.
     pub async fn dial(&self) -> Option<TcpStream> {
-        self.dial_index().await.map(|(stream, _)| stream)
+        self.dial_index(None).await.map(|(stream, _)| stream)
     }
 
-    /// Like `dial`, with the winner's index so a caller can demote it.
-    async fn dial_index(&self) -> Option<(TcpStream, usize)> {
+    /// Like `dial`, with the winner's index so a caller can demote it. `avoid` (the replica a
+    /// CONNECT just failed on) is tried only after every other replica, in each pass: the shared
+    /// preference can point back at it (another connection that reached it set that), and a
+    /// replay must go to the peer whenever the peer accepts a connection.
+    async fn dial_index(&self, avoid: Option<usize>) -> Option<(TcpStream, usize)> {
         let count = self.addresses.len();
         if count == 0 {
             return None;
         }
         let first = self.preferred.load(Ordering::Relaxed) % count;
+        let mut order: Vec<usize> = (0..count).map(|offset| (first + offset) % count).collect();
+        if let Some(avoid) = avoid {
+            order.retain(|index| *index != avoid);
+            order.push(avoid);
+        }
         for _ in 0..PASSES {
-            for offset in 0..count {
-                let index = (first + offset) % count;
+            for &index in &order {
                 let attempt = tokio::time::timeout(
                     self.timeout,
                     TcpStream::connect(self.addresses[index].as_str()),
@@ -101,31 +110,51 @@ async fn relay(replicas: Arc<Replicas>, mut guest: TcpStream) {
         _ => return,
     };
     first.truncate(read);
-    if first.starts_with(b"CONNECT ") {
-        return relay_connect(replicas, guest, first).await;
-    }
-    // Anything else (a plain proxied request) is never replayed: it may carry a body.
-    let Some(mut gateway) = replicas.dial().await else {
-        return;
+    let gateway = if first.starts_with(b"CONNECT ") {
+        // The buffers of the handshake are gone before the tunnel starts.
+        let Some(gateway) = connect_handshake(&replicas, &mut guest, first).await else {
+            return;
+        };
+        gateway
+    } else {
+        // Anything else (a plain proxied request, or a CONNECT whose first read is shorter than
+        // `CONNECT `) is never replayed: it may carry a body.
+        let Some(mut gateway) = replicas.dial().await else {
+            return;
+        };
+        if gateway.write_all(&first).await.is_err() {
+            return;
+        }
+        gateway
     };
-    if gateway.write_all(&first).await.is_ok() {
-        let _ = copy_bidirectional(&mut guest, &mut gateway).await;
-    }
+    let mut gateway = gateway;
+    let _ = copy_bidirectional(&mut guest, &mut gateway).await;
 }
 
 /// A CONNECT is replayed once on the other replica when the first closes or resets before one
 /// answer byte: nothing was tunnelled, so the other replica sees the same request. Guest bytes
 /// keep flowing to the replica while waiting for the answer (a request head can arrive in many
 /// writes), and a copy of up to `REPLAY_LIMIT` bytes is kept for the replay.
-async fn relay_connect(replicas: Arc<Replicas>, mut guest: TcpStream, first: Vec<u8>) {
+///
+/// The replay goes to the other replica whenever it accepts a connection (`dial_index(avoid)`).
+/// The limit on connections per identity is per replica, so a sandbox whose connections get
+/// replayed can reach up to twice its limit: accepted, because the alternative is a failed
+/// connection during every rolling replacement.
+///
+/// Returns the replica that answered once its first answer bytes are written to the guest;
+/// the caller relays the rest. The copy and the read buffers end here, not with the tunnel.
+async fn connect_handshake(
+    replicas: &Replicas,
+    guest: &mut TcpStream,
+    first: Vec<u8>,
+) -> Option<TcpStream> {
     let mut copy = Some(first);
     let mut guest_eof = false;
     let mut chunk = vec![0u8; 8192];
     let mut answer = vec![0u8; 8192];
+    let mut avoid = None;
     for _ in 0..2 {
-        let Some((mut gateway, index)) = replicas.dial_index().await else {
-            return;
-        };
+        let (mut gateway, index) = replicas.dial_index(avoid).await?;
         let mut failed = match &copy {
             Some(bytes) => gateway.write_all(bytes).await.is_err(),
             None => false,
@@ -140,7 +169,7 @@ async fn relay_connect(replicas: Arc<Replicas>, mut guest: TcpStream, first: Vec
                         guest_eof = true;
                         let _ = gateway.shutdown().await;
                     }
-                    Err(_) => return,
+                    Err(_) => return None,
                     Ok(read) => {
                         if let Some(bytes) = copy.as_mut() {
                             if bytes.len() + read > REPLAY_LIMIT {
@@ -154,20 +183,17 @@ async fn relay_connect(replicas: Arc<Replicas>, mut guest: TcpStream, first: Vec
                 },
                 read = gateway.read(&mut answer) => match read {
                     Ok(read) if read > 0 => {
-                        if guest.write_all(&answer[..read]).await.is_ok() {
-                            let _ = copy_bidirectional(&mut guest, &mut gateway).await;
-                        }
-                        return;
+                        return guest.write_all(&answer[..read]).await.ok().map(|_| gateway);
                     }
                     _ => failed = true,
                 },
             }
         }
-        demote(&replicas, index);
-        if copy.is_none() {
-            return;
-        }
+        demote(replicas, index);
+        avoid = Some(index);
+        copy.as_ref()?;
     }
+    None
 }
 
 /// Accept loop. Returns only if the listener fails.
@@ -401,6 +427,18 @@ mod tests {
                     }
                     match reply {
                         Reply::Answer => {
+                            // Bytes that follow the head at once (a ClientHello) count too.
+                            while let Ok(Ok(read)) = tokio::time::timeout(
+                                Duration::from_millis(200),
+                                stream.read(&mut buffer),
+                            )
+                            .await
+                            {
+                                if read == 0 {
+                                    break;
+                                }
+                                got.extend_from_slice(&buffer[..read]);
+                            }
                             let _ = stream
                                 .write_all(format!("ANSWER {}", got.len()).as_bytes())
                                 .await;
@@ -531,6 +569,67 @@ mod tests {
         assert_eq!(got, "");
         assert_eq!(first_hits.load(Ordering::SeqCst), 1);
         assert_eq!(second_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_first_read_shorter_than_connect_is_relayed_without_replay() {
+        let (first, first_hits) = scripted(Reply::Close).await;
+        let (second, second_hits) = scripted(Reply::Answer).await;
+        let got = exchange(
+            vec![first, second],
+            vec![b"CON".to_vec(), b"NECT a:443 HTTP/1.1\r\n\r\n".to_vec()],
+        )
+        .await;
+        assert_eq!(got, "");
+        assert_eq!(first_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(second_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_client_hello_right_after_the_head_is_replayed_with_it() {
+        let (bad, _) = scripted(Reply::Close).await;
+        let (good, good_hits) = scripted(Reply::Answer).await;
+        let head = b"CONNECT a:443 HTTP/1.1\r\n\r\n".to_vec();
+        let hello = vec![0x16, 0x03, 0x01, 0x00, 0x05, 1, 2, 3, 4, 5];
+        let want = format!("ANSWER {}", head.len() + hello.len());
+        let got = exchange(vec![bad, good], vec![head, hello]).await;
+        assert_eq!(got, want);
+        assert_eq!(good_hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_connect_head_just_under_the_replay_limit_is_replayed() {
+        let (first, _) = scripted(Reply::Close).await;
+        let (second, second_hits) = scripted(Reply::Answer).await;
+        let head = format!(
+            "CONNECT a:443 HTTP/1.1\r\nX-Pad: {}\r\n\r\n",
+            "p".repeat(REPLAY_LIMIT - 100)
+        );
+        assert!(head.len() < REPLAY_LIMIT);
+        let want = format!("ANSWER {}", head.len());
+        let got = exchange(vec![first, second], vec![head.into_bytes()]).await;
+        assert_eq!(got, want);
+        assert_eq!(second_hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_replay_avoids_the_replica_that_just_failed_even_when_the_preference_points_back() {
+        let (first, first_hits) = scripted(Reply::Close).await;
+        let (second, _) = scripted(Reply::Answer).await;
+        let replicas = Replicas::new(vec![first, second], Duration::from_millis(300));
+        // Another connection reached replica 0 and set the shared preference back to it.
+        replicas.preferred.store(0, Ordering::Relaxed);
+        let (_stream, index) = replicas.dial_index(Some(0)).await.unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(first_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_replay_falls_back_to_the_failed_replica_when_the_peer_refuses() {
+        let (first, _) = scripted(Reply::Answer).await;
+        let replicas = Replicas::new(vec![first, refused()], Duration::from_millis(300));
+        let (_stream, index) = replicas.dial_index(Some(0)).await.unwrap();
+        assert_eq!(index, 0);
     }
 
     #[tokio::test]
