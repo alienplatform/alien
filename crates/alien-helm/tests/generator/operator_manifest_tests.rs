@@ -975,11 +975,18 @@ fn rendered_operator_chart(
     parse_manifest(&rendered.stdout)
 }
 
-/// Resources the Operator's Role or ClusterRole may `patch` in the `apps` group.
-fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
-    docs.iter()
-        .filter(|doc| doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
-        .flat_map(|role| role["rules"].as_sequence().into_iter().flatten())
+fn hook_events(doc: &YamlValue) -> Vec<String> {
+    doc["metadata"]["annotations"]["helm.sh/hook"]
+        .as_str()
+        .map(|events| events.split(',').map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+fn grants_workload_patch(role: &YamlValue) -> BTreeSet<String> {
+    role["rules"]
+        .as_sequence()
+        .into_iter()
+        .flatten()
         .filter(|rule| {
             rule["apiGroups"][0] == "apps"
                 && rule["verbs"]
@@ -991,6 +998,59 @@ fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
         .filter(|resource| WORKLOAD_KINDS.contains(resource))
         .map(str::to_owned)
         .collect()
+}
+
+/// Resources the chart's grant lets the Operator `patch` in the `apps` group. The grant is a
+/// Role or ClusterRole run as a `post-install,post-upgrade,post-rollback` hook; no role of the
+/// release itself may carry it, and a `pre-delete` hook of the same name removes it again.
+fn patchable_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
+    let roles: Vec<_> = docs
+        .iter()
+        .filter(|doc| doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
+        .collect();
+    let mut granted = BTreeSet::new();
+    for role in &roles {
+        let events = hook_events(role);
+        let patch = grants_workload_patch(role);
+        if events.is_empty() {
+            assert!(patch.is_empty(), "a release role carries a workload patch");
+        } else if events.contains(&"post-install".to_owned()) {
+            assert_eq!(
+                events,
+                ["post-install", "post-upgrade", "post-rollback"],
+                "the grant runs after the release objects are applied"
+            );
+            assert_eq!(
+                role["metadata"]["annotations"]["helm.sh/hook-delete-policy"],
+                "before-hook-creation"
+            );
+            granted.extend(patch);
+        } else {
+            assert_eq!(events, ["pre-delete"]);
+            assert!(role["rules"].as_sequence().unwrap().is_empty());
+        }
+    }
+    // Each kind of hook object comes in the pair that installs and removes it, with its binding.
+    let named = |kind: &str, event: &str| -> BTreeSet<String> {
+        docs.iter()
+            .filter(|doc| doc["kind"] == kind && hook_events(doc).iter().any(|e| e == event))
+            .map(|doc| doc["metadata"]["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    for (role, binding) in [
+        ("Role", "RoleBinding"),
+        ("ClusterRole", "ClusterRoleBinding"),
+    ] {
+        for event in ["post-install", "pre-delete"] {
+            assert_eq!(named(role, event), named(binding, event));
+        }
+        assert_eq!(
+            named(role, "post-install"),
+            named(role, "pre-delete"),
+            "uninstall removes what the hook created"
+        );
+    }
+    granted
 }
 
 /// Resources a bound policy of the chart limits, and whether every policy has a binding.
@@ -1112,6 +1172,8 @@ fn restart_policy_admits_only_the_operator_account_restarting_in_its_namespace()
             spec["matchConditions"][0]["expression"],
             "request.userInfo.username == 'system:serviceaccount:ns1:my-saas-operator'"
         );
+        // A standalone Operator has no dynamic workloads to exempt.
+        assert_eq!(spec["matchConditions"].as_sequence().unwrap().len(), 1);
         let expressions: String = spec["validations"]
             .as_sequence()
             .unwrap()
@@ -1137,7 +1199,10 @@ fn restart_policy_admits_only_the_operator_account_restarting_in_its_namespace()
         // The rule keeps its resource name limit.
         let role = docs
             .iter()
-            .find(|doc| doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
+            .find(|doc| {
+                (doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
+                    && hook_events(doc).iter().any(|event| event == "post-install")
+            })
             .unwrap();
         let patch_rule = role["rules"]
             .as_sequence()

@@ -30,11 +30,11 @@ impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
         let _ = Command::new("helm")
             .args(["--kube-context", self.0, "uninstall", RELEASE])
-            .args(["--namespace", NAMESPACE, "--ignore-not-found", "--no-hooks"])
+            .args(["--namespace", NAMESPACE, "--ignore-not-found"])
             .output();
         let _ = Command::new("kubectl")
             .args(["--context", self.0, "delete", "namespace", NAMESPACE])
-            .args(["--ignore-not-found", "--wait=false"])
+            .args(["--ignore-not-found", "--wait=true", "--timeout=120s"])
             .output();
     }
 }
@@ -94,9 +94,14 @@ fn operation() -> KubernetesOperationPermissions {
     }
 }
 
-fn write_chart(directory: &Path) {
+/// The Operator chart. `with_operation` declares the restart operation (a chart without it is
+/// the chart as it was before the feature); `scope` is the install scope. A `zz-broken.yaml`
+/// template that fails when applied is switched on by `--set broken=true`: it sorts after the
+/// policy objects, so the release fails after they were applied.
+fn write_chart(directory: &Path, with_operation: bool, scope: OperatorScope) {
+    let operations = [operation()];
     let template = generate_operator_manifest(OperatorManifestOptions {
-        custom_operation_permissions: &[operation()],
+        custom_operation_permissions: if with_operation { &operations } else { &[] },
         manager_url: "https://manager.example.com",
         group_token: "test-token",
         encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -107,7 +112,7 @@ fn write_chart(directory: &Path) {
         environment_name: None,
         install_namespace: None,
         label_domain: None,
-        scope: OperatorScope::Namespace,
+        scope,
         label_selector: None,
         permission: OperatorPermission::Remediation,
         format: OperatorOutputFormat::HelmTemplate,
@@ -121,10 +126,15 @@ fn write_chart(directory: &Path) {
     .unwrap();
     fs::write(
         directory.join("values.yaml"),
-        "remoteOperator:\n  serviceAccountAnnotations: {}\nalien:\n  version: test\n",
+        "broken: false\nremoteOperator:\n  serviceAccountAnnotations: {}\nalien:\n  version: test\n",
     )
     .unwrap();
     fs::write(directory.join("templates/operator.yaml"), template).unwrap();
+    fs::write(
+        directory.join("templates/zz-broken.yaml"),
+        "{{- if .Values.broken }}\napiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\nmetadata: {name: Not_A_Valid_Name}\nspec: {policyName: nothing}\n{{- end }}\n",
+    )
+    .unwrap();
 }
 
 const WORKLOADS: &str = r#"apiVersion: apps/v1
@@ -134,7 +144,7 @@ spec:
   replicas: 0
   selector: {matchLabels: {app: web}}
   template:
-    metadata: {labels: {app: web}}
+    metadata: {labels: {app: web}, annotations: {keep: "1"}}
     spec:
       containers: [{name: main, image: "registry.k8s.io/pause:3.10"}]
 ---
@@ -263,7 +273,7 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
         .expect("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT names the cluster");
     let _cleanup = Cleanup(&context);
     let directory = tempfile::tempdir().unwrap();
-    write_chart(directory.path());
+    write_chart(directory.path(), true, OperatorScope::Namespace);
 
     let rendered = run(
         "helm",
@@ -279,7 +289,7 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
         None,
     );
     assert!(rendered.0);
-    let rendered = rendered.1;
+    assert!(rendered.1.contains("helm.sh/hook: post-install"));
     let (ok, _) = run(
         "helm",
         &[
@@ -487,6 +497,49 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
             "update strategy",
             r#"{"spec":{"updateStrategy":{"type":"OnDelete"}}}"#,
         ),
+        ("deployment", "web", "paused", r#"{"spec":{"paused":true}}"#),
+        (
+            "deployment",
+            "web",
+            "revision history limit",
+            r#"{"spec":{"revisionHistoryLimit":1}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "an init container",
+            r#"{"spec":{"template":{"spec":{"initContainers":[{"name":"i","image":"busybox"}]}}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "owner references",
+            r#"{"metadata":{"ownerReferences":[{"apiVersion":"v1","kind":"ConfigMap","name":"x","uid":"00000000-0000-0000-0000-000000000000"}]}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "finalizers",
+            r#"{"metadata":{"finalizers":["example.com/hold"]}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "the annotation the server sets on a DaemonSet, set on a Deployment",
+            r#"{"metadata":{"annotations":{"deprecated.daemonset.template.generation":"9"}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "removing an existing pod annotation",
+            r#"{"spec":{"template":{"metadata":{"annotations":{"keep":null}}}}}"#,
+        ),
+        (
+            "daemonset",
+            "agent",
+            "a pod template key beside metadata and spec",
+            r#"{"metadata":{"labels":{"extra":"x"}}}"#,
+        ),
     ];
     for (kind, name, what, body) in refused {
         let (ok, text) = patch(&context, OPERATOR, kind, name, body);
@@ -496,6 +549,61 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
             "{what} of {kind} is refused by the policy with its message: {text}"
         );
     }
+
+    // The same changes in the other patch formats, and changes the API server may refuse on its
+    // own: refused whichever check says so.
+    let item = format!("/apis/apps/v1/namespaces/{NAMESPACE}/deployments/web");
+    for (what, content_type, body) in [
+        (
+            "JSON patch of the replicas",
+            "json-patch+json",
+            r#"[{"op":"replace","path":"/spec/replicas","value":3}]"#,
+        ),
+        (
+            "JSON patch of the image",
+            "json-patch+json",
+            r#"[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"busybox"}]"#,
+        ),
+        (
+            "JSON patch adding an annotation next to the restart",
+            "json-patch+json",
+            r#"[{"op":"add","path":"/spec/template/metadata/annotations/other","value":"x"}]"#,
+        ),
+        (
+            "merge patch of the image",
+            "merge-patch+json",
+            r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
+        ),
+        (
+            "merge patch removing a pod label",
+            "merge-patch+json",
+            r#"{"spec":{"template":{"metadata":{"labels":{"app":null}}}}}"#,
+        ),
+        (
+            "an ephemeral container",
+            "merge-patch+json",
+            r#"{"spec":{"template":{"spec":{"ephemeralContainers":[{"name":"e","image":"busybox"}]}}}}"#,
+        ),
+    ] {
+        let (ok, text) = api_patch_as(&context, OPERATOR, &item, content_type, body);
+        assert!(!ok, "{what} must be refused: {text}");
+    }
+    let (ok, text) = api_patch_as(
+        &context,
+        OPERATOR,
+        &item,
+        "json-patch+json",
+        r#"[{"op":"add","path":"/spec/template/metadata/annotations/kubectl.kubernetes.io~1restartedAt","value":"2026-05-01T00:00:00Z"}]"#,
+    );
+    assert!(ok, "a JSON patch of the restart annotation passes: {text}");
+    let (ok, text) = api_patch_as(
+        &context,
+        OPERATOR,
+        &format!("/apis/apps/v1/namespaces/{NAMESPACE}/statefulsets/db"),
+        "merge-patch+json",
+        r#"{"spec":{"volumeClaimTemplates":[{"metadata":{"name":"data"},"spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"1Gi"}}}}]}}"#,
+    );
+    assert!(!ok, "volumeClaimTemplates must be refused: {text}");
 
     // The status and scale subresources are not part of the grant.
     for subresource in ["status", "scale"] {
@@ -550,7 +658,7 @@ fn a_cluster_without_the_policy_api_gets_no_workload_patch() {
         "this cluster serves the policy API; use one older than Kubernetes 1.30"
     );
     let directory = tempfile::tempdir().unwrap();
-    write_chart(directory.path());
+    write_chart(directory.path(), true, OperatorScope::Namespace);
     let (ok, rendered) = run(
         "helm",
         &[
@@ -574,5 +682,505 @@ fn a_cluster_without_the_policy_api_gets_no_workload_patch() {
     assert!(
         !rendered.contains("verbs: ['patch']"),
         "no workload patch is granted without its policy"
+    );
+}
+
+static NEXT_REPLICAS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1000);
+
+const PROBE_BODY: &str = r#"{"spec":{"replicas":REPLICAS}}"#;
+
+/// Patches the replicas of `web` as `user` over and over (a different value every time, so an
+/// admitted patch is always a change) and records every HTTP status.
+struct Probe {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    statuses: std::sync::Arc<std::sync::Mutex<Vec<(std::time::Instant, u16)>>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    proxy: std::process::Child,
+}
+
+impl Probe {
+    fn start(context: &str, user: &str) -> Probe {
+        use std::io::{BufRead, BufReader};
+        use std::process::Stdio;
+        use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex};
+        let as_user = format!("--as={user}");
+        let mut proxy = Command::new("kubectl")
+            .args(["--context", context, &as_user, "proxy", "--port=0"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("start kubectl proxy");
+        let mut line = String::new();
+        BufReader::new(proxy.stdout.as_mut().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let address = line.trim().rsplit(' ').next().unwrap().to_owned();
+        let url = format!("http://{address}/apis/apps/v1/namespaces/{NAMESPACE}/deployments/web");
+        let stop = Arc::new(AtomicBool::new(false));
+        let statuses = Arc::new(Mutex::new(Vec::new()));
+        let (stop_flag, seen) = (stop.clone(), statuses.clone());
+        let thread = std::thread::spawn(move || {
+            // Every probe patch is a change: a repeated value would be a no-op the policy admits.
+            while !stop_flag.load(Ordering::SeqCst) {
+                let count = NEXT_REPLICAS.fetch_add(1, Ordering::SeqCst);
+                let body = PROBE_BODY.replace("REPLICAS", &count.to_string());
+                let output = Command::new("curl")
+                    .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "-X", "PATCH"])
+                    .args(["-H", "Content-Type: application/strategic-merge-patch+json"])
+                    .args(["-d", &body, &url])
+                    .output()
+                    .expect("run curl");
+                if let Ok(status) = String::from_utf8_lossy(&output.stdout).parse::<u16>() {
+                    seen.lock()
+                        .unwrap()
+                        .push((std::time::Instant::now(), status));
+                }
+            }
+        });
+        Probe {
+            stop,
+            statuses,
+            thread: Some(thread),
+            proxy,
+        }
+    }
+
+    /// The statuses seen, in order, with repeats folded.
+    fn finish(mut self) -> Seen {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.thread.take().unwrap().join().unwrap();
+        let _ = self.proxy.kill();
+        let _ = self.proxy.wait();
+        let all = self.statuses.lock().unwrap().clone();
+        let mut folded: Vec<u16> = all.iter().map(|(_, status)| *status).collect();
+        folded.dedup();
+        // How long an admitted patch was possible: from the first to the last 200.
+        let admitted: Vec<_> = all.iter().filter(|(_, status)| *status == 200).collect();
+        println!(
+            "probe statuses (HTTP, repeats folded): {folded:?}; {} requests, {} admitted{}",
+            all.len(),
+            admitted.len(),
+            match (admitted.first(), admitted.last()) {
+                (Some(first), Some(last)) => format!(" over {} ms", (last.0 - first.0).as_millis()),
+                _ => String::new(),
+            }
+        );
+        Seen {
+            statuses: folded,
+            admitted_ms: match (admitted.first(), admitted.last()) {
+                (Some(first), Some(last)) => Some((last.0 - first.0).as_millis()),
+                _ => None,
+            },
+        }
+    }
+}
+
+struct Seen {
+    statuses: Vec<u16>,
+    /// From the first to the last admitted patch, if any was.
+    admitted_ms: Option<u128>,
+}
+
+impl Seen {
+    /// The grant is never usable unenforced: no patch was admitted.
+    fn assert_never_admitted(&self, when: &str) {
+        assert!(
+            self.admitted_ms.is_none(),
+            "a patch was admitted {when}: {:?}",
+            self.statuses
+        );
+    }
+
+    /// The policy was new: the API server needs a moment to start enforcing it, and patches the
+    /// grant admits in that moment are not limited. It must be short and end in the refusal.
+    fn assert_only_the_start_up_of_a_new_policy(&self, when: &str) {
+        assert_eq!(
+            self.statuses.first(),
+            Some(&403),
+            "{when}: {:?}",
+            self.statuses
+        );
+        assert_eq!(
+            self.statuses.last(),
+            Some(&422),
+            "{when}: {:?}",
+            self.statuses
+        );
+        assert!(
+            self.statuses.len() <= 3,
+            "{when}: admitted again after refusing: {:?}",
+            self.statuses
+        );
+        assert!(
+            self.admitted_ms.unwrap_or(0) < 3000,
+            "{when}: the unenforced window is {:?} ms",
+            self.admitted_ms
+        );
+        println!(
+            "{when}: patches were admitted for {:?} ms after the grant appeared (the API server starting to enforce the new policy)",
+            self.admitted_ms
+        );
+    }
+}
+
+fn can_patch_workloads(context: &str) -> bool {
+    let (_, can) = kubectl(
+        context,
+        &[
+            "auth",
+            "can-i",
+            "patch",
+            "deployments.apps",
+            &format!("--as={OPERATOR}"),
+        ],
+        None,
+    );
+    can.trim() == "yes"
+}
+
+fn helm_chart(context: &str, verb: &str, chart: &Path, extra: &[&str]) -> (bool, String) {
+    let mut arguments = vec!["--kube-context", context, verb, RELEASE];
+    arguments.push(chart.to_str().unwrap());
+    arguments.extend(["--namespace", NAMESPACE]);
+    arguments.extend(extra);
+    run("helm", &arguments, None)
+}
+
+fn install_namespace_and_workloads(context: &str) {
+    assert!(
+        run(
+            "kubectl",
+            &["--context", context, "create", "namespace", NAMESPACE],
+            None
+        )
+        .0
+    );
+    assert!(kubectl(context, &["apply", "-f", "-"], Some(WORKLOADS)).0);
+}
+
+/// The grant (the `patch` rule) is never usable without an enforcing policy: not while a chart
+/// that has the feature is installed over one that has not, not when the upgrade fails after the
+/// policy was applied, and not while the release is uninstalled.
+///
+/// A probe patches the replicas of a workload as the Operator the whole time. It sees 403 while
+/// there is no grant; the first answer after that must be the policy's refusal, never an
+/// admitted patch.
+#[test]
+#[ignore = "requires a disposable cluster (Kubernetes 1.30 or later) named by ALIEN_WORKLOAD_RESTART_KIND_CONTEXT"]
+fn the_grant_never_exists_without_an_enforcing_policy() {
+    let context = std::env::var("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT")
+        .expect("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT names the cluster");
+    let _cleanup = Cleanup(&context);
+    let before = tempfile::tempdir().unwrap();
+    let after = tempfile::tempdir().unwrap();
+    write_chart(before.path(), false, OperatorScope::Namespace);
+    write_chart(after.path(), true, OperatorScope::Namespace);
+    install_namespace_and_workloads(&context);
+
+    // A fresh install of the chart with the feature.
+    let probe = Probe::start(&context, OPERATOR);
+    let (ok, _) = helm_chart(&context, "install", after.path(), &[]);
+    assert!(ok);
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let seen = probe.finish();
+    assert!(can_patch_workloads(&context));
+    seen.assert_only_the_start_up_of_a_new_policy("install");
+    // Hook objects stay out of the release's manifest.
+    let (_, manifest) = run(
+        "helm",
+        &[
+            "--kube-context",
+            &context,
+            "get",
+            "manifest",
+            RELEASE,
+            "--namespace",
+            NAMESPACE,
+        ],
+        None,
+    );
+    assert!(manifest.contains("ValidatingAdmissionPolicy"));
+    assert!(!manifest.contains("verbs: ['patch']") && !manifest.contains("- patch"));
+
+    // Uninstall: the pre-delete hook removes the grant before the policy goes.
+    let probe = Probe::start(&context, OPERATOR);
+    let (ok, _) = run(
+        "helm",
+        &[
+            "--kube-context",
+            &context,
+            "uninstall",
+            RELEASE,
+            "--namespace",
+            NAMESPACE,
+        ],
+        None,
+    );
+    assert!(ok);
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let seen = probe.finish();
+    seen.assert_never_admitted("during uninstall");
+    assert_eq!(seen.statuses.last(), Some(&403));
+    assert!(!can_patch_workloads(&context));
+    for kind in ["role", "rolebinding", "clusterrole", "clusterrolebinding"] {
+        let (_, left) = kubectl(
+            &context,
+            &["get", kind, "-A", "--no-headers", "-o", "name"],
+            None,
+        );
+        assert!(!left.contains("restart"), "uninstall left a {kind}: {left}");
+    }
+    let (_, policies) = run(
+        "kubectl",
+        &[
+            "--context",
+            &context,
+            "get",
+            "validatingadmissionpolicies,validatingadmissionpolicybindings",
+            "-o",
+            "name",
+        ],
+        None,
+    );
+    assert!(
+        !policies.contains("restart"),
+        "uninstall left a policy: {policies}"
+    );
+
+    // An upgrade from a chart without the feature.
+    assert!(helm_chart(&context, "install", before.path(), &[]).0);
+    assert!(!can_patch_workloads(&context));
+    let probe = Probe::start(&context, OPERATOR);
+    let (ok, _) = helm_chart(&context, "upgrade", after.path(), &[]);
+    assert!(ok);
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    let seen = probe.finish();
+    assert!(can_patch_workloads(&context));
+    seen.assert_only_the_start_up_of_a_new_policy("upgrade from a chart without the feature");
+
+    // A second upgrade replaces the grant (the hook deletes it before it creates it again) and
+    // never leaves it without the policy.
+    let probe = Probe::start(&context, OPERATOR);
+    assert!(
+        helm_chart(
+            &context,
+            "upgrade",
+            after.path(),
+            &["--set", "alien.version=next"]
+        )
+        .0
+    );
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let seen = probe.finish();
+    seen.assert_never_admitted("during a second upgrade (the policy is already enforcing)");
+    assert!(can_patch_workloads(&context));
+
+    // A failed upgrade, after the policy objects were applied, creates no new grant: start from
+    // the chart without the feature.
+    assert!(
+        run(
+            "helm",
+            &[
+                "--kube-context",
+                &context,
+                "uninstall",
+                RELEASE,
+                "--namespace",
+                NAMESPACE
+            ],
+            None
+        )
+        .0
+    );
+    assert!(helm_chart(&context, "install", before.path(), &[]).0);
+    let (ok, text) = helm_chart(&context, "upgrade", after.path(), &["--set", "broken=true"]);
+    assert!(!ok, "the broken upgrade must fail: {text}");
+    let (_, policies) = run(
+        "kubectl",
+        &[
+            "--context",
+            &context,
+            "get",
+            "validatingadmissionpolicies",
+            "-o",
+            "name",
+        ],
+        None,
+    );
+    assert!(
+        policies.contains("restart"),
+        "the policy was applied before the failure: {policies}"
+    );
+    assert!(
+        !can_patch_workloads(&context),
+        "a failed upgrade leaves no grant"
+    );
+    // And the next good upgrade completes it.
+    assert!(helm_chart(&context, "upgrade", after.path(), &[]).0);
+    assert!(can_patch_workloads(&context));
+    // A rollback to the revision of the chart without the feature, recorded as it is: Helm runs
+    // the hooks of the revision it returns to, and that chart has none, so the grant its
+    // successor created stays while the rollback removes the policy.
+    let (ok, _) = run(
+        "helm",
+        &[
+            "--kube-context",
+            &context,
+            "rollback",
+            RELEASE,
+            "1",
+            "--namespace",
+            NAMESPACE,
+        ],
+        None,
+    );
+    assert!(ok);
+    println!(
+        "after a rollback to a chart without the feature: grant present = {}",
+        can_patch_workloads(&context)
+    );
+}
+
+/// A cluster-wide install patches in any namespace; its policy has no namespace selector.
+#[test]
+#[ignore = "requires a disposable cluster (Kubernetes 1.30 or later) named by ALIEN_WORKLOAD_RESTART_KIND_CONTEXT"]
+fn a_cluster_wide_install_is_limited_to_a_restart_in_every_namespace() {
+    let context = std::env::var("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT")
+        .expect("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT names the cluster");
+    let _cleanup = Cleanup(&context);
+    let _other = CleanupNamespace(&context, "alien-restart-other");
+    let chart = tempfile::tempdir().unwrap();
+    write_chart(chart.path(), true, OperatorScope::Cluster);
+    install_namespace_and_workloads(&context);
+    assert!(helm_chart(&context, "install", chart.path(), &[]).0);
+    assert!(
+        run(
+            "kubectl",
+            &[
+                "--context",
+                &context,
+                "create",
+                "namespace",
+                "alien-restart-other"
+            ],
+            None
+        )
+        .0
+    );
+    assert!(
+        run(
+            "kubectl",
+            &[
+                "--context",
+                &context,
+                "--namespace",
+                "alien-restart-other",
+                "apply",
+                "-f",
+                "-"
+            ],
+            Some(WORKLOADS.split("---\n").next().unwrap()),
+        )
+        .0
+    );
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let path = "/apis/apps/v1/namespaces/alien-restart-other/deployments/web";
+    assert!(
+        api_patch(&context, OPERATOR, path, RESTART).0,
+        "a restart in another namespace"
+    );
+    let (ok, text) = api_patch(
+        &context,
+        OPERATOR,
+        path,
+        r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
+    );
+    assert!(
+        !ok && text.contains("denied request"),
+        "an image in another namespace: {text}"
+    );
+}
+
+struct CleanupNamespace<'a>(&'a str, &'a str);
+
+impl Drop for CleanupNamespace<'_> {
+    fn drop(&mut self) {
+        let _ = Command::new("kubectl")
+            .args(["--context", self.0, "delete", "namespace", self.1])
+            .args(["--ignore-not-found", "--wait=true", "--timeout=120s"])
+            .output();
+    }
+}
+
+/// A namespaced install is bound to its own namespace: its Role does not reach another one, and
+/// the binding does not match another namespace's workloads.
+#[test]
+#[ignore = "requires a disposable cluster (Kubernetes 1.30 or later) named by ALIEN_WORKLOAD_RESTART_KIND_CONTEXT"]
+fn a_namespaced_install_reaches_and_limits_only_its_own_namespace() {
+    let context = std::env::var("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT")
+        .expect("ALIEN_WORKLOAD_RESTART_KIND_CONTEXT names the cluster");
+    let _cleanup = Cleanup(&context);
+    let _other = CleanupNamespace(&context, "alien-restart-other");
+    let chart = tempfile::tempdir().unwrap();
+    write_chart(chart.path(), true, OperatorScope::Namespace);
+    install_namespace_and_workloads(&context);
+    assert!(helm_chart(&context, "install", chart.path(), &[]).0);
+    assert!(
+        run(
+            "kubectl",
+            &[
+                "--context",
+                &context,
+                "create",
+                "namespace",
+                "alien-restart-other"
+            ],
+            None
+        )
+        .0
+    );
+    assert!(
+        run(
+            "kubectl",
+            &[
+                "--context",
+                &context,
+                "--namespace",
+                "alien-restart-other",
+                "apply",
+                "-f",
+                "-"
+            ],
+            Some(WORKLOADS.split("---\n").next().unwrap()),
+        )
+        .0
+    );
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    let path = "/apis/apps/v1/namespaces/alien-restart-other/deployments/web";
+    let (ok, text) = api_patch(&context, OPERATOR, path, RESTART);
+    assert!(
+        !ok && text.contains("forbidden") && !text.contains("denied request"),
+        "{text}"
+    );
+    // Nobody else is limited there.
+    let (ok, text) = run(
+        "kubectl",
+        &[
+            "--context",
+            &context,
+            "--namespace",
+            "alien-restart-other",
+            "patch",
+            "deployment",
+            "web",
+            "--type=merge",
+            "-p",
+            r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
+        ],
+        None,
+    );
+    assert!(
+        ok,
+        "an account that is not the Operator is not limited: {}",
+        text
     );
 }

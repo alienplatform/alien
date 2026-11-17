@@ -2192,10 +2192,11 @@ fn generate_operator_manifest_inner(
         ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
-    // The workload `patch` rule and the policy that limits it to a restart are
+    // The workload `patch` grant and the policy that limits it to a restart are
     // one decision: both come from `restart_grants`.
-    docs.extend(workload_restart_policy_docs(
+    let (policy_docs, restart_hook_docs) = workload_restart_policy_docs(
         &operator_name,
+        namespace,
         options.scope,
         &labels,
         &restart_grants(
@@ -2203,7 +2204,9 @@ fn generate_operator_manifest_inner(
             options.custom_operation_permissions,
             options.format,
         ),
-    ));
+        dynamic_containers,
+    );
+    docs.extend(policy_docs);
     // Dynamic workloads need write access in this deployment namespace only.
     // Keep it in a Role even when inventory observation uses a ClusterRole.
     if dynamic_containers {
@@ -2349,6 +2352,7 @@ fn generate_operator_manifest_inner(
         ));
     }
 
+    docs.extend(restart_hook_docs);
     Ok(ensure_trailing_newline(docs.join("---\n")))
 }
 
@@ -2689,12 +2693,7 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(&operator_rules(
-        crd_names,
-        permission,
-        custom_operations,
-        format,
-    ));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
     yaml
 }
 
@@ -2842,7 +2841,6 @@ fn operator_rules(
     names: &AccessRequestCrdNames,
     permission: OperatorPermission,
     custom_operations: &[KubernetesOperationPermissions],
-    format: OperatorOutputFormat,
 ) -> String {
     // Normalize runtime and operation grants together. Names are part of the key:
     // sharing a grant never widens a named requirement to all resources.
@@ -2958,38 +2956,6 @@ fn operator_rules(
             ));
         }
     }
-    // The `patch` on workloads exists only where the cluster serves the
-    // admission policy API: the same condition guards the policy objects.
-    let restart = restart_grants(permission, custom_operations, format);
-    if !restart.0.is_empty() {
-        yaml.push_str(&format!(
-            "  {{{{- if {} }}}}\n",
-            workload_restart::POLICY_API_CONDITION
-        ));
-        for (grant, reasons) in &restart.0 {
-            for reason in reasons {
-                yaml.push_str(&format!(
-                    "  # Required by {reason} (limited to a restart by the admission policy of this chart)\n"
-                ));
-            }
-            yaml.push_str(&format!(
-                "  - apiGroups: ['apps']\n    resources: [{}]\n    verbs: ['patch']\n",
-                yaml_string(grant.resource)
-            ));
-            if !grant.resource_names.is_empty() {
-                yaml.push_str(&format!(
-                    "    resourceNames: [{}]\n",
-                    grant
-                        .resource_names
-                        .iter()
-                        .map(|name| yaml_string(name))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-        }
-        yaml.push_str("  {{- end }}\n");
-    }
     yaml
 }
 
@@ -3049,17 +3015,35 @@ fn restart_grants(
     RestartGrants(grants)
 }
 
-/// The admission policy and binding for the workload kinds the Operator may
-/// patch, or nothing when no `patch` rule is rendered.
+/// The objects of the workload `patch` grant: the admission policy and its
+/// binding (ordinary release objects), and the Role or ClusterRole carrying the
+/// `patch` rule with its binding, which are Helm hooks.
+///
+/// The rule is a hook so it can never exist without the policy:
+/// - `post-install`, `post-upgrade` and `post-rollback` run only after every
+///   release object, the policy included, has been applied. A release that
+///   fails earlier leaves no new rule.
+/// - Helm applies unknown kinds (the policy) after Role and ClusterRole, so
+///   inside the release the rule would exist for a moment before the policy.
+/// - `before-hook-creation` replaces the rule on each run: the rule is absent
+///   for an instant on an upgrade, never present without the policy.
+/// - Hook objects are not part of the release, so `helm uninstall` would leave
+///   them. A `pre-delete` hook of the same kind and name removes them before
+///   the policy is deleted: `before-hook-creation` deletes the stored object,
+///   the hook creates an empty rule that `hook-succeeded` deletes again.
+///
+/// Returns (release objects, hook objects).
 fn workload_restart_policy_docs(
     operator_name: &str,
+    namespace: &str,
     scope: OperatorScope,
     labels: &BTreeMap<String, String>,
     grants: &RestartGrants,
-) -> Vec<String> {
+    dynamic_containers: bool,
+) -> (Vec<String>, Vec<String>) {
     let resources: BTreeSet<&str> = grants.0.keys().map(|grant| grant.resource).collect();
     if resources.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     // A template-valued name (`{{ include ... }}`) is used as the expression it
     // wraps; a literal name is quoted.
@@ -3084,8 +3068,17 @@ fn workload_restart_policy_docs(
         .collect::<Vec<_>>()
         .join(", ");
     let mut policy = format!(
-        "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\n{metadata}spec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n      - apiGroups: ['apps']\n        apiVersions: ['v1']\n        operations: ['UPDATE']\n        resources: [{resource_list}]\n  matchConditions:\n    - name: operator-account\n      expression: {{{{ printf \"request.userInfo.username == 'system:serviceaccount:%s:%s'\" .Release.Namespace {name_expression} | quote }}}}\n  variables:\n"
+        "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\n{metadata}spec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n      - apiGroups: ['apps']\n        apiVersions: ['v1']\n        operations: ['UPDATE']\n        resources: [{resource_list}]\n  matchConditions:\n    - name: operator-account\n      expression: {{{{ printf \"request.userInfo.username == 'system:serviceaccount:%s:%s'\" .Release.Namespace {name_expression} | quote }}}}\n"
     );
+    if dynamic_containers {
+        // A product chart's Operator also creates, updates and deletes the
+        // Deployments of its dynamic containers in the release namespace.
+        policy.push_str(&format!(
+            "    - name: not-a-dynamic-workload\n      expression: {{{{ printf \"{}\" .Release.Namespace | quote }}}}\n",
+            workload_restart::dynamic_workload_exemption("'%s'")
+        ));
+    }
+    policy.push_str("  variables:\n");
     for (name, expression) in workload_restart::VARIABLES {
         policy.push_str(&format!(
             "    - name: {name}\n      expression: {}\n",
@@ -3109,15 +3102,68 @@ fn workload_restart_policy_docs(
             "  matchResources:\n    namespaceSelector:\n      matchLabels:\n        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}\n",
         );
     }
-    [policy, binding]
-        .into_iter()
-        .map(|doc| {
-            format!(
-                "{{{{- if {} }}}}\n{doc}{{{{- end }}}}\n",
-                workload_restart::POLICY_API_CONDITION
-            )
-        })
-        .collect()
+
+    // The grant: a Role (namespaced install) or ClusterRole, and its binding.
+    let (role_kind, binding_kind) = if scope.is_cluster_wide() {
+        ("ClusterRole", "ClusterRoleBinding")
+    } else {
+        ("Role", "RoleBinding")
+    };
+    let object_metadata = |kind: &str, annotations: &str| {
+        let mut yaml =
+            format!("apiVersion: rbac.authorization.k8s.io/v1\nkind: {kind}\n{metadata}");
+        if !scope.is_cluster_wide() {
+            yaml.push_str(&format!("  namespace: {}\n", yaml_string(namespace)));
+        }
+        yaml.push_str(annotations);
+        yaml
+    };
+    let mut rules = String::from("rules:\n");
+    for (grant, reasons) in &grants.0 {
+        for reason in reasons {
+            rules.push_str(&format!(
+                "  # Required by {reason} (limited to a restart by the admission policy of this chart)\n"
+            ));
+        }
+        rules.push_str(&format!(
+            "  - apiGroups: ['apps']\n    resources: [{}]\n    verbs: ['patch']\n",
+            yaml_string(grant.resource)
+        ));
+        if !grant.resource_names.is_empty() {
+            rules.push_str(&format!(
+                "    resourceNames: [{}]\n",
+                grant
+                    .resource_names
+                    .iter()
+                    .map(|name| yaml_string(name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    let subjects = format!(
+        "subjects:\n  - kind: ServiceAccount\n    name: {}\n    namespace: {}\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: {role_kind}\n  name: {object_name}\n",
+        yaml_string(operator_name),
+        yaml_string(namespace)
+    );
+    let install_hook = "  annotations:\n    helm.sh/hook: post-install,post-upgrade,post-rollback\n    helm.sh/hook-delete-policy: before-hook-creation\n";
+    let delete_hook = "  annotations:\n    helm.sh/hook: pre-delete\n    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded\n";
+    let hooks = [
+        format!("{}{rules}", object_metadata(role_kind, install_hook)),
+        format!("{}{subjects}", object_metadata(binding_kind, install_hook)),
+        format!("{}rules: []\n", object_metadata(role_kind, delete_hook)),
+        format!("{}{subjects}", object_metadata(binding_kind, delete_hook)),
+    ];
+    let guard = |doc: String| {
+        format!(
+            "{{{{- if {} }}}}\n{doc}{{{{- end }}}}\n",
+            workload_restart::POLICY_API_CONDITION
+        )
+    };
+    (
+        [policy, binding].into_iter().map(guard).collect(),
+        hooks.into_iter().map(guard).collect(),
+    )
 }
 
 /// The access-request `CustomResourceDefinition`, white-labeled from `names`.
@@ -3263,12 +3309,7 @@ fn operator_clusterrole_doc(
     format: OperatorOutputFormat,
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(&operator_rules(
-        crd_names,
-        permission,
-        custom_operations,
-        format,
-    ));
+    yaml.push_str(&operator_rules(crd_names, permission, custom_operations));
     yaml
 }
 
@@ -10076,6 +10117,15 @@ mod tests {
         include_collector: bool,
         label_domain: Option<&str>,
     ) -> HelmChart {
+        product_chart_with_operations(stack, include_collector, label_domain, &[])
+    }
+
+    fn product_chart_with_operations(
+        stack: &Stack,
+        include_collector: bool,
+        label_domain: Option<&str>,
+        operations: &[KubernetesOperationPermissions],
+    ) -> HelmChart {
         let registry = HelmRegistry::built_in();
         generate_product_helm_chart(
             stack,
@@ -10103,7 +10153,7 @@ mod tests {
                     label_domain,
                     scope: OperatorScope::Namespace,
                     label_selector: None,
-                    custom_operation_permissions: &[],
+                    custom_operation_permissions: operations,
                     permission: OperatorPermission::Remediation,
                     format: OperatorOutputFormat::HelmTemplate,
                 },
@@ -13791,6 +13841,63 @@ remoteOperator:
                 "OPERATOR_DYNAMIC_CONTAINERS"
             ),
             Some("true")
+        );
+    }
+
+    #[test]
+    fn product_restart_policy_leaves_the_operators_own_dynamic_workloads_alone() {
+        use alien_operations_sdk::{KubernetesPermissionRule, KubernetesPermissions, RiskTier};
+        let operation = KubernetesOperationPermissions {
+            plugin: "restarter".into(),
+            operation: "restart".into(),
+            tier: RiskTier::Mutating,
+            permissions: KubernetesPermissions {
+                schema_version: 1,
+                rules: vec![KubernetesPermissionRule {
+                    api_group: "apps".into(),
+                    resource: "deployments".into(),
+                    verbs: vec!["patch".into()],
+                    resource_names: vec![],
+                    reason: "Restart workloads".into(),
+                }],
+            },
+        };
+        let chart =
+            product_chart_with_operations(&dynamic_container_stack(), false, None, &[operation]);
+        let mut files = chart.files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let rendered = crate::test_utils::helm_template_with_api_versions(
+            &files,
+            Some(values),
+            "customer-one",
+            "tenant-ns",
+            &["admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy"],
+        );
+        rendered.assert_ok("product chart with a restart plugin");
+        let docs = parse_manifest_docs(&rendered.stdout);
+        let policy = docs_by_kind(&docs, "ValidatingAdmissionPolicy")
+            .into_iter()
+            .next()
+            .expect("a restart policy");
+        let conditions = policy["spec"]["matchConditions"].as_sequence().unwrap();
+        assert_eq!(conditions.len(), 2, "{conditions:?}");
+        assert_eq!(
+            conditions[1]["expression"],
+            "!(request.namespace == 'tenant-ns' && oldObject.metadata.?labels.orValue({}).exists(k, k == 'alien.dev/dynamic-deployment'))"
+        );
+        // The label the exemption reads is the one the Operator sets on its dynamic workloads.
+        assert!(
+            include_str!("../../alien-operator/src/loops/dynamic_containers/mod.rs")
+                .contains("const OWNER_LABEL: &str = \"alien.dev/dynamic-deployment\";")
         );
     }
 

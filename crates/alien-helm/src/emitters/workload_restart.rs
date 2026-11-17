@@ -11,6 +11,22 @@
 //! annotation. The rule and the policy come from one decision in the
 //! generator and are rendered together or not at all.
 //!
+//! The policy and its binding are ordinary release objects. The `patch` rule
+//! is a separate Role or ClusterRole (and binding) run as Helm hooks after the
+//! release objects are applied (`post-install`, `post-upgrade`,
+//! `post-rollback`), and removed by a `pre-delete` hook before the policy is
+//! deleted. A failed release therefore leaves no rule newer than the policy.
+//! Limits: the API server needs a moment (measured on Kubernetes 1.31: about a
+//! quarter to half a second) to start enforcing a NEW policy, during which the
+//! rule admits unlimited patches; a cluster that serves the policy API with the
+//! admission plugin disabled, a policy deleted by hand, and a rollback to a
+//! chart from before this feature leave the rule unconfined.
+//!
+//! A product chart's Operator also manages dynamic workloads in the release
+//! namespace (its Role already allows create/update/delete of Deployments
+//! there). Updates of workloads that already carry the Operator's dynamic
+//! workload label are exempt from the policy in that namespace only.
+//!
 //! Scope of the policy:
 //! - Only the main resource is matched. `deployments/status` is never granted,
 //!   and `deployments/scale` (an existing, separate grant) only changes the
@@ -38,10 +54,10 @@
 /// Annotation `kubectl rollout restart` sets on the pod template.
 pub(crate) const RESTART_ANNOTATION: &str = "kubectl.kubernetes.io/restartedAt";
 
-/// Annotation of the workload itself that the API server rewrites when a
-/// DaemonSet's pod template changes (a counter of template changes), so a
-/// restart changes it too. It carries no privilege.
-const SERVER_ANNOTATION: &str = "deprecated.daemonset.template.generation";
+/// Label the Operator puts on the workloads it creates for dynamic containers: a workload that
+/// carries it is one the Operator creates and updates itself (see
+/// [`dynamic_workload_exemption`]).
+pub(crate) const DYNAMIC_WORKLOAD_LABEL: &str = "alien.dev/dynamic-deployment";
 
 /// Template condition: the cluster serves the admission policy API.
 pub(crate) const POLICY_API_CONDITION: &str =
@@ -51,7 +67,22 @@ pub(crate) const POLICY_API_CONDITION: &str =
 pub(crate) const RESTART_RESOURCES: [&str; 3] = ["deployments", "statefulsets", "daemonsets"];
 
 /// Metadata of the workload itself that a request could otherwise set.
-const OBJECT_METADATA_FIELDS: [&str; 3] = ["finalizers", "labels", "ownerReferences"];
+const OBJECT_METADATA_FIELDS: [&str; 4] =
+    ["finalizers", "generateName", "labels", "ownerReferences"];
+
+/// Match condition of a product chart whose Operator also manages dynamic
+/// workloads: in the release namespace, an update of a workload that already
+/// carries the dynamic-workload label is not the policy's business. In that
+/// namespace the Operator's dynamic-container Role already lets it create,
+/// update and delete Deployments, so this takes nothing from the policy. The
+/// label is read from the STORED object (`oldObject`): the Operator cannot
+/// exempt an existing workload by labelling it, because that update is itself
+/// subject to the policy, which freezes labels.
+pub(crate) fn dynamic_workload_exemption(namespace_expression: &str) -> String {
+    format!(
+        "!(request.namespace == {namespace_expression} && oldObject.metadata.?labels.orValue({{}}).exists(k, k == '{DYNAMIC_WORKLOAD_LABEL}'))"
+    )
+}
 
 /// Whether this rule verb is the `patch` the policy exists for. The grant is
 /// never rendered without it.
@@ -61,7 +92,14 @@ pub(crate) fn is_restart_patch(api_group: &str, resource: &str, verb: &str) -> b
 
 /// Named CEL variables: the spec and the pod template's metadata read as maps,
 /// and the annotation maps (empty when absent), before and after.
-pub(crate) const VARIABLES: [(&str, &str); 8] = [
+pub(crate) const VARIABLES: [(&str, &str); 11] = [
+    // Only a DaemonSet's own metadata carries the server's template counter.
+    (
+        "serverAnnotation",
+        "object.kind == 'DaemonSet' ? 'deprecated.daemonset.template.generation' : ''",
+    ),
+    ("newTemplate", "dyn(object.spec.template)"),
+    ("oldTemplate", "dyn(oldObject.spec.template)"),
     ("newSpec", "dyn(object.spec)"),
     ("oldSpec", "dyn(oldObject.spec)"),
     ("newTemplateMetadata", "dyn(object.spec.template.metadata)"),
@@ -85,14 +123,22 @@ pub(crate) const VARIABLES: [(&str, &str); 8] = [
 ];
 
 /// `new` and `old` (CEL variables holding maps) have the same keys and the
-/// same value for each key, leaving out the `ignored` keys.
+/// same value for each key, leaving out the `ignored` keys. An ignored entry
+/// starting with `variables.` is a CEL expression for the key, otherwise a
+/// literal key.
 fn same_except(new: &str, old: &str, ignored: &[&str]) -> String {
     let is_ignored = if ignored.is_empty() {
         "false".to_owned()
     } else {
         ignored
             .iter()
-            .map(|key| format!("k == '{key}'"))
+            .map(|key| {
+                if key.starts_with("variables.") {
+                    format!("k == {key}")
+                } else {
+                    format!("k == '{key}'")
+                }
+            })
             .collect::<Vec<_>>()
             .join(" || ")
     };
@@ -122,6 +168,10 @@ pub(crate) fn validations() -> Vec<(String, &'static str)> {
             "the workload spec (replicas, selector, strategy, ...) cannot be changed by a restart",
         ),
         (
+            same_except("newTemplate", "oldTemplate", &["metadata", "spec"]),
+            "the pod template cannot be changed by a restart",
+        ),
+        (
             same_except("newTemplateMetadata", "oldTemplateMetadata", &["annotations"]),
             "the pod template's labels and other metadata cannot be changed by a restart",
         ),
@@ -136,7 +186,7 @@ pub(crate) fn validations() -> Vec<(String, &'static str)> {
         (
             format!(
                 "{metadata} && {}",
-                same_except("newAnnotations", "oldAnnotations", &[SERVER_ANNOTATION])
+                same_except("newAnnotations", "oldAnnotations", &["variables.serverAnnotation"])
             ),
             "the workload's labels, annotations, owners and finalizers cannot be changed by a restart",
         ),
