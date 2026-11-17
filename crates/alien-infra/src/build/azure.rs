@@ -529,6 +529,74 @@ mod tests {
         assert!(executor.outputs().is_none());
     }
 
+    /// Regression: the controller never creates a `Microsoft.App/jobs/<build id>` job (jobs are
+    /// created per run by the build binding under another name), so no role assignment may be
+    /// written at that scope. Azure answers such a write with ResourceNotFound and setup fails.
+    #[tokio::test]
+    async fn test_no_role_assignment_is_written_at_a_job_the_build_never_creates() {
+        use alien_azure_clients::authorization::MockAuthorizationApi;
+        use alien_core::permissions::{PermissionProfile, PermissionSetReference};
+        use std::sync::Mutex;
+
+        let build = basic_build();
+        let mut profile = PermissionProfile::new();
+        profile.0.insert(
+            build.id.clone(),
+            vec![
+                PermissionSetReference::from_name("build/execute"),
+                PermissionSetReference::from_name("build/provision"),
+            ],
+        );
+
+        let scopes = Arc::new(Mutex::new(Vec::<String>::new()));
+        let recorded = scopes.clone();
+        let mut mock_provider = MockPlatformServiceProvider::new();
+        mock_provider
+            .expect_get_azure_authorization_client()
+            .returning(move |_| {
+                let recorded = recorded.clone();
+                let mut authorization = MockAuthorizationApi::new();
+                authorization
+                    .expect_get_role_definition()
+                    .returning(|_, id| {
+                        Err(alien_error::AlienError::new(
+                            alien_client_core::ErrorData::RemoteResourceNotFound {
+                                resource_type: "Role definition".to_string(),
+                                resource_name: id,
+                            },
+                        ))
+                    });
+                authorization
+                    .expect_create_or_update_role_definition()
+                    .returning(|_, _, definition| Ok(definition.clone()));
+                authorization
+                    .expect_create_or_update_role_assignment_by_id()
+                    .returning(move |id, assignment| {
+                        recorded.lock().unwrap().push(id);
+                        Ok(assignment.clone())
+                    });
+                Ok(Arc::new(authorization))
+            });
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(build)
+            .controller(AzureBuildController::default())
+            .platform(Platform::Azure)
+            .service_provider(Arc::new(mock_provider))
+            .permission_profile("default-profile", profile)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        let scopes = scopes.lock().unwrap();
+        assert!(
+            scopes.iter().all(|id| !id.contains("/Microsoft.App/jobs/")),
+            "role assignments were written at a job that does not exist: {scopes:?}"
+        );
+    }
+
     #[rstest]
     #[case::basic_to_env(basic_build(), build_with_env_vars())]
     #[case::env_to_complex(build_with_env_vars(), build_medium_compute())]

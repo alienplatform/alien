@@ -59,6 +59,24 @@ impl AzurePermissionsHelper {
         }
     }
 
+    /// Drops bindings scoped to a Container Apps job named after a Build.
+    ///
+    /// The `build/*` permission sets bind a resource-level grant to
+    /// `Microsoft.App/jobs/${resourceName}`, but nothing creates a job under the Build's own
+    /// name: the build binding creates one job per run (`build-<prefix>-<timestamp>`). Azure
+    /// answers a role assignment at a missing scope with ResourceNotFound, so writing it
+    /// fails setup and can never take effect. The same actions are granted at the resource
+    /// group through the stack-wide binding, which is what the per-run jobs rely on.
+    fn bindings_on_existing_scopes(bindings: Vec<AzureRoleBinding>) -> Vec<AzureRoleBinding> {
+        bindings
+            .into_iter()
+            .filter(|binding| {
+                !(binding.permission_set_id.starts_with("build/")
+                    && binding.scope.contains("/providers/Microsoft.App/jobs/"))
+            })
+            .collect()
+    }
+
     fn role_definition_scope_for_assignment_scope(scope: &Scope) -> Scope {
         match scope {
             Scope::Resource {
@@ -439,7 +457,7 @@ impl AzurePermissionsHelper {
                     .into_iter()
                     .map(|custom_role| (permission_set.id.clone(), custom_role)),
             );
-            bindings.extend(grant_plan.bindings);
+            bindings.extend(Self::bindings_on_existing_scopes(grant_plan.bindings));
         }
 
         if apply {
@@ -1206,7 +1224,7 @@ impl AzurePermissionsHelper {
                     .into_iter()
                     .map(|custom_role| (permission_set.id.clone(), custom_role)),
             );
-            bindings.extend(grant_plan.bindings);
+            bindings.extend(Self::bindings_on_existing_scopes(grant_plan.bindings));
         }
 
         let assignments = dedupe_azure_role_bindings(bindings)
