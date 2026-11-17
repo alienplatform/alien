@@ -5,6 +5,7 @@ pub mod container;
 pub mod events;
 pub mod lifecycle;
 pub mod notification_cleanup;
+pub mod queue_dead_letter;
 pub mod remote_bindings;
 pub mod routing;
 pub mod runner;

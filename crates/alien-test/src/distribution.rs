@@ -2988,6 +2988,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
                 | TestApp::ByoAi
                 | TestApp::AutomaticSetup
                 | TestApp::StorageNotifications
+                | TestApp::QueueDeadLetter
                 | TestApp::SandboxRemote
         )
         && matches!(

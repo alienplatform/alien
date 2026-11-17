@@ -110,6 +110,9 @@ if [ "$PUSH_AWS_CLI" = "true" ]; then
   if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-storage-notifications","test_filter":"push_aws_storage_notifications","needs_oidc":false,"resource_suffix":"awsntf","bindings_arch":"aarch64","timeout_minutes":60}]')
   fi
+  if [ "$APP" = "All" ] || [ "$APP" = "queue-dead-letter" ]; then
+    PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-queue-dead-letter","test_filter":"push_aws_queue_dead_letter","needs_oidc":false,"resource_suffix":"awsdlq","bindings_arch":"aarch64","timeout_minutes":90}]')
+  fi
   if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-automatic-setup","test_filter":"push_aws_automatic_setup","needs_oidc":false,"resource_suffix":"autoaws","timeout_minutes":60}]')
   fi
@@ -124,6 +127,9 @@ if [ "$PUSH_GCP_CLI" = "true" ]; then
   if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-storage-notifications","test_filter":"push_gcp_storage_notifications","needs_oidc":false,"resource_suffix":"gcpntf","bindings_arch":"x86_64","timeout_minutes":60}]')
   fi
+  if [ "$APP" = "All" ] || [ "$APP" = "queue-dead-letter" ]; then
+    PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-queue-dead-letter","test_filter":"push_gcp_queue_dead_letter","needs_oidc":false,"resource_suffix":"gcpdlq","bindings_arch":"x86_64","timeout_minutes":90}]')
+  fi
   if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-automatic-setup","test_filter":"push_gcp_automatic_setup","needs_oidc":false,"resource_suffix":"autogcp","timeout_minutes":60}]')
   fi
@@ -137,6 +143,9 @@ fi
 if [ "$PUSH_AZURE_CLI" = "true" ]; then
   if [ "$APP" = "All" ] || [ "$APP" = "storage-notifications" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-storage-notifications","test_filter":"push_azure_storage_notifications","needs_oidc":true,"resource_suffix":"azurentf","bindings_arch":"x86_64","timeout_minutes":60}]')
+  fi
+  if [ "$APP" = "All" ] || [ "$APP" = "queue-dead-letter" ]; then
+    PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-queue-dead-letter","test_filter":"push_azure_queue_dead_letter","needs_oidc":true,"resource_suffix":"azuredlq","bindings_arch":"x86_64","timeout_minutes":90}]')
   fi
   if [ "$APP" = "All" ] || [ "$APP" = "automatic-setup" ]; then
     PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-automatic-setup","test_filter":"push_azure_automatic_setup","needs_oidc":true,"resource_suffix":"autoaz","timeout_minutes":60}]')

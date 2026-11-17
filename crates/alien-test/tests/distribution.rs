@@ -81,6 +81,9 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("remote AI checks failed: {error:#}");
             }
         }
+        TestApp::QueueDeadLetter => {
+            common::queue_dead_letter::check_dead_letter(&ctx.deployment, "m").await;
+        }
         TestApp::StorageNotifications => {
             common::storage_notifications::check_delivery(&ctx.deployment).await;
             alien_test::distribution::verify_rule_update(ctx)
