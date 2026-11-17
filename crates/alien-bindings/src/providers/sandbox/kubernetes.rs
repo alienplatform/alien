@@ -118,22 +118,33 @@ enum Lookup {
 /// session. That outcome is unknown, and not retried.
 fn broker_failure(operation: &str, url: &str, error: reqwest::Error) -> AlienError<ErrorData> {
     let refused = error.is_connect();
-    let error = AlienError::new(ErrorData::RemoteServiceUnavailable {
-        operation_context: operation.to_string(),
-        details: format!(
+    let failed: std::result::Result<(), reqwest::Error> = Err(error);
+    if !refused && operation == "sandbox.create" {
+        return failed
+            .into_alien_error()
+            .context(ErrorData::SandboxOutcomeUnknown {
+                operation: operation.to_string(),
+                reason: format!(
+                    "the connection to the sandbox broker at {url} failed after the request was sent"
+                ),
+            })
+            .unwrap_err();
+    }
+    let details = if refused {
+        format!(
             "the sandbox broker at {url} did not accept the connection; if the Operator is \
              restarting, retry in a few seconds, otherwise check the broker address"
-        ),
-    });
-    if !refused && operation == "sandbox.create" {
-        return AlienError::new(ErrorData::SandboxOutcomeUnknown {
-            operation: operation.to_string(),
-            reason: format!(
-                "the connection to the sandbox broker at {url} failed after the request was sent"
-            ),
-        });
-    }
-    error
+        )
+    } else {
+        format!("the request to the sandbox broker at {url} failed")
+    };
+    failed
+        .into_alien_error()
+        .context(ErrorData::RemoteServiceUnavailable {
+            operation_context: operation.to_string(),
+            details,
+        })
+        .unwrap_err()
 }
 
 /// Asks the broker for a session and a fresh capability.
@@ -1074,6 +1085,10 @@ mod tests {
             .expect_err("nothing listens on that port");
         assert!(error.retryable, "a refused connection is retryable");
         assert!(error.message.contains(&url), "{}", error.message);
+        assert!(
+            error.source.is_some(),
+            "the connect error stays in the chain: {error:?}"
+        );
     }
 
     /// A connection that dies after the request was sent may already have claimed a pod. Creating
@@ -1098,6 +1113,10 @@ mod tests {
         assert!(
             matches!(error.error, Some(ErrorData::SandboxOutcomeUnknown { .. })),
             "{error:?}"
+        );
+        assert!(
+            error.source.is_some(),
+            "the cause stays in the chain: {error:?}"
         );
     }
 
