@@ -542,27 +542,34 @@ pub fn generate_cloudformation_template_with_profile(
     let mut emitted_resource_ids: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut deployer_secrets_vault_binding: Option<CfExpression> = None;
 
+    if options.target.is_kubernetes() {
+        // A database or cache setup creates that an existing cluster could not reach is refused
+        // here; one the installer binds to infrastructure it already has is the deployer's.
+        alien_core::refuse_unreachable_databases(
+            stack,
+            &stack_settings,
+            Platform::Aws,
+            Some("set the stack's network to the cluster's own network"),
+            |entry| {
+                alien_core::emits_package_scaffolding(
+                    entry,
+                    stack_settings.setup_management,
+                    alien_core::SetupTarget::from_cloud(Platform::Aws, true),
+                ) && options
+                    .registry
+                    .emitter(&entry.config.resource_type(), options.target.cloud_platform())
+                    .is_some()
+            },
+        )?;
+    }
+
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
         if !alien_core::emits_package_scaffolding(
             resource,
             stack_settings.setup_management,
-            Platform::Aws,
+            alien_core::SetupTarget::from_cloud(Platform::Aws, options.target.is_kubernetes()),
         ) {
-            continue;
-        }
-        // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not
-        // cloud infrastructure. Emitter lookup keys off the cloud the cluster runs in, so without
-        // this an EKS install would provision the MicroVM image, connector, security group and
-        // roles of the AWS backend it never uses, and register import data naming it. The
-        // Terraform generator refuses the same way; the two formats have to install the same
-        // thing from one declaration.
-        // Logical ComputeCluster pools belong to the Kubernetes operator too;
-        // they must not emit a second cloud fleet or cloud import payload.
-        if options.target.is_kubernetes()
-            && (resource_type == Sandbox::RESOURCE_TYPE
-                || resource_type == ComputeCluster::RESOURCE_TYPE)
-        {
             continue;
         }
         let emitter = options
@@ -2804,7 +2811,7 @@ fn add_standard_conditions(
             add_list_parameter_condition(template, parameter);
         }
     }
-    let has_created_network = stack_has_created_network(stack, settings.setup_management);
+    let has_created_network = stack_has_created_network(stack, settings.setup_management, target);
     if !target.is_kubernetes() && alien_core::sandbox_egress::has_sandbox_gateway(stack) {
         // True when the list has exactly three entries. Conditions are evaluated on
         // every create and update, including create-new installs that leave the list
@@ -2935,9 +2942,14 @@ fn add_standard_conditions(
     }
 }
 
-fn stack_has_created_network(stack: &Stack, management: alien_core::SetupManagement) -> bool {
+fn stack_has_created_network(
+    stack: &Stack,
+    management: alien_core::SetupManagement,
+    target: CloudFormationTarget,
+) -> bool {
+    let setup_target = alien_core::SetupTarget::from_cloud(Platform::Aws, target.is_kubernetes());
     stack.resources().any(|(_resource_id, resource)| {
-        alien_core::emits_package_scaffolding(resource, management, Platform::Aws)
+        alien_core::emits_package_scaffolding(resource, management, setup_target)
             && resource
                 .config
                 .downcast_ref::<Network>()

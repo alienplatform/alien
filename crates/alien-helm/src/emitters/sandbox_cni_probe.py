@@ -101,6 +101,82 @@ def run_stages(start_client, wait_client):
             wait_client(role)
 
 
+
+
+# A client pod whose probe container never ran says nothing about NetworkPolicy: the sandbox
+# runtime could not start it. These are the container states the kubelet reports for that.
+RUNTIME_START_REASONS = {
+    "StartError", "ContainerCannotRun", "CreateContainerError", "RunContainerError",
+    "CreateContainerConfigError",
+}
+# How long a pod may stay Pending with a container the runtime failed to create, before it is
+# treated as not started.
+START_BOUND_SECONDS = 90
+
+
+def _terminated_messages(pod):
+    return [status.get("state", {}).get("terminated", {}).get("message", "")
+            for status in pod.get("status", {}).get("containerStatuses", [])]
+
+
+def runtime_start_failure(pod, pending_seconds):
+    """The runtime's message when the probe container never ran, else None.
+
+    A probe that ran is judged by its own verdict. A container that was never started carries
+    the runtime's reason and message instead, either as a failed pod or as a pod stuck waiting
+    past START_BOUND_SECONDS.
+    """
+    for status in pod.get("status", {}).get("containerStatuses", []):
+        state = status.get("state", {})
+        terminated = state.get("terminated")
+        if terminated:
+            started = terminated.get("startedAt") or ""
+            # The kubelet reports an unstarted container with a zero or missing start time, an
+            # exit code of 128 or a start-failure reason; a probe that ran exits 0 or 1.
+            never_started = (terminated.get("reason") in RUNTIME_START_REASONS
+                             or terminated.get("exitCode") == 128
+                             or not started or started[:4] in ("0001", "1970"))
+            if never_started:
+                return terminated.get("message") or terminated.get("reason") or "container not started"
+        waiting = state.get("waiting")
+        if waiting and waiting.get("reason") in RUNTIME_START_REASONS and pending_seconds > START_BOUND_SECONDS:
+            return waiting.get("message") or waiting.get("reason")
+    return None
+
+
+def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hint,
+                 now=time.monotonic, sleep=time.sleep, out=print):
+    """Wait for a pod to satisfy `predicate`, recreating it once if the runtime failed to start it."""
+    first_seen = now()
+    recreated = False
+    while now() < deadline:
+        current = request("GET", pods + "/" + prefix + "-" + role)
+        phase = current.get("status", {}).get("phase")
+        failure = runtime_start_failure(current, now() - first_seen) if phase in ("Failed", "Pending") else None
+        if failure:
+            if recreated:
+                raise RuntimeError(f"runtime failed to start {role} pod: {failure}")
+            out(f"runtime failed to start {role} pod: {failure[:512]}; recreated", flush=True)
+            recreate(role)
+            recreated = True
+            first_seen = now()
+            sleep(1)
+            continue
+        if phase == "Failed":
+            details = _terminated_messages(current)
+            raise RuntimeError(f"{role} probe failed: NetworkPolicy enforcement is unproven; "
+                               + " ".join(details)[:1024] + " | " + hint)
+        if predicate(current):
+            notes = _terminated_messages(current)
+            if any(notes):
+                out(f"{role}: " + " ".join(notes)[:256], flush=True)
+            out(f"{role}: {phase}; node={current['spec'].get('nodeName')}; "
+                f"ip={current.get('status', {}).get('podIP')}", flush=True)
+            return current
+        sleep(1)
+    raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement. " + hint)
+
+
 def main():
     namespace = os.environ["PROBE_NAMESPACE"]
     job = os.environ["PROBE_JOB"]
@@ -150,6 +226,7 @@ def main():
     node_selector = json.loads(os.environ.get("PROBE_NODE_SELECTOR") or "{}")
     tolerations = json.loads(os.environ.get("PROBE_TOLERATIONS") or "[]")
     created = []
+    specs = {}
     deadline = time.monotonic() + 210
     marker = uuid.uuid4().hex
     server = (
@@ -165,6 +242,7 @@ def main():
     def create(path, resource):
         resource["metadata"]["ownerReferences"] = owner_ref
         name = resource["metadata"]["name"]
+        specs[name] = resource
         try:
             result = request("POST", path, resource)
         except urllib.error.HTTPError as error:
@@ -221,24 +299,8 @@ def main():
         }
 
     def wait(role, predicate):
-        while time.monotonic() < deadline:
-            current = request("GET", pods + "/" + prefix + "-" + role)
-            phase = current.get("status", {}).get("phase")
-            if phase == "Failed":
-                details = [status.get("state", {}).get("terminated", {}).get("message", "")
-                           for status in current.get("status", {}).get("containerStatuses", [])]
-                raise RuntimeError(f"{role} probe failed: NetworkPolicy enforcement is unproven; "
-                                   + " ".join(details)[:1024] + " | " + FIX_HINT)
-            if predicate(current):
-                notes = [status.get("state", {}).get("terminated", {}).get("message", "")
-                         for status in current.get("status", {}).get("containerStatuses", [])]
-                if any(notes):
-                    print(f"{role}: " + " ".join(notes)[:256], flush=True)
-                print(f"{role}: {phase}; node={current['spec'].get('nodeName')}; "
-                      f"ip={current.get('status', {}).get('podIP')}", flush=True)
-                return current
-            time.sleep(1)
-        raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement. " + FIX_HINT)
+        return wait_for_pod(request, pods, prefix, role, predicate, deadline,
+                            lambda r: create(pods, specs[prefix + "-" + r]), FIX_HINT)
 
     # Pod and NetworkPolicy creation are confined by admission policies for this account.
     # Refuse to run unless each one rejects a request it must reject, with its own message.

@@ -24,14 +24,18 @@ use super::AppState;
 use crate::auth::{Scope, Subject};
 use crate::traits::deployment_store::{DeploymentRecord, UpdateImportedDeploymentParams};
 
-/// Whether a `helm upgrade` carries a frozen resource of this type: its
-/// controller only observes a Kubernetes object the chart renders. A compute
-/// cluster always does. A service account does only without a base cloud; with
-/// one, its controller creates a cloud identity, which needs cloud credentials.
-fn chart_renders(resource_type: &str, base_platform: Option<Platform>) -> bool {
+/// Whether a frozen resource of this type is realized in the cluster, with no cloud
+/// credentials, so a `helm upgrade` alone carries a change to it. A compute cluster and a
+/// sandbox always are: the chart renders the cluster, and a sandbox is a pod and gateway in the
+/// cluster whatever cloud it runs in (setup emits no cloud resource for one on a Kubernetes
+/// target, and its controller is always the Kubernetes one). A service account and a vault
+/// are only without a base cloud (the Operator keeps the vault as Kubernetes Secrets); with
+/// one, their controllers create a cloud identity or secret store, which needs cloud
+/// credentials.
+fn realized_in_the_cluster(resource_type: &str, base_platform: Option<Platform>) -> bool {
     match resource_type {
-        "compute-cluster" => true,
-        "service-account" => base_platform.is_none(),
+        "compute-cluster" | "sandbox" => true,
+        "service-account" | "vault" => base_platform.is_none(),
         _ => false,
     }
 }
@@ -176,13 +180,15 @@ fn changes_needing_cloud_setup(
         if unchanged {
             continue;
         }
-        if !chart_renders(entry.config.resource_type().as_ref(), base_platform) {
+        if !realized_in_the_cluster(entry.config.resource_type().as_ref(), base_platform) {
             return Some(format!(
                 "This release adds or changes '{id}', which lives in your cloud account"
             ));
         }
     }
-    if baseline.permissions.management != target.permissions.management {
+    // The management profile is held by a cloud identity; the chart renders nothing from it,
+    // so with no base cloud there is nothing for a cloud setup to change.
+    if base_platform.is_some() && baseline.permissions.management != target.permissions.management {
         return Some("This release changes what the management identity may do".to_string());
     }
     if base_platform.is_some() && baseline.permissions.profiles != target.permissions.profiles {
@@ -682,7 +688,10 @@ pub(super) mod tests {
         CreateDeploymentGroupParams, CreateImportedDeploymentParams, CreateReleaseParams,
         DeploymentStore, ReleaseStore,
     };
-    use alien_core::{RuntimeMetadata, ServiceAccount, StackState, Storage};
+    use alien_core::{
+        permissions::PermissionProfile, ManagementPermissions, RuntimeMetadata, ServiceAccount,
+        StackState, Storage, Vault,
+    };
     use axum::{body::to_bytes, http::Method};
     use chrono::Utc;
     use std::{collections::BTreeMap, sync::Arc};
@@ -706,6 +715,28 @@ pub(super) mod tests {
                 )
                 .build()
                 .resources,
+        );
+        next
+    }
+
+    fn with_vault(stack: &Stack) -> Stack {
+        let mut next = stack.clone();
+        next.resources.extend(
+            Stack::new("extra".to_string())
+                .add(
+                    Vault::new("secrets".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+                .resources,
+        );
+        next
+    }
+
+    fn with_management_grant(stack: &Stack) -> Stack {
+        let mut next = stack.clone();
+        next.permissions.management = ManagementPermissions::Extend(
+            PermissionProfile::new().resource("secrets", ["vault/management"]),
         );
         next
     }
@@ -1064,6 +1095,151 @@ pub(super) mod tests {
             reason.contains("run your cloud setup, then upgrade"),
             "{reason}"
         );
+    }
+
+    /// The release a sandbox app ships, with its one Frozen sandbox set to `egress`.
+    fn sandbox_release(egress: alien_core::SandboxEgress) -> crate::traits::ReleaseRecord {
+        let stack = Stack::new("app".to_string())
+            .add(
+                alien_core::Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "python:3.13-slim".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(egress)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        crate::traits::ReleaseRecord {
+            id: "rel_2".to_string(),
+            workspace_id: "workspace".to_string(),
+            project_id: "project".to_string(),
+            stacks: std::collections::HashMap::from([(Platform::Kubernetes, stack)]),
+            signed_stacks: Default::default(),
+            setup_templates: Default::default(),
+            git_commit_sha: None,
+            git_commit_ref: None,
+            git_commit_message: None,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// Switching a Frozen sandbox's egress between `none` and `internet` changes what the
+    /// preflights add around it (the gateway and its links). Both stacks are what the manager
+    /// prepares, not hand-built, and a chart upgrade alone carries the switch: nothing in
+    /// the change lives in a cloud account.
+    #[tokio::test]
+    async fn a_frozen_sandbox_switching_egress_either_way_is_a_chart_upgrade() {
+        use alien_core::SandboxEgress::{Internet, None as NoEgress};
+
+        let settings = alien_core::StackSettings::default();
+        let state = StackState::new(Platform::Kubernetes);
+        for (from, to) in [(Internet, NoEgress), (NoEgress, Internet)] {
+            let mut record = deployment(baseline());
+            let prepared = prepare_target(&sandbox_release(from), &record, &settings, &state)
+                .await
+                .unwrap();
+            record.runtime_metadata.as_mut().unwrap().prepared_stack = Some(prepared);
+            let target = prepare_target(&sandbox_release(to), &record, &settings, &state)
+                .await
+                .unwrap();
+            let decision = decide(&record, &report("rel_2"), &target, None);
+            assert!(
+                matches!(decision, ReportDecision::Mint(_)),
+                "expected a mint, got {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sandbox_is_realized_in_the_cluster_on_every_base_cloud() {
+        for base in [
+            None,
+            Some(Platform::Aws),
+            Some(Platform::Gcp),
+            Some(Platform::Azure),
+        ] {
+            assert!(realized_in_the_cluster("sandbox", base));
+        }
+    }
+
+    #[test]
+    fn a_vault_added_or_removed_without_a_base_cloud_is_a_chart_upgrade() {
+        // Without a base cloud the Operator keeps the vault as Kubernetes Secrets, so there is
+        // nothing in a cloud account to create or delete.
+        let without = baseline();
+        let with = with_vault(&without);
+        for (installed, target) in [(&without, &with), (&with, &without)] {
+            let decision = decide(
+                &deployment(installed.clone()),
+                &report("rel_2"),
+                target,
+                None,
+            );
+            let ReportDecision::Mint(authorization) = decision else {
+                panic!("expected a mint, got {decision:?}");
+            };
+            assert_eq!(
+                authorization.target_frozen_digest,
+                target.setup_update_digest()
+            );
+        }
+    }
+
+    #[test]
+    fn a_vault_added_or_removed_on_a_base_cloud_still_needs_the_cloud_setup() {
+        let without = baseline();
+        let with = with_vault(&without);
+        for (installed, target) in [(&without, &with), (&with, &without)] {
+            let mut on_cloud = deployment(installed.clone());
+            on_cloud.base_platform = Some(Platform::Aws);
+            let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), target, None)
+            else {
+                panic!("expected a refusal");
+            };
+            assert!(reason.contains("secrets"), "{reason}");
+            assert!(reason.contains("run your cloud setup"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn a_management_grant_change_without_a_base_cloud_is_a_chart_upgrade() {
+        // The chart renders nothing from the management profile and no cloud identity holds it
+        // when there is no base cloud, so changing it needs no cloud setup.
+        let without = baseline();
+        let with = with_management_grant(&without);
+        for (installed, target) in [(&without, &with), (&with, &without)] {
+            let decision = decide(
+                &deployment(installed.clone()),
+                &report("rel_2"),
+                target,
+                None,
+            );
+            assert!(
+                matches!(decision, ReportDecision::Mint(_)),
+                "expected a mint, got {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_management_grant_change_on_a_base_cloud_still_needs_the_cloud_setup() {
+        let without = baseline();
+        let with = with_management_grant(&without);
+        for (installed, target) in [(&without, &with), (&with, &without)] {
+            let mut on_cloud = deployment(installed.clone());
+            on_cloud.base_platform = Some(Platform::Aws);
+            let ReportDecision::Refuse(reason) = decide(&on_cloud, &report("rel_2"), target, None)
+            else {
+                panic!("expected a refusal");
+            };
+            assert!(reason.contains("management identity"), "{reason}");
+        }
     }
 
     #[test]
