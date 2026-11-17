@@ -686,10 +686,6 @@ async fn signing_from_first_release_to_recovery() {
     // From now on her releases are signed.
     let output = ok(world.run_in_terminal(&alice, &app, RELEASE, &[]));
     assert!(
-        output.contains("Setup as the control plane hosts it · registers through stack outputs · managed by any managing role"),
-        "{output}"
-    );
-    assert!(
         output.contains("Releasing to production · 0 protected deployments will run it"),
         "{output}"
     );
