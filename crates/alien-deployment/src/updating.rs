@@ -1517,6 +1517,155 @@ mod tests {
             assert_eq!(result.state.status, DeploymentStatus::Updating);
             // The narrowing is named in the preflight warnings (covered in alien-preflights).
 
+            // Execute the update on the frozen identities the real mutations produced, with a
+            // client that has no endpoint to reach: a cloud call would fail the step. The
+            // service account and the vault keep their recorded definitions, edges and state.
+            let metadata = result.state.runtime_metadata.clone().unwrap();
+            let keep = |stack: &Stack| {
+                let mut stack = stack.clone();
+                let kept: HashSet<String> = stack
+                    .resources()
+                    .filter(|(id, e)| {
+                        e.lifecycle == ResourceLifecycle::Frozen
+                            && (id.as_str() == alien_core::DEPLOYER_SECRETS_VAULT_ID
+                                || e.config.resource_type().to_string() == "service-account")
+                    })
+                    .map(|(id, _)| id.clone())
+                    .collect();
+                stack.resources.retain(|id, _| kept.contains(id));
+                // The secrets sync reads the parameter store; this step is about the plan.
+                stack.inputs.clear();
+                for entry in stack.resources.values_mut() {
+                    entry.dependencies.retain(|d| kept.contains(&d.id));
+                }
+                stack
+            };
+            let baseline = keep(metadata.prepared_stack.as_ref().unwrap());
+            let target = keep(metadata.pending_prepared_stack.as_ref().unwrap());
+            assert_eq!(
+                baseline.resources.len(),
+                2,
+                "{:?}",
+                baseline.resources.keys().collect::<Vec<_>>()
+            );
+            let mut saved = StackState::with_resource_prefix(Platform::Aws, "test".into());
+            for (id, entry) in baseline.resources() {
+                let mut resource = StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(ResourceLifecycle::Frozen),
+                    entry.dependencies.clone(),
+                );
+                resource.status = ResourceStatus::Running;
+                if entry.config.resource_type().to_string() == "service-account" {
+                    let controller: alien_infra::AwsServiceAccountController =
+                        serde_json::from_value(serde_json::json!({
+                            "state": "ready",
+                            "roleArn": "arn:aws:iam::123456789012:role/test-api-sa",
+                            "roleName": "test-api-sa", "stackPermissionsApplied": true
+                        }))
+                        .unwrap();
+                    resource
+                        .set_internal_controller(Some(Box::new(controller)))
+                        .unwrap();
+                } else {
+                    let controller: alien_infra::AwsVaultController =
+                        serde_json::from_value(serde_json::json!({
+                            "state": "ready", "accountId": "123456789012",
+                            "region": "us-east-1", "vaultPrefix": "deployer-secrets"
+                        }))
+                        .unwrap();
+                    resource
+                        .set_internal_controller(Some(Box::new(controller)))
+                        .unwrap();
+                    resource.remote_binding_params = Some(
+                        serde_json::to_value(alien_core::bindings::VaultBinding::parameter_store(
+                            "test-deployer-secrets",
+                        ))
+                        .unwrap(),
+                    );
+                }
+                saved.resources.insert(id.clone(), resource);
+            }
+            let before = saved.clone();
+            // The reconcile loop runs again on the same recorded state: twice, same result.
+            let state = DeploymentState {
+                status: DeploymentStatus::Updating,
+                platform: Platform::Aws,
+                current_release: None,
+                target_release: None,
+                stack_state: Some(saved),
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(alien_core::RuntimeMetadata {
+                    initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
+                    prepared_stack: Some(baseline),
+                    pending_prepared_stack: Some(target),
+                    ..Default::default()
+                }),
+                retry_requested: false,
+                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+            for round in 1..=2 {
+                let executed = handle_updating(
+                    state.clone(),
+                    config(),
+                    ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+                    std::sync::Arc::new(alien_infra::MockPlatformServiceProvider::new()),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    executed.state.status,
+                    DeploymentStatus::Running,
+                    "round {round}: {:?}",
+                    executed.state.error
+                );
+                let after = executed.state.stack_state.clone().unwrap();
+                for (id, resource) in &before.resources {
+                    let now = &after.resources[id];
+                    assert_eq!(now.config, resource.config, "round {round}: {id}");
+                    assert_eq!(now.dependencies, resource.dependencies);
+                    assert!(now.previous_config.is_none(), "round {round}: {id}");
+                    assert_eq!(now.internal_state, resource.internal_state);
+                }
+            }
+
+            // The preflights name what stays: profile 'api' and service account 'api-sa'.
+            let (client, _server) = client().await;
+            let installed = metadata.prepared_stack.clone().unwrap();
+            let recorded = result.state.stack_state.clone().unwrap();
+            let summary = alien_preflights::runner::PreflightRunner::new()
+                .run_deployment_time_preflights(
+                    stack(&seven),
+                    &recorded,
+                    &config(),
+                    &client,
+                    Some(&installed),
+                    None,
+                    Some(InitialSetupAuthority::ImportedHandoff),
+                )
+                .await
+                .expect("the narrowing passes preflights")
+                .1;
+            let warnings: Vec<String> = summary
+                .results
+                .iter()
+                .flat_map(|r| r.warnings.clone())
+                .collect();
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.contains("Permission profile 'api' grants less")),
+                "{warnings:?}"
+            );
+            assert!(
+                warnings
+                    .iter()
+                    .any(|w| w.contains("Service account 'api-sa' grants less")),
+                "{warnings:?}"
+            );
+
             let swapped = ["a", "b", "c", "e", "f", "g", "h", "new"];
             let error = update(stack(&eight), stack(&swapped))
                 .await
@@ -2470,7 +2619,7 @@ mod aws_handoff_tests {
                 }
                 if id == "execution-sa" {
                     resource.dependencies = target.resources[id].dependencies.clone();
-                    let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
+                    let controller: alien_infra::AwsServiceAccountController = serde_json::from_value(serde_json::json!({
                         "state": "ready", "roleArn": "arn:aws:iam::123456789012:role/test-execution-sa",
                         "roleName": "test-execution-sa", "stackPermissionsApplied": true
                     })).unwrap();
