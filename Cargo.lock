@@ -1308,6 +1308,7 @@ dependencies = [
  "aws-sigv4",
  "axum 0.8.9",
  "base64 0.22.1",
+ "bollard",
  "bon",
  "chrono",
  "clap",

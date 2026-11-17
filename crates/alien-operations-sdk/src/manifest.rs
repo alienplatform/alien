@@ -345,6 +345,10 @@ pub struct CanonicalOperationManifest {
         deserialize_with = "deserialize_kubernetes_permissions"
     )]
     pub kubernetes_permissions: Option<KubernetesPermissions>,
+    /// What the operation needs from a Linux machine or Docker host: group
+    /// membership, exact sudo command templates, Docker socket use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_permissions: Option<crate::host::HostPermissions>,
     /// Operation name, unique within the plugin (e.g. `vacuum`).
     pub name: String,
     /// Risk tier for this specific operation. Falls back to the plugin's
@@ -567,6 +571,7 @@ impl From<OperationManifest> for CanonicalOperationManifest {
     fn from(operation: OperationManifest) -> Self {
         Self {
             kubernetes_permissions: operation.kubernetes_permissions,
+            host_permissions: None,
             name: operation.name,
             tier: operation.tier,
             description: operation.description,
@@ -705,6 +710,9 @@ impl CanonicalPluginManifest {
                 }
             }
             if let Some(permissions) = &operation.kubernetes_permissions {
+                permissions.validate(operation.effective_tier(self.tier))?;
+            }
+            if let Some(permissions) = &operation.host_permissions {
                 permissions.validate(operation.effective_tier(self.tier))?;
             }
             if !seen.insert(operation.name.as_str()) {
@@ -1509,6 +1517,7 @@ mod tests {
     fn operation_tier_falls_back_to_plugin_default() {
         let op = CanonicalOperationManifest {
             kubernetes_permissions: None,
+            host_permissions: None,
             name: "vacuum".into(),
             tier: None,
             description: None,
@@ -1537,6 +1546,7 @@ mod tests {
     fn explicit_no_permissions_serialize_as_an_empty_canonical_array() {
         let operation = CanonicalOperationManifest {
             kubernetes_permissions: None,
+            host_permissions: None,
             name: "health".into(),
             tier: Some(RiskTier::ReadOnly),
             description: None,

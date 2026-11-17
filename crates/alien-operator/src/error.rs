@@ -50,6 +50,17 @@ pub enum ErrorData {
     )]
     ConfigurationError { message: String },
 
+    /// The identity Secret changed since it was last read, so the write was
+    /// refused. Another operator or an earlier run saved first.
+    #[error(
+        code = "IDENTITY_CONFLICT",
+        message = "The operator identity was changed by another writer",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 409
+    )]
+    IdentityConflict,
+
     #[error(
         code = "DATABASE_ERROR",
         message = "Database error: {message}",
@@ -123,6 +134,16 @@ pub enum ErrorData {
         http_status_code = 500
     )]
     CollectorTelemetryInvalid { message: String },
+
+    /// Telemetry waiting to be sent reached its limit; exporters retry.
+    #[error(
+        code = "TELEMETRY_BUFFER_FULL",
+        message = "Telemetry queue reached its {limit_bytes}-byte limit",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 503
+    )]
+    TelemetryBufferFull { limit_bytes: i64 },
 
     /// The bounded local Pod-log queue must drain before reading more logs.
     #[error(

@@ -84,6 +84,34 @@
       "actions": ["s3:GetObjectTagging"],
       "resources": ["arn:aws:s3:::*/*"]
     },
+    "operations/ecs/services": {
+      "actions": ["ecs:ListServices", "ecs:DescribeServices"],
+      "resources": ["arn:aws:ecs:*:*:*"]
+    },
+    "operations/ecs/service-status": {
+      "actions": ["ecs:DescribeServices"],
+      "resources": ["arn:aws:ecs:*:*:*"]
+    },
+    "operations/ecs/service-events": {
+      "actions": ["ecs:DescribeServices"],
+      "resources": ["arn:aws:ecs:*:*:*"]
+    },
+    "operations/ecs/tasks": {
+      "actions": ["ecs:ListTasks", "ecs:DescribeTasks"],
+      "resources": ["arn:aws:ecs:*:*:*"]
+    },
+    "operations/ecs/task-status": {
+      "actions": ["ecs:DescribeTasks"],
+      "resources": ["arn:aws:ecs:*:*:*"]
+    },
+    "operations/ecs/force-new-deployment": {
+      "actions": ["ecs:UpdateService"],
+      "resources": ["arn:aws:ecs:*:*:*"]
+    },
+    "operations/ecs/stop-task": {
+      "actions": ["ecs:StopTask"],
+      "resources": ["arn:aws:ecs:*:*:*"]
+    },
     "operations/sqs/list-queues": {
       "actions": ["sqs:ListQueues"],
       "resources": ["*"]

@@ -15,6 +15,7 @@
 mod emitter;
 mod emitters;
 mod generator;
+mod operator_chart;
 mod package;
 mod postgres;
 mod registry;
@@ -32,6 +33,10 @@ pub use generator::{
     ManagerFetchHelmValuesOptions, OperatorImageIdentityOptions, OperatorLogCollectorOptions,
     OperatorManifestOptions, OperatorOutputFormat, OperatorPermission, OperatorScope,
     ProductOperatorManifestOptions, OPERATOR_RBAC_POLICY_VERSION,
+};
+pub use operator_chart::{
+    generate_operator_chart, OperatorChartOptions, OperatorChartPlugin, DEFAULT_EXCLUDED_NAMESPACES,
+    OPERATOR_CHART_OTLP_PORT,
 };
 pub use package::{
     apply_package_defaults, package_chart, LogCollectorDefault, OperatorImageDefault,

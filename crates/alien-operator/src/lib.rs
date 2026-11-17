@@ -24,7 +24,10 @@ pub mod cli;
 pub mod collector_logs;
 pub mod config;
 pub mod db;
+pub mod ecs;
 pub mod error;
+pub mod host;
+pub mod host_logs;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
@@ -60,6 +63,9 @@ struct OperatorRuntimeOptions {
     identity_initialized_config_map: Option<String>,
     runtime_deployment_scope: Option<(String, String)>,
     pod_log_collection: Option<pod_logs::PodLogCollectionConfig>,
+    host_logs: Option<host_logs::HostLogsConfig>,
+    host_inventory: Option<host_logs::HostLogsConfig>,
+    ecs: Option<ecs::EcsConfig>,
 }
 
 impl OperatorRuntimeOptions {
@@ -69,6 +75,9 @@ impl OperatorRuntimeOptions {
             identity_initialized_config_map: identity_initialized_config_map_from_env()?,
             runtime_deployment_scope: runtime_deployment_scope_from_env()?,
             pod_log_collection: pod_logs::config_from_env()?,
+            host_logs: host_logs::config_from_env(false)?,
+            host_inventory: None,
+            ecs: ecs::config_from_env()?,
         })
     }
 }
@@ -243,6 +252,7 @@ pub async fn run_operator_with_cancel_and_loops(
         operations_sync_handler,
         cancel,
         runtime_options,
+        None,
     )
     .await
 }
@@ -258,6 +268,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
     cancel: CancellationToken,
     runtime_options: OperatorRuntimeOptions,
+    opened_db: Option<Arc<db::OperatorDb>>,
 ) -> error::Result<()> {
     info!(
         sync_configured = config.sync.is_some(),
@@ -319,8 +330,13 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         .as_ref()
         .and_then(|provider| provider.get_local_bindings_provider());
 
-    // Initialize encrypted database
-    let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
+    // Initialize encrypted database. An Operator that keeps its identity outside the database
+    // hands over the one it already opened, so every loop reads and writes the identity there
+    // instead of an empty cache with no identity.
+    let db = match opened_db {
+        Some(db) => db,
+        None => Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?),
+    };
     // The digest key is kept in the database, so the checksums saved in the
     // deployment's state still match after a restart. A key the embedder
     // already set wins.
@@ -518,6 +534,31 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
         None
     };
 
+    if let Some(inventory_config) = runtime_options
+        .host_inventory
+        .filter(|_| !matches!(config.platform, Platform::Kubernetes))
+    {
+        let state = state.clone();
+        tokio::spawn(async move { host::run_inventory_loop(state, inventory_config).await });
+    }
+    let host_log_handle = match runtime_options.host_logs {
+        Some(host_log_config) if !matches!(config.platform, Platform::Kubernetes) => {
+            Some(tokio::spawn({
+                let state = state.clone();
+                async move { host_logs::run_loop(state, host_log_config).await }
+            }))
+        }
+        _ => None,
+    };
+
+    let ecs_handle = match runtime_options.ecs.clone() {
+        Some(ecs_config) if matches!(config.platform, Platform::Aws) => Some(tokio::spawn({
+            let state = state.clone();
+            async move { ecs::run(state, ecs_config).await }
+        })),
+        _ => None,
+    };
+
     // Start sync and telemetry loops only if not airgapped
     let sync_handle = if !config.is_airgapped() {
         Some(tokio::spawn({
@@ -614,6 +655,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
     // shutdown.
     let access_request_handle = if !config.is_airgapped()
         && !config.is_protected()
+        && access_requests_enabled()
         && matches!(config.platform, Platform::Kubernetes)
     {
         let loop_impl: Arc<dyn loops::access_requests::AccessRequestSyncLoop> = access_request_loop
@@ -714,6 +756,21 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 std::future::pending::<()>().await;
             }
         } => Ok(loop_exit(&cancel, "pod-logs")),
+        // A log or inventory collector that stops, or cannot run, leaves the operator running.
+        _ = async {
+            if let Some(h) = host_log_handle {
+                h.await.ok();
+                warn!("Host log collection ended; the operator keeps running without it");
+            }
+            std::future::pending::<()>().await;
+        } => Ok(loop_exit(&cancel, "host-logs")),
+        _ = async {
+            if let Some(h) = ecs_handle {
+                h.await.ok();
+                warn!("ECS collection ended; the operator keeps running without it");
+            }
+            std::future::pending::<()>().await;
+        } => Ok(loop_exit(&cancel, "ecs")),
         _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();
@@ -1128,7 +1185,11 @@ mod tests {
                 identity_initialized_config_map: None,
                 runtime_deployment_scope: None,
                 pod_log_collection: None,
+                host_logs: None,
+                host_inventory: None,
+                ecs: None,
             },
+            None,
         ));
         tokio::time::sleep(Duration::from_secs(2)).await;
         assert!(
@@ -1274,7 +1335,11 @@ mod tests {
                     identity_initialized_config_map: None,
                     runtime_deployment_scope: None,
                     pod_log_collection: None,
+                    host_logs: None,
+                    host_inventory: None,
+                    ecs: None,
                 },
+                None,
             ),
         )
         .await
@@ -1756,7 +1821,34 @@ impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
     }
 }
 
+/// `OPERATOR_ACCESS_REQUESTS=false` stops the in-cluster approval loop. Unset
+/// or any other value keeps it running, as before.
+fn access_requests_enabled() -> bool {
+    access_requests_setting_enabled(std::env::var("OPERATOR_ACCESS_REQUESTS").ok().as_deref())
+}
+
+fn access_requests_setting_enabled(value: Option<&str>) -> bool {
+    !value.is_some_and(|value| value.trim().eq_ignore_ascii_case("false"))
+}
+
+#[cfg(test)]
+mod access_requests_switch_tests {
+    use super::access_requests_setting_enabled;
+
+    #[test]
+    fn only_an_explicit_false_stops_the_approval_loop() {
+        assert!(access_requests_setting_enabled(None));
+        assert!(access_requests_setting_enabled(Some("true")));
+        assert!(access_requests_setting_enabled(Some("")));
+        assert!(!access_requests_setting_enabled(Some("false")));
+        assert!(!access_requests_setting_enabled(Some(" FALSE ")));
+    }
+}
+
 mod daily_identity;
+mod enrollment_token;
+mod identity_store;
+mod identity_store_aws;
 
 /// Whether this Operator has finished enrolling and so holds a daily key.
 ///
@@ -1786,6 +1878,7 @@ pub async fn save_enrolled_identity_for_tests(
         pending_started_at: None,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
         enrolled_code_hash: None,
+        store_version: Default::default(),
         pending_enrollment: None,
         previous: None,
     })

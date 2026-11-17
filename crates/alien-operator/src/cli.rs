@@ -67,7 +67,9 @@ The Operator:
                   argv is visible in `ps` / `/proc/<pid>/cmdline`."
 )]
 pub struct Args {
-    #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
+    /// Where this operator runs. Unset means `local`: a machine or a Docker
+    /// host enrolled with only a token.
+    #[arg(long, env = "PLATFORM", value_parser = parse_platform, default_value = "local")]
     pub platform: Platform,
 
     #[arg(long, env = "OPERATOR_BASE_PLATFORM", value_parser = parse_platform)]
@@ -83,6 +85,31 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_ENROLLMENT_CODE_FILE")]
     pub identity_enrollment_code_file: Option<PathBuf>,
 
+    /// File holding a single enrollment token (`ax_join_v1_...`) that carries
+    /// the manager URL and a one-use code. The audience is the manager URL.
+    #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN_FILE")]
+    pub enrollment_token_file: Option<PathBuf>,
+
+    /// The same enrollment token given directly, for targets that cannot mount
+    /// a file (`docker run -e`, container service secrets). The file wins when
+    /// both are set. The value is never logged.
+    #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN", hide_env_values = true)]
+    pub enrollment_token: Option<String>,
+
+    /// Name of a Kubernetes Secret, in the operator's namespace, that holds the
+    /// enrolled identity and the local database key. The data directory is then
+    /// only a cache. Unset, the identity stays in the local database.
+    #[arg(long, env = "OPERATOR_IDENTITY_SECRET")]
+    pub identity_secret: Option<String>,
+
+    /// Name or ARN of an AWS Secrets Manager secret that holds the enrolled
+    /// identity and the local database key, for installs on Amazon ECS. Like
+    /// `OPERATOR_IDENTITY_SECRET`, it makes the data directory a cache; set
+    /// `OPERATOR_DATA_PERSISTENT=false`. The task role needs get, put,
+    /// describe and version-stage updates on this one secret.
+    #[arg(long, env = "OPERATOR_IDENTITY_AWS_SECRET")]
+    pub identity_aws_secret: Option<String>,
+
     /// Exact manager audience supplied by installation configuration.
     #[arg(long, env = "ALIEN_MANAGER_AUDIENCE")]
     pub manager_audience: Option<String>,
@@ -93,6 +120,11 @@ pub struct Args {
 
     #[arg(long, env = "COLLECTOR_TOKEN_FILE")]
     pub collector_token_file: Option<PathBuf>,
+
+    /// Most bytes of telemetry that may wait to be sent while connected. Unset
+    /// leaves the queue unbounded.
+    #[arg(long, env = "OPERATOR_OTLP_MAX_QUEUED_BYTES")]
+    pub otlp_max_queued_bytes: Option<i64>,
 
     #[arg(long, env = "DEPLOYMENT_ID")]
     pub deployment_id: Option<String>,
@@ -548,6 +580,28 @@ async fn run_operator_cli(
     info!("   Platform: {}", args.platform);
     info!("   Data directory: {}", data_dir);
 
+    // The token is only needed until the operator is enrolled. A release
+    // upgraded without it has no token file, and the saved identity is enough.
+    let join_token = resolve_join_token(
+        args.enrollment_token_file.as_deref(),
+        args.enrollment_token.as_deref(),
+    )
+    .await?;
+    refuse_owned_secret_with_identity_store(
+        args.owned_secret.as_deref(),
+        has_identity_store(
+            args.identity_secret.as_deref(),
+            args.identity_aws_secret.as_deref(),
+        ),
+    )?;
+    refuse_encryption_key_with_identity_store(
+        args.encryption_key_file.as_deref(),
+        env_string("OPERATOR_ENCRYPTION_KEY").is_some(),
+        has_identity_store(
+            args.identity_secret.as_deref(),
+            args.identity_aws_secret.as_deref(),
+        ),
+    )?;
     let owned_values = load_owned_secret(
         args.owned_secret.as_deref(),
         &args.owned_secret_keys,
@@ -556,11 +610,29 @@ async fn run_operator_cli(
         &data_dir_path,
     )
     .await?;
-    let encryption_key = match owned_values.get("encryption-key") {
-        Some(key) => key.clone(),
-        None => load_encryption_key(args.encryption_key_file.as_deref()).await?,
+    let (db, encryption_key) = match owned_values.get("encryption-key") {
+        Some(key) => (
+            crate::db::OperatorDb::new(&data_dir, key).await?,
+            key.clone(),
+        ),
+        None => {
+            open_operator_db(
+                &data_dir,
+                args.identity_secret.as_deref(),
+                args.identity_aws_secret.as_deref(),
+                args.namespace.clone(),
+                args.encryption_key_file.as_deref(),
+                args.data_persistent,
+                join_token.is_some(),
+            )
+            .await?
+        }
     };
-    let db = std::sync::Arc::new(crate::db::OperatorDb::new(&data_dir, &encryption_key).await?);
+    let db = std::sync::Arc::new(db);
+    db.set_telemetry_queue_cap(args.otlp_max_queued_bytes);
+    // A token for another manager never overrides an enrolled operator.
+    let join_token =
+        join_token_for_saved_identity(join_token, db.read_daily_identity().await?.as_ref());
 
     let cli_sync_token = load_sync_token(args.sync_token_file.as_deref()).await?;
     let collector_token = match owned_values.get("collector-token") {
@@ -568,8 +640,10 @@ async fn run_operator_cli(
         None => load_collector_token(args.collector_token_file.as_deref()).await?,
     };
 
-    let effective_sync_url = args
-        .sync_url
+    let effective_sync_url = join_token
+        .as_ref()
+        .map(|token| token.manager_url.clone())
+        .or(args.sync_url)
         .or_else(|| packaged_config.as_ref().and_then(|c| c.manager_url.clone()));
     if let Some(url) = effective_sync_url.as_deref() {
         if let Some(warning) = plain_http_url_warning(url) {
@@ -624,7 +698,10 @@ async fn run_operator_cli(
         })
         .transpose()?;
 
-    if args.identity_enrollment_code_file.is_none() && args.manager_audience.is_none() {
+    if args.identity_enrollment_code_file.is_none()
+        && args.manager_audience.is_none()
+        && join_token.is_none()
+    {
         enroll_with_deployment_token(
             &db,
             args.platform,
@@ -636,8 +713,22 @@ async fn run_operator_cli(
         .await?;
     }
     let stored_identity = db.read_daily_identity().await?;
+    let enrolled_at_start = stored_identity
+        .as_ref()
+        .is_some_and(|identity| !identity.deployment_id.is_empty());
+    if (args.enrollment_token_file.is_some() || args.enrollment_token.is_some())
+        && join_token.is_none()
+        && !stored_identity
+            .as_ref()
+            .is_some_and(|identity| !identity.deployment_id.is_empty())
+    {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "This operator has no saved identity and no enrollment token. Install with the enrollment token (or a Secret that holds it under the key `token`); a token is used once, so issue a new one if it was already used.".into(),
+        }));
+    }
     // A key saved before its enrollment finished is no identity yet.
     let sync_config = if args.identity_enrollment_code_file.is_some()
+        || join_token.is_some()
         || stored_identity
             .as_ref()
             .is_some_and(|identity| !identity.deployment_id.is_empty())
@@ -654,8 +745,14 @@ async fn run_operator_cli(
                     message: "Component enrollment requires a manager URL".into(),
                 })
             })?;
-        let audience = args
-            .manager_audience
+        // An enrolled operator keeps the audience it enrolled with: a later
+        // token may spell the same manager URL differently.
+        let audience = stored_identity
+            .as_ref()
+            .filter(|identity| !identity.deployment_id.is_empty())
+            .map(|identity| identity.audience.clone())
+            .or_else(|| join_token.as_ref().map(|token| token.manager_url.clone()))
+            .or(args.manager_audience)
             .or_else(|| {
                 stored_identity
                     .as_ref()
@@ -666,18 +763,51 @@ async fn run_operator_cli(
                     message: "Component enrollment requires the configured manager audience".into(),
                 })
             })?;
-        let code = load_sync_token(args.identity_enrollment_code_file.as_deref())
-            .await?
-            .unwrap_or_default();
-        let (deployment_id, token) =
-            std::sync::Arc::new(crate::daily_identity::DailyIdentity::new(db.clone())?)
-                .connect(crate::daily_identity::EnrollmentRequest {
-                    manager_url: &manager_url,
-                    audience: &audience,
-                    code: &code,
-                    deployment_id: configured_deployment_id.as_deref(),
-                })
-                .await?;
+        let code = match &join_token {
+            Some(token) => token.code.clone(),
+            None => load_sync_token(args.identity_enrollment_code_file.as_deref())
+                .await?
+                .unwrap_or_default(),
+        };
+        let enrolled_before = stored_identity
+            .as_ref()
+            .is_some_and(|identity| !identity.deployment_id.is_empty());
+        let identity = std::sync::Arc::new(crate::daily_identity::DailyIdentity::new(db.clone())?);
+        let (deployment_id, token) = identity
+            .clone()
+            .connect(crate::daily_identity::EnrollmentRequest {
+                manager_url: &manager_url,
+                audience: &audience,
+                code: &code,
+                deployment_id: configured_deployment_id.as_deref(),
+            })
+            .await
+            .map_err(|error| {
+                if join_token.is_some() && !enrolled_before && identity.code_was_refused() {
+                    return AlienError::new(ErrorData::ConfigurationError {
+                        message: "The enrollment token was already used, has expired or is not valid, and this operator has no saved identity. Issue a new enrollment token and install again with it.".into(),
+                    });
+                }
+                error
+            })?;
+        // A start from an empty cache has no deployment state yet; an
+        // observe-only environment starts as running, as it does when it
+        // registers itself.
+        if starts_observe_only(
+            has_identity_store(
+                args.identity_secret.as_deref(),
+                args.identity_aws_secret.as_deref(),
+            ),
+            join_token.is_some(),
+            args.initial_desired_release,
+        ) && db.get_deployment_state().await?.is_none()
+        {
+            db.set_deployment_state(&observe_only_initial_state(
+                args.platform,
+                args.base_platform,
+            ))
+            .await?;
+        }
         if configured_deployment_id
             .as_ref()
             .is_some_and(|expected| expected != &deployment_id)
@@ -956,9 +1086,13 @@ async fn run_operator_cli(
     let cancel = CancellationToken::new();
 
     let signal_cancel = cancel.clone();
+    let signal_db = db.clone();
     tokio::spawn(async move {
         wait_for_shutdown_signal().await;
         info!("Received shutdown signal");
+        // A terminating pod must not write its identity into a Secret that a
+        // newer install has created since.
+        signal_db.stop_identity_writes();
         signal_cancel.cancel();
     });
 
@@ -981,11 +1115,19 @@ async fn run_operator_cli(
         &operator_config.data_dir,
         operator_config.operations.as_ref(),
     );
+    let enrolled_by_token = join_token.is_some();
+    let host_logs = crate::host_logs::config_from_env(enrolled_by_token)?;
     let runtime_options = OperatorRuntimeOptions {
         readiness_server_port: crate::readiness_server_port_from_env()?,
         identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
         runtime_deployment_scope: crate::runtime_deployment_scope_from_env()?,
         pod_log_collection: crate::pod_logs::config_from_env()?,
+        host_logs,
+        host_inventory: crate::host_logs::inventory_config(host_logs, enrolled_by_token),
+        ecs: crate::ecs::config_from_env()?.map(|mut ecs| {
+            ecs.enrolled_at_start = enrolled_at_start;
+            ecs
+        }),
     };
     run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
@@ -997,6 +1139,10 @@ async fn run_operator_cli(
         operations_sync_handler,
         cancel,
         runtime_options,
+        // The loops always use the database opened here: it carries the identity store when one
+        // is selected, and the settings made on it (such as the telemetry queue cap). A second
+        // database opened by the loops would read no identity and ignore those settings.
+        Some(db.clone()),
     )
     .await?;
 
@@ -1783,6 +1929,38 @@ fn is_secret_file_mode_allowed(mode: u32) -> bool {
     has_owner_read && !has_owner_execute && !has_group_write_or_execute && !has_world_access
 }
 
+/// The Secret the Operator owns (database key and collector token) and the identity Secret are
+/// two ways to keep the Operator's state. With both set the owned Secret's key would win and
+/// the identity store would silently never be used, so the enrolled identity would not be
+/// kept outside the cache. Refuse the combination instead.
+fn refuse_owned_secret_with_identity_store(
+    owned_secret: Option<&str>,
+    has_identity_store: bool,
+) -> Result<()> {
+    if owned_secret.is_some() && has_identity_store {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "OPERATOR_OWNED_SECRET and an identity store (OPERATOR_IDENTITY_SECRET or OPERATOR_IDENTITY_AWS_SECRET) are both set. Set only one: an install uses either the owned Secret or an identity store, not both.".to_string(),
+        }));
+    }
+    Ok(())
+}
+
+/// With an identity store the database key lives in the store, so a key given
+/// by file or variable would be ignored without a word. Refuse the combination
+/// instead, like the owned Secret.
+fn refuse_encryption_key_with_identity_store(
+    encryption_key_file: Option<&std::path::Path>,
+    has_encryption_key_env: bool,
+    has_identity_store: bool,
+) -> Result<()> {
+    if has_identity_store && (encryption_key_file.is_some() || has_encryption_key_env) {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "An encryption key (OPERATOR_ENCRYPTION_KEY_FILE or OPERATOR_ENCRYPTION_KEY) and an identity store (OPERATOR_IDENTITY_SECRET or OPERATOR_IDENTITY_AWS_SECRET) are both set. Set only one: with an identity store the database key is kept in the store and the given key would be ignored.".to_string(),
+        }));
+    }
+    Ok(())
+}
+
 /// The values in the Secret the Operator owns, created first if they are missing. Empty when
 /// the chart names no such Secret (an Operator started with a key file or variable).
 async fn load_owned_secret(
@@ -1819,6 +1997,265 @@ async fn load_owned_secret(
     .await?;
     crate::owned_secret::report(&owned, &ensured);
     Ok(ensured.values)
+}
+
+/// Open the local database. With an identity Secret the database key and the
+/// enrolled identity live in the Secret and the data directory is a cache: a
+/// cache that cannot be opened with the key (the Secret was recreated) is
+/// emptied and opened again.
+async fn open_operator_db(
+    data_dir: &str,
+    identity_secret: Option<&str>,
+    identity_aws_secret: Option<&str>,
+    namespace: Option<String>,
+    encryption_key_file: Option<&std::path::Path>,
+    data_persistent: Option<bool>,
+    has_join_token: bool,
+) -> Result<(crate::db::OperatorDb, String)> {
+    if identity_secret.is_some() && identity_aws_secret.is_some() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Set only one of OPERATOR_IDENTITY_SECRET and OPERATOR_IDENTITY_AWS_SECRET"
+                .into(),
+        }));
+    }
+    let (backend, secret_name): (
+        std::sync::Arc<dyn crate::identity_store::SecretBackend>,
+        &str,
+    ) = match (identity_secret, identity_aws_secret) {
+        (Some(secret_name), _) => {
+            let namespace = match namespace {
+                Some(namespace) => namespace,
+                None => tokio::fs::read_to_string(IN_CLUSTER_NAMESPACE_FILE)
+                    .await
+                    .map(|namespace| namespace.trim().to_string())
+                    .ok()
+                    .filter(|namespace| !namespace.is_empty())
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::ConfigurationError {
+                            message: "OPERATOR_IDENTITY_SECRET needs the operator's namespace"
+                                .into(),
+                        })
+                    })?,
+            };
+            (
+                std::sync::Arc::new(
+                    crate::identity_store::KubernetesSecret::in_cluster(&namespace, secret_name)
+                        .await?,
+                ),
+                secret_name,
+            )
+        }
+        (None, Some(secret_id)) => (
+            std::sync::Arc::new(
+                crate::identity_store_aws::AwsSecret::from_environment(secret_id).await?,
+            ),
+            secret_id,
+        ),
+        (None, None) => {
+            let key =
+                match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
+                    Some(path) => load_or_create_local_key(&path).await?,
+                    None => load_encryption_key(encryption_key_file).await?,
+                };
+            return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
+        }
+    };
+    let store = std::sync::Arc::new(crate::identity_store::SecretIdentityStore::new(
+        backend,
+        secret_name,
+    ));
+    let key = identity_secret_key(&store).await?;
+    let db = open_cache(data_dir, &key, data_persistent).await?;
+    Ok((db.use_identity_store(store).await?, key))
+}
+
+/// The local key from the identity Secret. While the API server cannot be asked
+/// the operator waits and tries again, rather than start with a key that would
+/// orphan its cache or an identity it does not know it has.
+async fn identity_secret_key(store: &crate::identity_store::SecretIdentityStore) -> Result<String> {
+    const ATTEMPTS: u32 = 8;
+    let mut delay = std::time::Duration::from_secs(1);
+    let mut attempt = 1;
+    loop {
+        match store.encryption_key().await {
+            Ok(key) => return Ok(key),
+            Err(error) if attempt < ATTEMPTS => {
+                warn!(error = %error, attempt, "Cannot read the identity Secret yet; trying again");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(std::time::Duration::from_secs(30));
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Open the local database in the data directory. The directory is a cache only
+/// when `OPERATOR_DATA_PERSISTENT=false`; then a database that cannot be opened
+/// with the key (the Secret was recreated) is emptied and opened again. On a
+/// persistent volume the database may hold the only copy of an identity, so it
+/// is never deleted: the operator stops with a message instead.
+async fn open_cache(
+    data_dir: &str,
+    key: &str,
+    data_persistent: Option<bool>,
+) -> Result<crate::db::OperatorDb> {
+    match crate::db::OperatorDb::new(data_dir, key).await {
+        Ok(db) => Ok(db),
+        Err(error) if data_persistent == Some(false) => {
+            warn!(error = %error, "Cannot open the local cache; starting with an empty one");
+            let mut entries = tokio::fs::read_dir(data_dir).await.ok();
+            while let Some(entry) = match entries.as_mut() {
+                Some(entries) => entries.next_entry().await.ok().flatten(),
+                None => None,
+            } {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("operator.db")
+                {
+                    let _ = tokio::fs::remove_file(entry.path()).await;
+                }
+            }
+            crate::db::OperatorDb::new(data_dir, key).await
+        }
+        Err(error) => Err(error).context(ErrorData::ConfigurationError {
+            message: "The operator's local database cannot be opened with the key in the identity Secret, and the data directory is persistent, so it is kept. Remove the database files by hand if the identity is safe in the Secret, or set OPERATOR_DATA_PERSISTENT=false for a cache directory.".into(),
+        }),
+    }
+}
+
+/// An enrolled operator keeps its identity when it is given a token for another
+/// manager (a token is a trust root, and an operator that works does not move).
+/// It says so once and goes on; it never fails to start for it.
+fn join_token_for_saved_identity(
+    token: Option<crate::enrollment_token::EnrollmentToken>,
+    saved: Option<&crate::daily_identity::DailyIdentityState>,
+) -> Option<crate::enrollment_token::EnrollmentToken> {
+    let token = token?;
+    let Some(saved) = saved.filter(|saved| !saved.deployment_id.is_empty()) else {
+        return Some(token);
+    };
+    if crate::daily_identity::same_endpoint(&saved.manager_url, &token.manager_url) {
+        return Some(token);
+    }
+    warn!(
+        saved_manager = %saved.manager_url,
+        "The enrollment token names another manager than the one this operator is enrolled with; \
+         ignoring it. To move the operator, uninstall the release (which deletes its identity Secret) and install again."
+    );
+    None
+}
+
+const IN_CLUSTER_NAMESPACE_FILE: &str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
+
+/// Where an operator installed with only an enrollment token keeps its local
+/// database key: `operator.key` beside the database. Used when no key was
+/// given, and either a token was or the key file is already there.
+fn local_key_file_to_generate(
+    data_dir: &str,
+    encryption_key_file: Option<&std::path::Path>,
+    has_join_token: bool,
+) -> Option<PathBuf> {
+    if encryption_key_file.is_some() || env_string("OPERATOR_ENCRYPTION_KEY").is_some() {
+        return None;
+    }
+    let path = PathBuf::from(data_dir).join(LOCAL_KEY_FILE_NAME);
+    (has_join_token || path.exists()).then_some(path)
+}
+
+const LOCAL_KEY_FILE_NAME: &str = "operator.key";
+
+/// Read the local key, or create it (64 hex characters, mode 0600, never
+/// replacing an existing file) on the first start.
+///
+/// The key is written to a temporary file, flushed to disk and then linked into
+/// place, so `operator.key` is either absent or complete: a crash cannot leave
+/// an empty file that blocks the next start. A file that is empty anyway (left
+/// by an earlier version that wrote in place) is treated as absent only when no
+/// database exists beside it: the database is created after the key is read,
+/// so with none, no data was ever encrypted with a key from this file. With a
+/// database present the file is the only copy of its key, so the start fails
+/// and names the file.
+async fn load_or_create_local_key(path: &std::path::Path) -> Result<String> {
+    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+        let empty = tokio::fs::read_to_string(path)
+            .await
+            .map(|contents| contents.trim().is_empty())
+            .unwrap_or(false);
+        if !empty {
+            return read_secret_file(path, "local encryption key").await;
+        }
+        let has_database = path.parent().is_some_and(crate::owned_secret::has_state);
+        if has_database {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "The local encryption key file '{}' is empty but the database beside it exists, so its key is lost. Restore the file from a backup, or remove the data directory to start over (the Operator then enrolls again).",
+                    path.display()
+                ),
+            }));
+        }
+        warn!(path = %path.display(), "The local encryption key file is empty and no database exists beside it; creating a new key");
+        tokio::fs::remove_file(path)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Cannot replace the empty key file '{}'", path.display()),
+            })?;
+    }
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).map_err(|_| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "Cannot generate the local encryption key".into(),
+        })
+    })?;
+    let key: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Cannot create '{}'", parent.display()),
+            })?;
+    }
+    let write_error = |error: std::io::Error| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Cannot write '{}': {error}", path.display()),
+        })
+    };
+    let mut temporary_name = path.as_os_str().to_owned();
+    temporary_name.push(format!(".tmp-{}", std::process::id()));
+    let temporary = PathBuf::from(temporary_name);
+    // A temporary left by this process id's earlier crash is removed first.
+    let _ = tokio::fs::remove_file(&temporary).await;
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&temporary).await.map_err(write_error)?;
+        file.write_all(key.as_bytes()).await.map_err(write_error)?;
+        file.sync_all().await.map_err(write_error)?;
+    }
+    // A hard link never replaces: another start that created the key first wins.
+    let linked = tokio::fs::hard_link(&temporary, path).await;
+    let _ = tokio::fs::remove_file(&temporary).await;
+    match linked {
+        Ok(()) => {
+            // Flush the directory entry, so the file is there after a crash.
+            if let Some(parent) = path.parent() {
+                if let Ok(directory) = tokio::fs::File::open(parent).await {
+                    let _ = directory.sync_all().await;
+                }
+            }
+            Ok(key)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_secret_file(path, "local encryption key").await
+        }
+        Err(error) => Err(write_error(error)),
+    }
 }
 
 pub(crate) async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
@@ -1934,6 +2371,47 @@ fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<Operat
         .map(|()| Some(report))
 }
 
+/// Whether the identity lives in a store outside the database (a Kubernetes Secret or an
+/// AWS Secrets Manager secret).
+fn has_identity_store(secret: Option<&str>, aws_secret: Option<&str>) -> bool {
+    secret.is_some() || aws_secret.is_some()
+}
+
+/// Whether a start with no deployment state writes the observe-only one: with the
+/// Secret identity store when no release is wanted (as before), and for every install
+/// enrolled by a join token, which has no Secret on a machine or a Docker host. The initial
+/// desired release only matters when the Operator registers a new deployment, and an
+/// enrolled install is registered before it starts, so it does not decide this: a Docker
+/// command that does not set it would otherwise leave the deployment `pending` for good.
+fn starts_observe_only(
+    identity_secret: bool,
+    join_token: bool,
+    initial_desired_release: InitialDesiredReleaseArg,
+) -> bool {
+    join_token || (identity_secret && initial_desired_release == InitialDesiredReleaseArg::None)
+}
+
+/// The enrollment token from its file when that exists, else from the
+/// environment value. A blank value counts as no token.
+async fn resolve_join_token(
+    file: Option<&std::path::Path>,
+    inline: Option<&str>,
+) -> Result<Option<crate::enrollment_token::EnrollmentToken>> {
+    if let Some(path) = file {
+        if tokio::fs::try_exists(path).await.unwrap_or(false) {
+            return Ok(Some(crate::enrollment_token::EnrollmentToken::parse(
+                &read_secret_file(path, "enrollment token").await?,
+            )?));
+        }
+    }
+    match inline.map(str::trim) {
+        Some(value) if !value.is_empty() => Ok(Some(
+            crate::enrollment_token::EnrollmentToken::parse(value)?,
+        )),
+        _ => Ok(None),
+    }
+}
+
 async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String>> {
     if let Some(path) = file {
         return Ok(Some(read_secret_file(path, "sync token").await?));
@@ -1956,6 +2434,65 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 
 #[cfg(all(test, unix))]
 mod tests {
+    #[test]
+    fn an_owned_secret_with_an_identity_store_is_refused_not_silently_ignored() {
+        let refuse = super::refuse_owned_secret_with_identity_store;
+        // The Kubernetes Secret and the AWS secret both count as an identity store.
+        assert!(refuse(Some("owned"), super::has_identity_store(Some("id"), None)).is_err());
+        assert!(refuse(Some("owned"), super::has_identity_store(None, Some("arn"))).is_err());
+        assert!(refuse(Some("owned"), false).is_ok());
+        assert!(refuse(None, true).is_ok());
+        assert!(refuse(None, false).is_ok());
+    }
+
+    #[test]
+    fn an_encryption_key_with_an_identity_store_is_refused_not_silently_ignored() {
+        let refuse = super::refuse_encryption_key_with_identity_store;
+        let file = std::path::Path::new("/keys/operator.key");
+        assert!(refuse(Some(file), false, true).is_err());
+        assert!(refuse(None, true, true).is_err());
+        assert!(refuse(Some(file), true, false).is_ok());
+        assert!(refuse(None, false, true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_local_key_is_created_whole_and_an_empty_file_is_handled_by_what_it_protects() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operator.key");
+        let key = super::load_or_create_local_key(&path).await.unwrap();
+        assert_eq!(key.len(), 64);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), key);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // No temporary is left beside it, and a second start reads the same key.
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert_eq!(super::load_or_create_local_key(&path).await.unwrap(), key);
+
+        // An empty file with no database beside it protects nothing: replaced.
+        let empty_dir = tempfile::tempdir().unwrap();
+        let empty = empty_dir.path().join("operator.key");
+        std::fs::write(&empty, "").unwrap();
+        std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let replaced = super::load_or_create_local_key(&empty).await.unwrap();
+        assert_eq!(replaced.len(), 64);
+
+        // With a database beside it the key is lost: fail, naming the file.
+        let lost_dir = tempfile::tempdir().unwrap();
+        let lost = lost_dir.path().join("operator.key");
+        std::fs::write(&lost, "").unwrap();
+        std::fs::set_permissions(&lost, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(lost_dir.path().join("operator.db"), "x").unwrap();
+        let error = super::load_or_create_local_key(&lost).await.unwrap_err();
+        assert!(error.to_string().contains("operator.key"), "{error}");
+        assert_eq!(std::fs::read_to_string(&lost).unwrap(), "");
+    }
+
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, load_operator_package_config,
         observe_only_initial_state, parse_operator_image_report, parse_operator_operations,
@@ -1967,6 +2504,92 @@ mod tests {
     use alien_core::{sync::OperatorImageSource, DeploymentStatus, Platform};
     use clap::Parser;
     use std::os::unix::fs::PermissionsExt;
+
+    fn join_token(manager: &str) -> crate::enrollment_token::EnrollmentToken {
+        crate::enrollment_token::EnrollmentToken {
+            manager_url: manager.into(),
+            code: "ax_enroll_v1_x".into(),
+        }
+    }
+
+    fn saved_identity(
+        manager: &str,
+        deployment: &str,
+    ) -> crate::daily_identity::DailyIdentityState {
+        crate::daily_identity::DailyIdentityState {
+            manager_url: manager.into(),
+            audience: manager.into(),
+            deployment_id: deployment.into(),
+            current: "ax_day_v1_k".into(),
+            pending: None,
+            pending_started_at: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(20),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+            previous: None,
+            store_version: Default::default(),
+        }
+    }
+
+    #[test]
+    fn an_enrolled_operator_ignores_a_token_for_another_manager() {
+        let saved = saved_identity("https://a.example", "dep_1");
+        // Another manager: ignored, and the operator keeps running on its identity.
+        assert!(super::join_token_for_saved_identity(
+            Some(join_token("https://b.example")),
+            Some(&saved)
+        )
+        .is_none());
+        // The same manager, even with a trailing slash: the token is used.
+        assert!(super::join_token_for_saved_identity(
+            Some(join_token("https://a.example/")),
+            Some(&saved)
+        )
+        .is_some());
+        // Nothing enrolled yet (or only a candidate): the token is used.
+        let candidate = saved_identity("https://a.example", "");
+        assert!(super::join_token_for_saved_identity(
+            Some(join_token("https://b.example")),
+            Some(&candidate)
+        )
+        .is_some());
+        assert!(
+            super::join_token_for_saved_identity(Some(join_token("https://b.example")), None)
+                .is_some()
+        );
+        assert!(super::join_token_for_saved_identity(None, Some(&saved)).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_persistent_data_directory_is_never_emptied_but_a_cache_is() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_str().unwrap();
+        // A database written with another key, as after the Secret was recreated.
+        crate::db::OperatorDb::new(path, &"a".repeat(64))
+            .await
+            .unwrap();
+        let files = |dir: &std::path::Path| {
+            std::fs::read_dir(dir)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("operator.db"))
+                .count()
+        };
+        let before = files(directory.path());
+        assert!(before > 0);
+
+        for persistent in [None, Some(true)] {
+            let error = super::open_cache(path, &"b".repeat(64), persistent)
+                .await
+                .err()
+                .expect("a persistent directory is not emptied");
+            assert!(error.to_string().contains("persistent"));
+            assert_eq!(files(directory.path()), before);
+        }
+        super::open_cache(path, &"b".repeat(64), Some(false))
+            .await
+            .expect("a cache directory is emptied and opened again");
+    }
 
     /// Counts the enrollment-code requests an Operator makes with its token.
     async fn manager_counting_code_requests(
@@ -2057,6 +2680,110 @@ mod tests {
                 "{persistent:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_observe_only_start_state_is_kept_for_the_secret_store_and_added_for_join_tokens() {
+        use super::InitialDesiredReleaseArg::{Active, None as NoRelease};
+        // A Kubernetes install with the identity Secret that wants no release, as before.
+        // Both store kinds count as a store: an ECS task (AWS secret) with no release wanted
+        // and no token starts observe-only, like the Kubernetes Secret.
+        assert!(super::has_identity_store(Some("a"), None));
+        assert!(super::has_identity_store(None, Some("arn")));
+        assert!(!super::has_identity_store(None, None));
+        assert!(super::starts_observe_only(
+            super::has_identity_store(None, Some("arn")),
+            false,
+            NoRelease
+        ));
+        assert!(super::starts_observe_only(true, false, NoRelease));
+        assert!(super::starts_observe_only(true, true, NoRelease));
+        // A Secret install that asks for the active release registers and runs it itself.
+        assert!(!super::starts_observe_only(true, false, Active));
+        // A machine or Docker host enrolled by a join token, whatever the release setting:
+        // the default is `active`, and a command that leaves it out must still reach `running`.
+        assert!(super::starts_observe_only(false, true, NoRelease));
+        assert!(super::starts_observe_only(false, true, Active));
+        assert!(super::starts_observe_only(true, true, Active));
+        // A local install with neither starts with no state, as before.
+        assert!(!super::starts_observe_only(false, false, NoRelease));
+        assert!(!super::starts_observe_only(false, false, Active));
+    }
+
+    #[tokio::test]
+    async fn a_generated_local_key_is_private_stable_and_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data").join("operator.key");
+        let first = super::load_or_create_local_key(&path).await.unwrap();
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|b| b.is_ascii_hexdigit()));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // Same key on the next start.
+        assert_eq!(super::load_or_create_local_key(&path).await.unwrap(), first);
+        // A key file that was given wins; nothing is generated beside it.
+        assert!(
+            super::local_key_file_to_generate(dir.path().to_str().unwrap(), Some(&path), true)
+                .is_none()
+        );
+        // A token given as a flag (not only as an environment variable) starts
+        // a fresh install: the key file is chosen for it.
+        let fresh = tempfile::tempdir().unwrap();
+        assert_eq!(
+            super::local_key_file_to_generate(fresh.path().to_str().unwrap(), None, true),
+            Some(fresh.path().join("operator.key"))
+        );
+        assert!(
+            super::local_key_file_to_generate(fresh.path().to_str().unwrap(), None, false)
+                .is_none()
+        );
+        // A key file that is too open is refused, not read.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(super::load_or_create_local_key(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_join_token_comes_from_the_file_or_the_environment_value() {
+        use base64::Engine as _;
+        let token = |code: &str| {
+            format!(
+                "ax_join_v1_{}",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+                    r#"{{"u":"https://manager.example.com","c":"{code}"}}"#
+                ))
+            )
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("token");
+        std::fs::write(&file, token("from-file")).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let from_env = super::resolve_join_token(None, Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(from_env.code, "from-env");
+        // The file wins, and a missing file falls through to the value.
+        let both = super::resolve_join_token(Some(&file), Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(both.code, "from-file");
+        let missing = dir.path().join("absent");
+        let fallback = super::resolve_join_token(Some(&missing), Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fallback.code, "from-env");
+        assert!(super::resolve_join_token(None, Some("  "))
+            .await
+            .unwrap()
+            .is_none());
+        let error = super::resolve_join_token(None, Some("ax_join_v1_secretsecret"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("secretsecret"), "{error}");
     }
 
     #[test]
