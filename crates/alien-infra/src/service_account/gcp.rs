@@ -962,7 +962,8 @@ mod tests {
                 .resource_lifecycle(ResourceLifecycle::Frozen)
                 .controller(GcpServiceAccountController {
                     service_account_email: Some(
-                        "test-default-profile-sa@test-project-123.iam.gserviceaccount.com".to_string(),
+                        "test-default-profile-sa@test-project-123.iam.gserviceaccount.com"
+                            .to_string(),
                     ),
                     state: GcpServiceAccountState::Ready,
                     ..Default::default()

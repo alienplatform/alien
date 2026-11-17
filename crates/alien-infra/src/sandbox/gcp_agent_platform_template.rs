@@ -367,7 +367,10 @@ impl GcpAgentPlatformTemplateController {
                 self.preview_service_account = signer;
             }
             self.reconciled_grants =
-                Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?);
+                Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
+                    ctx,
+                    crate::core::ResourcePermissionsHelper::get_gcp_management_service_account_email(ctx),
+                )?);
         }
 
         info!(id=%config.id, engine=%engine, "Creating sandbox environment template");
@@ -659,7 +662,10 @@ impl GcpAgentPlatformTemplateController {
                     self.preview_service_account = signer;
                 }
                 self.reconciled_grants =
-                    Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?);
+                    Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
+                        ctx,
+                        crate::core::ResourcePermissionsHelper::get_gcp_management_service_account_email(ctx),
+                    )?);
             }
         }
 
@@ -774,7 +780,13 @@ impl GcpAgentPlatformTemplateController {
             return Ok(false);
         }
         Ok(self.reconciled_grants.as_deref()
-            != Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?.as_str()))
+            != Some(
+                crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
+                    ctx,
+                    crate::core::ResourcePermissionsHelper::get_gcp_management_service_account_email(ctx),
+                )?
+                .as_str(),
+            ))
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {

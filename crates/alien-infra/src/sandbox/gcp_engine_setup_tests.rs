@@ -14,6 +14,7 @@ use alien_gcp_clients::iam::{Binding, IamPolicy, MockIamApi};
 
 use crate::core::controller_test::SingleControllerExecutor;
 use crate::core::MockPlatformServiceProvider;
+use crate::core::StackResourceStateExt as _;
 use crate::remote_stack_management::GcpRemoteStackManagementController;
 use crate::sandbox::gcp_engine_setup::{preview_signer_account_id, SIGN_JWT_PERMISSION};
 use crate::sandbox::{GcpAgentPlatformEngineController, GcpAgentPlatformTemplateController};
@@ -478,7 +479,10 @@ async fn a_setup_rerun_updates_only_when_the_profiles_changed() {
             .map(|policy| members(policy, "sandbox_preview_sign"))
             .unwrap_or_default()
     };
-    assert_eq!(signer_members(&calls), vec![format!("serviceAccount:{WORKLOAD}")]);
+    assert_eq!(
+        signer_members(&calls),
+        vec![format!("serviceAccount:{WORKLOAD}")]
+    );
 
     executor.add_permission_profile(
         "added",
@@ -497,6 +501,48 @@ async fn a_setup_rerun_updates_only_when_the_profiles_changed() {
         "the new profile's identity may sign: {:?}",
         signer_members(&calls)
     );
+    assert!(
+        !executor.needs_update().unwrap(),
+        "the update settled the check: exactly one"
+    );
+}
+
+/// An install moved to another manager identity gets the management grant again: the identity is
+/// an input of the reconcile, though the stack does not name it.
+#[tokio::test]
+async fn a_setup_rerun_updates_once_when_the_management_identity_changed() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let (iam, platform) = clients(&calls);
+    let mut executor = executor_full(iam, platform, true, true, false).await;
+    executor.run_until_terminal().await.expect("create runs");
+    assert!(
+        !executor.needs_update().unwrap(),
+        "a steady state asks for no update"
+    );
+
+    let mut saved = executor
+        .stack_state()
+        .resources
+        .get("management")
+        .expect("the management resource is in the state")
+        .clone();
+    saved
+        .set_internal_controller(Some(Box::new(GcpRemoteStackManagementController {
+            service_account_email: Some(
+                "other-manager@test-project-123.iam.gserviceaccount.com".to_string(),
+            ),
+            ..Default::default()
+        })))
+        .unwrap();
+    executor.insert_saved_resource("management", saved);
+    assert!(
+        executor.needs_update().unwrap(),
+        "another management identity asks for the update"
+    );
+    executor
+        .update(sandbox(vec![8080], alien_core::SandboxEgress::None))
+        .expect("update is accepted");
+    executor.run_until_terminal().await.expect("update runs");
     assert!(
         !executor.needs_update().unwrap(),
         "the update settled the check: exactly one"

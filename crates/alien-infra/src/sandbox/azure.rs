@@ -651,7 +651,13 @@ impl AzureSandboxController {
             return Ok(self.setup_owns_grants(ctx)
                 && self.reconciled_grants.as_deref()
                     != Some(
-                        crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?.as_str(),
+                        crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
+                            ctx,
+                            crate::core::AzurePermissionsHelper::get_management_uami_principal_id(
+                                ctx,
+                            ),
+                        )?
+                        .as_str(),
                     ));
         }
         let config = ctx.desired_resource_config::<Sandbox>()?;
@@ -1230,8 +1236,10 @@ impl AzureSandboxController {
             "sandbox",
         )
         .await?;
-        self.reconciled_grants =
-            Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(ctx)?);
+        self.reconciled_grants = Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
+            ctx,
+            crate::core::AzurePermissionsHelper::get_management_uami_principal_id(ctx),
+        )?);
         Ok(())
     }
 

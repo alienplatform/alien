@@ -13,19 +13,25 @@ use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, IntoAlienError};
 
 /// The inputs that decide the grants placed for the sandbox: the profiles and the management
-/// permissions, and which identities (service accounts, remote callers, management) the stack
-/// declares for them to land on. A change to any of them is one update; a steady state is none.
-pub(crate) fn grant_inputs_fingerprint(ctx: &ResourceControllerContext<'_>) -> Result<String> {
-    fingerprint_of(ctx.desired_stack)
+/// permissions, which identities (service accounts, remote callers, management) the stack
+/// declares for them to land on, and the management identity itself, which the deployment
+/// supplies and the stack does not name (`management_identity`: the email or principal the
+/// management grant is made to). A change to any of them is one update; a steady state is none.
+/// An identity that cannot be read yet counts as absent, so it is picked up when it can.
+pub(crate) fn grant_inputs_fingerprint(
+    ctx: &ResourceControllerContext<'_>,
+    management_identity: Result<Option<String>>,
+) -> Result<String> {
+    fingerprint_of(ctx.desired_stack, management_identity.ok().flatten())
 }
 
-fn fingerprint_of(stack: &Stack) -> Result<String> {
+fn fingerprint_of(stack: &Stack, management_identity: Option<String>) -> Result<String> {
     let mut identities: Vec<(String, String)> = stack
         .resources()
         .map(|(id, entry)| (entry.config.resource_type().to_string(), id.clone()))
         .collect();
     identities.sort();
-    let inputs = serde_json::to_vec(&(&stack.permissions, identities))
+    let inputs = serde_json::to_vec(&(&stack.permissions, identities, management_identity))
         .into_alien_error()
         .map_err(|error| {
             AlienError::new(ErrorData::InfrastructureError {
@@ -46,12 +52,27 @@ mod tests {
     fn the_fingerprint_changes_with_a_profile_and_not_without() {
         let base = || Stack::new("s".to_string()).build();
         let mut with_profile = base();
-        let same = fingerprint_of(&base()).unwrap();
-        assert_eq!(same, fingerprint_of(&base()).unwrap());
+        let same = fingerprint_of(&base(), None).unwrap();
+        assert_eq!(same, fingerprint_of(&base(), None).unwrap());
         with_profile.permissions.profiles.insert(
             "worker".to_string(),
             PermissionProfile::new().global(["sandbox/execute"]),
         );
-        assert_ne!(same, fingerprint_of(&with_profile).unwrap());
+        assert_ne!(same, fingerprint_of(&with_profile, None).unwrap());
+    }
+
+    #[test]
+    fn the_fingerprint_changes_with_the_management_identity() {
+        let stack = Stack::new("s".to_string()).build();
+        let one = fingerprint_of(&stack, Some("manager-1".to_string())).unwrap();
+        assert_eq!(
+            one,
+            fingerprint_of(&stack, Some("manager-1".to_string())).unwrap()
+        );
+        assert_ne!(
+            one,
+            fingerprint_of(&stack, Some("manager-2".to_string())).unwrap()
+        );
+        assert_ne!(one, fingerprint_of(&stack, None).unwrap());
     }
 }
