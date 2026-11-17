@@ -2154,7 +2154,8 @@ mod tests {
         let render = |security: Option<alien_core::ContainerSecurity>| async move {
             let mut config = manifest_test_daemon(&[]);
             config.security = security;
-            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
             manifest_test_controller()
                 .build_daemonset(
                     &config,
@@ -2192,11 +2193,7 @@ mod tests {
             Some(1000)
         );
         assert_eq!(
-            restricted
-                .security_context
-                .as_ref()
-                .unwrap()
-                .run_as_non_root,
+            restricted.security_context.as_ref().unwrap().run_as_non_root,
             Some(true)
         );
         let container_context = restricted.containers[0]
@@ -2211,10 +2208,7 @@ mod tests {
             .iter()
             .map(|mount| mount.mount_path.as_str())
             .collect();
-        assert!(
-            mounts.contains(&"/tmp") && mounts.contains(&"/cache"),
-            "{mounts:?}"
-        );
+        assert!(mounts.contains(&"/tmp") && mounts.contains(&"/cache"), "{mounts:?}");
     }
 
     #[tokio::test]

@@ -86,11 +86,7 @@ fn a_declared_profile_survives_a_round_trip() {
         let read: Stack = serde_json::from_value(written).unwrap();
         assert_eq!(
             security_of(&read),
-            vec![
-                Some(declared.clone()),
-                Some(declared.clone()),
-                Some(declared)
-            ]
+            vec![Some(declared.clone()), Some(declared.clone()), Some(declared)]
         );
     }
 }

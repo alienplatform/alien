@@ -189,11 +189,7 @@ async fn regions_listed_after_an_accepted_empty_update_ask_for_a_setup_update() 
     // First update: accepted with no regions. The stack recorded for it is the update target.
     let first = deployment_config(Some(json!([])));
     let mut recorded = prepare(after(), &first).await;
-    alien_preflights::compatibility::resolve_empty_frozen_input_references(
-        &before(),
-        &mut recorded,
-        &first,
-    );
+    alien_preflights::compatibility::resolve_empty_frozen_input_references(&before(), &mut recorded, &first);
     // Second update to the same release: the deployer now lists a region.
     let second = deployment_config(Some(json!(["us-west-2"])));
     let next = prepare(after(), &second).await;
