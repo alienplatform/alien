@@ -14,6 +14,7 @@ use alien_core::{CommandTarget, CommandTargetType};
 
 use crate::auth::{CommandCapability, Role, Scope, Subject};
 use crate::traits::deployment_store::DeploymentRecord;
+use crate::traits::token_store::TokenType;
 
 /// Decide whether a commands-scoped subject may create this request.
 ///
@@ -286,6 +287,17 @@ pub fn commands_key_may_use_target(subject: &Subject, target: &CommandTarget) ->
     subject.role != Role::CommandsReceiver || !is_operations_command_target(&target.resource_id)
 }
 
+/// Whether the subject came from a setup or setup-import key. The token
+/// validator gives these the same role and scope as the deployment's own
+/// deployment token (they act for the deployment during installation), so the
+/// key's format, which the manager alone issues, is what tells them apart.
+fn is_setup_key(subject: &Subject) -> bool {
+    subject.bearer_token.starts_with(TokenType::Setup.prefix())
+        || subject
+            .bearer_token
+            .starts_with(TokenType::SetupImport.prefix())
+}
+
 /// The one rule for who may lease, answer or release a command on a reserved
 /// operations target. Checked first on every such path, before any policy, so
 /// no policy can widen it.
@@ -297,9 +309,19 @@ pub fn commands_key_may_use_target(subject: &Subject, target: &CommandTarget) ->
 /// 1. the Operator's operations credential, for the Operator queue only;
 /// 2. the deployment's own deployment token with the manager role, for both
 ///    reserved ids (a token-installed Operator relay may lease the operations
-///    worker from stack state).
+///    worker from stack state). Setup and setup-import keys, which act as the
+///    same role, do not pass.
 ///
 /// Other subjects are refused.
+///
+/// Limit: the Operator's commands are received only by the Operator when the
+/// Operator is enrolled (it hands workloads a capability bound to their own
+/// target, or the commands-only key, neither of which reaches a reserved
+/// target). An Operator installed with a deployment token that never enrolled
+/// hands that same token to its Container, Daemon and Worker workloads as their
+/// commands token, and on Local (`alien dev`) workloads hold the deployment
+/// token too. Such a workload is the deployment's own deployment token here
+/// and can lease, answer and release both reserved targets.
 pub fn reserved_target_decision(
     subject: &Subject,
     deployment_id: &str,
@@ -327,7 +349,11 @@ pub fn reserved_target_decision(
         Scope::Deployment {
             deployment_id: scoped,
             ..
-        } => subject.role == Role::DeploymentManager && scoped == deployment_id,
+        } => {
+            subject.role == Role::DeploymentManager
+                && scoped == deployment_id
+                && !is_setup_key(subject)
+        }
         _ => false,
     }
 }
