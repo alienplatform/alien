@@ -4,9 +4,7 @@
 //!
 //! This installs the rendered chart on a real cluster (Kubernetes 1.30 or later) and patches as
 //! the Operator's ServiceAccount: a restart passes, every other change is refused with the
-//! policy's message, and another account is not affected. It also checks that the policy compares
-//! every field the cluster's API schema defines, so a field added by a newer Kubernetes fails here
-//! instead of going unchecked.
+//! policy's message, and another account is not affected.
 //!
 //! Run against a disposable cluster:
 //! `ALIEN_WORKLOAD_RESTART_KIND_CONTEXT=kind-<name> cargo test -p alien-helm --test workload_restart_kind -- --ignored --nocapture`
@@ -18,7 +16,7 @@ use alien_helm::{
 use alien_operations_sdk::{
     KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions, RiskTier,
 };
-use std::{collections::BTreeSet, fs, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 const RELEASE: &str = "restart-policy";
 const NAMESPACE: &str = "alien-restart-policy";
@@ -162,6 +160,20 @@ apiVersion: v1
 kind: ServiceAccount
 metadata: {name: other}
 ---
+# Test only: `kubectl rollout restart` reads the workload before it patches it. The Operator's own
+# grant does not include reading a workload by name, so this lets the real command run as it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: operator-get}
+rules:
+  - {apiGroups: [apps], resources: [deployments, statefulsets, daemonsets], verbs: [get]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: operator-get}
+subjects: [{kind: ServiceAccount, name: my-saas-operator}]
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: operator-get}
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata: {name: other-patch}
@@ -179,6 +191,16 @@ roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: other-patch}
 /// Operator may not `get`). `kubectl patch` reads the object first, so this goes through
 /// `kubectl proxy`, which carries the impersonation. Returns (accepted, response body).
 fn api_patch(context: &str, user: &str, path: &str, body: &str) -> (bool, String) {
+    api_patch_as(context, user, path, "strategic-merge-patch+json", body)
+}
+
+fn api_patch_as(
+    context: &str,
+    user: &str,
+    path: &str,
+    content_type: &str,
+    body: &str,
+) -> (bool, String) {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
     let as_user = format!("--as={user}");
@@ -195,7 +217,7 @@ fn api_patch(context: &str, user: &str, path: &str, body: &str) -> (bool, String
     let url = format!("http://{address}{path}");
     let output = Command::new("curl")
         .args(["-s", "-w", "\n%{http_code}", "-X", "PATCH", "-H"])
-        .args(["Content-Type: application/strategic-merge-patch+json", "-d", body, &url])
+        .args([&format!("Content-Type: application/{content_type}"), "-d", body, &url])
         .output()
         .expect("run curl");
     let _ = proxy.kill();
@@ -222,15 +244,6 @@ fn patch(context: &str, user: &str, kind: &str, name: &str, body: &str) -> (bool
         &format!("/apis/apps/v1/namespaces/{NAMESPACE}/{resource}/{name}"),
         body,
     )
-}
-
-fn schema_properties(schema: &serde_json::Value, name: &str) -> BTreeSet<String> {
-    schema["components"]["schemas"][name]["properties"]
-        .as_object()
-        .unwrap_or_else(|| panic!("no schema {name}"))
-        .keys()
-        .cloned()
-        .collect()
 }
 
 #[test]
@@ -288,6 +301,36 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
     let again = RESTART.replace("2026-01-01", "2026-02-01");
     assert!(patch(&context, OPERATOR, "deployment", "web", &again).0);
 
+    // The real command passes: it patches the same annotation.
+    for target in ["deployment/web", "statefulset/db", "daemonset/agent"] {
+        let (ok, text) = kubectl(
+            &context,
+            &["rollout", "restart", target, &format!("--as={OPERATOR}"), "-v=6"],
+            None,
+        );
+        assert!(ok && text.contains("restarted"), "kubectl rollout restart {target}: {text}");
+    }
+
+    // Server-side apply is an UPDATE as well: a restart applied this way passes, an image change
+    // applied this way does not.
+    let apply_path = format!("/apis/apps/v1/namespaces/{NAMESPACE}/deployments/web?fieldManager=operator&force=true");
+    let (ok, text) = api_patch_as(
+        &context,
+        OPERATOR,
+        &apply_path,
+        "apply-patch+yaml",
+        r#"{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web"},"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"2026-04-01T00:00:00Z"}}}}}"#,
+    );
+    assert!(ok, "server-side apply of a restart: {text}");
+    let (ok, text) = api_patch_as(
+        &context,
+        OPERATOR,
+        &apply_path,
+        "apply-patch+yaml",
+        r#"{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web"},"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
+    );
+    assert!(!ok && text.contains("denied request"), "server-side apply of an image: {text}");
+
     // Every other change is refused by the policy.
     let refused = [
         ("deployment", "web", "image", r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#),
@@ -300,6 +343,7 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
         ("deployment", "web", "pod annotation", r#"{"spec":{"template":{"metadata":{"annotations":{"extra":"x"}}}}}"#),
         ("deployment", "web", "workload label", r#"{"metadata":{"labels":{"extra":"x"}}}"#),
         ("deployment", "web", "workload annotation", r#"{"metadata":{"annotations":{"extra":"x"}}}"#),
+        ("deployment", "web", "a spec field that was not set", r#"{"spec":{"minReadySeconds":5}}"#),
         ("deployment", "web", "strategy", r#"{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}"#),
         ("deployment", "web", "restart with image", r#"{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"2026-03-01T00:00:00Z"}},"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#),
         ("statefulset", "db", "image", r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#),
@@ -336,46 +380,4 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
         r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
     );
     assert!(ok, "another account is not limited: {text}");
-
-    // The policy compares every field the cluster defines.
-    let (ok, schema) = run(
-        "kubectl",
-        &["--context", &context, "get", "--raw", "/openapi/v3/apis/apps/v1"],
-        None,
-    );
-    assert!(ok);
-    let schema: serde_json::Value = serde_json::from_str(&schema).unwrap();
-    for (kind, spec) in [
-        ("deployments", "io.k8s.api.apps.v1.DeploymentSpec"),
-        ("statefulsets", "io.k8s.api.apps.v1.StatefulSetSpec"),
-        ("daemonsets", "io.k8s.api.apps.v1.DaemonSetSpec"),
-    ] {
-        let policy = rendered
-            .split("---")
-            .find(|document| {
-                document.contains("kind: ValidatingAdmissionPolicy\n")
-                    && document.contains(&format!("resources: ['{kind}']"))
-            })
-            .unwrap_or_else(|| panic!("a policy for {kind}"));
-        for property in schema_properties(&schema, spec) {
-            if property == "template" {
-                continue;
-            }
-            assert!(
-                policy.contains(&format!("object.spec.?{property} == oldObject.spec.?{property}")),
-                "the {kind} policy does not compare spec.{property}"
-            );
-        }
-    }
-    for property in schema_properties(&schema, "io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta") {
-        if property == "annotations" {
-            continue;
-        }
-        assert!(
-            rendered.contains(&format!(
-                "object.spec.template.metadata.?{property} == oldObject.spec.template.metadata.?{property}"
-            )),
-            "the policy does not compare the pod template's metadata.{property}"
-        );
-    }
 }
