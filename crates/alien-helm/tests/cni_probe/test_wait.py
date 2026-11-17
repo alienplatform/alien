@@ -2,6 +2,7 @@
 
 from loader import probe
 import unittest
+import urllib.error
 
 START_MESSAGE = ("failed to create containerd task: failed to create shim task: "
                  "guest did not see hot-plugged drive image_0 within 10s")
@@ -99,6 +100,110 @@ class ProbeThatRan(unittest.TestCase):
         cluster = Cluster(pod("Running"), SUCCEEDED)
         self.assertEqual(cluster.wait()["status"]["phase"], "Succeeded")
         self.assertEqual(cluster.recreated, [])
+
+
+UNSCHEDULABLE = {"spec": {}, "status": {"phase": "Pending", "conditions": [
+    {"type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+     "message": "0/3 nodes are available: 3 Insufficient memory."}]}}
+IMAGE_PULL = pod("Pending", waiting={"reason": "ImagePullBackOff",
+                                     "message": "Back-off pulling image \"registry.example/probe\""})
+
+
+class PodThatNeverRuns(unittest.TestCase):
+    def test_an_unschedulable_pod_past_the_bound_names_why_and_is_not_recreated(self):
+        cluster = Cluster(UNSCHEDULABLE)
+        with self.assertRaises(RuntimeError) as raised:
+            cluster.wait()
+        text = str(raised.exception)
+        self.assertIn("Unschedulable", text)
+        self.assertIn("0/3 nodes are available: 3 Insufficient memory.", text)
+        self.assertNotIn("enforcement is unproven", text)
+        self.assertNotIn("NetworkPolicy enforcement", text.replace("NetworkPolicy was not tested", ""))
+        self.assertEqual(cluster.recreated, [])
+        self.assertLessEqual(cluster.clock, probe.PENDING_CAUSE_BOUND_SECONDS + 2)
+
+    def test_an_image_that_does_not_pull_past_the_bound_names_why_and_is_not_recreated(self):
+        cluster = Cluster(IMAGE_PULL)
+        with self.assertRaises(RuntimeError) as raised:
+            cluster.wait()
+        self.assertIn("ImagePullBackOff", str(raised.exception))
+        self.assertIn("Back-off pulling image", str(raised.exception))
+        self.assertNotIn("enforcement is unproven", str(raised.exception))
+        self.assertEqual(cluster.recreated, [])
+
+    def test_a_pod_pending_within_the_bound_is_only_slow(self):
+        cluster = Cluster(*([UNSCHEDULABLE] * 20 + [SUCCEEDED]))
+        cluster.wait()
+        self.assertEqual(cluster.recreated, [])
+
+    def test_the_deadline_of_a_pending_pod_names_its_cause_too(self):
+        cluster = Cluster(UNSCHEDULABLE)
+        with self.assertRaises(RuntimeError) as raised:
+            cluster.wait(pending_bound_deadline=30)
+        self.assertIn("Insufficient memory", str(raised.exception))
+        self.assertNotIn("enforcement is unproven", str(raised.exception))
+
+
+def http_error(code):
+    return urllib.error.HTTPError("https://api", code, "status", {}, None)
+
+
+class FakeApi:
+    """A pod deleted with no grace period stays visible (Terminating) for `lingers` reads."""
+
+    def __init__(self, lingers, present=True):
+        self.lingers = lingers
+        self.present = present
+        self.calls = []
+        self.clock = 0.0
+
+    def request(self, method, path, body=None):
+        self.calls.append(method)
+        if method == "DELETE":
+            if not self.present:
+                raise http_error(404)
+            self.present = "terminating"
+            return {}
+        if method == "GET":
+            if self.present == "terminating":
+                if self.lingers == 0:
+                    self.present = False
+                else:
+                    self.lingers -= 1
+            if self.present:
+                return {}
+            raise http_error(404)
+        if method == "POST":
+            if self.present:
+                raise http_error(409)
+            self.present = True
+            return {"metadata": {"name": body["metadata"]["name"]}}
+
+    def replace(self, deadline=100):
+        resource = {"metadata": {"name": "probe-client"}}
+        return probe.replace_object(
+            self.request, "/pods", resource, deadline,
+            now=lambda: self.clock, sleep=lambda seconds: setattr(self, "clock", self.clock + seconds))
+
+
+class Recreate(unittest.TestCase):
+    def test_the_new_pod_is_created_only_after_the_old_one_is_gone(self):
+        api = FakeApi(lingers=3)
+        self.assertEqual(api.replace()["metadata"]["name"], "probe-client")
+        self.assertEqual(api.calls[0], "DELETE")
+        self.assertEqual(api.calls[-1], "POST")
+        self.assertEqual(api.calls.count("POST"), 1)
+
+    def test_a_pod_that_is_already_gone_is_created(self):
+        api = FakeApi(lingers=0, present=False)
+        api.replace()
+        self.assertEqual(api.calls[-1], "POST")
+
+    def test_a_pod_that_stays_terminating_past_the_deadline_fails_clearly_not_with_a_409(self):
+        api = FakeApi(lingers=10**6)
+        with self.assertRaisesRegex(RuntimeError, "still being deleted"):
+            api.replace(deadline=5)
+        self.assertNotIn("POST", api.calls)
 
 
 if __name__ == "__main__":

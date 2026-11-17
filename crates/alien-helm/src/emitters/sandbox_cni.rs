@@ -27,6 +27,15 @@ const PROBE_ROLES: &[&str] = &[
     "admission-check",
 ];
 
+/// A number the probe script defines at its top level (`NAME = 480`). The script holds the time
+/// budget of a run; the Job's deadline is read from it so the two cannot drift apart.
+fn probe_constant(name: &str) -> u32 {
+    include_str!("sandbox_cni_probe.py")
+        .lines()
+        .find_map(|line| line.strip_prefix(name)?.strip_prefix(" = ")?.trim().parse().ok())
+        .unwrap_or_else(|| panic!("sandbox_cni_probe.py defines {name} as a number"))
+}
+
 /// `sandbox_class_helper` is true when the chart also carries the sandbox RuntimeClass helper. A
 /// chart with only a container that has egress has no sandbox, so the probe runs in the default
 /// runtime class (the value is empty) instead of requiring a helper that chart does not emit.
@@ -320,7 +329,7 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 300
+  activeDeadlineSeconds: {job_deadline}
   ttlSecondsAfterFinished: 600
   template:
     metadata:
@@ -382,6 +391,7 @@ spec:
             - -c
             - |
 {script}"#,
+        job_deadline = probe_constant("JOB_DEADLINE_SECONDS"),
         repository = PROBE_REPOSITORY,
         digest = PROBE_DIGEST,
     )
@@ -389,6 +399,15 @@ spec:
 
 #[cfg(test)]
 mod probe_pod_tests {
+    /// The Job must outlast the probe script's own budget, or it is killed with no message.
+    #[test]
+    fn the_job_deadline_is_the_scripts_budget() {
+        let rendered = super::template(true);
+        let deadline = super::probe_constant("JOB_DEADLINE_SECONDS");
+        assert!(rendered.contains(&format!("activeDeadlineSeconds: {deadline}\n")));
+        assert!(deadline > super::probe_constant("SCRIPT_BUDGET_SECONDS"));
+    }
+
     /// A pod under a Kata runtime class never started with a 64Mi memory limit on AKS: the
     /// runtime timed out creating the container ("create container timeout"), so the probe
     /// failed and the install with it. 128Mi started on the same node and image.
