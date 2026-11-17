@@ -22,7 +22,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 /// The agent is the one program every image is known to carry, root-owned and executable by the
 /// exec identity, so it is what the identity check runs. A customer's base image may have no
 /// shell and no `id`.
-pub const IDENTITY_ARGUMENT: &str = "identity";
+pub const IDENTITY_ARGUMENT: &str = alien_core::sandbox_image::AGENT_IDENTITY_ARGUMENT;
 
 /// Ceiling on the identity probe. One fork and exec of a binary already in the page cache;
 /// well under the hook's own timeout so a hang is reported as this check, not as the hook's.
@@ -48,6 +48,7 @@ async fn identity(state: &AgentState) -> Result<()> {
         timeout_ms: PROBE_TIMEOUT_MS,
         cwd: None,
         env: BTreeMap::new(),
+        reply_budget: None,
     };
     let frames = exec::run(
         &request,

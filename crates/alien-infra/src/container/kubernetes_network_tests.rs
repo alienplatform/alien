@@ -424,3 +424,55 @@ fn a_sandbox_source_is_matched_in_the_sandbox_namespace_only() {
         None
     );
 }
+
+#[test]
+fn the_built_policy_admits_dns_on_port_53_to_cluster_dns_and_the_node_local_cache_only() {
+    let mut target = container("gateway", "primary");
+    target.egress = Some(alien_core::ContainerEgress::Internet);
+    let harness = KubernetesManifestTestHarness::new(Resource::new(target.clone()), vec![]);
+    let ctx = harness.ctx();
+    let policy = build_policy(&target, "gateway", "test-ns", &ctx);
+    let egress = policy.spec.unwrap().egress.unwrap();
+
+    let dns_rules: Vec<_> = egress
+        .iter()
+        .filter(|rule| {
+            rule.ports
+                .as_ref()
+                .is_some_and(|ports| ports.iter().any(|p| p.port == Some(IntOrString::Int(53))))
+        })
+        .collect();
+    assert_eq!(dns_rules.len(), 1, "one rule carries DNS");
+    let rule = dns_rules[0];
+
+    let ports: Vec<_> = rule
+        .ports
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|p| (p.port.clone(), p.protocol.clone()))
+        .collect();
+    assert_eq!(
+        ports,
+        vec![
+            (Some(IntOrString::Int(53)), Some("UDP".to_string())),
+            (Some(IntOrString::Int(53)), Some("TCP".to_string())),
+        ]
+    );
+
+    let peer = |app: &str| NetworkPolicyPeer {
+        namespace_selector: Some(selector(BTreeMap::from([(
+            "kubernetes.io/metadata.name".to_string(),
+            "kube-system".to_string(),
+        )]))),
+        pod_selector: Some(selector(BTreeMap::from([(
+            "k8s-app".to_string(),
+            app.to_string(),
+        )]))),
+        ..Default::default()
+    };
+    assert_eq!(
+        rule.to.as_ref().unwrap(),
+        &vec![peer("kube-dns"), peer("node-local-dns")]
+    );
+}

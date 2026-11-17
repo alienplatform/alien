@@ -362,6 +362,38 @@ at plan time ("schedule sandboxes on amd64 nodes"); arm64 sandboxes on Kubernete
 supported yet. There is no pause: an idle session keeps its pod's CPU and memory on the node until
 it is terminated or reaches its deadline.
 
+## Kubernetes node consolidation
+
+A claimed sandbox pod carries `karpenter.sh/do-not-disrupt: "true"` and
+`cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so node consolidation and scale-down do
+not evict a live session; idle pool pods carry neither and stay evictable. With no
+`maxLifetimeSeconds` declared and no `timeoutMs` on the create, a session has no deadline, so the
+annotations keep its node until the session is terminated. What that means for node replacement
+depends on the platform:
+
+- **EKS Auto Mode:** NodeClaims get a 24 h termination grace period by default, so AMI drift and
+  the 336 h node expiry still end a session within about 24 h.
+- **Self-managed Karpenter:** with no `terminationGracePeriod` on the NodePool, a node that is
+  being replaced stays half-drained for as long as the session runs.
+- **GKE Autopilot:** honours the annotation for at most 7 days, and not on Spot nodes.
+- **GKE Standard:** the annotation stops autoscaler scale-down only; cluster upgrades ignore it.
+- **AKS:** the cluster autoscaler honours `safe-to-evict`; node image and Kubernetes upgrades
+  drain nodes without reading it (not checked on a live cluster).
+
+To bound how long a session can hold a node, set a node termination grace period on the NodePool
+rather than a default session lifetime. Do not add a PodDisruptionBudget for sandbox pods: a budget
+blocks the drain with no deadline.
+
+## Kubernetes Operator restarts and capacity
+
+The sandbox broker runs inside the Operator pod. While the Operator restarts (for example on every
+release), sandboxes keep running, but calls to the broker fail with a retryable
+`REMOTE_SERVICE_UNAVAILABLE` error for up to about a minute. The bindings do not retry for you;
+retry the call. A create whose connection failed after the request was sent is not retryable
+(`SANDBOX_OUTCOME_UNKNOWN`): the broker may already have claimed a pod, so list sessions before
+creating again. Size nodes for the warm pool plus live sessions: one 4-vCPU Kata node held about
+three default sandbox pods (2Gi each plus about 600Mi runtime overhead).
+
 ## Bootstrap file protection
 
 Before any image code starts, the agent creates a private mount namespace and
@@ -517,9 +549,47 @@ Limits the plan refuses with a message, rather than discovering them at the firs
 - a per-sandbox outbound policy: `defaultPolicy`, a runtime policy at create and `update_egress`
   are refused with "Google Cloud sandboxes have no outbound allowlist" (see "Egress on GCP");
 - a preview port equal to the agent's own (8971);
-- an idle pause policy. `pause_resume` is off: on the default network placement every
-  `:pause`/`:resume` cycle measured returned a fresh container (new boot id, process gone, uptime
-  reset), with the agent and with a bare workload alike, so a paused sandbox keeps nothing.
+- an idle pause policy. Google has no idle policy and Alien does not watch for idleness there;
+  pause the sandbox explicitly with `pause()` instead.
+
+`pause()` and `resume()` keep the sandbox's memory and running processes (`pause_resume` is on).
+A new sandbox leaves a marker as soon as it is created, and `pause()` refreshes it: a short
+`/bin/sh` command writes the container's generation to `/dev/shm/.alien-pause-generation` (`/tmp`
+where an image has no `/dev/shm`), outside the session root so that tidying the working tree
+cannot delete it. `/dev/shm` is memory, so the file survives exactly when the memory does, and a
+container that replaces the sandbox has no such file. A sandbox created with this contract has a
+display name that ends in `-pm1`; Google cannot change a name after create, so that tag is the
+record, outside the container, that a marker belongs there. `resume()` reads the marker back and
+fails with `SANDBOX_MEMORY_LOST` (not retryable) when a tagged sandbox has none, or when the marker
+differs from the container that answers. This holds in whatever state the sandbox is in: a running
+sandbox whose container Google replaced, with no pause at all, gets `SANDBOX_MEMORY_LOST` from a
+routine `resume()`, and so does one that a request woke into a replaced container before `resume()`
+was called. A read that fails for another reason, including an image whose marker script cannot
+run, is reported as that failure (`pauseMarkerFailed`, `pauseMarkerUnreadable`), not as lost memory.
+
+The marker is best effort at create, and that has false reports as its price:
+- An image with `/bin/sh` where neither `/dev/shm` nor `/tmp` is writable, or where three writes
+  fail for a passing reason, only logs a warning at create. The sandbox is returned and tagged, has
+  no marker, and every later routine `resume()` on it, even a healthy running one, reports
+  `SANDBOX_MEMORY_LOST`. Pause first (which writes the marker again), or recreate.
+- An entrypoint or workload that wipes `/dev/shm` or `/tmp` removes the marker the same way, and
+  the next `resume()` reports `SANDBOX_MEMORY_LOST` although the memory was kept.
+- The first marker is written after the sandbox settles. A second caller that reaches the sandbox
+  by key about 20 seconds after its create time can get it before the marker exists, and its
+  `resume()` then reports `SANDBOX_MEMORY_LOST`. Retrying after the create finishes succeeds.
+A sandbox created before this contract has no tag:
+`resume()` on it is a no-op while it is running, and a marker is checked only if one exists.
+
+Pause in one process and resume in another are checked the same way.
+On Google Cloud, pause and resume talk to the sandbox's agent to check that memory survived, so the
+caller needs `sandbox/execute` (or `sandbox/remote-execute`) as well as `sandbox/management`. A
+caller with lifecycle access only wakes the sandbox with `:resume` and then gets an error naming
+the missing set; the permission cannot be checked before the call.
+Any request to a paused sandbox, a command or a preview call included, wakes it: Google offers no
+way to turn that off, so a paused sandbox stays paused only while nothing talks to it. A
+`resume()` after such a wake returns once the sandbox answers, and still checks the marker.
+Whether the sandbox's maximum lifetime keeps counting while it is paused is Google's rule and is not
+tested; a sandbox that expired while paused reports `sandboxTerminated` from `resume()`.
 
 Images must be linux/amd64 and their container must keep running in the foreground: a template
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
@@ -580,6 +650,23 @@ Egress `none` (`internetAccess: false`) blocks TCP to public addresses, the meta
 resolution, measured on the default network placement. The platform has no client token on create,
 so a retried create can leave an extra sandbox; `get_or_create` reuses a running sandbox with the
 same id.
+
+## Reply limits on GCP
+
+Google Cloud returns at most 2,000,000 bytes for one sandbox call, so on GCP the caller sends a
+`replyBudget` and the agent keeps each reply under it:
+
+- A synchronous command (`run_command` with a deadline of 30 seconds or less) returns about 450 KB
+  of stdout and 450 KB of stderr; less when the output is many short lines, because each line is
+  its own frame. Output past that is dropped, the kept output is a prefix of each stream, and the
+  result is marked `truncated`. Use a job for more.
+- A job keeps the usual 4 MiB per stream; each poll returns what fits in one reply and the rest on
+  the next poll, so the outcome arrives after the last of the output.
+- `readFile` accepts `offset` and `length` and returns the file's `totalBytes`. The GCP client
+  reads a file in 900 KB pages and joins them, so files keep the agent's 32 MiB limit. An image
+  built before paging reads files only up to about 1.1 MB on GCP; rebuild it.
+
+Other clouds send no budget and see no difference.
 
 ## Kubernetes: metadata credentials
 
