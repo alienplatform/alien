@@ -1095,6 +1095,110 @@ async fn heartbeat_acquires_refresh_failure_without_turning_it_into_a_work_retry
 }
 
 #[tokio::test]
+async fn heartbeat_acquires_a_failed_update_only_when_it_asks_for_running_too() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "failed-update", Platform::Aws).await;
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET status = 'update-failed', retry_requested = 0 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+
+    for (statuses, expected_count) in [
+        (vec!["update-failed".to_string()], 0),
+        (
+            vec![
+                "running".to_string(),
+                "refresh-failed".to_string(),
+                "update-failed".to_string(),
+            ],
+            1,
+        ),
+    ] {
+        let acquired = store
+            .acquire(
+                &test_subject(),
+                "health-session",
+                &DeploymentFilter {
+                    statuses: Some(statuses),
+                    deployment_ids: Some(vec![dep.id.clone()]),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), expected_count);
+        if let Some(item) = acquired.first() {
+            assert_eq!(item.deployment.status, "update-failed");
+            assert!(!item.deployment.retry_requested);
+            store
+                .release(&test_subject(), &dep.id, "health-session", None)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+/// A retry that is waiting when the heartbeat acquires the failed update is handed to the
+/// normal step (the record carries it), and handing the acquisition back unused restores it,
+/// so a membership tick can never consume a retry.
+#[tokio::test]
+async fn heartbeat_acquisition_of_a_failed_update_never_loses_a_retry_request() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "retry", Platform::Aws).await;
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET status = 'update-failed', retry_requested = 1 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+    let filter = DeploymentFilter {
+        statuses: Some(vec![
+            "running".to_string(),
+            "refresh-failed".to_string(),
+            "update-failed".to_string(),
+        ]),
+        deployment_ids: Some(vec![dep.id.clone()]),
+        ..Default::default()
+    };
+
+    let acquired = store
+        .acquire(&test_subject(), "health-session", &filter, 1)
+        .await
+        .unwrap();
+    assert_eq!(acquired.len(), 1);
+    assert!(
+        acquired[0].deployment.retry_requested,
+        "the record carries the retry so the normal step consumes it"
+    );
+    store
+        .release_unused_acquisition(&test_subject(), &acquired[0], "health-session")
+        .await
+        .unwrap();
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(fetched.retry_requested);
+    assert_eq!(fetched.status, "update-failed");
+    assert!(fetched.locked_by.is_none());
+}
+
+#[tokio::test]
 async fn acquire_does_not_pick_failed_status_without_retry_request() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());

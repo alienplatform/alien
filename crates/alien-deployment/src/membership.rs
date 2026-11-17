@@ -101,3 +101,109 @@ pub async fn sync_membership(
             message: "Failed to update the admitted machines".to_string(),
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Platform, Resource, StackResourceState, StackState, Storage};
+
+    fn state(status: DeploymentStatus, resources: &[(&str, bool, ResourceStatus)]) -> DeploymentState {
+        let mut stack_state = StackState::new(Platform::Aws);
+        for (id, is_cluster, resource_status) in resources {
+            let config = if *is_cluster {
+                Resource::new(ComputeCluster::new((*id).to_string()).build())
+            } else {
+                Resource::new(Storage::new((*id).to_string()).build())
+            };
+            let mut resource = StackResourceState::new_pending(
+                config.resource_type().to_string(),
+                config,
+                None,
+                vec![],
+            );
+            resource.status = *resource_status;
+            stack_state.resources.insert((*id).to_string(), resource);
+        }
+        DeploymentState {
+            status,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: None,
+        }
+    }
+
+    #[test]
+    fn a_failed_update_gets_a_tick() {
+        let failed = state(
+            DeploymentStatus::UpdateFailed,
+            &[("data", false, ResourceStatus::UpdateFailed)],
+        );
+        assert!(membership_tick_wanted(&failed));
+    }
+
+    #[test]
+    fn a_retry_request_is_never_ticked_so_the_normal_step_consumes_it() {
+        let mut failed = state(
+            DeploymentStatus::UpdateFailed,
+            &[("compute", true, ResourceStatus::UpdateFailed)],
+        );
+        failed.retry_requested = true;
+        assert!(!membership_tick_wanted(&failed));
+        let mut refresh = state(
+            DeploymentStatus::RefreshFailed,
+            &[("compute", true, ResourceStatus::RefreshFailed)],
+        );
+        refresh.retry_requested = true;
+        assert!(!membership_tick_wanted(&refresh));
+    }
+
+    #[test]
+    fn a_failed_refresh_is_ticked_only_when_the_cluster_itself_failed() {
+        assert!(membership_tick_wanted(&state(
+            DeploymentStatus::RefreshFailed,
+            &[("compute", true, ResourceStatus::RefreshFailed)],
+        )));
+        // The cluster is Running, so the step the loop still takes refreshes its list.
+        assert!(!membership_tick_wanted(&state(
+            DeploymentStatus::RefreshFailed,
+            &[
+                ("compute", true, ResourceStatus::Running),
+                ("data", false, ResourceStatus::RefreshFailed),
+            ],
+        )));
+    }
+
+    #[test]
+    fn no_other_state_is_ticked() {
+        for status in [
+            DeploymentStatus::Running,
+            DeploymentStatus::Pending,
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::Provisioning,
+            DeploymentStatus::ProvisioningFailed,
+            DeploymentStatus::UpdatePending,
+            DeploymentStatus::Updating,
+            DeploymentStatus::DeletePending,
+            DeploymentStatus::Deleting,
+            DeploymentStatus::DeleteFailed,
+            DeploymentStatus::TeardownRequired,
+            DeploymentStatus::TeardownFailed,
+            DeploymentStatus::Deleted,
+        ] {
+            assert!(
+                !membership_tick_wanted(&state(
+                    status,
+                    &[("compute", true, ResourceStatus::UpdateFailed)]
+                )),
+                "{status:?}"
+            );
+        }
+    }
+}
