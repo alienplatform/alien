@@ -10,8 +10,8 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, resource_permission_owners, tags,
-            uniquify_iam_statement_sids,
+            cf_from_json, logical_id_for_ref, required_logical_id, resource_config,
+            resource_permission_owners, tags, uniquify_iam_statement_sids,
         },
         service_account::stack_permission_context,
     },
@@ -44,10 +44,34 @@ impl CfEmitter for AwsQueueEmitter {
             "VisibilityTimeout".to_string(),
             CfExpression::Integer(i64::from(visibility_timeout(ctx))),
         );
+        // A dead-lettered message keeps its original send time, so a target keeps messages
+        // longer than the sources that feed it.
+        let retention =
+            if alien_core::queues_dead_lettering_to(ctx.stack, ctx.resource_id).is_empty() {
+                alien_core::AWS_DEFAULT_RETENTION_SECONDS
+            } else {
+                alien_core::AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS
+            };
         queue_resource.properties.insert(
             "MessageRetentionPeriod".to_string(),
-            CfExpression::Integer(345_600),
+            CfExpression::Integer(i64::from(retention)),
         );
+        if let Some(dead_letter) = &queue.dead_letter {
+            let target_id = logical_id_for_ref(ctx, &dead_letter.queue)?;
+            queue_resource.properties.insert(
+                "RedrivePolicy".to_string(),
+                CfExpression::object([
+                    (
+                        "deadLetterTargetArn",
+                        CfExpression::get_att(target_id, "Arn"),
+                    ),
+                    (
+                        "maxReceiveCount",
+                        CfExpression::Integer(i64::from(dead_letter.max_attempts)),
+                    ),
+                ]),
+            );
+        }
         queue_resource
             .properties
             .insert("Tags".to_string(), tags(ctx));
