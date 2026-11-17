@@ -899,6 +899,85 @@ async fn test_message_peek_lock_and_complete(ctx: &ServiceBusTestContext) -> Res
     Ok(())
 }
 
+/// Abandoning a peek-locked message releases it at once (the next receive gets it again with a
+/// higher delivery count), and renewing a lock succeeds. Both are body-less requests that
+/// Service Bus rejects with 411 unless they carry an explicit `Content-Length: 0`.
+#[test_context(ServiceBusTestContext)]
+#[tokio::test]
+async fn test_message_abandon_and_renew_lock(ctx: &ServiceBusTestContext) -> Result<(), Error> {
+    let suffix = Uuid::new_v4().to_string().replace('-', "")[..8].to_lowercase();
+    let namespace_name = format!("dlq2082-sb-{suffix}");
+    let queue_name = format!("dlq2082-q-{suffix}");
+
+    ctx.create_test_namespace(&namespace_name).await?;
+    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+    ctx.create_test_queue(&namespace_name, &queue_name).await?;
+    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+    let message_id = Uuid::new_v4().to_string();
+    ctx.data_plane_client
+        .send_message(
+            namespace_name.clone(),
+            queue_name.clone(),
+            SendMessageParameters {
+                body: "abandon me".to_string(),
+                broker_properties: Some(BrokerProperties {
+                    message_id: Some(message_id.clone()),
+                    time_to_live: Some(300.0),
+                    ..default_broker_properties()
+                }),
+                custom_properties: HashMap::new(),
+            },
+        )
+        .await?;
+
+    let first = ctx
+        .data_plane_client
+        .peek_lock(namespace_name.clone(), queue_name.clone(), Some(30))
+        .await?
+        .expect("the sent message should be received");
+    let lock_token = first
+        .broker_properties
+        .as_ref()
+        .and_then(|props| props.lock_token.clone())
+        .expect("a peek-locked message has a lock token");
+
+    ctx.data_plane_client
+        .renew_message_lock(
+            namespace_name.clone(),
+            queue_name.clone(),
+            message_id.clone(),
+            lock_token.clone(),
+        )
+        .await?;
+    ctx.data_plane_client
+        .abandon_message(
+            namespace_name.clone(),
+            queue_name.clone(),
+            message_id.clone(),
+            lock_token,
+        )
+        .await?;
+
+    // Released immediately: no wait for the 30 second lock.
+    let second = ctx
+        .data_plane_client
+        .peek_lock(namespace_name.clone(), queue_name.clone(), Some(5))
+        .await?
+        .expect("an abandoned message is available again at once");
+    assert_eq!(second.body, "abandon me");
+    let delivery_count = second
+        .broker_properties
+        .as_ref()
+        .and_then(|props| props.delivery_count)
+        .expect("a delivery count");
+    assert_eq!(
+        delivery_count, 2,
+        "the abandoned message counts as a delivery"
+    );
+    Ok(())
+}
+
 fn default_broker_properties() -> BrokerProperties {
     BrokerProperties {
         label: None,
