@@ -3686,10 +3686,9 @@ mod tests {
         let server = MockServer::start_async().await;
         let _ready = server
             .mock_async(|when, then| {
-                when.method(GET).path("/healthz").header(
-                    "host",
-                    format!("app.customer-domain.invalid:{}", server.port()),
-                );
+                when.method(GET)
+                    .path("/healthz")
+                    .header("host", format!("app.customer-domain.invalid:{}", server.port()));
                 then.status(204);
             })
             .await;

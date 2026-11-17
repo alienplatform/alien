@@ -1588,7 +1588,7 @@ mod tests {
         };
         let message = super::older_cli_image_message("box", &[pod_with_init(check, exited)])
             .expect("a failed check is reported")
-            .0;
+        .0;
         assert!(!message.contains("older alien CLI"), "{message}");
         assert!(
             message.contains("OOMKilled") && message.contains("137"),
