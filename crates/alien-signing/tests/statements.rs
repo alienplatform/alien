@@ -618,7 +618,7 @@ fn a_denied_release_id_refuses_every_platform_statement_of_it() {
 
     // One the install already accepted is refused too: a rollback to it.
     let mut ledger = Ledger::new(PREFIX);
-    ledger.accept(&aws.open().unwrap().digest);
+    ledger.accept(&aws.open().unwrap().digest).unwrap();
     let with_ledger = Trust::new(
         settings(&keys),
         install(),

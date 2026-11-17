@@ -167,7 +167,7 @@ impl SignerListBody {
     /// Whether the list refuses this statement: its digest is denied, or it is
     /// a release whose release is. The one rule every enforcer applies.
     pub fn refuses(&self, opened: &crate::envelope::Opened) -> bool {
-        self.deny.iter().any(|denied| *denied == opened.digest)
+        self.deny.contains(&opened.digest)
             || (opened.kind == crate::envelope::Kind::Release
                 && self.deny.contains(&release_deny_entry(opened.sequence)))
     }

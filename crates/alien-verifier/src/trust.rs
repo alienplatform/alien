@@ -521,7 +521,7 @@ pub(crate) mod tests {
         let (v1, v2, settings) = lists_removing_ci(vec![keep]);
         let store = MemoryStore::protected(&settings);
         let install = found(&store).await.unwrap();
-        let accepted = accept(&install, &[v1.clone()], &by_ci, None, "aws", Utc::now()).unwrap();
+        let accepted = accept(&install, std::slice::from_ref(&v1), &by_ci, None, "aws", Utc::now()).unwrap();
         store_ledger(&store, PREFIX, &accepted.ledger)
             .await
             .unwrap();

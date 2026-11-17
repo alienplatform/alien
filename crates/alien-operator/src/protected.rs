@@ -1290,11 +1290,19 @@ pub(crate) mod tests {
         // A new Operator instance with an empty ledger accepts them from the list alone.
         accept(&fresh(), &kept).expect("a new instance needs nothing from the ledger");
 
-        // A list that keeps nothing refuses what the removed key signed, ledger or not.
+        // A list that keeps nothing refuses what the removed key signed, even when the
+        // ledger holds its digest (written by hand).
+        let mut by_hand = fresh();
+        for statement in [accepted_release.signed.as_ref().unwrap(), &config] {
+            by_hand
+                .ledger
+                .accept(&statement.open().unwrap().digest)
+                .unwrap();
+        }
         let mut dropped = accepted.clone();
         dropped.release_info.signer_lists =
             vec![signer_list(), test_signer_list_without_ci("shop")];
-        let refusal = accept(&stored, &dropped).unwrap_err().to_string();
+        let refusal = accept(&by_hand, &dropped).unwrap_err().to_string();
         assert!(
             refusal.contains("not on signer list version 2"),
             "{refusal}"
