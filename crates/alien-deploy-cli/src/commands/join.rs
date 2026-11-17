@@ -3581,7 +3581,6 @@ fn verify_machine_agent(
         install.clone(),
         &signing.signer_lists,
         &Ledger::new(&settings.prefix),
-        now,
     )
     .context(release_refused("signer list chain"))?;
     let release = trust
@@ -6567,7 +6566,7 @@ mod tests {
             let list = envelope(
                 "signer-list/v1",
                 1,
-                Some(Utc::now() + chrono::Duration::days(60)),
+                None,
                 SignerListBody {
                     previous: None,
                     admin_threshold: 1,
@@ -6575,6 +6574,7 @@ mod tests {
                         id: "admin".to_string(),
                         key: admin.public_key().as_str().to_string(),
                         kind: SignerKind::Device,
+                        backend: None,
                         roles: vec![Role::Release, Role::Admin],
                         label: None,
                     }],

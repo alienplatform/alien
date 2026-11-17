@@ -28,13 +28,12 @@ use alien_signing::{
     SetupTemplate, SignedStatement, Signer, SignerChain, SignerKind, SignerListBody,
 };
 use base64::Engine as _;
-use chrono::Utc;
 
 use super::api::{ListPublished, SigningApi};
 use super::device::Backend;
 use super::{
-    ci_key, list_expiry, pairing_code, signer_with_key, verified_chain, RepoSigning, SigningHome,
-    StatementSigner, LIST_WARNING_DAYS, REPO_SIGNING_FILE,
+    ci_key, pairing_code, signer_with_key, verified_chain, RepoSigning, SigningHome,
+    StatementSigner, REPO_SIGNING_FILE,
 };
 use crate::error::{ErrorData, Result};
 
@@ -75,7 +74,6 @@ pub fn signing_off_hint() -> String {
 pub async fn plan(
     api: &SigningApi,
     dir: &Path,
-    project: &str,
     interactive: bool,
 ) -> Result<SigningPlan> {
     let home = SigningHome::current()?;
@@ -88,12 +86,6 @@ pub async fn plan(
         Err(error) => return Ok(unsigned(error.message)),
     };
     let list = chain.current();
-    if list.is_expired(Utc::now()) {
-        return Ok(unsigned(format!(
-            "the device list expired on {}; an admin must run `alien approve` to refresh it",
-            list.not_after.format("%Y-%m-%d")
-        )));
-    }
     let signer = if let Some(key) = ci {
         let Some(signer) = signer_with_key(list, &key.public_key()) else {
             return Ok(unsigned(format!(
@@ -101,26 +93,21 @@ pub async fn plan(
                 repo.project
             )));
         };
-        let left = (list.not_after - Utc::now()).num_days();
-        if left < LIST_WARNING_DAYS {
-            eprintln!(
-                "! The device list for {} expires in {left} days, on {}. CI can't refresh it; an admin must run `alien approve`.",
-                repo.project,
-                list.not_after.format("%Y-%m-%d")
-            );
-        }
         StatementSigner::Key {
             id: signer.id.clone(),
             key,
         }
     } else {
         let device = if interactive {
-            home.device_or_create()?
+            Some(home.device_or_create()?)
         } else {
             home.device()?
         };
         let Some((record, key)) = device else {
-            return Ok(unsigned("this device has no hardware key to sign with"));
+            return Ok(unsigned(format!(
+                "this device isn't trusted for {} yet",
+                repo.project
+            )));
         };
         let Some(signer) = signer_with_key(list, &key.public_key) else {
             if !interactive {
@@ -188,11 +175,7 @@ pub async fn enable(api: &SigningApi, dir: &Path, project: &str) -> Result<Optio
             by: first_admin(first),
         }));
     }
-    let Some((record, key)) = SigningHome::current()?.device_or_create()? else {
-        return Err(AlienError::new(ErrorData::SigningFailed {
-            message: "This device has no hardware key to sign with".to_string(),
-        }));
-    };
+    let (record, key) = SigningHome::current()?.device_or_create()?;
     let device = StatementSigner::Device {
         id: record.signer_id.clone(),
         key,
@@ -211,13 +194,15 @@ pub async fn enable(api: &SigningApi, dir: &Path, project: &str) -> Result<Optio
                 id: record.signer_id.clone(),
                 key: device.public_key().as_str().to_string(),
                 kind: SignerKind::Device,
-                roles: vec![Role::Release, Role::Operate, Role::Admin],
+                backend: Some(record.backend.key_backend()),
+                roles: vec![Role::Release, Role::Admin],
                 label: record.label.clone(),
             },
             Signer {
                 id: RECOVERY_SIGNER.to_string(),
                 key: recovery.public_key().as_str().to_string(),
                 kind: SignerKind::Recovery,
+                backend: None,
                 roles: vec![Role::Admin],
                 label: None,
             },
@@ -230,7 +215,7 @@ pub async fn enable(api: &SigningApi, dir: &Path, project: &str) -> Result<Optio
         project: project.to_string(),
         install: None,
         sequence: 1,
-        not_after: Some(list_expiry(Utc::now())),
+        not_after: None,
         signer_list_version: 1,
         body,
     };
@@ -248,14 +233,13 @@ pub async fn enable(api: &SigningApi, dir: &Path, project: &str) -> Result<Optio
     SignerChain::from_statements(
         &fingerprint(&opened.digest),
         std::slice::from_ref(&statement),
-        Utc::now(),
     )
     .context(ErrorData::SigningFailed {
         message: "The new device list does not verify".to_string(),
     })?;
     let this = match record.backend {
         Backend::SecureEnclave => "this Mac",
-        Backend::Tpm | Backend::Yubikey => "this machine",
+        Backend::Tpm | Backend::Yubikey | Backend::Software => "this machine",
     };
     println!();
     println!("  Recovery code (shown once — save it in your password manager):");
@@ -373,6 +357,7 @@ async fn request_trust(
         id,
         key: key.as_str().to_string(),
         kind: SignerKind::Device,
+        backend: Some(record.backend.key_backend()),
         roles: vec![Role::Release],
         label: record.label.clone(),
     };
@@ -412,9 +397,10 @@ async fn request_trust(
         .collect();
     println!("! Not signed: this device isn't trusted for {project} yet.");
     println!(
-        "  Asked admins ({}) to trust {}. Send them this code over Slack or in person:",
+        "  Asked admins ({}) to trust {} ({}). Send them this code over Slack or in person:",
         admins.join(", "),
-        signer.id
+        signer.id,
+        record.backend.as_str()
     );
     println!("    {}", pairing_code(&signer, &change.id));
     Ok(())
@@ -843,7 +829,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         for interactive in [true, false] {
-            match plan(&api, dir.path(), "shop", interactive).await.unwrap() {
+            match plan(&api, dir.path(), interactive).await.unwrap() {
                 SigningPlan::Unsigned(reason) => assert_eq!(
                     reason,
                     "this repo has no .alien/signing.json; `alien devices init` turns signing on for the project"

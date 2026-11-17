@@ -12,11 +12,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_signing::signer_list::KeyBackend;
 use alien_signing::{
     display_fingerprint, Kind, PublicKey, RecoveryCode, Role, SecretKey, SignedStatement, Signer,
     SignerChain, SignerKind, SignerListBody,
 };
-use chrono::Utc;
 use clap::{Args, Subcommand};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -28,7 +28,7 @@ use crate::signing::api::{self, ListPublished, PendingChange, SigningApi};
 use crate::signing::release::{self, added_signers, Enabled, RECOVERY_SIGNER};
 use crate::signing::{
     kind_name, next_list, pairing_code, same_code, sign_envelope, signer_with_key, verified_chain,
-    RepoSigning, SigningHome, StatementSigner, LIST_WARNING_DAYS, REPO_SIGNING_FILE,
+    RepoSigning, SigningHome, StatementSigner, REPO_SIGNING_FILE,
 };
 
 /// GitHub environment the CI key is stored in.
@@ -100,13 +100,24 @@ pub enum DevicesCommand {
         /// The repository, as OWNER/REPO.
         repository: String,
     },
-    /// Replace the CI key, for example after it leaked
-    RotateCi {
+    /// Trust a new key for any CI system or remote box to sign releases, and print it once
+    AddKey {
+        /// The key's name on the list, such as `ci` or `build-box`.
+        name: String,
+        /// Write the key to this file (mode 0600) instead of printing it.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Replace a CI key, for example after it leaked
+    Rotate {
+        /// The key's name, as `alien devices list` shows it.
+        name: String,
         /// Also refuse the recent releases the old key signed.
         #[arg(long)]
         revoke: bool,
-        /// The repository, when more than one CI key is trusted.
-        repository: Option<String>,
+        /// For a key made by `add-key`: write the new key to this file (mode 0600) instead of printing it.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Restore signing with the recovery code when every admin device is lost
     Recover,
@@ -141,7 +152,7 @@ async fn admin(ctx: &ExecutionMode) -> Result<Admin> {
     let chain = verified_chain(&api, &repo).await?;
     let (_, key) = SigningHome::current()?.device()?.ok_or_else(|| {
         AlienError::new(ErrorData::SigningFailed {
-            message: "This device has no device key. Ask an admin, or use `alien devices recover` if every admin device is lost.".to_string(),
+            message: "This device has no signing key. Ask an admin, or use `alien devices recover` if every admin device is lost.".to_string(),
         })
     })?;
     let list = chain.current();
@@ -181,7 +192,7 @@ impl Admin {
         }
         let mut chain = self.chain.clone();
         chain
-            .extend(std::slice::from_ref(&statement), Utc::now())
+            .extend(std::slice::from_ref(&statement))
             .context(ErrorData::SigningFailed {
                 message: "The next device list does not extend the current one".to_string(),
             })?;
@@ -226,35 +237,12 @@ pub async fn approve_task(args: ApproveArgs, ctx: ExecutionMode) -> Result<()> {
         None => admin.api.pending(&project).await?,
     };
     if changes.is_empty() {
-        return refresh_if_due(&admin).await;
+        println!("No waiting requests for {}.", admin.chain.project());
+        return Ok(());
     }
     for change in changes {
         approve_one(&mut admin, &change).await?;
     }
-    Ok(())
-}
-
-/// With nothing waiting, refresh a list that expires within
-/// [`LIST_WARNING_DAYS`]: the same devices under a new expiry.
-async fn refresh_if_due(admin: &Admin) -> Result<()> {
-    let list = admin.chain.current();
-    let left = (list.not_after - Utc::now()).num_days();
-    if left >= LIST_WARNING_DAYS {
-        println!("No waiting requests for {}.", admin.chain.project());
-        return Ok(());
-    }
-    println!(
-        "The device list for {} expires on {}; refreshing it with the same devices.",
-        admin.chain.project(),
-        list.not_after.format("%Y-%m-%d")
-    );
-    let mut body = list.body.clone();
-    body.recovered = false;
-    let statement = admin.sign_next(body, "refresh")?;
-    admin.publish(&statement).await?;
-    println!(
-        "✓ Device list refreshed · delivered to protected deployments as the next device list"
-    );
     Ok(())
 }
 
@@ -284,7 +272,7 @@ async fn approve_one(admin: &mut Admin, change: &PendingChange) -> Result<()> {
             return Err(refused(
                 change,
                 &format!(
-                    "it adds a {} key ({}); CI keys are added with `alien devices add-ci`",
+                    "it adds a {} key ({}); CI keys are added with `alien devices add-ci` or `alien devices add-key`",
                     kind_name(signer.kind),
                     signer.id
                 ),
@@ -293,7 +281,11 @@ async fn approve_one(admin: &mut Admin, change: &PendingChange) -> Result<()> {
     }
     match added.as_slice() {
         [signer] if diff(&list.body, &body).len() == 1 => {
-            println!("{} asks to: {}", who(signer), roles_text(&signer.roles))
+            println!(
+                "{} asks to: {}",
+                who_with_backend(signer),
+                roles_text(&signer.roles)
+            )
         }
         _ => {
             println!(
@@ -322,7 +314,7 @@ async fn approve_one(admin: &mut Admin, change: &PendingChange) -> Result<()> {
     admin.api.approve(&change.id, version).await?;
     admin
         .chain
-        .extend(std::slice::from_ref(&statement), Utc::now())
+        .extend(std::slice::from_ref(&statement))
         .context(ErrorData::SigningFailed {
             message: "The approved device list does not extend the current one".to_string(),
         })?;
@@ -351,7 +343,7 @@ fn diff(current: &SignerListBody, next: &SignerListBody) -> Vec<String> {
     for signer in added_signers(current, next) {
         lines.push(format!(
             "+ {} · {} · {} · key {}",
-            who(signer),
+            who_with_backend(signer),
             kind_name(signer.kind),
             roles_text(&signer.roles),
             short_key(&signer.key)
@@ -417,10 +409,7 @@ fn diff(current: &SignerListBody, next: &SignerListBody) -> Vec<String> {
         ));
     }
     if lines.is_empty() {
-        lines.push(format!(
-            "no device changes; the list stays valid for {} more days",
-            crate::signing::LIST_LIFETIME_DAYS
-        ));
+        lines.push("no device changes".to_string());
     }
     lines
 }
@@ -431,6 +420,14 @@ fn short_key(key: &str) -> String {
         .strip_prefix(alien_signing::PUBLIC_KEY_PREFIX)
         .unwrap_or(key);
     key.chars().take(12).collect()
+}
+
+/// `who`, and where the key lives when the signer who added it said.
+fn who_with_backend(signer: &Signer) -> String {
+    match signer.backend {
+        Some(backend) => format!("{} · {}", who(signer), backend.as_str()),
+        None => who(signer),
+    }
 }
 
 fn who(signer: &Signer) -> String {
@@ -463,8 +460,7 @@ fn roles_text(roles: &[Role]) -> String {
     roles
         .iter()
         .map(|role| match role {
-            Role::Release => "release",
-            Role::Operate => "operate",
+            Role::Release => "release and debug sessions",
             Role::Admin => "manage devices",
         })
         .collect::<Vec<_>>()
@@ -590,8 +586,9 @@ pub async fn devices_task(args: DevicesArgs, ctx: ExecutionMode) -> Result<()> {
         DevicesCommand::List => list(&ctx, args.json).await,
         DevicesCommand::Remove { name } => remove(&ctx, &name).await,
         DevicesCommand::AddCi { repository } => add_ci(&ctx, &repository).await,
-        DevicesCommand::RotateCi { revoke, repository } => {
-            rotate_ci(&ctx, revoke, repository.as_deref()).await
+        DevicesCommand::AddKey { name, out } => add_key(&ctx, &name, out.as_deref()).await,
+        DevicesCommand::Rotate { name, revoke, out } => {
+            rotate(&ctx, &name, revoke, out.as_deref()).await
         }
         DevicesCommand::Recover => recover(&ctx).await,
     }
@@ -603,7 +600,6 @@ struct DevicesJson<'a> {
     project: &'a str,
     fingerprint: String,
     list_version: u64,
-    expires_at: String,
     recovered: bool,
     devices: Vec<DeviceJson<'a>>,
     waiting: Vec<WaitingJson<'a>>,
@@ -615,6 +611,7 @@ struct DeviceJson<'a> {
     id: &'a str,
     label: Option<&'a str>,
     kind: &'static str,
+    backend: Option<&'static str>,
     roles: &'a [Role],
 }
 
@@ -637,7 +634,6 @@ async fn list(ctx: &ExecutionMode, json: bool) -> Result<()> {
             project: chain.project(),
             fingerprint: repo.fingerprint.clone(),
             list_version: list.version,
-            expires_at: list.not_after.to_rfc3339(),
             recovered: list.body.recovered,
             devices: list
                 .body
@@ -647,6 +643,7 @@ async fn list(ctx: &ExecutionMode, json: bool) -> Result<()> {
                     id: &signer.id,
                     label: signer.label.as_deref(),
                     kind: kind_name(signer.kind),
+                    backend: signer.backend.map(|backend| backend.as_str()),
                     roles: &signer.roles,
                 })
                 .collect(),
@@ -661,11 +658,15 @@ async fn list(ctx: &ExecutionMode, json: bool) -> Result<()> {
         });
     }
     println!("Trusted devices for {}", chain.project());
-    let mut table = crate::ui::make_table(&["Device", "Kind", "Can", "Label"]);
+    let mut table = crate::ui::make_table(&["Device", "Kind", "Key", "Can", "Label"]);
     for signer in &list.body.signers {
         table.add_row(vec![
             signer.id.clone(),
             kind_name(signer.kind).to_string(),
+            signer
+                .backend
+                .map(|backend| backend.as_str().to_string())
+                .unwrap_or_default(),
             roles_text(&signer.roles),
             signer.label.clone().unwrap_or_default(),
         ]);
@@ -686,9 +687,8 @@ async fn list(ctx: &ExecutionMode, json: bool) -> Result<()> {
     }
     println!("Fingerprint  {}", display_fingerprint(&repo.fingerprint));
     println!(
-        "Device list  v{} · expires {}{}",
+        "Device list  v{}{}",
         list.version,
-        list.not_after.format("%Y-%m-%d"),
         if list.body.recovered {
             " · restored with the recovery code"
         } else {
@@ -791,37 +791,24 @@ async fn add_ci(ctx: &ExecutionMode, repository: &str) -> Result<()> {
     check_repository(repository)?;
     let admin = admin(ctx).await?;
     let id = ci_id(repository);
-    let list = admin.chain.current();
-    if list.signer(&id).is_some() {
+    if admin.chain.current().signer(&id).is_some() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "repository".to_string(),
             message: format!(
-                "{repository} already has a CI key; replace it with `alien devices rotate-ci`"
+                "{repository} already has a CI key; replace it with `alien devices rotate {id}`"
             ),
         }));
     }
     // The CLI pin is checked before anything changes, so a release that
     // doesn't verify leaves no key stored and no list published.
     pin_cli(&current_dir()?)?;
-    let key = SecretKey::generate().context(ErrorData::SigningFailed {
-        message: "Could not create the CI key".to_string(),
-    })?;
+    let key = new_ci_key()?;
     let who_can = store_ci_key(repository, &key)?;
-    let mut body = list.body.clone();
-    body.signers.push(Signer {
-        id: id.clone(),
-        key: key.public_key().as_str().to_string(),
-        kind: SignerKind::Ci,
-        roles: vec![Role::Release],
-        label: Some(ci_label(repository)),
-    });
-    body.recovered = false;
     println!(
         "Trusting GitHub Actions in {repository} to sign releases of {}.",
         admin.chain.project()
     );
-    let statement = admin.sign_next(body, "sign")?;
-    admin.publish(&statement).await?;
+    publish_ci_signer(&admin, &id, Some(ci_label(repository)), &key).await?;
     println!(
         "✓ {} can release · its key is in the `{GITHUB_ENVIRONMENT}` environment, which {who_can}",
         ci_label(repository)
@@ -829,43 +816,119 @@ async fn add_ci(ctx: &ExecutionMode, repository: &str) -> Result<()> {
     Ok(())
 }
 
-async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) -> Result<()> {
+/// Whether `name` is a signer id: 1-64 of `[a-z0-9-]`.
+fn check_key_name(name: &str) -> Result<()> {
+    let valid = (1..=64).contains(&name.len())
+        && name
+            .bytes()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'));
+    if valid {
+        Ok(())
+    } else {
+        Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!("'{name}' is not a key name: use 1-64 of a-z, 0-9 and -"),
+        }))
+    }
+}
+
+fn new_ci_key() -> Result<SecretKey> {
+    SecretKey::generate().context(ErrorData::SigningFailed {
+        message: "Could not create the CI key".to_string(),
+    })
+}
+
+/// Add `key` as CI signer `id`, with the release role only, as the next
+/// version of the list.
+async fn publish_ci_signer(
+    admin: &Admin,
+    id: &str,
+    label: Option<String>,
+    key: &SecretKey,
+) -> Result<()> {
+    let mut body = admin.chain.current().body.clone();
+    body.signers.push(Signer {
+        id: id.to_string(),
+        key: key.public_key().as_str().to_string(),
+        kind: SignerKind::Ci,
+        backend: Some(KeyBackend::Software),
+        roles: vec![Role::Release],
+        label,
+    });
+    body.recovered = false;
+    let statement = admin.sign_next(body, "sign")?;
+    admin.publish(&statement).await?;
+    Ok(())
+}
+
+/// `alien devices add-key`: a software key with the release role for any CI
+/// system or remote box. The key is shown once, after the list that trusts it
+/// is published.
+async fn add_key(ctx: &ExecutionMode, name: &str, out: Option<&Path>) -> Result<()> {
+    check_key_name(name)?;
+    let admin = admin(ctx).await?;
+    if admin.chain.current().signer(name).is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!(
+                "'{name}' is already on the list; replace its key with `alien devices rotate {name}`"
+            ),
+        }));
+    }
+    let key = new_ci_key()?;
+    eprintln!(
+        "Trusting a new key, {name}, to sign releases of {}.",
+        admin.chain.project()
+    );
+    publish_ci_signer(&admin, name, None, &key).await?;
+    show_ci_key(&key, out)?;
+    eprintln!("✓ {name} can release (and sign debug sessions); it can't change the devices");
+    Ok(())
+}
+
+/// Print `key` as PKCS#8 PEM to stdout, or write it to `out` (mode 0600),
+/// then say how to store it. Shown once: the control plane never holds it.
+fn show_ci_key(key: &SecretKey, out: Option<&Path>) -> Result<()> {
+    let pem = key.to_pkcs8_pem().context(ErrorData::SigningFailed {
+        message: "Could not encode the CI key".to_string(),
+    })?;
+    match out {
+        Some(path) => {
+            crate::signing::device::write_private(path, &pem)?;
+            eprintln!("Key written to {} (mode 0600).", path.display());
+        }
+        None => print!("{pem}"),
+    }
+    eprintln!(
+        "Store it as {GITHUB_SECRET} in your CI system's secrets: the CLI reads the PEM from that variable. It is shown once."
+    );
+    Ok(())
+}
+
+async fn rotate(ctx: &ExecutionMode, name: &str, revoke: bool, out: Option<&Path>) -> Result<()> {
     let admin = admin(ctx).await?;
     let list = admin.chain.current();
-    let ci: Vec<&Signer> = list
+    let old = list
         .body
         .signers
         .iter()
-        .filter(|signer| signer.kind == SignerKind::Ci)
-        .filter(|signer| repository.is_none_or(|repository| signer.id == ci_id(repository)))
-        .collect();
-    let old = match ci.as_slice() {
-        [signer] => (*signer).clone(),
-        [] => {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "repository".to_string(),
-                message: "No CI key to replace; add one with `alien devices add-ci OWNER/REPO`"
-                    .to_string(),
-            }))
-        }
-        _ => {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "repository".to_string(),
-                message: "More than one CI key is trusted; name the repository".to_string(),
-            }))
-        }
-    };
-    let repository = old
+        .find(|signer| signer.id == name && signer.kind == SignerKind::Ci)
+        .cloned()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: format!(
+                    "No CI key is named '{name}'; add one with `alien devices add-key {name}` or `add-ci OWNER/REPO`"
+                ),
+            })
+        })?;
+    // A key `add-ci` made lives in a GitHub environment; any other is shown.
+    let github = old
         .label
         .as_deref()
         .and_then(|label| label.strip_prefix("GitHub Actions ("))
         .and_then(|rest| rest.strip_suffix(')'))
-        .map(str::to_string)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::SigningFailed {
-                message: format!("CI key '{}' doesn't name its GitHub repository", old.id),
-            })
-        })?;
+        .map(str::to_string);
     let old_key = PublicKey::parse(&old.key).context(ErrorData::SigningFailed {
         message: format!("CI key '{}' on the list doesn't parse", old.id),
     })?;
@@ -874,14 +937,18 @@ async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) 
     } else {
         Vec::new()
     };
-    pin_cli(&current_dir()?)?;
-    let key = SecretKey::generate().context(ErrorData::SigningFailed {
-        message: "Could not create the CI key".to_string(),
-    })?;
-    let who_can = store_ci_key(&repository, &key)?;
+    let key = new_ci_key()?;
+    let who_can = match &github {
+        Some(repository) => {
+            pin_cli(&current_dir()?)?;
+            Some(store_ci_key(repository, &key)?)
+        }
+        None => None,
+    };
     let mut body = list.body.clone();
     for signer in body.signers.iter_mut().filter(|signer| signer.id == old.id) {
         signer.key = key.public_key().as_str().to_string();
+        signer.backend = Some(KeyBackend::Software);
     }
     for digest in &deny {
         if !body.deny.contains(digest) {
@@ -889,7 +956,7 @@ async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) 
         }
     }
     body.recovered = false;
-    println!("Replacing the CI key of {repository}.");
+    println!("Replacing the key {name}.");
     if revoke {
         println!(
             "  Protected deployments will refuse the {} release and config statement(s) the old key signed.",
@@ -898,7 +965,16 @@ async fn rotate_ci(ctx: &ExecutionMode, revoke: bool, repository: Option<&str>) 
     }
     let statement = admin.sign_next(body, "sign")?;
     admin.publish(&statement).await?;
-    println!("✓ New CI key in the `{GITHUB_ENVIRONMENT}` environment of {repository}, which {who_can}; the old key can't sign");
+    match who_can {
+        Some(who_can) => println!(
+            "✓ New key in the `{GITHUB_ENVIRONMENT}` environment of {}, which {who_can}; the old key can't sign",
+            github.unwrap_or_default()
+        ),
+        None => {
+            show_ci_key(&key, out)?;
+            eprintln!("✓ The old {name} key can't sign");
+        }
+    }
     Ok(())
 }
 
@@ -1021,11 +1097,7 @@ async fn recover(ctx: &ExecutionMode) -> Result<()> {
         })?
         .clone();
     let home = SigningHome::current()?;
-    let (record, device) = home.device_or_create()?.ok_or_else(|| {
-        AlienError::new(ErrorData::SigningFailed {
-            message: "This device has no hardware key to become the new admin".to_string(),
-        })
-    })?;
+    let (record, device) = home.device_or_create()?;
     let mut body = list.body.clone();
     let lost: Vec<String> = body
         .signers
@@ -1059,7 +1131,8 @@ async fn recover(ctx: &ExecutionMode) -> Result<()> {
                 id,
                 key: device.public_key.as_str().to_string(),
                 kind: SignerKind::Device,
-                roles: vec![Role::Release, Role::Operate, Role::Admin],
+                backend: Some(record.backend.key_backend()),
+                roles: vec![Role::Release, Role::Admin],
                 label: record.label.clone(),
             });
         }
@@ -1074,7 +1147,7 @@ async fn recover(ctx: &ExecutionMode) -> Result<()> {
     let statement = sign_envelope(&envelope, &signer)?;
     let mut extended = chain.clone();
     extended
-        .extend(std::slice::from_ref(&statement), Utc::now())
+        .extend(std::slice::from_ref(&statement))
         .context(ErrorData::SigningFailed {
             message: "The recovered device list does not extend the current one".to_string(),
         })?;
@@ -1329,7 +1402,7 @@ fn pin_cli(dir: &Path) -> Result<()> {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             println!(
-                "  No {RELEASE_WORKFLOW} here yet. Merge the Connect GitHub pull request, then run `alien devices rotate-ci` from the repo to pin this CLI."
+                "  No {RELEASE_WORKFLOW} here yet. Merge the Connect GitHub pull request, then run `alien devices rotate` from the repo to pin this CLI."
             );
             return Ok(());
         }
@@ -1739,6 +1812,7 @@ mod tests {
                 .as_str()
                 .to_string(),
             kind: SignerKind::Device,
+            backend: None,
             roles,
             label: Some(format!("{id}@example.com")),
         }

@@ -714,7 +714,7 @@ async fn plan_signing(
     // Planning may show a recovery code or a pairing code; progress drawn
     // meanwhile would erase it.
     let progress = crate::ui::pause_progress();
-    let plan = signing::release::plan(&api, dir, project_id, interactive).await?;
+    let plan = signing::release::plan(&api, dir, interactive).await?;
     drop(progress);
     Ok(SigningState {
         plan,
@@ -804,7 +804,6 @@ async fn previous_components(
                 &opened,
                 alien_signing::Kind::Release,
                 None,
-                chrono::Utc::now(),
             )?;
             let body: alien_signing::ReleaseBody = opened
                 .body()

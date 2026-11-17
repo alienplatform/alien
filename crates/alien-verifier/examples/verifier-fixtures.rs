@@ -21,7 +21,6 @@ use alien_signing::{
     fingerprint, ConfigBody, Kind, Ledger, ReleaseBody, Role, SecretKey, SignedStatement, Signer,
     SignerKind, SignerListBody, SigningSettings, Workload,
 };
-use chrono::{Duration, Utc};
 use serde::Serialize;
 
 const PROJECT: &str = "prj_e2e";
@@ -38,7 +37,7 @@ fn statement<B: Serialize>(
             project: PROJECT.to_string(),
             install: install.map(str::to_string),
             sequence,
-            not_after: (kind == Kind::SignerList).then(|| Utc::now() + Duration::days(60)),
+            not_after: None,
             signer_list_version: 1,
             body,
         }
@@ -111,6 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 id: "ci".to_string(),
                 key: ci.public_key().as_str().to_string(),
                 kind: SignerKind::Ci,
+                backend: None,
                 roles: vec![Role::Admin, Role::Release],
                 label: None,
             }],

@@ -430,7 +430,6 @@ impl Verifier {
             install.id.clone(),
             signer_lists,
             &install.ledger,
-            now,
         )
         .context(ErrorData::Refused {
             reason: "the signer lists were refused".to_string(),
@@ -549,7 +548,7 @@ mod tests {
     /// A GCP verifier whose install signed a cluster with a small group
     /// (`general`, at most 4) and a big one (`big`, at most 40).
     fn gcp_verifier() -> (Verifier, Arc<Resizes>, Value) {
-        let list = signer_list_of(PROJECT, &ci(), Utc::now());
+        let list = signer_list_of(PROJECT, &ci());
         let store = MemoryStore::protected(&settings_for(&list, PREFIX, CHANNEL));
         let backend = Arc::new(Resizes::default());
         let verifier = Verifier {
@@ -2872,7 +2871,7 @@ mod tests {
     /// and never the verifier or a name outside the install's own.
     #[tokio::test]
     async fn a_delete_removes_only_the_installs_own_workload_and_never_the_verifier() {
-        let list = signer_list_of(PROJECT, &ci(), Utc::now());
+        let list = signer_list_of(PROJECT, &ci());
         let backend = Arc::new(Deletes::default());
         let verifier = Verifier {
             own_name: format!("{PREFIX}-verifier"),
@@ -2922,7 +2921,7 @@ mod tests {
     /// the caller names only the signed cluster and group ids, never the cloud resource.
     #[tokio::test]
     async fn a_machines_delete_names_only_the_installs_own_group() {
-        let list = signer_list_of(PROJECT, &ci(), Utc::now());
+        let list = signer_list_of(PROJECT, &ci());
         let backend = Arc::new(Deletes::default());
         let verifier = Verifier {
             own_name: format!("{PREFIX}-verifier"),

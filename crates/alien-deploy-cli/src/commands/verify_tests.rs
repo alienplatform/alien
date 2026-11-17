@@ -31,6 +31,7 @@ pub(crate) fn signer(
         id: id.to_string(),
         key: key(seed).public_key().as_str().to_string(),
         kind,
+        backend: None,
         roles: roles.to_vec(),
         label: label.map(str::to_string),
     }
@@ -69,7 +70,7 @@ pub(crate) fn genesis() -> SignedStatement {
         Kind::SignerList,
         1,
         1,
-        Some(now() + Duration::days(80)),
+        None,
         SignerListBody {
             previous: None,
             admin_threshold: 1,
@@ -78,7 +79,7 @@ pub(crate) fn genesis() -> SignedStatement {
                     "alice-mbp",
                     1,
                     SignerKind::Device,
-                    &[Role::Release, Role::Operate, Role::Admin],
+                    &[Role::Release, Role::Admin],
                     Some("alice@acme.com"),
                 ),
                 signer(
@@ -176,7 +177,9 @@ fn ledger(running: Option<&SignedStatement>) -> Vec<u8> {
         "install": format!("aws:111122223333:us-east-1:{PREFIX}"),
         "signerList": { "sequence": 1, "digest": genesis().open().unwrap().digest },
     });
-    let _ = running;
+    if let Some(running) = running {
+        ledger["accepted"] = serde_json::json!([running.open().unwrap().digest]);
+    }
     ledger.to_string().into_bytes()
 }
 
@@ -326,7 +329,7 @@ fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen() {
              Template             matches release 2026-11-04.3 · production · {template}  ✓\n\
              Parameters           fingerprint pinned · 4 customer choices allowed  ✓\n\
              Managed by           arn:aws:iam::999988887777:role/vendor-manager · with an external id\n\
-             Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1, expires 2027-01-24)\n"
+             Trusted keys         alice@acme.com, GitHub Actions (acme/app), recovery  (list v1)\n"
         )
     );
 }
@@ -428,7 +431,7 @@ fn a_control_plane_that_signs_its_own_release_or_list_is_not_believed() {
         Kind::SignerList,
         1,
         1,
-        Some(now() + Duration::days(80)),
+        None,
         body,
         &[("alice-mbp", 9)],
     )];
@@ -483,7 +486,7 @@ fn a_release_whose_signer_was_removed_keeps_running_and_says_so() {
         Kind::SignerList,
         2,
         1,
-        Some(now() + Duration::days(85)),
+        None,
         body,
         &[("alice-mbp", 1)],
     ));

@@ -162,7 +162,6 @@ pub fn accept(
         install.id.clone(),
         signer_lists,
         &install.ledger,
-        now,
     )
     .context(ErrorData::Refused {
         reason: "the signer lists were refused".to_string(),
@@ -187,7 +186,10 @@ pub fn accept(
         )?),
         None => None,
     };
-    trust.record(&mut ledger).context(ErrorData::Refused {
+    let digests: Vec<&str> = std::iter::once(release.digest.as_str())
+        .chain(config.iter().map(|config| config.digest.as_str()))
+        .collect();
+    trust.record(&mut ledger, &digests).context(ErrorData::Refused {
         reason: "the ledger refused this trust".to_string(),
     })?;
     Ok(Accepted {
@@ -454,6 +456,7 @@ pub(crate) mod tests {
             id: id.to_string(),
             key: key.public_key().as_str().to_string(),
             kind,
+            backend: None,
             roles,
             label: None,
         };
@@ -475,7 +478,7 @@ pub(crate) mod tests {
             Kind::SignerList,
             None,
             1,
-            Some(Utc::now() + chrono::Duration::days(60)),
+            None,
             body(
                 None,
                 vec![
@@ -491,7 +494,7 @@ pub(crate) mod tests {
             Kind::SignerList,
             None,
             2,
-            Some(Utc::now() + chrono::Duration::days(60)),
+            None,
             1,
             body(Some(v1.open().unwrap().digest), vec![laptop_signer]),
         )
@@ -502,7 +505,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn removing_the_ci_key_refuses_what_it_signed_until_a_current_signer_signs_it() {
+    async fn removing_the_ci_key_keeps_what_the_install_accepted_and_refuses_what_is_new() {
         let (v1, v2, settings) = lists_removing_ci();
         let store = MemoryStore::protected(&settings);
         let install = found(&store).await.unwrap();
@@ -515,19 +518,26 @@ pub(crate) mod tests {
             .await
             .unwrap();
 
-        // CI leaves the list: what it signed is no longer vouched for, even the release the
-        // install already runs.
+        // CI leaves the list: the release the install already runs keeps running.
         let install = found(&store).await.unwrap();
         let both = [v1, v2];
-        let error = reason(accept(&install, &both, &by_ci, None, "aws", Utc::now()).unwrap_err());
+        let kept = accept(&install, &both, &by_ci, None, "aws", Utc::now()).unwrap();
+        assert!(kept.release.kept);
+
+        // A release CI signs now is new, and refused.
+        let new_by_ci = statement_under(PROJECT, Kind::Release, None, 11, None, 1, &body)
+            .sign_with("ci", &ci())
+            .unwrap();
+        let error =
+            reason(accept(&install, &both, &new_by_ci, None, "aws", Utc::now()).unwrap_err());
         assert!(error.contains("not on signer list version 2"), "{error}");
 
         // The same release signed by a current signer passes.
-        let by_laptop = statement_under(PROJECT, Kind::Release, None, 10, None, 2, &body)
+        let by_laptop = statement_under(PROJECT, Kind::Release, None, 11, None, 2, &body)
             .sign_with("laptop", &key(2))
             .unwrap();
         let next = accept(&install, &both, &by_laptop, None, "aws", Utc::now()).unwrap();
-        assert_eq!(next.release.sequence, 10);
+        assert_eq!(next.release.sequence, 11);
     }
 
     #[tokio::test]
