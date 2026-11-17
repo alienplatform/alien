@@ -1,33 +1,19 @@
-"""The CNI probe's client pods against a listener whose policy takes effect late, never, or flaps."""
+"""The client pods' verdicts, and the stages they run in."""
 
 import http.server
-import importlib.util
-import pathlib
-import socket
 import tempfile
 import threading
 import unittest
 
-SOURCE = pathlib.Path(__file__).parents[2] / "src" / "emitters" / "sandbox_cni_probe.py"
-spec = importlib.util.spec_from_file_location("sandbox_cni_probe", SOURCE)
-probe = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(probe)
+from loader import probe
 
 MARKER = "marker-for-the-test"
 
 
 class Listener:
-    """Answers `reachable` requests, then stops listening (connections are refused)."""
+    """Answers HTTP requests until stopped."""
 
-    def __init__(self, reachable, then_reachable_again=0):
-        self.remaining = reachable
-        self.server = None
-        self.port = None
-        self.lock = threading.Lock()
-        self.reopen_after = then_reachable_again
-        self.start()
-
-    def start(self):
+    def __init__(self, serve=True):
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -35,18 +21,16 @@ class Listener:
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(MARKER.encode())
-                with outer.lock:
-                    outer.remaining -= 1
-                    done = outer.remaining <= 0
-                if done:
-                    threading.Thread(target=outer.stop).start()
 
             def log_message(self, *args):
                 pass
 
-        self.server = http.server.HTTPServer(("127.0.0.1", self.port or 0), Handler)
+        self.server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
         self.port = self.server.server_address[1]
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        if serve:
+            threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        else:
+            self.server.server_close()
 
     def stop(self):
         self.server.shutdown()
@@ -57,45 +41,17 @@ class Listener:
 
 
 def run(listener, **settings):
-    log = tempfile.NamedTemporaryFile("r", suffix=".log")
-    code = probe.client_code(listener.url(), MARKER)
-    scope = {"LOG": log.name, "WINDOW": 20, **settings}
-    exec(compile(code, "client", "exec"), scope)
-    return open(log.name).read()
+    exec(compile(probe.client_code(listener.url(), MARKER), "client", "exec"), dict(settings))
 
 
 class DeniedClient(unittest.TestCase):
-    def test_policy_that_applies_after_a_few_requests_passes(self):
-        listener = Listener(reachable=3)
-        note = run(listener, DENIED=True)
-        self.assertIn("blocked after", note)
-        self.assertIn("3 reachable attempts first", note)
+    def test_a_denied_client_that_is_refused_passes(self):
+        run(Listener(serve=False), DENIED=True)
 
-    def test_policy_that_blocks_from_the_start_passes(self):
-        listener = Listener(reachable=0)
-        listener.stop()
-        self.assertIn("0 reachable attempts first", run(listener, DENIED=True))
-
-    def test_policy_that_never_takes_effect_fails(self):
-        listener = Listener(reachable=10**6)
+    def test_a_denied_client_that_reaches_the_listener_fails(self):
+        listener = Listener()
         try:
             with self.assertRaisesRegex(RuntimeError, "NetworkPolicy did not block traffic"):
-                run(listener, DENIED=True, WINDOW=3)
-        finally:
-            listener.stop()
-
-    def test_traffic_that_resumes_after_a_refusal_fails(self):
-        listener = Listener(reachable=0)
-        listener.stop()
-
-        def reopen():
-            threading.Event().wait(1.5)
-            listener.remaining = 10**6
-            listener.start()
-
-        threading.Thread(target=reopen, daemon=True).start()
-        try:
-            with self.assertRaisesRegex(RuntimeError, "reachable again"):
                 run(listener, DENIED=True)
         finally:
             listener.stop()
@@ -103,17 +59,15 @@ class DeniedClient(unittest.TestCase):
 
 class ControlClient(unittest.TestCase):
     def test_control_reaches_the_listener(self):
-        listener = Listener(reachable=10**6)
+        listener = Listener()
         try:
             run(listener, DENIED=False)
         finally:
             listener.stop()
 
     def test_control_that_is_refused_fails(self):
-        listener = Listener(reachable=0)
-        listener.stop()
         with self.assertRaises(RuntimeError):
-            run(listener, DENIED=False)
+            run(Listener(serve=False), DENIED=False)
 
 
 class Stages(unittest.TestCase):
@@ -132,7 +86,7 @@ class Stages(unittest.TestCase):
             awaited = [role for kind, role in events[position:position + len(stage)] if kind == "wait"]
             self.assertEqual(awaited, stage)
             position += len(stage)
-        # Two overlapping stages: pod starts cost three, not five, one after the other.
+        # Two overlapping stages: pod starts cost two, not five, one after the other.
         self.assertEqual(len(stages), 2)
 
     def test_every_probe_role_still_runs(self):
@@ -143,6 +97,12 @@ class Stages(unittest.TestCase):
         )
         denied = {role for stage in probe.STAGES for role, d, _ in stage if d}
         self.assertEqual(denied, {"denied", "ingress-denied"})
+
+    def test_a_control_runs_in_the_stage_after_every_denied_client(self):
+        for index, stage in enumerate(probe.STAGES[:-1]):
+            self.assertTrue(any(d for _, d, _ in stage))
+            self.assertTrue(any(not d for _, d, _ in probe.STAGES[index + 1]))
+        self.assertTrue(any(not d for _, d, _ in probe.STAGES[0]))
 
 
 if __name__ == "__main__":

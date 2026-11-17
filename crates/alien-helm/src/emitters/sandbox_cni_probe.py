@@ -20,66 +20,70 @@ FIX_HINT = (
     "--network-policy azure|calico|cilium."
 )
 
-# How long a pod that must be denied may keep reaching the listener before enforcement is
-# declared absent. A CNI applies a policy to a new pod's interface shortly after the pod
-# starts, so the first requests can still get through; a policy that never takes effect
-# still fails once this window ends.
-ENFORCEMENT_WINDOW_SECONDS = 45
+
+# Time budget of one run, in one place. The script's deadline and the Job's activeDeadlineSeconds
+# (sandbox_cni.rs reads JOB_DEADLINE_SECONDS from this file) come from these numbers; the Helm
+# install's own wait (`--timeout 10m` in the install instructions) must fit the Job with room for
+# the next hook. A pod start is ~35 s under a VM-per-pod runtime (Kata). A run that passes needs:
+#   API_READY_SECONDS      60   the runner's own network is applied (the wait below)
+#   ADMISSION_SECONDS      30   both admission policies answer
+#   POD_START_SECONDS      35   the listener starts
+#   stage 1: start + run   35 + 15   (three clients start together; 3 attempts of <= 4 s)
+#   stage 2: start + run   35 + 120  (the recovering control makes up to 30 attempts of <= 4 s)
+#   one recreate           45 + 35   (START_BOUND_SECONDS stuck, then a new start)
+#   CLEANUP_SECONDS        10   delete what was created
+#                         ---
+#                         420
+# The Job adds the runner's own start (image pull, 30 s) and a 30 s margin: 480 s, leaving the
+# remaining 120 s of the install's 10 minutes for the hook that follows.
+API_READY_SECONDS = 60
+ADMISSION_SECONDS = 30
+POD_START_SECONDS = 35
+CLIENT_RUN_SECONDS = 15
+RECOVER_RUN_SECONDS = 120
+CLEANUP_SECONDS = 10
+# How long a pod may stay Pending with a container the runtime failed to create, before it is
+# treated as not started and recreated. A retry the kubelet makes by itself succeeds within its
+# first backoff steps (10 s, then 20 s), so waiting longer than this is not worth the budget.
+START_BOUND_SECONDS = 45
+# How long a pod may stay Pending, unschedulable or failing to pull its image, before the run
+# fails naming that cause. The cause does not change by recreating the pod, so there is no retry.
+# A node that has to be provisioned for the pod is part of POD_START_SECONDS.
+PENDING_CAUSE_BOUND_SECONDS = 90
+SCRIPT_BUDGET_SECONDS = 420
+RUNNER_START_SECONDS = 30
+BUDGET_MARGIN_SECONDS = 30
+JOB_DEADLINE_SECONDS = 480
+# Each client pod's own deadline, counted by the kubelet from the pod's start.
+POD_DEADLINE_SECONDS = 240
 
 
 def client_code(url, marker):
     """Source of the client pods. `DENIED` and `RECOVER` are set by the caller before it."""
     return (
-        "import errno,socket,sys,time,urllib.request,urllib.error\n"
+        "import errno,socket,time,urllib.request,urllib.error\n"
         "def require(condition,message):\n"
         " if not condition: raise RuntimeError(message)\n"
         "opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
+        # A recovering control waits, within the pod deadline, for a CNI that removes a
+        # deleted policy slowly; it must still be reached once.
         "RECOVER=globals().get('RECOVER',False)\n"
-        "WINDOW=globals().get('WINDOW',%d)\n"
-        "LOG=globals().get('LOG','/dev/termination-log')\n"
-        "BLOCKED=(errno.ECONNREFUSED,errno.ENETUNREACH,errno.EHOSTUNREACH,errno.ETIMEDOUT)\n"
-        "def reach():\n"
-        " # True when the listener answered, False when the network refused or dropped it.\n"
+        "reached=False\n"
+        "for attempt in range(30 if RECOVER else 3):\n"
         " try:\n"
         f"  body=opener.open({url!r},timeout=3).read()\n"
         f"  require(body=={marker.encode()!r}, 'wrong positive control body')\n"
-        "  return True\n"
+        "  require(not DENIED, 'NetworkPolicy did not block traffic')\n"
+        "  reached=True\n"
+        "  if RECOVER: break\n"
         " except (urllib.error.URLError,TimeoutError,OSError) as error:\n"
         "  reason=getattr(error,'reason',error)\n"
-        "  require(isinstance(reason,TimeoutError) or getattr(reason,'errno',None) in BLOCKED, repr(error))\n"
-        "  return False\n"
-        "def note(text):\n"
-        " print(text,flush=True)\n"
-        " try: open(LOG,'w').write(text)\n"
-        " except OSError: pass\n"
-        "start=time.monotonic()\n"
-        "if DENIED:\n"
-        " # The policy may need a moment to reach a new pod: wait, bounded, for the first\n"
-        " # refusal, then require it to hold. Reaching the listener after a refusal, or never\n"
-        " # being refused within the window, is a failure.\n"
-        " reachable=0\n"
-        " while reach():\n"
-        "  reachable+=1\n"
-        "  require(time.monotonic()-start<WINDOW, 'NetworkPolicy did not block traffic')\n"
-        "  time.sleep(1)\n"
-        " blocked_after=time.monotonic()-start\n"
-        " for _ in range(2):\n"
-        "  time.sleep(1)\n"
-        "  require(not reach(), 'NetworkPolicy did not block traffic: reachable again after a refusal')\n"
-        " note('blocked after %%.1fs (%%d reachable attempts first)'%%(blocked_after,reachable))\n"
-        "else:\n"
-        # A recovering control waits, within the pod deadline, for a CNI that removes a
-        # deleted policy slowly; it must still be reached once.
-        " reached=False\n"
-        " for attempt in range(30 if RECOVER else 3):\n"
-        "  if reach():\n"
-        "   reached=True\n"
-        "   if RECOVER: break\n"
-        "  else:\n"
-        "   require(RECOVER,'positive control was not reached')\n"
-        "  time.sleep(1)\n"
-        " require(reached,'traffic did not resume after removing the policy')\n"
-    ) % ENFORCEMENT_WINDOW_SECONDS
+        "  require((DENIED or RECOVER) and (isinstance(reason,TimeoutError) or "
+        "getattr(reason,'errno',None) in (errno.ECONNREFUSED,errno.ENETUNREACH,"
+        "errno.EHOSTUNREACH,errno.ETIMEDOUT)), repr(error))\n"
+        " time.sleep(1)\n"
+        "require(DENIED or reached, 'traffic did not resume after removing the policy')\n"
+    )
 
 
 # A successful negative result is only meaningful bracketed by working controls. The clients of
@@ -101,17 +105,12 @@ def run_stages(start_client, wait_client):
             wait_client(role)
 
 
-
-
 # A client pod whose probe container never ran says nothing about NetworkPolicy: the sandbox
 # runtime could not start it. These are the container states the kubelet reports for that.
 RUNTIME_START_REASONS = {
     "StartError", "ContainerCannotRun", "CreateContainerError", "RunContainerError",
     "CreateContainerConfigError",
 }
-# How long a pod may stay Pending with a container the runtime failed to create, before it is
-# treated as not started.
-START_BOUND_SECONDS = 90
 
 
 def _terminated_messages(pod):
@@ -144,11 +143,60 @@ def runtime_start_failure(pod, pending_seconds):
     return None
 
 
+IMAGE_PULL_REASONS = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull"}
+
+
+def pending_cause(pod, pending_seconds):
+    """Why a pod stays Pending (not scheduled, or its image does not pull), else None.
+
+    Only a pod that has been Pending longer than PENDING_CAUSE_BOUND_SECONDS has a cause worth
+    naming: a node being provisioned or a first pull attempt are ordinary and short.
+    """
+    if pod.get("status", {}).get("phase") != "Pending" or pending_seconds <= PENDING_CAUSE_BOUND_SECONDS:
+        return None
+    for condition in pod.get("status", {}).get("conditions", []):
+        if condition.get("type") == "PodScheduled" and condition.get("status") == "False":
+            return "the pod was not scheduled (%s): %s" % (
+                condition.get("reason") or "Unschedulable", condition.get("message") or "no message")
+    for status in pod.get("status", {}).get("containerStatuses", []):
+        waiting = status.get("state", {}).get("waiting") or {}
+        if waiting.get("reason") in IMAGE_PULL_REASONS:
+            return "the pod's image did not pull (%s): %s" % (
+                waiting["reason"], waiting.get("message") or "no message")
+    return None
+
+
+def replace_object(request, path, resource, deadline, now=time.monotonic, sleep=time.sleep):
+    """Delete an object, wait until it is gone, create it again.
+
+    A pod deleted with no grace period can stay in the API for a moment (Terminating); creating
+    the same name then answers 409, so the new object is only created once the old one is 404.
+    """
+    name = resource["metadata"]["name"]
+    try:
+        request("DELETE", path + "/" + name, {"gracePeriodSeconds": 0})
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    while True:
+        try:
+            request("GET", path + "/" + name)
+        except urllib.error.HTTPError as gone:
+            if gone.code == 404:
+                break
+            raise
+        if now() >= deadline:
+            raise RuntimeError(f"{name} is still being deleted at the probe's deadline; cannot recreate it")
+        sleep(1)
+    return request("POST", path, resource)
+
+
 def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hint,
                  now=time.monotonic, sleep=time.sleep, out=print):
     """Wait for a pod to satisfy `predicate`, recreating it once if the runtime failed to start it."""
     first_seen = now()
     recreated = False
+    current = {}
     while now() < deadline:
         current = request("GET", pods + "/" + prefix + "-" + role)
         phase = current.get("status", {}).get("phase")
@@ -162,6 +210,9 @@ def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hin
             first_seen = now()
             sleep(1)
             continue
+        cause = pending_cause(current, now() - first_seen)
+        if cause:
+            raise RuntimeError(f"{role} pod never ran, so NetworkPolicy was not tested: {cause}")
         if phase == "Failed":
             details = _terminated_messages(current)
             raise RuntimeError(f"{role} probe failed: NetworkPolicy enforcement is unproven; "
@@ -174,6 +225,9 @@ def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hin
                 f"ip={current.get('status', {}).get('podIP')}", flush=True)
             return current
         sleep(1)
+    cause = pending_cause(current, float("inf"))
+    if cause:
+        raise RuntimeError(f"{role} pod never ran before the probe's deadline, so NetworkPolicy was not tested: {cause}")
     raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement. " + hint)
 
 
@@ -205,15 +259,17 @@ def main():
 
     pods = f"/api/v1/namespaces/{namespace}/pods"
     policies = f"/apis/networking.k8s.io/v1/namespaces/{namespace}/networkpolicies"
+    # One deadline for the whole run, counted from here (see the budget above).
+    start = time.monotonic()
+    deadline = start + SCRIPT_BUDGET_SECONDS
     # A cluster that denies pod traffic by default admits this pod's API calls only once the
     # CNI has applied the runner policy, shortly after the pod starts.
-    start = time.monotonic()
     while True:
         try:
             owner = request("GET", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}")
             break
         except (urllib.error.URLError, TimeoutError) as error:
-            if isinstance(error, urllib.error.HTTPError) or time.monotonic() - start > 60:
+            if isinstance(error, urllib.error.HTTPError) or time.monotonic() - start > API_READY_SECONDS:
                 raise
             time.sleep(2)
     owner_ref = [{"apiVersion": "batch/v1", "kind": "Job", "name": job,
@@ -227,7 +283,7 @@ def main():
     tolerations = json.loads(os.environ.get("PROBE_TOLERATIONS") or "[]")
     created = []
     specs = {}
-    deadline = time.monotonic() + 210
+    admission_deadline = time.monotonic() + ADMISSION_SECONDS
     marker = uuid.uuid4().hex
     server = (
         "from http.server import BaseHTTPRequestHandler,HTTPServer\n"
@@ -249,17 +305,18 @@ def main():
             if error.code != 409:
                 raise
             # A previous run's object with the same fixed name; replace it.
-            request("DELETE", path + "/" + name, {"gracePeriodSeconds": 0})
-            while time.monotonic() < deadline:
-                try:
-                    request("GET", path + "/" + name)
-                except urllib.error.HTTPError as gone:
-                    if gone.code == 404:
-                        break
-                    raise
-                time.sleep(1)
-            result = request("POST", path, resource)
-        created.append(path + "/" + result["metadata"]["name"])
+            result = replace_object(request, path, resource, deadline)
+        track(path + "/" + result["metadata"]["name"])
+        return result
+
+    def track(path):
+        if path not in created:
+            created.append(path)
+
+    def recreate(role):
+        resource = specs[prefix + "-" + role]
+        result = replace_object(request, pods, resource, deadline)
+        track(pods + "/" + result["metadata"]["name"])
         return result
 
     def pod(role, code):
@@ -283,7 +340,7 @@ def main():
                          "annotations": {"karpenter.sh/do-not-disrupt": "true"}},
             "spec": {
                 "automountServiceAccountToken": False, "restartPolicy": "Never",
-                "activeDeadlineSeconds": 240, "terminationGracePeriodSeconds": 1,
+                "activeDeadlineSeconds": POD_DEADLINE_SECONDS, "terminationGracePeriodSeconds": 1,
                 "securityContext": {"runAsNonRoot": True, "runAsUser": 65534,
                                     "seccompProfile": {"type": "RuntimeDefault"}},
                 **({"imagePullSecrets": pull_secrets} if pull_secrets else {}),
@@ -300,7 +357,7 @@ def main():
 
     def wait(role, predicate):
         return wait_for_pod(request, pods, prefix, role, predicate, deadline,
-                            lambda r: create(pods, specs[prefix + "-" + r]), FIX_HINT)
+                            recreate, FIX_HINT)
 
     # Pod and NetworkPolicy creation are confined by admission policies for this account.
     # Refuse to run unless each one rejects a request it must reject, with its own message.
@@ -315,7 +372,7 @@ def main():
                 if f"ValidatingAdmissionPolicy '{policy}'" in text and message in text:
                     return
                 raise RuntimeError(f"unexpected admission answer {error.code}: {text[:512]}")
-            if time.monotonic() > deadline - 180:
+            if time.monotonic() > admission_deadline:
                 raise RuntimeError(f"admission policy {policy} is not enforced; refusing to run")
             time.sleep(1)
 

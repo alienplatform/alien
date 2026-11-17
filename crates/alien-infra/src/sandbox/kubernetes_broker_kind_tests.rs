@@ -277,6 +277,15 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
         }
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
+    let idle_annotations = pods
+        .get_pod(&namespace, "alien-kind-idle")
+        .await
+        .unwrap()
+        .metadata
+        .annotations
+        .unwrap_or_default();
+    assert!(!idle_annotations.contains_key("karpenter.sh/do-not-disrupt"));
+    assert!(!idle_annotations.contains_key("cluster-autoscaler.kubernetes.io/safe-to-evict"));
     let warm = ask("warm", None, None).await.ok().expect("warm claim");
     assert!(warm.created);
     let claimed = pods.get_pod(&namespace, "alien-kind-idle").await.unwrap();
@@ -284,6 +293,12 @@ async fn kubernetes_broker_kind_sessions_live_on_the_pod() {
         claimed.metadata.labels.as_ref().unwrap()[LABEL_SESSION],
         "warm",
         "the idle pod was claimed, not a new one created"
+    );
+    let claimed_annotations = claimed.metadata.annotations.as_ref().unwrap();
+    assert_eq!(claimed_annotations["karpenter.sh/do-not-disrupt"], "true");
+    assert_eq!(
+        claimed_annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"],
+        "false"
     );
 
     // list matches get: both sessions, nothing else.

@@ -362,6 +362,38 @@ at plan time ("schedule sandboxes on amd64 nodes"); arm64 sandboxes on Kubernete
 supported yet. There is no pause: an idle session keeps its pod's CPU and memory on the node until
 it is terminated or reaches its deadline.
 
+## Kubernetes node consolidation
+
+A claimed sandbox pod carries `karpenter.sh/do-not-disrupt: "true"` and
+`cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so node consolidation and scale-down do
+not evict a live session; idle pool pods carry neither and stay evictable. With no
+`maxLifetimeSeconds` declared and no `timeoutMs` on the create, a session has no deadline, so the
+annotations keep its node until the session is terminated. What that means for node replacement
+depends on the platform:
+
+- **EKS Auto Mode:** NodeClaims get a 24 h termination grace period by default, so AMI drift and
+  the 336 h node expiry still end a session within about 24 h.
+- **Self-managed Karpenter:** with no `terminationGracePeriod` on the NodePool, a node that is
+  being replaced stays half-drained for as long as the session runs.
+- **GKE Autopilot:** honours the annotation for at most 7 days, and not on Spot nodes.
+- **GKE Standard:** the annotation stops autoscaler scale-down only; cluster upgrades ignore it.
+- **AKS:** the cluster autoscaler honours `safe-to-evict`; node image and Kubernetes upgrades
+  drain nodes without reading it (not checked on a live cluster).
+
+To bound how long a session can hold a node, set a node termination grace period on the NodePool
+rather than a default session lifetime. Do not add a PodDisruptionBudget for sandbox pods: a budget
+blocks the drain with no deadline.
+
+## Kubernetes Operator restarts and capacity
+
+The sandbox broker runs inside the Operator pod. While the Operator restarts (for example on every
+release), sandboxes keep running, but calls to the broker fail with a retryable
+`REMOTE_SERVICE_UNAVAILABLE` error for up to about a minute. The bindings do not retry for you;
+retry the call. A create whose connection failed after the request was sent is not retryable
+(`SANDBOX_OUTCOME_UNKNOWN`): the broker may already have claimed a pod, so list sessions before
+creating again. Size nodes for the warm pool plus live sessions: one 4-vCPU Kata node held about
+three default sandbox pods (2Gi each plus about 600Mi runtime overhead).
+
 ## Bootstrap file protection
 
 Before any image code starts, the agent creates a private mount namespace and
