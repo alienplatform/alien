@@ -1100,9 +1100,10 @@ impl GcpAgentPlatformSandbox {
             .map(|dir| format!("{dir}/{PAUSE_MARKER_NAME}"))
             .collect::<Vec<_>>();
         let script = format!(
-            "rm -f {all} 2>/dev/null; for f in {all}; do d=$(dirname \"$f\"); \
-             if [ -d \"$d\" ] && [ -w \"$d\" ] && printf %s '{generation}' > \"$f\"; then exit 0; fi; \
-             done; exit 1",
+            "for f in {all}; do d=$(dirname \"$f\"); t=\"$f.tmp.$$\"; \
+             if [ -d \"$d\" ] && [ -w \"$d\" ] && printf %s '{generation}' > \"$t\" && mv -f \"$t\" \"$f\"; then \
+             for o in {all}; do [ \"$o\" = \"$f\" ] || rm -f \"$o\" 2>/dev/null; done; exit 0; fi; \
+             rm -f \"$t\" 2>/dev/null; done; exit 1",
             all = candidates.join(" ")
         );
         self.marker_script(operation, sandbox_id, script)
@@ -1861,32 +1862,53 @@ impl Sandbox for GcpAgentPlatformSandbox {
     /// kept, inside the sandbox, for that comparison.
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id(PAUSE, sandbox_id)?;
-        let Some(sandbox) = self.read_sandbox(PAUSE, sandbox_id).await? else {
-            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "sandboxGone".to_string(),
-                reason: format!("{PAUSE}: sandbox '{sandbox_id}' does not exist"),
-            }));
-        };
-
-        match sandbox.state.as_deref() {
-            Some("STATE_PAUSED") => return Ok(()),
-            Some("STATE_PAUSING") => {
-                return self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await
+        // Another pause() can finish between the state read and the health probe, and the probe
+        // then wakes the sandbox (a 503 "outcome unknown"). So the state is read again before the
+        // probe and after a failed one: paused or pausing is the goal reached; running means start
+        // over.
+        let mut attempt = 1;
+        let generation = loop {
+            let Some(sandbox) = self.read_sandbox(PAUSE, sandbox_id).await? else {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxGone".to_string(),
+                    reason: format!("{PAUSE}: sandbox '{sandbox_id}' does not exist"),
+                }));
+            };
+            match sandbox.state.as_deref() {
+                Some("STATE_PAUSED") => return Ok(()),
+                Some("STATE_PAUSING") => {
+                    return self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await
+                }
+                _ => {}
             }
-            _ => {}
-        }
-        if sandbox_state(PAUSE, sandbox.state.as_deref())? != SandboxState::Running {
-            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "sandboxNotRunning".to_string(),
-                reason: format!(
-                    "{PAUSE}: sandbox '{sandbox_id}' is not running, so there is nothing to pause"
-                ),
-            }));
-        }
+            if sandbox_state(PAUSE, sandbox.state.as_deref())? != SandboxState::Running {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sandboxNotRunning".to_string(),
+                    reason: format!(
+                        "{PAUSE}: sandbox '{sandbox_id}' is not running, so there is nothing to pause"
+                    ),
+                }));
+            }
 
-        // Read and written before the call: after a pause the agent is not reachable to ask. The
-        // marker lives in the sandbox, so whichever process resumes it can compare.
-        let generation = self.probe_agent(PAUSE, sandbox_id).await?;
+            // Read and written before the call: after a pause the agent is not reachable to ask.
+            // The marker lives in the sandbox, so whichever process resumes it can compare.
+            match self.probe_agent(PAUSE, sandbox_id).await {
+                Ok(generation) => break generation,
+                Err(error) => {
+                    let state = self.read_sandbox(PAUSE, sandbox_id).await?;
+                    match state.as_ref().and_then(|s| s.state.as_deref()) {
+                        Some("STATE_PAUSED" | "STATE_PAUSING") => {
+                            return self.wait_for_state(PAUSE, sandbox_id, "STATE_PAUSED").await
+                        }
+                        Some("STATE_RUNNING" | "STATE_RESUMING") if attempt < 3 => {
+                            attempt += 1;
+                            tokio::time::sleep(LIFECYCLE_POLL_INTERVAL).await;
+                        }
+                        _ => return Err(error),
+                    }
+                }
+            }
+        };
         self.write_pause_marker(PAUSE, sandbox_id, generation)
             .await?;
 

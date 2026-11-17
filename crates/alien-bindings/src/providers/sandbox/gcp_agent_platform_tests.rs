@@ -3891,3 +3891,135 @@ async fn get_by_key_skips_a_sandbox_that_stopped_after_the_list() {
         .expect("the live one answers");
     assert_eq!(found.sandbox_id, newer_id);
 }
+
+/// Refreshing the marker replaces it in one step: a resume that reads it during the refresh sees
+/// the old or the new generation, never "none" (which would read as a replaced container).
+#[tokio::test]
+async fn refreshing_the_pause_marker_never_leaves_it_absent() {
+    let scripts = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let scripts = scripts.clone();
+        client.expect_execute().returning(move |_, _, input| {
+            let value: serde_json::Value = serde_json::from_slice(input).unwrap();
+            scripts
+                .lock()
+                .unwrap()
+                .push(value["command"][2].as_str().unwrap().to_string());
+            Ok(ndjson(&[exit_frame(0)]))
+        });
+    }
+    let provider = provider(client);
+    provider
+        .write_pause_marker(PAUSE, "s1", 7)
+        .await
+        .expect("the marker is written");
+    let script = scripts.lock().unwrap().pop().expect("a script ran");
+
+    let shm = tempfile::tempdir().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let script = script
+        .replace("/dev/shm", "@SHM@")
+        .replace("/tmp", "@TMP@")
+        .replace("@SHM@", shm.path().to_str().unwrap())
+        .replace("@TMP@", tmp.path().to_str().unwrap());
+    let marker = shm.path().join(PAUSE_MARKER_NAME);
+    let run = |script: &str| {
+        let status = std::process::Command::new("/bin/sh")
+            .args(["-c", script])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    run(&script);
+    assert!(marker.exists());
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let absent = Arc::new(AtomicUsize::new(0));
+    let reader = {
+        let (stop, absent, marker) = (stop.clone(), absent.clone(), marker.clone());
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                match std::fs::read_to_string(&marker) {
+                    Ok(text) if text.is_empty() => {
+                        absent.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        absent.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        })
+    };
+    for _ in 0..150 {
+        run(&script);
+    }
+    stop.store(true, Ordering::SeqCst);
+    reader.join().unwrap();
+    assert_eq!(absent.load(Ordering::SeqCst), 0, "the marker was absent or empty");
+    assert_eq!(std::fs::read_to_string(&marker).unwrap(), "7");
+}
+
+/// Another pause finished between this one's state read and its health probe: the probe woke the
+/// sandbox (503) and the call must not fail; the sandbox is paused again.
+#[tokio::test]
+async fn a_pause_whose_probe_wakes_the_sandbox_pauses_it_again() {
+    let fake = PausableSandbox::running("boot-a");
+    let probes = Arc::new(AtomicUsize::new(0));
+    let pauses = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *fake.state.lock().unwrap())));
+    }
+    {
+        let fake = fake.clone();
+        let probes = probes.clone();
+        client.expect_execute().returning(move |_, _, input| {
+            if op_of(input) == "health" && probes.fetch_add(1, Ordering::SeqCst) == 0 {
+                // The other pause landed; this request wakes the sandbox.
+                fake.set_state("STATE_RUNNING");
+                return Err(http_error(503, "paused; resume has been initiated"));
+            }
+            fake.agent_reply(input)
+        });
+    }
+    {
+        let fake = fake.clone();
+        let pauses = pauses.clone();
+        client.expect_pause_sandbox().returning(move |_, _| {
+            pauses.fetch_add(1, Ordering::SeqCst);
+            fake.set_state("STATE_PAUSED");
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    provider(client).pause("s1").await.expect("paused again");
+    assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
+    assert_eq!(pauses.load(Ordering::SeqCst), 1);
+}
+
+/// The other pause is already done when the probe fails: the goal is reached, so it is a no-op.
+#[tokio::test]
+async fn a_pause_whose_probe_fails_on_an_already_paused_sandbox_is_done() {
+    let fake = PausableSandbox::running("boot-a");
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client.expect_get_sandbox().returning(move |_, id| {
+            // Running for the first read, paused from the second on.
+            if reads.fetch_add(1, Ordering::SeqCst) >= 1 {
+                fake.set_state("STATE_PAUSED");
+            }
+            Ok(sandbox_in_state(id, *fake.state.lock().unwrap()))
+        });
+    }
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(http_error(503, "paused; resume has been initiated")));
+    client.expect_pause_sandbox().never();
+    provider(client).pause("s1").await.expect("already paused");
+}
