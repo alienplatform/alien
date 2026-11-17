@@ -251,8 +251,13 @@ pub struct JobPollBody {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobPollResponse {
-    /// Whether the command is still running
+    /// Whether the caller must keep polling: the command is still running, or it has ended and
+    /// `more` output is waiting. Older callers stop at `false`, so a paged drain stays `true`.
     pub running: bool,
+    /// The command has ended, whatever `running` says. The outcome fields below are final; only
+    /// buffered output is left to read. Absent from replies of agents that predate it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
     /// Output frames after the polled sequence
     pub frames: Vec<Frame>,
     /// Exit code, present once a job has exited on its own
@@ -278,28 +283,22 @@ pub struct JobErrorBody {
 
 impl From<JobSnapshot> for JobPollResponse {
     fn from(snapshot: JobSnapshot) -> Self {
-        match snapshot.outcome {
-            None => Self {
-                running: true,
-                frames: snapshot.frames,
-                exit_code: None,
-                truncated: None,
-                error: None,
-            },
-            Some(JobOutcome::Exited { code, truncated }) => Self {
-                running: false,
-                frames: snapshot.frames,
-                exit_code: Some(code),
-                truncated: Some(truncated),
-                error: None,
-            },
-            Some(JobOutcome::Failed { code, message }) => Self {
-                running: false,
-                frames: snapshot.frames,
-                exit_code: None,
-                truncated: None,
-                error: Some(JobErrorBody { code, message }),
-            },
+        let running = snapshot.outcome.is_none() || snapshot.more;
+        let finished = snapshot.outcome.is_some();
+        let (exit_code, truncated, error) = match snapshot.outcome {
+            None => (None, None, None),
+            Some(JobOutcome::Exited { code, truncated }) => (Some(code), Some(truncated), None),
+            Some(JobOutcome::Failed { code, message }) => {
+                (None, None, Some(JobErrorBody { code, message }))
+            }
+        };
+        Self {
+            running,
+            finished,
+            frames: snapshot.frames,
+            exit_code,
+            truncated,
+            error,
         }
     }
 }

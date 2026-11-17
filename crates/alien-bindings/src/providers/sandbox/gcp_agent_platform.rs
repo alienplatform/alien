@@ -1011,6 +1011,7 @@ impl GcpAgentPlatformSandbox {
             finished: false,
             stopped: false,
             deadline_at: tokio::time::Instant::now() + timeout + JOB_POLL_GRACE,
+            draining: false,
         };
 
         Ok(Box::pin(stream::unfold(state, job_poll_step)))
@@ -1745,7 +1746,7 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             return None;
         }
 
-        if tokio::time::Instant::now() >= state.deadline_at {
+        if !state.draining && tokio::time::Instant::now() >= state.deadline_at {
             // The deadline is this client's decision, so it only names an outcome once the cancel
             // that makes it true has landed. A cancel that fails leaves the job running, and the
             // caller has to be told that rather than that the command was stopped.
@@ -1814,6 +1815,9 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
         // budgeted reply at a time. A poll that returned frames is that drain, so it earns the
         // grace again: the drain is bounded by what the agent buffered, and a command that ran
         // its whole timeout must not be reported as timed out for output still on its way.
+        if poll.finished {
+            state.draining = true;
+        }
         if !poll.frames.is_empty() {
             state.deadline_at = state
                 .deadline_at
@@ -1943,6 +1947,9 @@ struct JobPollState {
     /// Set only where the job itself ended, so a stream that ends any other way still cancels.
     stopped: bool,
     deadline_at: tokio::time::Instant,
+    /// The agent reported the command ended and is paging out the rest of its output. The
+    /// deadline bounds a command, not the reading of one that is over, so it no longer applies.
+    draining: bool,
 }
 
 /// Kills the command a dropped stream stops reading.
@@ -2006,6 +2013,10 @@ impl Drop for JobPollState {
 #[serde(rename_all = "camelCase")]
 struct JobPollReply {
     running: bool,
+    /// The command has ended and only buffered output is left to read. Absent from agents that
+    /// predate it, which read as not finished.
+    #[serde(default)]
+    finished: bool,
     #[serde(default)]
     frames: Vec<WireFrame>,
     #[serde(default)]

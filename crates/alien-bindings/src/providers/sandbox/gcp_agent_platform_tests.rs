@@ -3326,6 +3326,50 @@ async fn a_job_still_draining_buffered_output_is_not_timed_out() {
     assert_eq!(seen.len(), 21);
 }
 
+/// An agent that has reported the command finished (with its exit code) while pages of output
+/// remain is only waiting to be read. A reader slower than the deadline must still get every page
+/// and the real exit code, and the job is never cancelled. Mutation check: drop the `draining`
+/// guard in `job_poll_step` and this reports `timeoutExceeded`.
+#[tokio::test(start_paused = true)]
+async fn a_finished_job_with_pages_left_is_drained_past_the_deadline() {
+    let polls = AtomicUsize::new(0);
+    let (client, mut cancels) = cancel_watching_client_answering(move || {
+        let n = polls.fetch_add(1, Ordering::SeqCst);
+        let body = if n < 5 {
+            serde_json::json!({
+                "running": true, "finished": true, "exitCode": 7,
+                "frames": [stdout_frame(n as u64, b"x")]
+            })
+        } else {
+            serde_json::json!({"running": false, "finished": true, "frames": [], "exitCode": 7})
+        };
+        Ok(serde_json::to_vec(&body).unwrap())
+    });
+    let sandbox = provider(client);
+    let mut request = long_command();
+    request.timeout = Duration::from_secs(31);
+    let mut frames = sandbox
+        .run_command("s1", request)
+        .await
+        .expect("the job starts");
+    let mut seen = Vec::new();
+    while let Some(item) = frames.next().await {
+        // Far past the deadline plus grace, per page.
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        seen.push(item);
+    }
+    assert!(
+        matches!(seen.last(), Some(Ok(CommandOutput::Exit { code: 7, .. }))),
+        "{seen:?}"
+    );
+    assert_eq!(seen.len(), 6, "{seen:?}");
+    drop(frames);
+    assert!(
+        cancels.try_recv().is_err(),
+        "a finished job is never cancelled"
+    );
+}
+
 /// A file larger than one reply is read in pages and joined, and an agent without paging, which
 /// answers with the whole file and no size, still reads.
 #[tokio::test]
