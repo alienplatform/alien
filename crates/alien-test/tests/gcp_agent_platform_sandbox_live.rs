@@ -62,6 +62,17 @@ const HANDOFF_ENV: &str = "ALIEN_SANDBOX_LIVE_RECONNECT";
 const LIVE_PREFIX: &str = "alien-sbx-live-";
 const TTL_SECONDS: u32 = 3600;
 
+/// The display-name prefix for what this run creates: `ALIEN_TEST_GCP_DISPLAY_PREFIX` when set, so
+/// a shared project can tell one operator's engines apart, else [`LIVE_PREFIX`].
+fn display_prefix() -> String {
+    // An empty value counts as unset: an empty prefix would make the sweep match every engine.
+    std::env::var("ALIEN_TEST_GCP_DISPLAY_PREFIX")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| LIVE_PREFIX.to_string())
+}
+
 /// The credentials a client needs, from the same `GOOGLE_TARGET_*` variables the rest of the E2E
 /// harness uses. The agent image is read separately by [`agent_image`] so a process that only
 /// reconnects — the reconnect child — does not have to supply an image it never provisions from.
@@ -171,7 +182,7 @@ impl Drop for EngineGuard {
 }
 
 async fn provision_engine(client: &Arc<AgentPlatformClient>) -> String {
-    let display = format!("{LIVE_PREFIX}{}", uuid::Uuid::new_v4().simple());
+    let display = format!("{}{}", display_prefix(), uuid::Uuid::new_v4().simple());
     let operation = client
         .create_engine(&display, None)
         .await
@@ -190,7 +201,11 @@ async fn provision_engine(client: &Arc<AgentPlatformClient>) -> String {
 fn template_body(image: &str, internet_access: bool) -> SandboxEnvironmentTemplate {
     SandboxEnvironmentTemplate {
         name: None,
-        display_name: Some(format!("{LIVE_PREFIX}{}", uuid::Uuid::new_v4().simple())),
+        display_name: Some(format!(
+            "{}{}",
+            display_prefix(),
+            uuid::Uuid::new_v4().simple()
+        )),
         custom_container_environment: Some(CustomContainerEnvironment {
             custom_container_spec: Some(CustomContainerSpec {
                 image_uri: image.to_string(),
@@ -990,6 +1005,225 @@ async fn reach_through_a_manager_deployed_binding() {
     }
 }
 
+// ---- Pause and resume keep memory ---------------------------------------------------------------
+
+/// A process that holds a random token and a one-second counter only in memory, and answers on
+/// loopback. A fresh container has no such process, and a restarted one has another token.
+const MEMORY_PROBE: &str = r#"
+import http.server, json, os, secrets, threading, time
+TOKEN = secrets.token_hex(16)
+STATE = {"ticks": 0}
+def tick():
+    while True:
+        time.sleep(1)
+        STATE["ticks"] += 1
+threading.Thread(target=tick, daemon=True).start()
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = json.dumps({"pid": os.getpid(), "token": TOKEN, "ticks": STATE["ticks"]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args):
+        pass
+http.server.ThreadingHTTPServer(("127.0.0.1", 9999), Handler).serve_forever()
+"#;
+
+#[derive(Debug, PartialEq, serde::Deserialize)]
+struct ProbeReading {
+    pid: u32,
+    token: String,
+    ticks: u64,
+}
+
+async fn read_probe(provider: &GcpAgentPlatformSandbox, session: &str) -> ProbeReading {
+    let reading = shell(
+        provider,
+        session,
+        "python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9999/', timeout=5).read().decode())\"",
+    )
+    .await;
+    assert_eq!(
+        reading.exit_code,
+        0,
+        "the in-memory probe answers: {}",
+        String::from_utf8_lossy(&reading.stderr)
+    );
+    serde_json::from_slice(&reading.stdout).expect("the probe answers JSON")
+}
+
+/// How many times the image's boot process has started in this container, from the record it
+/// appends to on every start. Two means the container ran its image again.
+async fn boot_records(provider: &GcpAgentPlatformSandbox, session: &str) -> String {
+    let records = shell(
+        provider,
+        session,
+        "wc -l < /tmp/alien-contract/boots.jsonl 2>/dev/null || echo none",
+    )
+    .await;
+    String::from_utf8_lossy(&records.stdout).trim().to_string()
+}
+
+/// `pause` then `resume` keeps memory: the same container generation, the same in-memory token and
+/// a counter that continues. `ALIEN_TEST_GCP_PAUSE_SECONDS` lists the seconds each cycle stays
+/// paused (comma separated, default 120). `ALIEN_TEST_GCP_AGENT_IMAGE` should be an image with
+/// `python3` that the agent supervises, such as the one `alien build` makes from the conformance
+/// contract image. One JSON line per cycle is printed; the test fails on the first cycle that comes
+/// back changed.
+#[tokio::test]
+#[ignore = "requires a real GCP project; spends minutes of wall-clock per cycle"]
+async fn pause_and_resume_keep_memory() {
+    let config = LiveConfig::from_env();
+    let pauses: Vec<u64> = std::env::var("ALIEN_TEST_GCP_PAUSE_SECONDS")
+        .unwrap_or_else(|_| "120".to_string())
+        .split(',')
+        .map(|seconds| {
+            seconds
+                .trim()
+                .parse()
+                .expect("ALIEN_TEST_GCP_PAUSE_SECONDS is a comma separated list of seconds")
+        })
+        .collect();
+
+    let client = config.client();
+    let engine = provision_engine(&client).await;
+    record_engine(&engine);
+    let _guard = EngineGuard {
+        client: client.clone(),
+        engine: engine.clone(),
+    };
+    // The template the controller builds for a sandbox that declares no egress: closed, with the
+    // default limits.
+    let mut body = template_body(&agent_image(), false);
+    body.custom_container_environment
+        .as_mut()
+        .expect("the body has an environment")
+        .resources = Some(ContainerResources {
+        requests: None,
+        limits: Some(HashMap::from([
+            ("cpu".to_string(), "1".to_string()),
+            ("memory".to_string(), "2Gi".to_string()),
+            ("ephemeral-storage".to_string(), "8Gi".to_string()),
+        ])),
+    });
+    let engine_seg = last_segment(&engine).to_string();
+    let operation = client
+        .create_template(&engine_seg, body)
+        .await
+        .expect("template create accepted");
+    let created: SandboxEnvironmentTemplate = client
+        .await_operation(&operation, budget())
+        .await
+        .expect("template create operation resolves");
+    let template = created
+        .name
+        .expect("a created template carries a resource name");
+    client
+        .await_template_active(&engine_seg, last_segment(&template), budget())
+        .await
+        .expect("the template reaches ACTIVE");
+    let provider = provider(&client, &engine, &template);
+
+    let session = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create reaches a running, agent-answering session");
+    let sid = session.sandbox_id.clone();
+    println!(
+        "{}",
+        serde_json::json!({ "event": "created", "sandbox": sid, "generation": session.generation })
+    );
+
+    provider
+        .write_files(
+            &sid,
+            BTreeMap::from([("/probe.py".to_string(), MEMORY_PROBE.as_bytes().to_vec())]),
+        )
+        .await
+        .expect("the probe is written");
+    let started = shell(
+        &provider,
+        &sid,
+        "setsid python3 /sandbox/probe.py >/dev/null 2>&1 </dev/null & sleep 2",
+    )
+    .await;
+    assert_eq!(started.exit_code, 0, "the probe starts");
+    let first = read_probe(&provider, &sid).await;
+    let boots = boot_records(&provider, &sid).await;
+
+    for (index, pause_seconds) in pauses.iter().enumerate() {
+        let before = read_probe(&provider, &sid).await;
+        let generation = provider
+            .get(&sid)
+            .await
+            .expect("get answers")
+            .expect("the sandbox exists")
+            .generation;
+
+        let paused_at = std::time::Instant::now();
+        provider.pause(&sid).await.expect("pause");
+        let pause_took = paused_at.elapsed();
+        let state = provider
+            .get(&sid)
+            .await
+            .expect("get answers")
+            .expect("the sandbox exists")
+            .state;
+        assert_eq!(state, SandboxState::Paused, "pause returns once paused");
+
+        tokio::time::sleep(Duration::from_secs(*pause_seconds)).await;
+
+        let resumed_at = std::time::Instant::now();
+        let outcome = provider.resume(&sid).await;
+        let resume_took = resumed_at.elapsed();
+        let after_generation = provider
+            .get(&sid)
+            .await
+            .expect("get answers")
+            .expect("the sandbox exists")
+            .generation;
+        let after = read_probe(&provider, &sid).await;
+        let boots_after = boot_records(&provider, &sid).await;
+        println!(
+            "{}",
+            serde_json::json!({
+                "event": "cycle",
+                "cycle": index + 1,
+                "pauseSeconds": pause_seconds,
+                "pauseTookMs": pause_took.as_millis() as u64,
+                "resumeTookMs": resume_took.as_millis() as u64,
+                "resumeOk": outcome.is_ok(),
+                "generationBefore": generation,
+                "generationAfter": after_generation,
+                "sameGeneration": generation == after_generation,
+                "sameToken": before.token == after.token && first.token == after.token,
+                "samePid": before.pid == after.pid,
+                "ticksBefore": before.ticks,
+                "ticksAfter": after.ticks,
+                "bootRecordsBefore": boots,
+                "bootRecordsAfter": boots_after,
+            })
+        );
+
+        outcome.expect("resume returns the same container");
+        assert_eq!(
+            generation, after_generation,
+            "the container's boot id changed"
+        );
+        assert_eq!(before.token, after.token, "the in-memory token changed");
+        assert_eq!(before.pid, after.pid, "the probe process was replaced");
+        assert!(after.ticks > before.ticks, "the counter did not continue");
+        assert_eq!(boots, boots_after, "the image's boot process ran again");
+    }
+
+    provider.terminate(&sid).await.expect("terminate");
+    assert!(
+        provider.get(&sid).await.expect("get answers").is_none(),
+        "a terminated session is gone"
+    );
+}
+
 // ---- Orphan sweep -----------------------------------------------------------------------------
 
 fn sweep_log() -> PathBuf {
@@ -1037,7 +1271,7 @@ async fn sweep_orphaned_engines() {
         let matches_suite = engine
             .display_name
             .as_deref()
-            .is_some_and(|name| name.starts_with(LIVE_PREFIX));
+            .is_some_and(|name| name.starts_with(&display_prefix()));
         // An engine without a readable createTime is reaped: an orphan must not outlive the sweep.
         let outlived_any_run = engine
             .extra

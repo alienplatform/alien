@@ -1729,6 +1729,9 @@ pub trait Sandbox: Binding {
     ///
     /// Returns once the sandbox can take a command, so the next call does not race its wake-up.
     /// A sandbox that has ended cannot be resumed and fails without a retry being worth making.
+    ///
+    /// On GCP a resume that finds a different container than the one `pause` left its generation
+    /// in, or none, fails with `memoryLost`, not retryable.
     async fn resume(&self, sandbox_id: &str) -> Result<()>;
 
     /// Captures full sandbox state and returns its identifier. Requires `snapshot`.

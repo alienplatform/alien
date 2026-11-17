@@ -436,6 +436,27 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A sandbox was resumed, but what it held in memory was not kept.
+    ///
+    /// The container that answers after a resume is not the one that was paused, or nothing shows
+    /// it is. The sandbox exists and runs, holding only what its image provides: files written to
+    /// its disk since the image, running processes and in-memory state are gone. Repeating the
+    /// resume cannot bring them back, so this is not retryable; the caller decides whether to start
+    /// its work again on this sandbox or on a new one.
+    #[error(
+        code = "SANDBOX_MEMORY_LOST",
+        message = "Sandbox '{sandbox_id}' was resumed but its memory and running processes were not kept: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SandboxMemoryLost {
+        /// Provider-scoped id of the sandbox that restarted
+        sandbox_id: String,
+        /// Why the memory is not kept, without provider response text
+        reason: String,
+    },
+
     /// A sandbox came up without a restriction its declaration asked for.
     ///
     /// Distinct from a refused call: the data plane accepted the request and answered, and what
