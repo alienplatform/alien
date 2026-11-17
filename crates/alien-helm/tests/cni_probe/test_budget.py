@@ -33,6 +33,22 @@ class Budget(unittest.TestCase):
             probe.CONTROL_RUN_SECONDS,
             probe.SERVE_WAIT_SECONDS + probe.ENFORCEMENT_WINDOW_SECONDS + probe.HOLD_SECONDS)
 
+    def test_the_control_outlasts_the_denied_pods_worst_case_with_margin(self):
+        # 20 serve wait + 45 window + 10 hold + two denied ticks of 7 s = 89; the control reads
+        # "done" one tick (10 s) later; 20 s margin.
+        self.assertEqual(probe.DENIED_WORST_CASE_SECONDS, 20 + 45 + 10 + 2 * 7)
+        self.assertEqual(probe.CONTROL_RUN_SECONDS, 89 + 10 + 20)
+        self.assertGreaterEqual(
+            probe.CONTROL_RUN_SECONDS,
+            probe.DENIED_WORST_CASE_SECONDS + probe.CONTROL_TICK_SECONDS + 20)
+
+    def test_a_control_that_cannot_be_scheduled_is_named_before_the_denied_pods_give_up(self):
+        # The second denied pod starts (35 s) before the control is created; the denied pods then
+        # wait DENIED_SERVED_WAIT_SECONDS. The runner's verdict on the control comes first, with margin.
+        self.assertLess(probe.FOLLOWER_PENDING_CAUSE_BOUND_SECONDS + probe.POD_START_SECONDS + 20,
+                        probe.DENIED_SERVED_WAIT_SECONDS)
+        self.assertLessEqual(probe.FOLLOWER_PENDING_CAUSE_BOUND_SECONDS, probe.PENDING_CAUSE_BOUND_SECONDS)
+
     def test_a_denied_pod_waits_long_enough_for_the_control_to_start_and_reach_it(self):
         self.assertGreaterEqual(
             probe.DENIED_SERVED_WAIT_SECONDS, probe.POD_START_SECONDS + probe.SERVE_WAIT_SECONDS)
@@ -60,6 +76,8 @@ class Budget(unittest.TestCase):
         self.assertIn(f"--timeout {wait}", (crates / "alien-cli/src/commands/onboard.rs").read_text())
         self.assertIn(f'"--timeout", "{wait}"', (crates / "alien-deploy-cli/src/commands/sync.rs").read_text())
         self.assertIn(f"timeout: {wait}", generator)
+        self.assertIn(f'.arg("--timeout")\n        .arg("{wait}")', (crates / "alien-deploy-cli/src/commands/up.rs").read_text())
+        self.assertIn(f"--timeout {wait}", (crates.parent / "examples/customer-kubernetes/README.md").read_text())
 
     def test_the_job_deadline_covers_the_script_the_runner_start_and_a_margin(self):
         self.assertEqual(

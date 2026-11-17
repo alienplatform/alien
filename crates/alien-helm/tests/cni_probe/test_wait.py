@@ -50,12 +50,12 @@ class Cluster:
     def say(self, text, flush=False):
         self.output.append(text)
 
-    def wait(self, role="client", pending_bound_deadline=400, created_at=None):
+    def wait(self, role="client", pending_bound_deadline=400, created_at=None, **extra):
         return probe.wait_for_pod(
             self.request, "/pods", "probe", role,
             lambda p: p["status"]["phase"] == "Succeeded", pending_bound_deadline,
             lambda r: self.recreated.append(r), "FIX HINT",
-            now=self.now, sleep=self.sleep, out=self.say, created_at=created_at)
+            now=self.now, sleep=self.sleep, out=self.say, created_at=created_at, **extra)
 
 
 class RuntimeStartFailure(unittest.TestCase):
@@ -168,6 +168,13 @@ class PodThatNeverRuns(unittest.TestCase):
         self.assertIn("Back-off pulling image", str(raised.exception))
         self.assertNotIn("enforcement is unproven", str(raised.exception))
         self.assertEqual(cluster.recreated, [])
+
+    def test_a_follower_pod_unschedulable_past_its_shorter_bound_names_why(self):
+        cluster = Cluster(UNSCHEDULABLE)
+        with self.assertRaises(RuntimeError) as raised:
+            cluster.wait(role="control", cause_bound=probe.FOLLOWER_PENDING_CAUSE_BOUND_SECONDS)
+        self.assertIn("Insufficient memory", str(raised.exception))
+        self.assertLessEqual(cluster.clock, probe.FOLLOWER_PENDING_CAUSE_BOUND_SECONDS + 2)
 
     def test_a_pod_pending_within_the_bound_is_only_slow(self):
         cluster = Cluster(*([UNSCHEDULABLE] * (probe.PENDING_CAUSE_BOUND_SECONDS - 10) + [SUCCEEDED]))

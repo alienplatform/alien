@@ -32,16 +32,16 @@ FIX_HINT = (
 #   API_READY_SECONDS       60   the runner's own network is applied (the wait below)
 #   ADMISSION_SECONDS       30   both admission policies answer
 #   PENDING_CAUSE_BOUND    210   the listener is scheduled and starts (a node may be provisioned)
-#   stage 1: 35 + 35 + 85 + 6    the denied pods start, then the control (which needs their
+#   stage 1: 35 + 35 + 119 + 6   the denied pods start, then the control (which needs their
 #                                addresses) starts, then the control runs until the denied pods
 #                                are done (CONTROL_RUN_SECONDS), which linger 6 s (LINGER_SECONDS)
 #   stage 2: 35 + 33             the controls start together; the recovering one waits up to 30 s
 #   one recreate            45 + 35   (START_BOUND_SECONDS stuck, then a new start)
 #   CLEANUP_SECONDS         10   delete what was created
 #                          ---
-#                          619
-# The Job adds the runner's own start (image pull, 30 s) and a 30 s margin: 679 s. The install's
-# 15 minutes (900 s) leave 221 s for the hooks and the rollout after it.
+#                          653
+# The Job adds the runner's own start (image pull, 30 s) and a 30 s margin: 713 s. The install's
+# 15 minutes (900 s) leave 187 s for the hooks and the rollout after it.
 API_READY_SECONDS = 60
 ADMISSION_SECONDS = 30
 POD_START_SECONDS = 35
@@ -55,10 +55,23 @@ HOLD_SECONDS = 10
 # After it is done a denied pod keeps answering, so the control can read that it is done.
 LINGER_SECONDS = 6
 # The control: how long it may take to reach each denied pod once, and its whole run: until every
-# denied pod has finished, which is at most served + window + hold after the control's start.
+# denied pod has finished. Every request times out after REQUEST_TIMEOUT_SECONDS.
+REQUEST_TIMEOUT_SECONDS = 3
 SERVE_WAIT_SECONDS = 20
-CONTROL_RUN_SECONDS = SERVE_WAIT_SECONDS + ENFORCEMENT_WINDOW_SECONDS + HOLD_SECONDS + 10
-# A control after the policies are removed waits this long for the CNI to remove a deleted one.
+# A denied pod's tick: the allowed port, the listener, then a 1 s sleep. The window and the hold
+# each end after the tick that is running when they expire, so each can overrun by one tick.
+DENIED_TICK_SECONDS = 2 * REQUEST_TIMEOUT_SECONDS + 1
+# The control's tick: the listener, each of the two denied pods, then a 1 s sleep. It reads that
+# a denied pod is done one tick after it is.
+CONTROL_TICK_SECONDS = 3 * REQUEST_TIMEOUT_SECONDS + 1
+# The longest a denied pod can need after the control starts: 20 + 45 + 10 + 2 * 7 = 89.
+DENIED_WORST_CASE_SECONDS = (SERVE_WAIT_SECONDS + ENFORCEMENT_WINDOW_SECONDS + HOLD_SECONDS
+                             + 2 * DENIED_TICK_SECONDS)
+# 89 + 10 (the control reads "done") + 20 margin = 119.
+CONTROL_RUN_MARGIN_SECONDS = 20
+CONTROL_RUN_SECONDS = DENIED_WORST_CASE_SECONDS + CONTROL_TICK_SECONDS + CONTROL_RUN_MARGIN_SECONDS
+# A stage-2 control may retry for this long before its first reply (nothing is deleted: the
+# policies stay, and a new pod's rules may take a moment to be applied).
 RECOVER_SECONDS = 30
 RECOVER_RUN_SECONDS = RECOVER_SECONDS + 3
 STAGE_ONE_SECONDS = 35 + 35 + CONTROL_RUN_SECONDS + LINGER_SECONDS
@@ -74,10 +87,15 @@ START_BOUND_SECONDS = 45
 # It is at least the wait the install had before (210 s), so a node pool that scales from zero
 # is not failed early.
 PENDING_CAUSE_BOUND_SECONDS = 210
-SCRIPT_BUDGET_SECONDS = 619
+# The pods after the listener land on the node the listener started on, so they are not waiting
+# for a node. A pod that stays Pending that long fails naming its cause. It is shorter than a
+# denied pod's wait for the control, so when the control cannot be scheduled the run names that,
+# before the denied pods give up on a control that never came.
+FOLLOWER_PENDING_CAUSE_BOUND_SECONDS = 90
+SCRIPT_BUDGET_SECONDS = 653
 RUNNER_START_SECONDS = 30
 BUDGET_MARGIN_SECONDS = 30
-JOB_DEADLINE_SECONDS = 679
+JOB_DEADLINE_SECONDS = 713
 # Every probe pod's own deadline (counted by the kubelet from the pod's start). The listener must
 # outlive every later control, so each pod gets the whole run's budget: the script's own deadline
 # ends the run, never a pod's.
@@ -245,8 +263,9 @@ def client_code(url, marker, allowed_url):
 # be up. Stage 1: the denied pods start first and serve; once they run, the control starts with
 # their addresses, reaches the listener every second for as long as they count, and reaches each
 # denied pod once. The `ingress-denied` pod may leave its own node; the listener's ingress allow
-# list is what refuses it. Stage 2 starts its two controls together: the recovering one waits for
-# the CNI to remove a deleted policy.
+# list is what refuses it. Stage 2 starts its two controls together, after the denied pods are
+# done: the recovering one retries for RECOVER_SECONDS before its first reply, the other must
+# get it at once.
 DENIED_ROLES = ["denied", "ingress-denied"]
 CONTROL_ROLE = "control"
 PODS_OF_THE_RUN = ["listener", CONTROL_ROLE, *DENIED_ROLES, "control-after", "ingress-control-after"]
@@ -309,13 +328,13 @@ def runtime_start_failure(pod, pending_seconds):
 IMAGE_PULL_REASONS = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull"}
 
 
-def pending_cause(pod, pending_seconds):
+def pending_cause(pod, pending_seconds, bound=PENDING_CAUSE_BOUND_SECONDS):
     """Why a pod stays Pending (not scheduled, or its image does not pull), else None.
 
-    Only a pod that has been Pending longer than PENDING_CAUSE_BOUND_SECONDS has a cause worth
+    Only a pod that has been Pending longer than `bound` has a cause worth
     naming: a node being provisioned or a first pull attempt are ordinary and short.
     """
-    if pod.get("status", {}).get("phase") != "Pending" or pending_seconds <= PENDING_CAUSE_BOUND_SECONDS:
+    if pod.get("status", {}).get("phase") != "Pending" or pending_seconds <= bound:
         return None
     for condition in pod.get("status", {}).get("conditions", []):
         if condition.get("type") == "PodScheduled" and condition.get("status") == "False":
@@ -355,7 +374,8 @@ def replace_object(request, path, resource, deadline, now=time.monotonic, sleep=
 
 
 def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hint,
-                 now=time.monotonic, sleep=time.sleep, out=print, created_at=None):
+                 now=time.monotonic, sleep=time.sleep, out=print, created_at=None,
+                 cause_bound=PENDING_CAUSE_BOUND_SECONDS):
     """Wait for a pod to satisfy `predicate`, recreating it once if the runtime failed to start it.
 
     `created_at` is the time the pod was created (same clock as `now`). Pods of a stage are
@@ -378,7 +398,7 @@ def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hin
             first_seen = now()
             sleep(1)
             continue
-        cause = pending_cause(current, now() - first_seen)
+        cause = pending_cause(current, now() - first_seen, cause_bound)
         if cause:
             raise RuntimeError(f"{role} pod never ran, so NetworkPolicy was not tested: {cause}")
         if phase == "Failed":
@@ -459,17 +479,18 @@ def main():
     admission_deadline = time.monotonic() + ADMISSION_SECONDS
     marker = uuid.uuid4().hex
     server = (
-        "from http.server import BaseHTTPRequestHandler,HTTPServer\n"
+        "from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\n"
         "class Handler(BaseHTTPRequestHandler):\n"
         " def do_GET(self):\n"
         "  self.send_response(200); self.end_headers(); "
         f"self.wfile.write({marker.encode()!r})\n"
         " def log_message(self,*args): pass\n"
         "import threading\n"
+        "ThreadingHTTPServer.daemon_threads=True\n"
         # The allowed port is bound first, so it answers whenever the readiness port does.
-        "allowed=HTTPServer(('0.0.0.0',8081),Handler)\n"
+        "allowed=ThreadingHTTPServer(('0.0.0.0',8081),Handler)\n"
         "threading.Thread(target=allowed.serve_forever,daemon=True).start()\n"
-        "HTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
+        "ThreadingHTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
     )
 
     created_at = {}
@@ -537,8 +558,10 @@ def main():
         }
 
     def wait(role, predicate):
+        bound = PENDING_CAUSE_BOUND_SECONDS if role == "listener" else FOLLOWER_PENDING_CAUSE_BOUND_SECONDS
         return wait_for_pod(request, pods, prefix, role, predicate, deadline,
-                            recreate, FIX_HINT, created_at=created_at.get(prefix + "-" + role))
+                            recreate, FIX_HINT, created_at=created_at.get(prefix + "-" + role),
+                            cause_bound=bound)
 
     # Pod and NetworkPolicy creation are confined by admission policies for this account.
     # Refuse to run unless each one rejects a request it must reject, with its own message.
