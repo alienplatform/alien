@@ -358,10 +358,14 @@ fn enumerate_push_targets(
             if resource_state.status != ResourceStatus::Running {
                 return None;
             }
-            // An enrolled Operator holds no credential the manager accepts for
-            // the reserved operations targets, and the manager pushes to that
-            // Worker itself: asking for a capability would only be refused on
-            // every tick. A token-installed Operator keeps leasing it.
+            // The operations worker is a reserved target: the manager accepts
+            // only the deployment's own deployment token for it. An enrolled
+            // Operator does not hold that token (its operations credential is
+            // for the Operator's own queue, and its other credentials are
+            // bound to their own targets), and the manager pushes to that
+            // Worker itself, so asking would only be refused on every tick. A
+            // token-installed Operator holds the deployment token and keeps
+            // leasing it.
             if enrolled && resource_id == OPERATIONS_WORKER_TARGET_ID {
                 return None;
             }
