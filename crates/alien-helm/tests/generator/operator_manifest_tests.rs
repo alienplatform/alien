@@ -964,7 +964,8 @@ fn rendered_operator_chart(
         ),
         (
             "values.yaml".to_string(),
-            "remoteOperator:\n  serviceAccountAnnotations: {}\nalien:\n  version: test\n".to_string(),
+            "remoteOperator:\n  serviceAccountAnnotations: {}\nalien:\n  version: test\n"
+                .to_string(),
         ),
         ("templates/operator.yaml".to_string(), template),
     ]);
@@ -1007,7 +1008,10 @@ fn restricted_workloads(docs: &[YamlValue]) -> BTreeSet<String> {
         .iter()
         .map(|doc| doc["metadata"]["name"].as_str().unwrap().to_owned())
         .collect();
-    assert_eq!(names, bindings, "every policy needs its binding and the reverse");
+    assert_eq!(
+        names, bindings,
+        "every policy needs its binding and the reverse"
+    );
     policies
         .iter()
         .flat_map(|doc| {
@@ -1034,19 +1038,25 @@ fn workload_patch_is_rendered_if_and_only_if_its_restart_policy_is() {
                 .then(|| restart_operation(kinds, &[]))
                 .into_iter()
                 .collect();
-            for permission in [OperatorPermission::Diagnostics, OperatorPermission::Remediation] {
+            for permission in [
+                OperatorPermission::Diagnostics,
+                OperatorPermission::Remediation,
+            ] {
                 for api_versions in [&[][..], &[POLICY_API][..]] {
-                    let docs = rendered_operator_chart(scope, permission, &operations, api_versions);
+                    let docs =
+                        rendered_operator_chart(scope, permission, &operations, api_versions);
                     let patched = patchable_workloads(&docs);
                     let restricted = restricted_workloads(&docs);
-                    let expected: BTreeSet<String> = if permission == OperatorPermission::Remediation
+                    let expected: BTreeSet<String> = if permission
+                        == OperatorPermission::Remediation
                         && !api_versions.is_empty()
                     {
                         kinds.iter().map(|kind| (*kind).to_owned()).collect()
                     } else {
                         BTreeSet::new()
                     };
-                    let context = format!("{scope:?} {kinds:?} {permission:?} api={api_versions:?}");
+                    let context =
+                        format!("{scope:?} {kinds:?} {permission:?} api={api_versions:?}");
                     assert_eq!(patched, expected, "patch rules: {context}");
                     assert_eq!(restricted, expected, "restart policies: {context}");
                 }
@@ -1089,9 +1099,15 @@ fn restart_policy_admits_only_the_operator_account_restarting_in_its_namespace()
         let spec = &policy["spec"];
         assert_eq!(spec["failurePolicy"], "Fail");
         let rule = &spec["matchConstraints"]["resourceRules"][0];
-        assert_eq!(rule["operations"], serde_yaml::to_value(["UPDATE"]).unwrap());
+        assert_eq!(
+            rule["operations"],
+            serde_yaml::to_value(["UPDATE"]).unwrap()
+        );
         assert_eq!(rule["apiGroups"], serde_yaml::to_value(["apps"]).unwrap());
-        assert_eq!(rule["resources"], serde_yaml::to_value(["deployments"]).unwrap());
+        assert_eq!(
+            rule["resources"],
+            serde_yaml::to_value(["deployments"]).unwrap()
+        );
         assert_eq!(
             spec["matchConditions"][0]["expression"],
             "request.userInfo.username == 'system:serviceaccount:ns1:my-saas-operator'"
@@ -1129,6 +1145,9 @@ fn restart_policy_admits_only_the_operator_account_restarting_in_its_namespace()
             .iter()
             .find(|rule| rule["verbs"] == serde_yaml::to_value(["patch"]).unwrap())
             .unwrap();
-        assert_eq!(patch_rule["resourceNames"], serde_yaml::to_value(["web"]).unwrap());
+        assert_eq!(
+            patch_rule["resourceNames"],
+            serde_yaml::to_value(["web"]).unwrap()
+        );
     }
 }

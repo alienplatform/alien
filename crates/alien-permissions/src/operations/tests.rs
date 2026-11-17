@@ -141,12 +141,19 @@ fn kubernetes_reads_and_remediation_remain_distinct() {
 fn workload_patch_is_a_mutating_tier_rule_for_three_kinds_only() {
     let rule = |group: &str, resource: &str, verb: &str| json!({"schemaVersion":1,"rules":[{"apiGroup":group,"resource":resource,"verbs":[verb],"reason":"Restart workloads"}]});
     let validate = |permissions: Value, tier: &str| {
-        run(json!({"task":"validateKubernetes","permissions":permissions,"tier":tier}))["ok"].clone()
+        run(json!({"task":"validateKubernetes","permissions":permissions,"tier":tier}))["ok"]
+            .clone()
     };
     for resource in ["deployments", "statefulsets", "daemonsets"] {
         assert_eq!(validate(rule("apps", resource, "patch"), "mutating"), true);
-        assert_eq!(validate(rule("apps", resource, "patch"), "destructive"), true);
-        assert_eq!(validate(rule("apps", resource, "patch"), "read-only"), false);
+        assert_eq!(
+            validate(rule("apps", resource, "patch"), "destructive"),
+            true
+        );
+        assert_eq!(
+            validate(rule("apps", resource, "patch"), "read-only"),
+            false
+        );
     }
     // No other write verb or workload resource is newly allowed.
     for (group, resource, verb) in [

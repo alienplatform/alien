@@ -5,6 +5,7 @@
 //! values + schema for both bootstrap paths (`registered setup` when
 //! `management.deploymentId` is set; external-bindings initialize otherwise).
 
+use crate::emitters::workload_restart;
 use crate::{
     emitter::{HelmFragment, InfrastructureValue},
     registry::HelmRegistry,
@@ -25,7 +26,6 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
 use alien_permissions::operations::kubernetes::OperatorFeature;
-use crate::emitters::workload_restart;
 use indexmap::IndexMap;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -2689,7 +2689,12 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(&operator_rules(crd_names, permission, custom_operations, format));
+    yaml.push_str(&operator_rules(
+        crd_names,
+        permission,
+        custom_operations,
+        format,
+    ));
     yaml
 }
 
@@ -3258,7 +3263,12 @@ fn operator_clusterrole_doc(
     format: OperatorOutputFormat,
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(&operator_rules(crd_names, permission, custom_operations, format));
+    yaml.push_str(&operator_rules(
+        crd_names,
+        permission,
+        custom_operations,
+        format,
+    ));
     yaml
 }
 

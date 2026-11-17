@@ -50,7 +50,12 @@ fn run(program: &str, arguments: &[&str], stdin: Option<&str>) -> (bool, String)
         .spawn()
         .unwrap_or_else(|error| panic!("run {program} {arguments:?}: {error}"));
     if let Some(input) = stdin {
-        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
     }
     let output = child.wait_with_output().unwrap();
     let text = format!(
@@ -217,7 +222,12 @@ fn api_patch_as(
     let url = format!("http://{address}{path}");
     let output = Command::new("curl")
         .args(["-s", "-w", "\n%{http_code}", "-X", "PATCH", "-H"])
-        .args([&format!("Content-Type: application/{content_type}"), "-d", body, &url])
+        .args([
+            &format!("Content-Type: application/{content_type}"),
+            "-d",
+            body,
+            &url,
+        ])
         .output()
         .expect("run curl");
     let _ = proxy.kill();
@@ -258,8 +268,13 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
     let rendered = run(
         "helm",
         &[
-            "template", RELEASE, directory.path().to_str().unwrap(), "--namespace", NAMESPACE,
-            "--api-versions", "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy",
+            "template",
+            RELEASE,
+            directory.path().to_str().unwrap(),
+            "--namespace",
+            NAMESPACE,
+            "--api-versions",
+            "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy",
         ],
         None,
     );
@@ -268,8 +283,14 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
     let (ok, _) = run(
         "helm",
         &[
-            "--kube-context", &context, "install", RELEASE,
-            directory.path().to_str().unwrap(), "--namespace", NAMESPACE, "--create-namespace",
+            "--kube-context",
+            &context,
+            "install",
+            RELEASE,
+            directory.path().to_str().unwrap(),
+            "--namespace",
+            NAMESPACE,
+            "--create-namespace",
         ],
         None,
     );
@@ -280,13 +301,26 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
     // The cluster advertises the policy API, so the chart rendered the rule itself.
     let (_, can) = kubectl(
         &context,
-        &["auth", "can-i", "patch", "deployments.apps", &format!("--as={OPERATOR}")],
+        &[
+            "auth",
+            "can-i",
+            "patch",
+            "deployments.apps",
+            &format!("--as={OPERATOR}"),
+        ],
         None,
     );
     assert_eq!(can.trim(), "yes");
     let (_, can) = kubectl(
         &context,
-        &["auth", "can-i", "patch", "deployments.apps", "--subresource=status", &format!("--as={OPERATOR}")],
+        &[
+            "auth",
+            "can-i",
+            "patch",
+            "deployments.apps",
+            "--subresource=status",
+            &format!("--as={OPERATOR}"),
+        ],
         None,
     );
     assert_eq!(can.trim(), "no", "the status subresource is not granted");
@@ -294,7 +328,11 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
     std::thread::sleep(std::time::Duration::from_secs(5));
 
     // A restart passes, for each kind, and repeats.
-    for (kind, name) in [("deployment", "web"), ("statefulset", "db"), ("daemonset", "agent")] {
+    for (kind, name) in [
+        ("deployment", "web"),
+        ("statefulset", "db"),
+        ("daemonset", "agent"),
+    ] {
         let (ok, text) = patch(&context, OPERATOR, kind, name, RESTART);
         assert!(ok, "restart of {kind}: {text}");
     }
@@ -305,15 +343,26 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
     for target in ["deployment/web", "statefulset/db", "daemonset/agent"] {
         let (ok, text) = kubectl(
             &context,
-            &["rollout", "restart", target, &format!("--as={OPERATOR}"), "-v=6"],
+            &[
+                "rollout",
+                "restart",
+                target,
+                &format!("--as={OPERATOR}"),
+                "-v=6",
+            ],
             None,
         );
-        assert!(ok && text.contains("restarted"), "kubectl rollout restart {target}: {text}");
+        assert!(
+            ok && text.contains("restarted"),
+            "kubectl rollout restart {target}: {text}"
+        );
     }
 
     // Server-side apply is an UPDATE as well: a restart applied this way passes, an image change
     // applied this way does not.
-    let apply_path = format!("/apis/apps/v1/namespaces/{NAMESPACE}/deployments/web?fieldManager=operator&force=true");
+    let apply_path = format!(
+        "/apis/apps/v1/namespaces/{NAMESPACE}/deployments/web?fieldManager=operator&force=true"
+    );
     let (ok, text) = api_patch_as(
         &context,
         OPERATOR,
@@ -329,27 +378,115 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
         "apply-patch+yaml",
         r#"{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web"},"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
     );
-    assert!(!ok && text.contains("denied request"), "server-side apply of an image: {text}");
+    assert!(
+        !ok && text.contains("denied request"),
+        "server-side apply of an image: {text}"
+    );
 
     // Every other change is refused by the policy.
     let refused = [
-        ("deployment", "web", "image", r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#),
-        ("deployment", "web", "environment", r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","env":[{"name":"A","value":"b"}]}]}}}}"#),
-        ("deployment", "web", "service account", r#"{"spec":{"template":{"spec":{"serviceAccountName":"other"}}}}"#),
-        ("deployment", "web", "volume", r#"{"spec":{"template":{"spec":{"volumes":[{"name":"v","emptyDir":{}}]}}}}"#),
-        ("deployment", "web", "privileged", r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","securityContext":{"privileged":true}}]}}}}"#),
-        ("deployment", "web", "replicas", r#"{"spec":{"replicas":3}}"#),
-        ("deployment", "web", "pod label", r#"{"spec":{"template":{"metadata":{"labels":{"extra":"x"}}}}}"#),
-        ("deployment", "web", "pod annotation", r#"{"spec":{"template":{"metadata":{"annotations":{"extra":"x"}}}}}"#),
-        ("deployment", "web", "workload label", r#"{"metadata":{"labels":{"extra":"x"}}}"#),
-        ("deployment", "web", "workload annotation", r#"{"metadata":{"annotations":{"extra":"x"}}}"#),
-        ("deployment", "web", "a spec field that was not set", r#"{"spec":{"minReadySeconds":5}}"#),
-        ("deployment", "web", "strategy", r#"{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}"#),
-        ("deployment", "web", "restart with image", r#"{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"2026-03-01T00:00:00Z"}},"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#),
-        ("statefulset", "db", "image", r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#),
-        ("statefulset", "db", "replicas", r#"{"spec":{"replicas":2}}"#),
-        ("daemonset", "agent", "host network", r#"{"spec":{"template":{"spec":{"hostNetwork":true}}}}"#),
-        ("daemonset", "agent", "update strategy", r#"{"spec":{"updateStrategy":{"type":"OnDelete"}}}"#),
+        (
+            "deployment",
+            "web",
+            "image",
+            r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "environment",
+            r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","env":[{"name":"A","value":"b"}]}]}}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "service account",
+            r#"{"spec":{"template":{"spec":{"serviceAccountName":"other"}}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "volume",
+            r#"{"spec":{"template":{"spec":{"volumes":[{"name":"v","emptyDir":{}}]}}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "privileged",
+            r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","securityContext":{"privileged":true}}]}}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "replicas",
+            r#"{"spec":{"replicas":3}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "pod label",
+            r#"{"spec":{"template":{"metadata":{"labels":{"extra":"x"}}}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "pod annotation",
+            r#"{"spec":{"template":{"metadata":{"annotations":{"extra":"x"}}}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "workload label",
+            r#"{"metadata":{"labels":{"extra":"x"}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "workload annotation",
+            r#"{"metadata":{"annotations":{"extra":"x"}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "a spec field that was not set",
+            r#"{"spec":{"minReadySeconds":5}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "strategy",
+            r#"{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}"#,
+        ),
+        (
+            "deployment",
+            "web",
+            "restart with image",
+            r#"{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"2026-03-01T00:00:00Z"}},"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
+        ),
+        (
+            "statefulset",
+            "db",
+            "image",
+            r#"{"spec":{"template":{"spec":{"containers":[{"name":"main","image":"busybox"}]}}}}"#,
+        ),
+        (
+            "statefulset",
+            "db",
+            "replicas",
+            r#"{"spec":{"replicas":2}}"#,
+        ),
+        (
+            "daemonset",
+            "agent",
+            "host network",
+            r#"{"spec":{"template":{"spec":{"hostNetwork":true}}}}"#,
+        ),
+        (
+            "daemonset",
+            "agent",
+            "update strategy",
+            r#"{"spec":{"updateStrategy":{"type":"OnDelete"}}}"#,
+        ),
     ];
     for (kind, name, what, body) in refused {
         let (ok, text) = patch(&context, OPERATOR, kind, name, body);
@@ -391,11 +528,21 @@ fn a_cluster_without_the_policy_api_gets_no_workload_patch() {
     let context = std::env::var("ALIEN_WORKLOAD_RESTART_OLD_KIND_CONTEXT")
         .expect("ALIEN_WORKLOAD_RESTART_OLD_KIND_CONTEXT names the cluster");
     let _cleanup = Cleanup(&context);
-    let (ok, _) = run("kubectl", &["--context", &context, "create", "namespace", NAMESPACE], None);
+    let (ok, _) = run(
+        "kubectl",
+        &["--context", &context, "create", "namespace", NAMESPACE],
+        None,
+    );
     assert!(ok);
     let (_, resources) = run(
         "kubectl",
-        &["--context", &context, "get", "--raw", "/apis/admissionregistration.k8s.io/v1"],
+        &[
+            "--context",
+            &context,
+            "get",
+            "--raw",
+            "/apis/admissionregistration.k8s.io/v1",
+        ],
         None,
     );
     assert!(
@@ -407,13 +554,22 @@ fn a_cluster_without_the_policy_api_gets_no_workload_patch() {
     let (ok, rendered) = run(
         "helm",
         &[
-            "--kube-context", &context, "install", RELEASE, directory.path().to_str().unwrap(),
-            "--namespace", NAMESPACE, "--dry-run=server",
+            "--kube-context",
+            &context,
+            "install",
+            RELEASE,
+            directory.path().to_str().unwrap(),
+            "--namespace",
+            NAMESPACE,
+            "--dry-run=server",
         ],
         None,
     );
     assert!(ok, "the chart renders on an older cluster: {rendered}");
-    assert!(rendered.contains("kind: Role\n"), "the Operator's Role is still rendered");
+    assert!(
+        rendered.contains("kind: Role\n"),
+        "the Operator's Role is still rendered"
+    );
     assert!(!rendered.contains("ValidatingAdmissionPolicy"), "no policy");
     assert!(
         !rendered.contains("verbs: ['patch']"),
