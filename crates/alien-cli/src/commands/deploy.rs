@@ -2504,14 +2504,22 @@ async fn deploy_task_with_environment(
     let has_installed_release = deployment.current_release_id.is_some();
     // Read through the typed record, as the rest of this command does: a renamed field fails to
     // compile instead of silently reading as "not a direct setup".
-    let direct_setup = deployment
-        .runtime_metadata
-        .as_ref()
-        .and_then(|metadata| serde_json::to_value(metadata).ok())
-        .and_then(|metadata| serde_json::from_value::<alien_core::RuntimeMetadata>(metadata).ok())
-        .is_some_and(|metadata| {
-            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-        });
+    let direct_setup = match deployment.runtime_metadata.as_ref() {
+        None => false,
+        Some(metadata) => match serde_json::to_value(metadata)
+            .and_then(serde_json::from_value::<alien_core::RuntimeMetadata>)
+        {
+            Ok(metadata) => {
+                metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+            }
+            Err(error) => {
+                // Treated as "not a direct setup", but said out loud: a record this CLI cannot
+                // read would otherwise send a direct install down the wrong path in silence.
+                tracing::warn!(error = %error, "could not read the deployment's runtime metadata; treating it as not a direct setup");
+                false
+            }
+        },
+    };
     let initial_setup = existing_deployment_plan(
         &status,
         None,

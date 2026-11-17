@@ -746,9 +746,13 @@ impl GcpAgentPlatformTemplateController {
                 &self.engine_setup,
             )
             .await?;
-        } else {
+        } else if !config.preview_ports.is_empty()
+            && ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        {
             // The record may have been dropped by an older manager rewriting the state; the
-            // signer's own description still names this deployment.
+            // signer's own description still names this deployment. Only a direct-setup
+            // deployment with preview ports can have a signer, and a package install's
+            // management identity cannot read service accounts (GCP answers 403).
             crate::sandbox::gcp_engine_setup::remove_marked_signer(ctx, &config.id).await?;
         }
         self.clear_state();

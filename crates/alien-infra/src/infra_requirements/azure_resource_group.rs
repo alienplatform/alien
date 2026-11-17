@@ -270,13 +270,26 @@ impl AzureResourceGroupController {
         let azure_config = ctx.get_azure_config()?;
         let config = ctx.desired_resource_config::<AzureResourceGroup>()?;
 
-        // Nothing was recorded: creation never ran or was refused (a group this deployment
-        // did not create), so there is nothing of ours to delete.
-        let Some(group_name) = self.resource_group_name.as_ref() else {
-            return Ok(HandlerAction::Continue {
-                state: Deleted,
-                suggested_delay: None,
-            });
+        // Nothing recorded: creation never ran, was refused, or succeeded with its response lost
+        // before the name was saved. Only a direct setup creates the group itself, so only there
+        // is the derived name looked up, and the group is deleted only when it carries this
+        // deployment's tag.
+        let name_was_recorded = self.resource_group_name.is_some();
+        let derived;
+        let group_name = match self.resource_group_name.as_ref() {
+            Some(name) => name,
+            None if ctx.initial_setup_authority
+                == alien_core::InitialSetupAuthority::DirectSetup =>
+            {
+                derived = generate_azure_resource_group_name(&ctx.resource_prefix, &config.id);
+                &derived
+            }
+            None => {
+                return Ok(HandlerAction::Continue {
+                    state: Deleted,
+                    suggested_delay: None,
+                });
+            }
         };
 
         info!(group_name=%group_name, "Initiating Azure Resource Group deletion");
@@ -290,7 +303,15 @@ impl AzureResourceGroupController {
         let marker = owner_marker(&ctx.resource_prefix, &config.id);
         match client.get_resource_group(group_name).await {
             Ok(found) => {
-                if let Some(owner) = found.tags.get(RESOURCE_GROUP_OWNER_TAG) {
+                let owner = found.tags.get(RESOURCE_GROUP_OWNER_TAG);
+                if !name_was_recorded && owner != Some(&marker) {
+                    info!(group_name=%group_name, "Resource group is not tagged for this deployment, leaving it");
+                    return Ok(HandlerAction::Continue {
+                        state: Deleted,
+                        suggested_delay: None,
+                    });
+                }
+                if let Some(owner) = owner {
                     if owner != &marker {
                         info!(group_name=%group_name, "Resource group belongs to another deployment, leaving it");
                         self.resource_group_name = None;
@@ -303,12 +324,20 @@ impl AzureResourceGroupController {
                     }
                 }
             }
-            // Gone already: the delete below reports it.
+            // Gone already: the delete below reports it (nothing to delete if never recorded).
             Err(e)
                 if matches!(
                     e.error,
                     Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                ) => {}
+                ) =>
+            {
+                if !name_was_recorded {
+                    return Ok(HandlerAction::Continue {
+                        state: Deleted,
+                        suggested_delay: None,
+                    });
+                }
+            }
             Err(e) => {
                 return Err(e.context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -673,18 +702,48 @@ mod tests {
         executor.step().await.expect("retry goes on");
     }
 
-    /// A refused create recorded nothing: destroy has nothing to delete and succeeds without
-    /// touching the group.
+    /// A refused create recorded nothing, and the group under the derived name is somebody
+    /// else's (untagged, or tagged for another deployment): destroy deletes nothing.
     #[tokio::test]
     async fn delete_after_a_refused_create_deletes_nothing() {
+        for tag in [None, Some("other/default-resource-group".to_string())] {
+            let mut api = MockResourcesApi::new();
+            api.expect_get_resource_group()
+                .returning(move |_| Ok(group(tag.as_deref())));
+            api.expect_delete_resource_group().times(0);
+            let mut executor = executor(api, AzureResourceGroupController::default()).await;
+            executor.delete().expect("delete starts");
+            executor.step().await.expect("delete step");
+            executor
+                .run_until_status(ResourceStatus::Deleted)
+                .await
+                .expect("deleted");
+        }
+    }
+
+    /// The create succeeded but its response was lost before the name was saved: the group under
+    /// the derived name carries this deployment's tag, so destroy deletes it; one that was never
+    /// created (not found) is nothing to delete.
+    #[tokio::test]
+    async fn delete_without_a_recorded_name_removes_a_group_tagged_for_this_deployment() {
         let mut api = MockResourcesApi::new();
-        api.expect_get_resource_group().times(0);
+        api.expect_get_resource_group()
+            .returning(|_| Ok(group(Some(&marker_for("test")))));
+        api.expect_delete_resource_group().times(1).returning(|_| {
+            Ok(alien_azure_clients::long_running_operation::OperationResult::Completed(()))
+        });
+        let mut run = executor(api, AzureResourceGroupController::default()).await;
+        run.delete().expect("delete starts");
+        run.step().await.expect("delete step");
+
+        let mut api = MockResourcesApi::new();
+        api.expect_get_resource_group()
+            .returning(|_| Err(not_found()));
         api.expect_delete_resource_group().times(0);
-        let mut executor = executor(api, AzureResourceGroupController::default()).await;
-        executor.delete().expect("delete starts");
-        executor.step().await.expect("delete step");
-        executor
-            .run_until_status(ResourceStatus::Deleted)
+        let mut run = executor(api, AzureResourceGroupController::default()).await;
+        run.delete().expect("delete starts");
+        run.step().await.expect("delete step");
+        run.run_until_status(ResourceStatus::Deleted)
             .await
             .expect("deleted");
     }

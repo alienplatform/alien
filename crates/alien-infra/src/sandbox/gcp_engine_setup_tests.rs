@@ -228,6 +228,27 @@ async fn executor_seeded(
     remote: bool,
     controller: GcpAgentPlatformTemplateController,
 ) -> SingleControllerExecutor {
+    executor_seeded_as(
+        InitialSetupAuthority::DirectSetup,
+        iam,
+        platform,
+        setup_run,
+        management,
+        remote,
+        controller,
+    )
+    .await
+}
+
+async fn executor_seeded_as(
+    authority: InitialSetupAuthority,
+    iam: MockIamApi,
+    platform: MockAgentPlatformApi,
+    setup_run: bool,
+    management: bool,
+    remote: bool,
+    controller: GcpAgentPlatformTemplateController,
+) -> SingleControllerExecutor {
     let iam = Arc::new(iam);
     let platform = Arc::new(platform);
     let mut provider = MockPlatformServiceProvider::new();
@@ -248,7 +269,7 @@ async fn executor_seeded(
         .resource_lifecycle(ResourceLifecycle::Frozen)
         .controller(controller)
         .platform(Platform::Gcp)
-        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .initial_setup_authority(authority)
         .setup_run(setup_run)
         .with_dependency(
             GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("box")).build(),
@@ -507,6 +528,93 @@ async fn a_signer_the_state_forgot_is_removed_only_when_it_carries_this_deployme
         assert_eq!(executor.status(), ResourceStatus::Deleted);
         assert_eq!(calls.lock().unwrap().deleted_accounts.len(), removed);
     }
+}
+
+/// A package install (or a sandbox with no preview ports) has no signer of ours: teardown makes
+/// no IAM call at all, because the management identity cannot read service accounts. The mock
+/// has no expectation, so any call fails the test.
+#[tokio::test]
+async fn teardown_without_a_setup_record_makes_no_iam_call_for_a_package_install() {
+    let mut platform = MockAgentPlatformApi::new();
+    platform.expect_delete_template().returning(|_, _| Ok(()));
+    let mut executor = executor_seeded_as(
+        InitialSetupAuthority::ImportedHandoff,
+        MockIamApi::new(),
+        platform,
+        false,
+        false,
+        false,
+        GcpAgentPlatformTemplateController::mock_ready("eng", "tpl"),
+    )
+    .await;
+    executor.delete().expect("delete is accepted");
+    executor.run_until_terminal().await.expect("delete runs");
+    assert_eq!(executor.status(), ResourceStatus::Deleted);
+}
+
+/// A signer delete that fails (not a 404) fails the delete and keeps the record, so a retry
+/// removes the signer instead of forgetting it.
+#[tokio::test]
+async fn a_failed_signer_delete_fails_the_teardown_and_keeps_the_record() {
+    let mut iam = MockIamApi::new();
+    iam.expect_delete_service_account().returning(|_| {
+        Err(AlienError::new(
+            alien_client_core::ErrorData::RemoteServiceUnavailable {
+                message: "backend error".to_string(),
+            },
+        ))
+    });
+    let mut platform = MockAgentPlatformApi::new();
+    platform.expect_delete_template().returning(|_, _| Ok(()));
+    let mut controller = GcpAgentPlatformTemplateController::mock_ready("eng", "tpl");
+    controller.engine_setup.signer_created =
+        Some(format!("signer@{PROJECT}.iam.gserviceaccount.com"));
+    let mut executor = executor_seeded(iam, platform, false, false, false, controller).await;
+    executor.delete().expect("delete is accepted");
+    let _ = executor.run_until_terminal().await;
+    // A 5xx is retryable, so the resource stays in Deleting (or DeleteFailed); never Deleted.
+    assert_ne!(executor.status(), ResourceStatus::Deleted);
+    let controller = executor
+        .internal_state::<GcpAgentPlatformTemplateController>()
+        .unwrap();
+    assert!(controller.engine_setup.signer_created.is_some());
+}
+
+/// A rerun of setup removes an engine grant the stack no longer gives, and forgets it.
+#[tokio::test]
+async fn a_setup_rerun_revokes_an_engine_grant_the_stack_no_longer_gives() {
+    let calls = Arc::new(Mutex::new(Calls::default()));
+    let stale = (
+        "projects/p/roles/old_role".to_string(),
+        "serviceAccount:gone@test-project-123.iam.gserviceaccount.com".to_string(),
+    );
+    calls.lock().unwrap().engine_policy = Some(IamPolicy {
+        bindings: vec![Binding {
+            role: stale.0.clone(),
+            members: vec![stale.1.clone()],
+            condition: None,
+        }],
+        ..Default::default()
+    });
+    let (iam, platform) = clients(&calls);
+    let mut controller = GcpAgentPlatformTemplateController::mock_ready("eng", "tpl");
+    controller.engine_setup.engine_grants = vec![stale.clone()];
+    let mut executor = executor_seeded(iam, platform, true, false, false, controller).await;
+    executor
+        .update(sandbox(vec![8080], alien_core::SandboxEgress::None))
+        .expect("update is accepted");
+    executor.run_until_terminal().await.expect("update runs");
+    let calls = calls.lock().unwrap();
+    let policy = calls.engine_policy.as_ref().expect("engine policy set");
+    assert!(
+        !policy.bindings.iter().any(|b| b.members.contains(&stale.1)),
+        "{policy:?}"
+    );
+    drop(calls);
+    let controller = executor
+        .internal_state::<GcpAgentPlatformTemplateController>()
+        .unwrap();
+    assert!(!controller.engine_setup.engine_grants.contains(&stale));
 }
 
 /// A setup run again with nothing changed asks for no update; with a profile added since, it asks

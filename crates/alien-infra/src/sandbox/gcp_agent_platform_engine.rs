@@ -241,7 +241,11 @@ impl GcpAgentPlatformEngineController {
         let config = ctx.desired_resource_config::<GcpAgentPlatformEngine>()?;
 
         let owned = self.owns_engine_deletion(ctx, &config.id)?;
-        if !owned && !self.marked_as_ours(ctx, &config.id).await? {
+        // The ownership lookup runs only for a deployment installed by direct setup: a package
+        // install's engine is never ours, and the management identity has no list permission, so
+        // asking would turn a clean teardown into a 403.
+        let direct = ctx.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup;
+        if !owned && !(direct && self.marked_as_ours(ctx, &config.id).await?) {
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
@@ -299,6 +303,7 @@ impl GcpAgentPlatformEngineController {
 
 /// Text in the engine's description that only a direct setup of this deployment writes. It
 /// proves ownership when the controller state lost `created_here` (an older manager rewrote it).
+// The marker is `prefix/id`; the resource prefix is unique per deployment, so it names one.
 pub(crate) fn engine_marker(resource_prefix: &str, resource_id: &str) -> String {
     format!("Alien setup owner: {resource_prefix}/{resource_id}.")
 }
@@ -551,6 +556,27 @@ mod tests {
                 .expect("delete runs to terminal");
             assert_eq!(executor.status(), ResourceStatus::Deleted);
         }
+    }
+
+    /// A package-installed engine is never ours, and the management identity cannot list
+    /// engines: teardown must make no provider call at all (the mock has no expectation).
+    #[tokio::test]
+    async fn a_package_installed_engine_is_left_alone_without_any_provider_call() {
+        let m = MockAgentPlatformApi::new();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(GcpAgentPlatformEngine::new("orders-engine".to_string()).build())
+            .controller(GcpAgentPlatformEngineController::mock_ready("eng-42"))
+            .platform(Platform::Gcp)
+            .resource_lifecycle(ResourceLifecycle::Frozen)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::ImportedHandoff)
+            .service_provider(provider_with(Arc::new(m)))
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+        executor.delete().expect("delete is accepted");
+        executor.run_until_terminal().await.expect("terminal");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
     }
 
     /// An older manager rewrites the controller state without `created_here`. The marker this

@@ -109,6 +109,10 @@ pub struct AzureSandboxController {
     /// only when a profile or caller changed.
     #[serde(default)]
     pub(crate) reconciled_grants: Option<String>,
+    /// Role assignment ids the last grant run placed on the group, so a rerun removes the ones a
+    /// profile no longer earns. A state from before this field has none and removes nothing.
+    #[serde(default)]
+    pub(crate) group_assignment_ids: Vec<String>,
     /// Recorded, and saved, after the group was found absent and before the create call. A group
     /// that exists while this is unset was not made by this deployment and is never taken over;
     /// one that exists while it is set is this deployment's own earlier attempt.
@@ -1224,21 +1228,58 @@ impl AzureSandboxController {
         config: &Sandbox,
     ) -> Result<()> {
         let (group, _region, resource_group) = self.identity(&config.id)?;
+        let scope = alien_azure_clients::authorization::Scope::Resource {
+            resource_group_name: resource_group,
+            resource_provider: "Microsoft.App".to_string(),
+            parent_resource_path: None,
+            resource_type: "sandboxGroups".to_string(),
+            resource_name: group.clone(),
+        };
+        let permission_context =
+            crate::core::ResourcePermissionsHelper::build_azure_permission_context(ctx, &group)?;
+        let planned =
+            crate::core::AzurePermissionsHelper::plan_resource_scoped_role_assignment_ids(
+                ctx,
+                &config.id,
+                "sandbox",
+                scope.clone(),
+                &permission_context,
+            )
+            .await?;
         crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
-            ctx,
-            &config.id,
-            &group,
-            alien_azure_clients::authorization::Scope::Resource {
-                resource_group_name: resource_group,
-                resource_provider: "Microsoft.App".to_string(),
-                parent_resource_path: None,
-                resource_type: "sandboxGroups".to_string(),
-                resource_name: group.clone(),
-            },
-            "Sandbox",
-            "sandbox",
+            ctx, &config.id, &group, scope, "Sandbox", "sandbox",
         )
         .await?;
+        // A profile that lost its sandbox verbs loses the assignments they gave.
+        let authorization = ctx
+            .service_provider
+            .get_azure_authorization_client(ctx.get_azure_config()?)?;
+        for stale in self
+            .group_assignment_ids
+            .iter()
+            .filter(|id| !planned.contains(id))
+        {
+            match authorization
+                .delete_role_assignment_by_id(stale.clone())
+                .await
+            {
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) => {}
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to remove stale sandbox role assignment '{stale}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            }
+        }
+        self.group_assignment_ids = planned;
         self.reconciled_grants = Some(crate::sandbox::grant_fingerprint::grant_inputs_fingerprint(
             ctx,
             crate::core::AzurePermissionsHelper::get_management_uami_principal_id(ctx),
@@ -1554,6 +1595,7 @@ mod tests {
             egress_replica_secret_ready: false,
             created_group: false,
             reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1615,6 +1657,7 @@ mod tests {
             egress_replica_secret_ready: false,
             created_group: false,
             reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1806,6 +1849,7 @@ mod tests {
             egress_replica_secret_ready: false,
             created_group: false,
             reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1863,6 +1907,7 @@ mod tests {
             egress_replica_secret_ready: false,
             created_group: false,
             reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1928,6 +1973,7 @@ mod tests {
             egress_replica_secret_ready: false,
             created_group: false,
             reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -1970,6 +2016,7 @@ mod tests {
             egress_replica_secret_ready: false,
             created_group: false,
             reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
             group_create_intent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
@@ -2086,6 +2133,7 @@ mod tests {
                 egress_replica_secret_ready: false,
                 created_group: false,
                 reconciled_grants: None,
+                group_assignment_ids: Vec::new(),
                 group_create_intent: false,
                 group_role_definitions: Vec::new(),
                 default_policy: None,
@@ -3854,6 +3902,7 @@ mod direct_setup_tests {
             resource_group: Some("default-resource-group".to_string()),
             created_group: true,
             reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
             group_create_intent: true,
             ..Default::default()
         };
@@ -3953,6 +4002,7 @@ mod direct_setup_tests {
                 resource_group: Some("rg".to_string()),
                 created_group: created,
                 reconciled_grants: None,
+                group_assignment_ids: Vec::new(),
                 group_create_intent: false,
                 group_role_definitions: Vec::new(),
                 ..Default::default()
@@ -4087,6 +4137,7 @@ mod direct_setup_tests {
             resource_group: Some("rg".to_string()),
             created_group: true,
             reconciled_grants: None,
+            group_assignment_ids: Vec::new(),
             group_create_intent: false,
             ..Default::default()
         };

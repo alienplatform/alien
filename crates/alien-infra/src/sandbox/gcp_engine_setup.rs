@@ -11,7 +11,9 @@ use std::collections::BTreeSet;
 
 use alien_core::{ResourceRef, Sandbox};
 use alien_error::{AlienError, Context};
-use alien_gcp_clients::agent_platform::{bind_member, grant_on_engine, revoke_on_engine};
+use alien_gcp_clients::agent_platform::{
+    bind_member, grant_on_engine, revoke_on_engine, unbind_member,
+};
 use alien_gcp_clients::iam::{CreateServiceAccountRequest, ServiceAccount as GcpServiceAccount};
 use alien_permissions::generators::{
     GcpBindingResourceKind, GcpBindingTargetScope, GcpCustomRole, GcpRuntimePermissionsGenerator,
@@ -45,6 +47,9 @@ pub(crate) struct EngineSetupRecord {
     /// `(role, member)` pairs this controller placed on the engine.
     #[serde(default)]
     pub engine_grants: Vec<(String, String)>,
+    /// Members (`serviceAccount:<email>`) this controller let sign as the preview signer.
+    #[serde(default)]
+    pub sign_members: Vec<String>,
 }
 
 /// Text in the signer's description that only this deployment's setup writes; it is how a
@@ -238,31 +243,43 @@ pub(crate) async fn set_up_engine_access(
         // The role holding only signJwt, project-wide with a fixed id, bound on the signer for
         // each identity that executes in this sandbox.
         let owners = execute_owner_emails(ctx, &sandbox.id)?;
-        if !owners.is_empty() {
+        let wanted: Vec<String> = owners
+            .iter()
+            .map(|owner| format!("serviceAccount:{owner}"))
+            .collect();
+        let dropped: Vec<String> = record
+            .sign_members
+            .iter()
+            .filter(|member| !wanted.contains(member))
+            .cloned()
+            .collect();
+        if !owners.is_empty() || !dropped.is_empty() {
             let naming = GcpCustomRoleNaming::for_deployment(ctx.state)?;
             let role_id = format!(
                 "role_{}_sandbox_preview_sign",
                 naming.namespace(ctx.resource_prefix)
             );
             let role_name = format!("projects/{}/roles/{role_id}", gcp_config.project_id);
-            ResourcePermissionsHelper::ensure_gcp_custom_roles(
-                ctx,
-                PREVIEW_EDGE,
-                vec![GcpCustomRole {
-                    role_id: role_id.clone(),
-                    name: role_name.clone(),
-                    title: "Sign the preview edge credential".to_string(),
-                    description: format!(
-                        "Sign a JWT as the preview edge signer. Granted on that one service \
-                         account. Resource prefix: {}.",
-                        ctx.resource_prefix
-                    ),
-                    included_permissions: vec![SIGN_JWT_PERMISSION.to_string()],
-                    stage: "GA".to_string(),
-                }],
-            )
-            .await?;
-            record.sign_role = Some(role_name.clone());
+            if !owners.is_empty() {
+                ResourcePermissionsHelper::ensure_gcp_custom_roles(
+                    ctx,
+                    PREVIEW_EDGE,
+                    vec![GcpCustomRole {
+                        role_id: role_id.clone(),
+                        name: role_name.clone(),
+                        title: "Sign the preview edge credential".to_string(),
+                        description: format!(
+                            "Sign a JWT as the preview edge signer. Granted on that one service \
+                             account. Resource prefix: {}.",
+                            ctx.resource_prefix
+                        ),
+                        included_permissions: vec![SIGN_JWT_PERMISSION.to_string()],
+                        stage: "GA".to_string(),
+                    }],
+                )
+                .await?;
+                record.sign_role = Some(role_name.clone());
+            }
             let mut policy = iam
                 .get_service_account_iam_policy(email.clone())
                 .await
@@ -270,20 +287,32 @@ pub(crate) async fn set_up_engine_access(
                     message: "Failed to read the preview signer's IAM policy".to_string(),
                     resource_id: Some(sandbox.id.clone()),
                 })?;
+            // Remember old and new until the write lands, so a failure part-way still lets
+            // teardown (or the next run) remove what was bound.
+            let mut remembered = record.sign_members.clone();
+            for member in &wanted {
+                if !remembered.contains(member) {
+                    remembered.push(member.clone());
+                }
+            }
+            record.sign_members = remembered;
             let mut changed = false;
-            for owner in owners {
-                changed |= bind_member(&mut policy, &role_name, &format!("serviceAccount:{owner}"));
+            for member in &wanted {
+                changed |= bind_member(&mut policy, &role_name, member);
+            }
+            for member in &dropped {
+                changed |= unbind_member(&mut policy, &role_name, member);
             }
             if changed {
                 policy.version = Some(3);
                 iam.set_service_account_iam_policy(email.clone(), policy)
                     .await
                     .context(ErrorData::CloudPlatformError {
-                        message: "Failed to let the workload sign as the preview signer"
-                            .to_string(),
+                        message: "Failed to update who may sign as the preview signer".to_string(),
                         resource_id: Some(sandbox.id.clone()),
                     })?;
             }
+            record.sign_members = wanted;
         }
         signer_email = Some(email);
     }
@@ -335,17 +364,39 @@ pub(crate) async fn set_up_engine_access(
 
     let distinct: BTreeSet<(String, String)> = grants.into_iter().collect();
     let grants: Vec<(String, String)> = distinct.into_iter().collect();
-    if !grants.is_empty() {
+    let revoked: Vec<(String, String)> = record
+        .engine_grants
+        .iter()
+        .filter(|grant| !grants.contains(grant))
+        .cloned()
+        .collect();
+    if !grants.is_empty() || !revoked.is_empty() {
         let platform = ctx
             .service_provider
             .get_gcp_agent_platform_client(gcp_config)?;
-        record.engine_grants = grants.clone();
+        // Old and new stay recorded until both writes land, so a failure part-way still lets
+        // teardown remove everything that may have been placed.
+        let mut remembered = record.engine_grants.clone();
+        for grant in &grants {
+            if !remembered.contains(grant) {
+                remembered.push(grant.clone());
+            }
+        }
+        record.engine_grants = remembered;
         grant_on_engine(platform.as_ref(), engine, &grants)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to place the sandbox grants on the engine".to_string(),
                 resource_id: Some(sandbox.id.clone()),
             })?;
+        // A profile that lost its sandbox verbs loses the grants they gave.
+        revoke_on_engine(platform.as_ref(), engine, &revoked)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to remove engine grants the stack no longer gives".to_string(),
+                resource_id: Some(sandbox.id.clone()),
+            })?;
+        record.engine_grants = grants;
     }
     Ok(signer_email)
 }
@@ -361,10 +412,14 @@ pub(crate) async fn tear_down_engine_access(
         let platform = ctx
             .service_provider
             .get_gcp_agent_platform_client(gcp_config)?;
-        if let Err(error) = revoke_on_engine(platform.as_ref(), engine, &record.engine_grants).await
-        {
-            tracing::warn!(engine=%engine, error=%error, "could not remove engine grants during teardown, continuing");
-        }
+        // A failed revoke is returned, with the record kept, so the delete is retried rather
+        // than forgetting a grant that still names a removed identity.
+        revoke_on_engine(platform.as_ref(), engine, &record.engine_grants)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to remove the sandbox grants from the engine".to_string(),
+                resource_id: None,
+            })?;
     }
     if record.signer_created.is_none() {
         return Ok(());
@@ -376,10 +431,16 @@ pub(crate) async fn tear_down_engine_access(
                 error.error,
                 Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
             ) {
-                tracing::warn!(signer=%email, error=%error, "could not delete the preview signer, continuing");
+                // Returned so the delete retries; the record stays until the signer is gone.
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete the preview signer {email}"),
+                    resource_id: None,
+                });
             }
         }
     }
+    // Note: when several sandboxes of one deployment are deleted at once, each sees the others'
+    // signers still present, so the shared role is left to the deployment-wide role cleanup.
     // The signing role is one project-wide role shared by every preview sandbox of the
     // deployment, so one sandbox's teardown must not delete it. Its description names the
     // deployment prefix, so the deployment-wide custom role cleanup removes it.
@@ -426,7 +487,10 @@ pub(crate) async fn remove_marked_signer(
                 error.error,
                 Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
             ) {
-                tracing::warn!(signer=%email, error=%error, "could not delete the preview signer, continuing");
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete the preview signer {email}"),
+                    resource_id: Some(sandbox_id.to_string()),
+                });
             }
         }
     }
