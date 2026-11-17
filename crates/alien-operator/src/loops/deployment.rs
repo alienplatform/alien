@@ -496,12 +496,13 @@ pub(crate) async fn run_deployment_continuously(
     let client_config = resolve_client_config(
         current.platform,
         base_platform,
-        deployment_needs_base_cloud(
+        step_needs_base_cloud(
             &current,
             &target_release.stack,
-            &enriched_config.stack_settings,
+            &enriched_config,
             base_platform,
-        ),
+        )
+        .await,
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -1233,6 +1234,64 @@ pub(super) fn deployment_needs_base_cloud(
             .is_some_and(|state| alien_infra::state_needs_base_cloud(state, base))
 }
 
+/// `deployment_needs_base_cloud` for a pass that may run the pending step. That step adds
+/// resources through the preflight mutations (a vault, a service account), so before the
+/// client is chosen the stack is prepared the way the step prepares it, with the plain
+/// Kubernetes client: compile-time checks and mutations need no cloud, and the advisory runtime
+/// checks report "unknown" without one. The predicate then runs on the prepared stack. If
+/// preparing fails, the raw stack decides and the pending step reports the real error.
+async fn step_needs_base_cloud(
+    current: &DeploymentState,
+    release_stack: &alien_core::Stack,
+    config: &alien_core::DeploymentConfig,
+    base_platform: Option<Platform>,
+) -> bool {
+    if deployment_needs_base_cloud(current, release_stack, &config.stack_settings, base_platform)
+    {
+        return true;
+    }
+    let Some(base) = base_platform else {
+        return false;
+    };
+    let unprepared = current.platform == Platform::Kubernetes
+        && matches!(
+            current.status,
+            alien_core::DeploymentStatus::Pending | alien_core::DeploymentStatus::PreflightsFailed
+        )
+        && current
+            .runtime_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.prepared_stack.as_ref())
+            .is_none();
+    if !unprepared {
+        return false;
+    }
+    let mut prepared_config = config.clone();
+    let plain = ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+        namespace: None,
+        additional_headers: None,
+    }));
+    match alien_deployment::prepare_target_stack(
+        current,
+        release_stack.clone(),
+        &mut prepared_config,
+        &plain,
+    )
+    .await
+    {
+        Ok(prepared) => alien_infra::stack_needs_base_cloud(
+            &prepared.mutated_stack,
+            current.platform,
+            Some(base),
+            &prepared_config.stack_settings,
+        ),
+        Err(error) => {
+            debug!(error = %error, "Preparing the stack ahead of the pending step failed; the step reports it");
+            false
+        }
+    }
+}
+
 /// The base cloud client, built through the SDK's default chain exactly as an install that
 /// always needed it does (environment, IRSA, Pod Identity, the node's instance role). When it
 /// cannot be built the pass fails with a retryable `BASE_CLOUD_UNAVAILABLE` naming what to set;
@@ -1559,6 +1618,91 @@ mod base_cloud_client_tests {
         assert!(!super::deployment_needs_base_cloud(
             &current, &stack, &settings, None
         ));
+    }
+
+    /// A vault the preflight mutations add exists only on the prepared stack. A first pass on
+    /// a base cloud with nothing recorded must prepare the stack before choosing its client, or
+    /// the pending step runs with plain Kubernetes and the vault fails there.
+    #[test]
+    fn a_vault_added_by_the_preflights_gets_the_cloud_client_at_pending() {
+        use alien_core::{
+            DeploymentState, EnvironmentVariablesSnapshot, ResourceEntry, ResourceLifecycle,
+            Worker, WorkerCode,
+        };
+        let worker = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("profile".to_string())
+            .build();
+        let stack = alien_core::Stack::new("app".to_string())
+            .add_entry(ResourceEntry {
+                display_name: None,
+                description: None,
+                config: alien_core::Resource::new(worker),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            })
+            .permissions(alien_core::permissions::PermissionsConfig {
+                profiles: [(
+                    "profile".to_string(),
+                    alien_core::permissions::PermissionProfile::new(),
+                )]
+                .into_iter()
+                .collect(),
+                management: alien_core::permissions::ManagementPermissions::Auto,
+            })
+            .build();
+        // Runtime monitoring makes a Worker on Kubernetes read its secrets from the vault.
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .monitoring(alien_core::OtlpConfig {
+                logs_endpoint: "https://example.com/v1/logs".to_string(),
+                logs_auth_header: "authorization=Bearer test".to_string(),
+                metrics_endpoint: None,
+                metrics_auth_header: None,
+                resource_attributes: Default::default(),
+            })
+            .build();
+        let current = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: alien_core::DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let decide = |base| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(super::step_needs_base_cloud(&current, &stack, &config, base))
+        };
+        assert!(
+            !super::deployment_needs_base_cloud(
+                &current,
+                &stack,
+                &config.stack_settings,
+                Some(Platform::Aws)
+            ),
+            "the stack as written has no vault"
+        );
+        assert!(decide(Some(Platform::Aws)), "the prepared stack has one");
+        assert!(!decide(None), "no base cloud: nothing to build");
     }
 
     /// Once the Operator has built the base cloud client it keeps using it: a later

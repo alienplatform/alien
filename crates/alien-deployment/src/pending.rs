@@ -7,7 +7,7 @@ use alien_core::{
 };
 use alien_error::AlienError;
 use alien_error::Context;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Prepare a re-runnable direct setup without replacing the existing cloud
 /// state. The caller must hold the deployment lock and supply setup credentials.
@@ -141,21 +141,21 @@ async fn prepare_setup_update(
     Ok(metadata)
 }
 
-/// Handle Pending → InitialSetup transition
-///
-/// This step:
-/// 1. Initializes stack state with platform-specific settings
-/// 2. Collects environment information from the cloud platform
-/// 3. Runs preflight checks (mutations are applied in subsequent phases)
-pub async fn handle_pending(
-    current: DeploymentState,
-    target_stack: Stack,
-    mut config: DeploymentConfig,
-    client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
-) -> Result<DeploymentStepResult> {
-    info!("Handling Pending status");
+/// The pending step's stack preparation: gate answers, declines, the preflight mutations and
+/// checks. Everything the step decides from the stack (does it need the base cloud) is decided
+/// on this result, so callers that must choose their client first can run it ahead of the step.
+pub struct PreparedTarget {
+    pub stack_state: StackState,
+    pub mutated_stack: Stack,
+    pub persisted_gate_answers: alien_core::GateAnswers,
+}
 
+pub async fn prepare_target_stack(
+    current: &DeploymentState,
+    target_stack: Stack,
+    config: &mut DeploymentConfig,
+    client_config: &alien_core::ClientConfig,
+) -> Result<PreparedTarget> {
     // Azure automatic management must hand off to an installed identity;
     // bootstrap credentials are never a runtime fallback for this mode.
     if current.platform == Platform::Azure
@@ -210,7 +210,7 @@ pub async fn handle_pending(
             target_stack.clone(),
             &stack_state,
             &config,
-            &client_config,
+            client_config,
             None, // No old stack for initial deployment
             None,
             Some(alien_core::InitialSetupAuthority::DirectSetup),
@@ -230,6 +230,34 @@ pub async fn handle_pending(
         &frozen_gating,
         current.platform,
     )?;
+
+    Ok(PreparedTarget {
+        stack_state,
+        mutated_stack,
+        persisted_gate_answers,
+    })
+}
+
+/// Handle Pending → InitialSetup transition
+///
+/// This step:
+/// 1. Initializes stack state with platform-specific settings
+/// 2. Collects environment information from the cloud platform
+/// 3. Runs preflight checks (mutations are applied in subsequent phases)
+pub async fn handle_pending(
+    current: DeploymentState,
+    target_stack: Stack,
+    mut config: DeploymentConfig,
+    client_config: alien_core::ClientConfig,
+    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+) -> Result<DeploymentStepResult> {
+    info!("Handling Pending status");
+
+    let PreparedTarget {
+        stack_state,
+        mutated_stack,
+        persisted_gate_answers,
+    } = prepare_target_stack(&current, target_stack, &mut config, &client_config).await?;
 
     // Step 4a: Collect environment information on the PREPARED stack, so the answer to
     // "does this stack need the base cloud" sees the mutations' resources and not the
