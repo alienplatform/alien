@@ -7,15 +7,14 @@ import unittest
 from loader import probe
 
 RUST = pathlib.Path(__file__).parents[2] / "src" / "emitters" / "sandbox_cni.rs"
-INSTALL_WAIT_SECONDS = 600  # `helm install --timeout 10m`
-NEXT_HOOK_SECONDS = 120  # the root boot check's own pod deadline
+HELM_TIMEOUT_SECONDS = 900  # `--timeout 15m`, applied by Helm to each hook
 
 
 class Budget(unittest.TestCase):
     def test_the_script_budget_is_the_sum_of_its_parts(self):
         start = probe.POD_START_SECONDS
         total = (probe.API_READY_SECONDS + probe.ADMISSION_SECONDS
-                 + start                                              # listener
+                 + probe.PENDING_CAUSE_BOUND_SECONDS                  # listener (a node may be provisioned)
                  + start + probe.CLIENT_RUN_SECONDS                   # stage 1
                  + start + probe.RECOVER_RUN_SECONDS                  # stage 2
                  + probe.START_BOUND_SECONDS + start                  # one recreate
@@ -35,8 +34,11 @@ class Budget(unittest.TestCase):
         self.assertIsNotNone(job)
         self.assertNotRegex(job.group(1), r"^\d+$", "the Job's deadline is read from the script, not typed twice")
 
-    def test_the_job_leaves_the_next_hook_room_inside_the_install_wait(self):
-        self.assertLessEqual(probe.JOB_DEADLINE_SECONDS + NEXT_HOOK_SECONDS, INSTALL_WAIT_SECONDS)
+    def test_the_job_fits_inside_helms_timeout_for_a_hook(self):
+        self.assertLessEqual(probe.JOB_DEADLINE_SECONDS, HELM_TIMEOUT_SECONDS)
+
+    def test_a_pending_pod_waits_at_least_as_long_as_the_install_did_before(self):
+        self.assertGreaterEqual(probe.PENDING_CAUSE_BOUND_SECONDS, 210)
 
     def test_a_client_pods_own_deadline_covers_its_longest_run(self):
         self.assertGreaterEqual(

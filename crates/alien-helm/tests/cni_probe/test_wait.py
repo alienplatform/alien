@@ -50,7 +50,7 @@ class Cluster:
     def say(self, text, flush=False):
         self.output.append(text)
 
-    def wait(self, role="client", pending_bound_deadline=200):
+    def wait(self, role="client", pending_bound_deadline=400):
         return probe.wait_for_pod(
             self.request, "/pods", "probe", role,
             lambda p: p["status"]["phase"] == "Succeeded", pending_bound_deadline,
@@ -96,6 +96,22 @@ class ProbeThatRan(unittest.TestCase):
         self.assertIn("client probe failed: NetworkPolicy enforcement is unproven", str(raised.exception))
         self.assertIn("NetworkPolicy did not block traffic", str(raised.exception))
 
+    def test_a_pod_that_ran_and_was_lost_with_its_node_fails_and_is_not_recreated(self):
+        # ContainerStatusUnknown: exit 137, no start time. It may have run and connected.
+        lost = pod("Failed", {"exitCode": 137, "reason": "ContainerStatusUnknown",
+                              "message": "The container could not be located when the pod was deleted."})
+        cluster = Cluster(lost)
+        with self.assertRaises(RuntimeError) as raised:
+            cluster.wait()
+        self.assertEqual(cluster.recreated, [])
+        self.assertIn("enforcement is unproven", str(raised.exception))
+
+    def test_a_pod_that_ran_and_failed_with_no_start_time_is_not_recreated(self):
+        cluster = Cluster(pod("Failed", {"exitCode": 1, "message": "RuntimeError: boom"}))
+        with self.assertRaises(RuntimeError):
+            cluster.wait()
+        self.assertEqual(cluster.recreated, [])
+
     def test_a_pod_that_succeeds_is_returned_unchanged(self):
         cluster = Cluster(pod("Running"), SUCCEEDED)
         self.assertEqual(cluster.wait()["status"]["phase"], "Succeeded")
@@ -132,7 +148,7 @@ class PodThatNeverRuns(unittest.TestCase):
         self.assertEqual(cluster.recreated, [])
 
     def test_a_pod_pending_within_the_bound_is_only_slow(self):
-        cluster = Cluster(*([UNSCHEDULABLE] * 20 + [SUCCEEDED]))
+        cluster = Cluster(*([UNSCHEDULABLE] * (probe.PENDING_CAUSE_BOUND_SECONDS - 10) + [SUCCEEDED]))
         cluster.wait()
         self.assertEqual(cluster.recreated, [])
 
