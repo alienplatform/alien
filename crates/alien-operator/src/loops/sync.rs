@@ -1028,14 +1028,34 @@ pub(crate) async fn accept_target(
         );
     }
 
+    // The manager replays a target on every sync. Only a target that changes the
+    // deployment's state or what is applied wakes the loop: a replay must not cut
+    // short the wait a step asked for.
+    let previous_state = state.db.get_deployment_state().await?;
+    let previous_config = state.db.get_deployment_config().await?;
+    let changed = serde_json::to_value(&previous_state).ok()
+        != serde_json::to_value(Some(&deployment_state)).ok()
+        || match (&previous_state, &previous_config) {
+            (Some(previous), Some(config)) => {
+                crate::db::approved_target_hash(previous.target_release.as_ref(), config)?
+                    != crate::db::approved_target_hash(
+                        deployment_state.target_release.as_ref(),
+                        &target_deployment.config,
+                    )?
+            }
+            _ => true,
+        };
+
     // Save state and config
     state.db.set_deployment_state(&deployment_state).await?;
     state
         .db
         .set_deployment_config(&target_deployment.config)
         .await?;
-    // Written last: the loop reads the config together with the target.
-    state.db.request_deployment();
+    if changed {
+        // Written last: the loop reads the config together with the target.
+        state.db.request_deployment();
+    }
 
     // Handle deployment approval if required. A refresh changes nothing that
     // was not already approved.
@@ -1380,8 +1400,11 @@ fn apply_manager_control_state(
             | alien_core::DeploymentStatus::TeardownFailed
             | alien_core::DeploymentStatus::Deleted
     ) {
+        // The manager reports this state on every sync: only a different one is a change.
+        let changed =
+            serde_json::to_value(&*local_state).ok() != serde_json::to_value(manager_state).ok();
         *local_state = manager_state.clone();
-        return true;
+        return changed;
     }
     let protocol_changed = manager_state.protocol_version > local_state.protocol_version
         && alien_core::accepts_deployment_protocol_report(
@@ -2471,7 +2494,7 @@ mod tests {
                     .unwrap(),
             );
             db.set_deployment_id("dep_held").await.unwrap();
-            db.set_deployment_state(&DeploymentState {
+            let held = DeploymentState {
                 platform: Platform::Local,
                 status,
                 current_release: None,
@@ -2482,16 +2505,18 @@ mod tests {
                 environment_info: None,
                 retry_requested: false,
                 protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-            })
-            .await
-            .unwrap();
+            };
+            db.set_deployment_state(&held).await.unwrap();
             let captured = Arc::new(Mutex::new(None));
             let request_capture = captured.clone();
+            let held_reply = held.clone();
             let app = Router::new().route(
                 "/v1/sync",
                 post(move |Json(body): Json<Value>| {
                     *request_capture.lock().unwrap() = Some(body);
-                    async move { Json(json!({})) }
+                    // The manager reports the same state on every sync.
+                    let response = json!({"currentState": held_reply});
+                    async move { Json(response) }
                 }),
             );
             let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
@@ -2935,8 +2960,8 @@ mod tests {
             stack: Stack::new("app".into())
                 .add(worker(image), alien_core::ResourceLifecycle::Live)
                 .build(),
-            signed: None,
-            signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
         let mut internal = serde_json::to_value(
@@ -3119,8 +3144,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-            signed: None,
-            signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3259,8 +3284,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-            signed: None,
-            signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let mut config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3357,8 +3382,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-            signed: None,
-            signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let mut keyless = config.clone();
         keyless.runtime_identity_audience = None;
@@ -3457,8 +3482,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-            signed: None,
-            signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -5350,8 +5375,8 @@ mod tests {
                         alien_core::ResourceLifecycle::Live,
                     )
                     .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+                    signed: None,
+                    signer_lists: Vec::new(),
             };
             let applying = status == DeploymentStatus::UpdatePending;
             DeploymentState {

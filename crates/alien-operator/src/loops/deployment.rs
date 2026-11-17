@@ -249,12 +249,13 @@ const HOLD_CAP: Duration = Duration::from_secs(60);
 
 /// Statuses where the Operator has nothing left to do: the deployment waits for
 /// something outside this loop (the manager's setup teardown, a retry request, a
-/// new target). The Delete operation ends the pass in each at once, without a
-/// step (`classify_status`), or with the status's no-op handler.
+/// new target), or is gone. The Delete operation ends the pass in each at once,
+/// without a step (`classify_status`), or with the status's no-op handler.
 fn is_hold_status(status: DeploymentStatus) -> bool {
     matches!(
         status,
-        DeploymentStatus::TeardownRequired
+        DeploymentStatus::Deleted
+            | DeploymentStatus::TeardownRequired
             | DeploymentStatus::RetentionRequired
             | DeploymentStatus::Retained
             | DeploymentStatus::TeardownFailed
@@ -611,9 +612,14 @@ pub(crate) async fn run_deployment_continuously(
                     .await?;
             }
             // A disconnected Operator needs the installed config for health refreshes.
-            if (state.config.airgap_target_secret.is_none()
-                && enriched_config.runtime_identity_audience.is_none())
-                || loop_result.final_status != DeploymentStatus::Running
+            // A pass that held without a step finished nothing: the sync loop
+            // keeps sending the target, so clearing its config would only be
+            // undone by the next sync.
+            let held_without_step = steps_executed == 0 && is_hold_status(loop_result.final_status);
+            if !held_without_step
+                && ((state.config.airgap_target_secret.is_none()
+                    && enriched_config.runtime_identity_audience.is_none())
+                    || loop_result.final_status != DeploymentStatus::Running)
             {
                 debug!("Deployment synced, clearing deployment config");
                 state.db.clear_deployment_config().await?;
@@ -1313,7 +1319,8 @@ mod tests {
         (directory, state)
     }
 
-    const HOLD_STATUSES: [DeploymentStatus; 4] = [
+    const HOLD_STATUSES: [DeploymentStatus; 5] = [
+        DeploymentStatus::Deleted,
         DeploymentStatus::TeardownRequired,
         DeploymentStatus::RetentionRequired,
         DeploymentStatus::Retained,
@@ -1325,6 +1332,7 @@ mod tests {
         for status in HOLD_STATUSES {
             let (_directory, state) = held_operator(status).await;
             let before = state.db.get_deployment_state().await.unwrap().unwrap();
+            let config_before = state.db.get_deployment_config().await.unwrap();
             let (steps, _) = run_deployment_continuously(&state).await.unwrap();
             assert_eq!(steps, 0, "{status:?} must not step");
             let after = state.db.get_deployment_state().await.unwrap().unwrap();
@@ -1332,6 +1340,12 @@ mod tests {
                 serde_json::to_value(&before).unwrap(),
                 serde_json::to_value(&after).unwrap(),
                 "{status:?} must not change"
+            );
+            // The sync loop keeps sending the target, so a hold pass must not clear its config.
+            assert_eq!(
+                serde_json::to_value(state.db.get_deployment_config().await.unwrap()).unwrap(),
+                serde_json::to_value(config_before).unwrap(),
+                "{status:?} must keep the stored config"
             );
         }
     }
@@ -2394,8 +2408,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-            signed: None,
-            signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::UpdatePending,
@@ -2698,6 +2712,60 @@ mod tests {
         // A wake (a new target) is handled at once, mid-wait.
         let before = waits_now.len();
         state.db.request_deployment();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert_eq!(waits.lock().unwrap().len(), before + 1);
+        state.cancel.cancel();
+        task.await.unwrap();
+    }
+
+    /// The manager replays the same target on every sync. That must not cut a wait
+    /// short (a hold's backoff, a step's requested delay); a changed target does.
+    #[tokio::test(start_paused = true)]
+    async fn replayed_targets_do_not_wake_the_loop_and_a_changed_one_does() {
+        let (_directory, state) = held_operator(DeploymentStatus::TeardownRequired).await;
+        let stored = state.db.get_deployment_state().await.unwrap().unwrap();
+        let target = alien_core::sync::TargetDeployment {
+            release_info: stored.target_release.clone().unwrap(),
+            config: test_deployment_config(),
+            signed_config: None,
+        };
+        let waits = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+        let observed = Arc::clone(&waits);
+        let task = tokio::spawn(run_deployment_loop_observed(
+            Arc::clone(&state),
+            move |delay| observed.lock().unwrap().push(delay),
+        ));
+        // The first sync stores the target the Operator did not hold yet.
+        crate::loops::sync::accept_target(&state, &target, false)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let after_first = waits.lock().unwrap().len();
+
+        // Ten minutes of syncs, one every 30 s, each replaying the same target.
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            crate::loops::sync::accept_target(&state, &target, false)
+                .await
+                .unwrap();
+        }
+        let passes = waits.lock().unwrap().len() - after_first;
+        assert!(
+            passes <= 14,
+            "{passes} passes in ten minutes of replayed targets: a replay woke the loop"
+        );
+        assert!(
+            waits.lock().unwrap().contains(&HOLD_CAP),
+            "the backoff reached its cap"
+        );
+
+        // A different release is a real change: the loop runs a pass at once.
+        let before = waits.lock().unwrap().len();
+        let mut changed = target.clone();
+        changed.release_info.release_id = Some("rel_changed".into());
+        crate::loops::sync::accept_target(&state, &changed, false)
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(1)).await;
         assert_eq!(waits.lock().unwrap().len(), before + 1);
         state.cancel.cancel();
