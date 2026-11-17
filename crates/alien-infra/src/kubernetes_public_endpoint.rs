@@ -1325,6 +1325,21 @@ async fn delete_managed_acm_certificate(
     }))
 }
 
+/// Whether a controller's recorded internal state holds an ACM certificate (or the token that
+/// finds one) imported for a public endpoint. Controller states embed
+/// [`KubernetesPublicEndpointState`] under different field names, so the keys are searched for.
+pub(crate) fn records_imported_acm_certificate(state: &serde_json::Value) -> bool {
+    match state {
+        serde_json::Value::Object(fields) => fields.iter().any(|(key, value)| {
+            (matches!(key.as_str(), "managedAcmCertificateArn" | "managedAcmImportToken")
+                && value.as_str().is_some_and(|value| !value.is_empty()))
+                || records_imported_acm_certificate(value)
+        }),
+        serde_json::Value::Array(items) => items.iter().any(records_imported_acm_certificate),
+        _ => false,
+    }
+}
+
 /// A Worker is public when it declares any public endpoint.
 fn worker_serves_public_endpoint(public_endpoints: &[alien_core::WorkerPublicEndpoint]) -> bool {
     !public_endpoints.is_empty()

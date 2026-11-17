@@ -355,7 +355,9 @@ pub fn stack_needs_base_cloud(
 }
 
 /// Whether public endpoints publish their certificate by importing it into AWS ACM
-/// (`managedAcmImport`), which calls the cloud's API from the Operator.
+/// (`managedAcmImport`), which calls the cloud's API from the Operator. Only generated exposure
+/// can: a custom domain with `managedAcmImport` is a configuration error the endpoint planner
+/// reports, not something to wait for a cloud identity for.
 fn imports_certificates_into_acm(settings: &alien_core::StackSettings) -> bool {
     use alien_core::{KubernetesCertificateMode, KubernetesExposureSettings};
     matches!(
@@ -367,12 +369,6 @@ fn imports_certificates_into_acm(settings: &alien_core::StackSettings) -> bool {
             KubernetesExposureSettings::Generated {
                 certificate: KubernetesCertificateMode::ManagedAcmImport { .. },
                 ..
-            } | KubernetesExposureSettings::Custom {
-                certificate: KubernetesCertificateMode::ManagedAcmImport { .. },
-                ..
-            } | KubernetesExposureSettings::CustomBaseDomain {
-                certificate: KubernetesCertificateMode::ManagedAcmImport { .. },
-                ..
             }
         )
     )
@@ -382,6 +378,19 @@ fn imports_certificates_into_acm(settings: &alien_core::StackSettings) -> bool {
 /// cloud's controller: one recorded with that controller, or an older record with none, which
 /// the cloud's controllers served. Recorded state wins over what the stack says now.
 pub fn state_needs_base_cloud(state: &alien_core::StackState, base_platform: Platform) -> bool {
+    // Removing a public endpoint whose certificate was imported into ACM deletes it there,
+    // so that resource needs the cloud until the recorded certificate is gone, whatever the
+    // stack says now.
+    if base_platform == Platform::Aws
+        && state.resources.values().any(|resource| {
+            resource
+                .internal_state
+                .as_ref()
+                .is_some_and(crate::kubernetes_public_endpoint::records_imported_acm_certificate)
+        })
+    {
+        return true;
+    }
     state
         .resources
         .values()
@@ -642,6 +651,36 @@ mod controller_platform_tests {
         ));
     }
 
+    /// An endpoint removed from the stack still has its ACM certificate to delete, so recorded
+    /// state keeps the base cloud needed (it is the only place that remembers the certificate).
+    #[test]
+    fn a_recorded_acm_certificate_keeps_the_base_cloud_needed() {
+        let recorded = |token: Option<&str>| {
+            let mut state = alien_core::StackState::new(Platform::Kubernetes);
+            let mut resource = alien_core::StackResourceState::new_pending(
+                "container".into(),
+                Resource::new(Storage::new("web".to_string()).build()),
+                Some(ResourceLifecycle::Live),
+                Vec::new(),
+            );
+            resource.controller_platform = Some(Platform::Kubernetes);
+            resource.internal_state = Some(serde_json::json!({
+                "state": "Ready",
+                "publicEndpoint": serde_json::to_value(
+                    crate::kubernetes_public_endpoint::KubernetesPublicEndpointState {
+                        managed_acm_import_token: token.map(str::to_string),
+                        ..Default::default()
+                    }
+                ).unwrap(),
+            }));
+            state.resources.insert("web".to_string(), resource);
+            state
+        };
+        assert!(state_needs_base_cloud(&recorded(Some("token")), Platform::Aws));
+        assert!(!state_needs_base_cloud(&recorded(None), Platform::Aws));
+        assert!(!state_needs_base_cloud(&recorded(Some("token")), Platform::Gcp));
+    }
+
     #[test]
     fn the_secrets_vault_a_mutation_adds_needs_the_cloud_only_with_a_base_cloud() {
         let vault = || {
@@ -736,6 +775,17 @@ mod controller_platform_tests {
             !needs(&private, &acm, Some(Platform::Aws)),
             "no public endpoint: nothing is imported, so no cloud call"
         );
+        // A custom domain cannot import into ACM: the endpoint planner reports that as the
+        // configuration error it is, so it must not wait for a cloud identity first.
+        let custom: alien_core::StackSettings = serde_json::from_value(serde_json::json!({
+            "kubernetes": {"exposure": {
+                "mode": "custom", "domain": "app.example.com",
+                "route": {"routeApi": "ingress", "ingressClassName": "alb"},
+                "certificate": {"mode": "managedAcmImport"},
+            }}
+        }))
+        .expect("custom settings");
+        assert!(!needs(&public, &custom, Some(Platform::Aws)));
         let stack = &public;
         let needs = |settings: &alien_core::StackSettings, base| needs(stack, settings, base);
         let secret = settings(serde_json::json!({"mode": "none"}));
