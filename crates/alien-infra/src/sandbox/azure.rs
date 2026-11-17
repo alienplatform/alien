@@ -261,22 +261,7 @@ impl AzureSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
-        let (group, _region, resource_group) = self.identity(&config.id)?;
-        crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
-            ctx,
-            &config.id,
-            &group,
-            alien_azure_clients::authorization::Scope::Resource {
-                resource_group_name: resource_group,
-                resource_provider: "Microsoft.App".to_string(),
-                parent_resource_path: None,
-                resource_type: "sandboxGroups".to_string(),
-                resource_name: group.clone(),
-            },
-            "Sandbox",
-            "sandbox",
-        )
-        .await?;
+        self.apply_group_grants(ctx, config).await?;
         Ok(HandlerAction::Continue {
             state: self.state_after_group(config),
             suggested_delay: None,
@@ -483,6 +468,9 @@ impl AzureSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         self.capture_session_inputs(config)?;
+        if self.setup_owns_grants(ctx) {
+            self.apply_group_grants(ctx, config).await?;
+        }
         info!(sandbox_id = %config.id, "Updated Azure sandbox configuration");
 
         Ok(HandlerAction::Continue {
@@ -647,8 +635,12 @@ impl AzureSandboxController {
     /// binding: it names an image, and nothing updates the Worker once the image exists. The
     /// request keeps dependents waiting until the build has run and the binding is published.
     fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
-        if ctx.deployment_config.setup_run || !matches!(self.state, AzureSandboxState::Ready) {
+        if !matches!(self.state, AzureSandboxState::Ready) {
             return Ok(false);
+        }
+        if ctx.deployment_config.setup_run {
+            // Every setup run reconciles the grants of a group it created.
+            return Ok(self.setup_owns_grants(ctx));
         }
         let config = ctx.desired_resource_config::<Sandbox>()?;
         Ok(self.disk_image.is_none()
@@ -1202,6 +1194,36 @@ impl AzureSandboxController {
             &resource_group,
         )?;
         Ok((group, client))
+    }
+
+    /// Places the grants on the group. Idempotent: an assignment already there is left alone.
+    async fn apply_group_grants(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        config: &Sandbox,
+    ) -> Result<()> {
+        let (group, _region, resource_group) = self.identity(&config.id)?;
+        crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
+            ctx,
+            &config.id,
+            &group,
+            alien_azure_clients::authorization::Scope::Resource {
+                resource_group_name: resource_group,
+                resource_provider: "Microsoft.App".to_string(),
+                parent_resource_path: None,
+                resource_type: "sandboxGroups".to_string(),
+                resource_name: group.clone(),
+            },
+            "Sandbox",
+            "sandbox",
+        )
+        .await
+    }
+
+    /// A direct setup made this group, so a later setup run owns its grants too: a profile added
+    /// since gets its assignment, as it does when the package is applied again.
+    fn setup_owns_grants(&self, ctx: &ResourceControllerContext<'_>) -> bool {
+        self.created_group && ctx.deployment_config.setup_run && ctx.is_direct_setup_run()
     }
 
     /// A group that already exists under this name is never taken over: destroy would delete it
@@ -3626,6 +3648,62 @@ mod direct_setup_tests {
         let roles: std::collections::BTreeSet<&str> =
             assigned.iter().map(|(_, _, r)| r.as_str()).collect();
         assert_eq!(roles.len(), 2, "two different roles: {assigned:?}");
+    }
+
+    /// A setup run again, after a profile that executes in the sandbox was added, places the new
+    /// assignment, as applying the package again does. A runtime run does not ask for it.
+    #[tokio::test]
+    async fn a_setup_rerun_places_the_grants_a_new_profile_needs() {
+        let ready = || AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("g".to_string()),
+            region: Some("eastus".to_string()),
+            resource_group: Some("default-resource-group".to_string()),
+            created_group: true,
+            group_create_intent: true,
+            ..Default::default()
+        };
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let assigned = Assigned::default();
+        let mut executor = executor_with_authorization(
+            ready(),
+            groups,
+            true,
+            SandboxEgress::None,
+            recording_authorization(assigned.clone()),
+            true,
+            false,
+        )
+        .await;
+        assert!(executor.needs_update().unwrap(), "a setup rerun reconciles the grants");
+        executor
+            .update(sandbox(SandboxEgress::None))
+            .expect("update is accepted");
+        drive(&mut executor).await;
+        let assigned = assigned.lock().unwrap();
+        assert!(
+            assigned.iter().any(|(_, principal, _)| principal == "principal-1"),
+            "the execute identity gets its assignment: {assigned:?}"
+        );
+
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_get_sandbox_group()
+            .returning(|_, _| Ok(group("Succeeded")));
+        let runtime = executor_with_authorization(
+            ready(),
+            groups,
+            false,
+            SandboxEgress::None,
+            recording_authorization(Assigned::default()),
+            true,
+            false,
+        )
+        .await;
+        assert!(!runtime.needs_update().unwrap());
     }
 
     /// An internet-egress group connects to subnets only the package creates, so a direct setup
