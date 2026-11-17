@@ -772,15 +772,6 @@ async fn collect_deployment_environment_info(
     .await;
     let environment_info = match collected {
         Ok(info) => info,
-        // A Kubernetes stack with nothing on the base cloud does not need its environment
-        // details (for example when the cloud identity is configured but does not authenticate).
-        Err(error) if platform == Platform::Kubernetes && !stack_needs_base_cloud => {
-            warn!(
-                error = %error,
-                "Could not collect the base cloud environment; the stack has no resource on it, continuing as plain Kubernetes"
-            );
-            return Ok(None);
-        }
         Err(error) => return Err(error),
     };
 
@@ -2183,27 +2174,22 @@ mod tests {
         assert!(json.contains("basePlatformConfig.aws.region"), "{json}");
     }
 
+    /// A failed environment collection with a cloud client is an error whatever the stack
+    /// needs: it is never swallowed, so one failed call cannot leave the environment unrecorded
+    /// for good. Only the plain Kubernetes client skips it (a stack with nothing on the cloud).
     #[tokio::test]
-    async fn a_cloud_that_does_not_resolve_is_skipped_when_the_stack_has_no_cloud_resource() {
+    async fn a_failed_collection_with_a_cloud_client_is_never_swallowed() {
         // The client config carries no config for the base cloud: collection fails.
         let broken = ClientConfig::Test;
-        let skipped = collect_deployment_environment_info(
-            Platform::Kubernetes,
-            Some(Platform::Aws),
-            &broken,
-            false,
-        )
-        .await
-        .expect("a stack with nothing on the cloud continues");
-        assert!(skipped.is_none());
-
-        collect_deployment_environment_info(
-            Platform::Kubernetes,
-            Some(Platform::Aws),
-            &broken,
-            true,
-        )
-        .await
-        .expect_err("a stack that needs the cloud still fails");
+        for needs in [false, true] {
+            collect_deployment_environment_info(
+                Platform::Kubernetes,
+                Some(Platform::Aws),
+                &broken,
+                needs,
+            )
+            .await
+            .expect_err("a failed collection is an error");
+        }
     }
 }
