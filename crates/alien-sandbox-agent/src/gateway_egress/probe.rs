@@ -61,9 +61,7 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
         .into_alien_error()
         .context(failed("run command path check"))?;
     if !status.success() {
-        let reason = status
-            .code()
-            .map_or("the check was killed by a signal", path_check_reason);
+        let reason = status.code().map_or("the check was killed by a signal", path_check_reason);
         return Err(AlienError::new(ErrorData::egress_unverified(
             "command-identity",
             format!("the command-identity path check did not confirm the path is closed: {reason} ({status})"),

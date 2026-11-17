@@ -13,8 +13,8 @@ pub mod preview;
 pub mod preview_capability;
 #[cfg(unix)]
 pub mod privilege;
-pub mod proxy_failover;
 pub mod server;
+pub mod proxy_failover;
 pub mod startup_gate;
 pub mod validate;
 
