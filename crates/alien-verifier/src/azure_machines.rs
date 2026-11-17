@@ -103,9 +103,10 @@ pub fn image_facts(image: &str, definition: &Value, version: &Value) -> Result<I
         architecture: architecture.to_string(),
         created: created.with_timezone(&Utc),
         root_disk_gib,
+        // Only the version's own description: the definition's is shared by every
+        // version, so it can't say which agent this image carries.
         machine_agent: version["properties"]["description"]
             .as_str()
-            .or_else(|| definition["properties"]["description"].as_str())
             .and_then(machine_agent_from_description),
     })
 }
@@ -531,6 +532,8 @@ mod tests {
     #[derive(Default)]
     struct Recorded {
         published: String,
+        /// A version that carries no description of its own.
+        bare_version: bool,
         existing: Option<Value>,
         puts: Mutex<Vec<(String, Value)>>,
         posts: Mutex<Vec<(String, Value)>>,
@@ -554,7 +557,7 @@ mod tests {
                 })
             } else if path.contains("/versions/") {
                 // As a real community gallery version read returned it.
-                Some(json!({
+                let mut version = json!({
                     "properties": {
                         "publishedDate": self.published,
                         "excludeFromLatest": false,
@@ -563,8 +566,14 @@ mod tests {
                     },
                     "location": "westeurope",
                     "name": "1.0.0"
-                }))
+                });
+                if !self.bare_version {
+                    version["properties"]["description"] =
+                        json!(format!("machine-agent=sha256:{}", "2".repeat(64)));
+                }
+                Some(version)
             } else if path.contains("/communityGalleries/") {
+                // The definition carries a description too; it is never read.
                 Some(
                     json!({"properties": {"architecture": "x64", "osType": "Linux",
                     "description": format!("machine-agent=sha256:{}", "2".repeat(64))}}),
@@ -601,6 +610,21 @@ mod tests {
             &Unopposed,
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn an_agent_named_only_by_the_definition_is_not_the_versions() {
+        let api = Recorded {
+            published: "2026-11-01T08:00:00.1234567+00:00".to_string(),
+            bare_version: true,
+            ..Default::default()
+        };
+        let error = roll_with(&api, &request()).await.unwrap_err();
+        assert!(
+            format!("{error:?}").contains("does not say which machine agent build"),
+            "{error:?}"
+        );
+        assert!(api.puts.into_inner().unwrap().is_empty());
     }
 
     #[tokio::test]
