@@ -21,8 +21,8 @@ mod generator {
     pub mod aws_flow_log_parity_tests;
     pub mod aws_full_stack_tests;
     pub mod aws_iam_coverage_tests;
-    pub mod aws_management_network_tests;
     pub mod aws_identity_tests;
+    pub mod aws_management_network_tests;
     pub mod aws_role_policy_upgrade_tests;
     pub mod aws_workload_grant_parity_tests;
     pub mod azure_compute_tests;
@@ -51,6 +51,7 @@ mod generator {
     pub mod secrets_vault_management_tests;
     pub mod setup_management_tests;
     pub mod stack_input_tests;
+    pub mod queue_dead_letter_tests;
     pub mod storage_notifications_tests;
     pub mod terraform_1_9_tests;
     pub mod verified_setup_tests;
