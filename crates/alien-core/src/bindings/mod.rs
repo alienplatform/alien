@@ -31,8 +31,8 @@ mod vault;
 mod worker;
 
 pub use ai::{
-    AiBinding, AmbientAiBinding, BedrockAiBinding, ExternalAi, ExternalAiBinding, FoundryAiBinding,
-    VertexAiBinding,
+    validate_aws_region, AiBinding, AmbientAiBinding, BedrockAiBinding, ExternalAi,
+    ExternalAiBinding, FoundryAiBinding, VertexAiBinding,
 };
 pub use artifact_registry::{
     AcrArtifactRegistryBinding, ArtifactRegistryBinding, EcrArtifactRegistryBinding,

@@ -33,8 +33,61 @@ pub enum AiBinding {
 #[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct BedrockAiBinding {
-    /// The AWS region where Bedrock is accessed
+    /// The AWS region where Bedrock is accessed (for example `us-east-1`). The gateway builds
+    /// `https://bedrock-runtime.<region>.amazonaws.com` from it, so parsing refuses anything
+    /// that is not a plain AWS region name.
+    #[serde(deserialize_with = "deserialize_aws_region")]
     pub region: String,
+}
+
+impl BedrockAiBinding {
+    /// Builds a binding after checking the region with [`validate_aws_region`].
+    pub fn new(region: impl Into<String>) -> Result<Self, String> {
+        let region = region.into();
+        validate_aws_region(&region)?;
+        Ok(Self { region })
+    }
+}
+
+/// Accepts an AWS region name such as `us-east-1`, `eu-central-2`, `us-gov-west-1` or
+/// `ap-southeast-4`: lowercase letter groups and one trailing number, joined by single
+/// dashes, starting with a two-letter geography. No dots, slashes, spaces or uppercase, so a
+/// region can never change the host of a URL built from it.
+pub fn validate_aws_region(region: &str) -> Result<(), String> {
+    let invalid = || {
+        format!(
+            "invalid AWS region {region:?}: expected a region name such as \"us-east-1\" \
+             (lowercase letters, digits and single dashes only)"
+        )
+    };
+    if region.len() > 30 {
+        return Err(invalid());
+    }
+    let parts: Vec<&str> = region.split('-').collect();
+    let [geography, middle @ .., number] = parts.as_slice() else {
+        return Err(invalid());
+    };
+    let lowercase = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase());
+    let valid = geography.len() == 2
+        && lowercase(geography)
+        && !middle.is_empty()
+        && middle.iter().all(|m| lowercase(m))
+        && !number.is_empty()
+        && number.len() <= 2
+        && number.bytes().all(|b| b.is_ascii_digit());
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid())
+    }
+}
+
+fn deserialize_aws_region<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let region = String::deserialize(deserializer)?;
+    validate_aws_region(&region).map_err(serde::de::Error::custom)?;
+    Ok(region)
 }
 
 /// GCP Vertex AI binding configuration
@@ -93,11 +146,21 @@ impl std::fmt::Debug for ExternalAiBinding {
 
 /// What an installer supplies for an AI resource with an external binding.
 ///
-/// Two inputs, told apart by whether the JSON carries a `service` tag:
+/// Two inputs, told apart by whether the JSON carries a `service` tag (other than `external-ai`):
 /// - `{ "provider", "apiKey" }` — BYO key (the original input; stored deployments and Helm values
-///   carry it, so it parses exactly as before).
+///   carry it, so it parses exactly as before). `{ "service": "external-ai", "provider",
+///   "apiKey" }` also parses, as it did before the cloud-identity form existed.
 /// - `{ "service": "bedrock", "region" }` — the cloud's own AI service, called with the workload's
 ///   ambient identity (for example an EKS pod's IRSA role). No key, no Secret.
+///
+/// The cloud-identity form needs the pod to have its own AWS identity: on Kubernetes, an IRSA role
+/// on the service account (or an EKS Pod Identity association) with `bedrock:InvokeModel` and
+/// `bedrock:InvokeModelWithResponseStream`. Without one the gateway refuses to sign and never uses
+/// the node's role. The `region` must be a plain AWS region name such as `us-east-1`.
+///
+/// Access is not checked at install time (the setup credentials cannot speak for the pod's role):
+/// it is checked on the first call, and a model the role cannot use fails with
+/// `provider_access_unavailable`.
 ///
 /// Untagged, because the BYO-key input has no tag and must keep parsing unchanged. The two shapes
 /// cannot overlap: the ambient one requires `service`, the key one requires `provider` and `apiKey`.
@@ -125,7 +188,11 @@ impl<'de> Deserialize<'de> for ExternalAi {
                 "invalid external AI binding: {FORMS}"
             )));
         };
-        if object.contains_key("service") {
+        // `external-ai` is the tag the BYO-key binding carries once it reaches a workload, and
+        // earlier releases accepted that form here (the tag was ignored), so keep it on the key
+        // path. Any other `service` is the cloud-identity form.
+        let service = object.get("service").and_then(|v| v.as_str());
+        if object.contains_key("service") && service != Some("external-ai") {
             if let Some(extra) = object.keys().find(|k| *k != "service" && *k != "region") {
                 return Err(D::Error::custom(format!(
                     "invalid external AI binding: field `{extra}` is not allowed with `service` \
@@ -272,6 +339,84 @@ mod tests {
         let deserialized: AiBinding =
             serde_json::from_value(json).expect("external binding should round-trip");
         assert_eq!(binding, deserialized);
+    }
+
+    #[test]
+    fn external_ai_with_the_external_ai_service_tag_still_parses_as_a_key() {
+        let parsed: ExternalAi = serde_json::from_value(serde_json::json!({
+            "service": "external-ai", "provider": "openai", "apiKey": "sk-x"
+        }))
+        .expect("the tagged BYO-key input parsed before and must keep parsing");
+        assert!(matches!(&parsed, ExternalAi::ApiKey(b) if b.provider == "openai"));
+        // Same through the external binding wrapper, and a tagged input missing its key is
+        // still refused with the clear error.
+        let binding: crate::ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "service": "external-ai", "provider": "openai", "apiKey": "sk-x"
+        }))
+        .unwrap();
+        assert_eq!(
+            binding.to_env_binding_value().unwrap(),
+            serde_json::json!({"service": "external-ai", "provider": "openai", "apiKey": "sk-x"})
+        );
+        let err = serde_json::from_value::<ExternalAi>(
+            serde_json::json!({"service": "external-ai", "provider": "openai"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("invalid external AI binding"), "{err}");
+    }
+
+    #[test]
+    fn bedrock_region_must_be_a_plain_aws_region() {
+        for ok in [
+            "us-east-1",
+            "eu-central-2",
+            "ap-southeast-4",
+            "us-gov-west-1",
+            "us-iso-east-1",
+            "cn-north-1",
+        ] {
+            let binding: BedrockAiBinding =
+                serde_json::from_value(serde_json::json!({ "region": ok }))
+                    .unwrap_or_else(|e| panic!("{ok} must parse: {e}"));
+            assert_eq!(binding.region, ok);
+            assert!(BedrockAiBinding::new(ok).is_ok());
+        }
+        for bad in [
+            "x.evil.com/",
+            "us-east-1.evil.com",
+            "",
+            "US-EAST-1",
+            "us east 1",
+            "us-east-1/",
+            "us-east-1@evil.com",
+            "us-east",
+            "useast1",
+            "us--east-1",
+            "-us-east-1",
+            "us-east-1-",
+            "us-east-1\n",
+            "us-east-123",
+        ] {
+            let err =
+                serde_json::from_value::<BedrockAiBinding>(serde_json::json!({ "region": bad }))
+                    .expect_err(&format!("{bad:?} must be refused"))
+                    .to_string();
+            assert!(
+                err.contains("invalid AWS region"),
+                "unclear error for {bad:?}: {err}"
+            );
+            assert!(BedrockAiBinding::new(bad).is_err());
+            // Also refused through the tagged forms that carry a Bedrock binding.
+            assert!(serde_json::from_value::<AiBinding>(
+                serde_json::json!({ "service": "bedrock", "region": bad })
+            )
+            .is_err());
+            assert!(serde_json::from_value::<ExternalAi>(
+                serde_json::json!({ "service": "bedrock", "region": bad })
+            )
+            .is_err());
+        }
     }
 
     #[test]

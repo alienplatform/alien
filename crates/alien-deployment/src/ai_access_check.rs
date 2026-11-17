@@ -75,7 +75,9 @@ pub(crate) async fn check_within(
 /// `(resource id, model id)` for each model an AI resource declares. An AI resource supplied
 /// through an external binding is left out: it is either a BYO-key provider, or Bedrock reached
 /// with the workload's own identity, which the setup credentials cannot speak for. The customer
-/// owns that role, so the check is skipped and never falls back to a key.
+/// owns that role, so the check is skipped (no new check): access is verified on the first
+/// call, and a model the role cannot use fails with `provider_access_unavailable`. It never
+/// falls back to a key.
 fn declared_models(stack: &Stack, external_bindings: &ExternalBindings) -> Vec<(String, String)> {
     stack
         .resources()
