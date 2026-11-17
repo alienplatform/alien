@@ -1183,9 +1183,7 @@ mod tests {
     fn the_agent_digest_is_read_from_the_image_description() {
         let hex = "2".repeat(64);
         assert_eq!(
-            machine_agent_from_description(&format!(
-                "Machine image machine-agent=sha256:{hex} v3"
-            )),
+            machine_agent_from_description(&format!("Machine image machine-agent=sha256:{hex} v3")),
             Some(format!("sha256:{hex}"))
         );
         assert_eq!(

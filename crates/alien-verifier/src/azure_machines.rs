@@ -103,8 +103,9 @@ pub fn image_facts(image: &str, definition: &Value, version: &Value) -> Result<I
         architecture: architecture.to_string(),
         created: created.with_timezone(&Utc),
         root_disk_gib,
-        machine_agent: definition["properties"]["description"]
+        machine_agent: version["properties"]["description"]
             .as_str()
+            .or_else(|| definition["properties"]["description"].as_str())
             .and_then(machine_agent_from_description),
     })
 }
