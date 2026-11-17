@@ -41,6 +41,9 @@ pub struct SandboxGroup {
     /// Provisioning state; deletion is async, so this is not a substitute for polling to 404
     #[serde(skip_serializing_if = "Option::is_none")]
     pub properties: Option<SandboxGroupProperties>,
+    /// ARM tags. Direct setup writes its ownership marker here.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tags: std::collections::BTreeMap<String, String>,
 }
 
 /// Observed state of a sandbox group.
@@ -76,6 +79,7 @@ pub trait SandboxGroupsApi: Send + Sync + std::fmt::Debug {
         resource_group: &str,
         name: &str,
         location: &str,
+        tags: std::collections::BTreeMap<String, String>,
     ) -> Result<SandboxGroup>;
 
     /// Reads a sandbox group. A 404 surfaces as an error, which is how deletion is confirmed.
@@ -154,6 +158,7 @@ impl SandboxGroupsApi for AzureSandboxGroupsClient {
         resource_group: &str,
         name: &str,
         location: &str,
+        tags: std::collections::BTreeMap<String, String>,
     ) -> Result<SandboxGroup> {
         let bearer_token = self
             .token_cache
@@ -170,6 +175,7 @@ impl SandboxGroupsApi for AzureSandboxGroupsClient {
             name: None,
             location: location.to_string(),
             properties: None,
+            tags,
         };
 
         let body = serde_json::to_string(&group).into_alien_error().context(
@@ -330,6 +336,7 @@ mod tests {
             name: None,
             location: "swedencentral".to_string(),
             properties: None,
+            tags: Default::default(),
         };
 
         let body = serde_json::to_value(&group).expect("serializes");

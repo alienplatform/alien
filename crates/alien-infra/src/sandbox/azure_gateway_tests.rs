@@ -52,6 +52,16 @@ async fn executor_with(
             "properties":{"provisioningState":"Succeeded", "subnetId":format!("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet/subnets/{}", if wrong_source {"private"} else {"sandbox"})}
         })).unwrap())
     });
+    // Teardown reads the group for this deployment's owner tag; there is none.
+    arm.expect_get_sandbox_group().returning(|_, _| {
+        Ok(alien_azure_clients::azure::sandbox_groups::SandboxGroup {
+            id: None,
+            name: None,
+            location: "eastus".to_string(),
+            properties: None,
+            tags: Default::default(),
+        })
+    });
     let network_client = Arc::new(network_client);
     let arm = Arc::new(arm);
     let mut provider = MockPlatformServiceProvider::new();

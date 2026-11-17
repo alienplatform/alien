@@ -523,6 +523,9 @@ impl AzureSandboxController {
         // its sandboxes and disk images with it. A delete here would race `terraform destroy` and
         // fail teardown on the 404 whichever call lost. A group a direct setup created is this
         // controller's: nothing else will remove it.
+        if !self.created_group && self.group_is_tagged_as_ours(ctx).await? {
+            self.created_group = true;
+        }
         if self.created_group {
             if let (Some(group), Some(resource_group)) =
                 (self.sandbox_group.as_ref(), self.resource_group.as_ref())
@@ -1243,6 +1246,34 @@ impl AzureSandboxController {
         Ok(())
     }
 
+    /// True only when the group in state carries this deployment's owner tag in the cloud.
+    async fn group_is_tagged_as_ours(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let (Some(group), Some(resource_group)) =
+            (self.sandbox_group.as_ref(), self.resource_group.as_ref())
+        else {
+            return Ok(false);
+        };
+        let arm = ctx
+            .service_provider
+            .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
+        match arm.get_sandbox_group(resource_group, group).await {
+            Ok(found) => Ok(found.tags.get(GROUP_OWNER_TAG).map(String::as_str)
+                == Some(group_marker(ctx.resource_prefix, ctx.desired_config.id()).as_str())),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read Azure sandbox group '{group}' to check ownership"),
+                resource_id: Some(ctx.desired_config.id().to_string()),
+            })),
+        }
+    }
+
     /// A direct setup made this group, so a later setup run owns its grants too: a profile added
     /// since gets its assignment, as it does when the package is applied again.
     fn setup_owns_grants(&self, ctx: &ResourceControllerContext<'_>) -> bool {
@@ -1339,12 +1370,21 @@ impl AzureSandboxController {
             .service_provider
             .get_azure_sandbox_groups_client(azure_config)?;
         // An idempotent put: a retry after a failed setup finds the group and converges on it.
-        arm.create_or_update_sandbox_group(&resource_group, &group, &region)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create Azure sandbox group '{group}'"),
-                resource_id: Some(config.id.clone()),
-            })?;
+        arm.create_or_update_sandbox_group(
+            &resource_group,
+            &group,
+            &region,
+            [(
+                GROUP_OWNER_TAG.to_string(),
+                group_marker(ctx.resource_prefix, &config.id),
+            )]
+            .into(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to create Azure sandbox group '{group}'"),
+            resource_id: Some(config.id.clone()),
+        })?;
         self.capture_session_inputs(config)?;
         self.sandbox_group = Some(group.clone());
         self.region = Some(region);
@@ -1401,6 +1441,15 @@ impl AzureSandboxController {
             }
         }
     }
+}
+
+/// Tag a direct setup puts on the group it creates. It proves ownership when the saved state
+/// lost `created_group` (an older manager rewrote it): only a group tagged for this deployment
+/// and sandbox is deleted on teardown; a package's or somebody else's group is left alone.
+const GROUP_OWNER_TAG: &str = "alien-setup-owner";
+
+fn group_marker(resource_prefix: &str, sandbox_id: &str) -> String {
+    format!("{resource_prefix}/{sandbox_id}")
 }
 
 /// The group's name, the one the Terraform setup package derives from the same prefix and id:
@@ -1567,19 +1616,39 @@ mod tests {
             _internal_stay_count: None,
         };
 
+        // The group carries no owner tag of this deployment, so it is read and never deleted.
+        let mut groups = alien_azure_clients::sandbox_groups::MockSandboxGroupsApi::new();
+        groups.expect_delete_sandbox_group().never();
+        groups.expect_get_sandbox_group().returning(|_, _| {
+            Ok(alien_azure_clients::sandbox_groups::SandboxGroup {
+                id: None,
+                name: None,
+                location: "swedencentral".to_string(),
+                properties: None,
+                tags: Default::default(),
+            })
+        });
+        let groups = Arc::new(groups);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_azure_sandbox_groups_client()
+            .returning(move |_| Ok(groups.clone()));
         let mut executor = SingleControllerExecutor::builder()
             .resource(sandbox)
             .controller(controller)
             .platform(Platform::Azure)
             .resource_lifecycle(ResourceLifecycle::Frozen)
-            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .service_provider(Arc::new(provider))
             .build()
             .await
             .expect("executor should build");
 
         executor.delete().expect("transition to delete");
         while executor.status() != ResourceStatus::Deleted {
-            executor.step().await.expect("teardown makes no cloud call");
+            executor
+                .step()
+                .await
+                .expect("teardown only reads the group");
         }
     }
 
@@ -3226,6 +3295,7 @@ mod direct_setup_tests {
             properties: Some(SandboxGroupProperties {
                 provisioning_state: Some(state.to_string()),
             }),
+            tags: Default::default(),
         }
     }
 
@@ -3405,13 +3475,14 @@ mod direct_setup_tests {
         let made_by_create = made.clone();
         groups
             .expect_create_or_update_sandbox_group()
-            .withf(|rg, name, location| {
+            .withf(|rg, name, location, tags| {
                 rg == "default-resource-group"
                     && name == "test-prefix-box-one"
                     && location == "eastus"
+                    && tags.get(GROUP_OWNER_TAG).map(String::as_str) == Some("Test_Prefix/box_one")
             })
             .times(1)
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 made_by_create.store(true, Ordering::SeqCst);
                 Ok(group("Creating"))
             });
@@ -3465,7 +3536,7 @@ mod direct_setup_tests {
         let made_by_create = made.clone();
         groups
             .expect_create_or_update_sandbox_group()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 made_by_create.store(true, Ordering::SeqCst);
                 Ok(group("Succeeded"))
             });
@@ -3589,7 +3660,7 @@ mod direct_setup_tests {
         groups
             .expect_create_or_update_sandbox_group()
             .times(1)
-            .returning(|_, _, _| Ok(group("Succeeded")));
+            .returning(|_, _, _, _| Ok(group("Succeeded")));
         groups
             .expect_get_sandbox_group()
             .returning(|_, _| Ok(group("Succeeded")));
@@ -3644,7 +3715,7 @@ mod direct_setup_tests {
         let mut groups = MockSandboxGroupsApi::new();
         groups
             .expect_create_or_update_sandbox_group()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 made_by_create.store(true, Ordering::SeqCst);
                 Ok(group("Succeeded"))
             });
@@ -3814,6 +3885,52 @@ mod direct_setup_tests {
                 reconciled_grants: None,
                 group_create_intent: false,
                 group_role_definitions: Vec::new(),
+                ..Default::default()
+            };
+            let mut executor = executor(controller, groups, true, SandboxEgress::None).await;
+            executor.delete().expect("delete is accepted");
+            executor
+                .run_until_status(ResourceStatus::Deleted)
+                .await
+                .expect("the delete finishes");
+        }
+    }
+
+    /// An older manager rewrites the state without `created_group`. The tag the setup put on the
+    /// group still proves it is ours, so teardown removes it; a group with no tag, or another
+    /// deployment's, is left alone.
+    #[tokio::test]
+    async fn delete_removes_a_group_the_state_forgot_only_when_it_carries_our_tag() {
+        let ours = group_marker("Test_Prefix", "box_one");
+        for (tag, deletes) in [
+            (Some(ours), 1usize),
+            (Some("other/box_one".to_string()), 0),
+            (None, 0),
+        ] {
+            let mut groups = MockSandboxGroupsApi::new();
+            groups
+                .expect_delete_sandbox_group()
+                .times(deletes)
+                .returning(|_, _| Ok(()));
+            let mut seen = 0;
+            groups.expect_get_sandbox_group().returning(move |_, _| {
+                // The first read is the ownership check; after the delete the group is gone.
+                seen += 1;
+                if seen > 1 {
+                    return Err(not_found());
+                }
+                let mut found = group("Succeeded");
+                if let Some(tag) = &tag {
+                    found.tags.insert(GROUP_OWNER_TAG.to_string(), tag.clone());
+                }
+                Ok(found)
+            });
+            let controller = AzureSandboxController {
+                state: AzureSandboxState::Ready,
+                sandbox_group: Some("g".to_string()),
+                region: Some("eastus".to_string()),
+                resource_group: Some("rg".to_string()),
+                created_group: false,
                 ..Default::default()
             };
             let mut executor = executor(controller, groups, true, SandboxEgress::None).await;
@@ -3999,7 +4116,7 @@ mod direct_setup_tests {
         let mut groups = MockSandboxGroupsApi::new();
         groups
             .expect_create_or_update_sandbox_group()
-            .returning(move |_, _, _| {
+            .returning(move |_, _, _, _| {
                 made_by_create.store(true, Ordering::SeqCst);
                 Ok(group("Succeeded"))
             });
