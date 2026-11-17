@@ -1346,22 +1346,29 @@ async fn retire_then_judge(
     retire_stale_idle_pods(client, namespace, sandbox_id, stale).await;
     retire_stale_idle_pods(client, namespace, sandbox_id, excess).await;
     match older_cli_image_message(sandbox_id, fresh) {
-        Some(message) => Err(AlienError::new(ErrorData::CloudPlatformError {
-            message,
-            resource_id: Some(sandbox_id.to_string()),
-        })),
+        Some((message, missing_agent)) => {
+            let mut error = AlienError::new(ErrorData::CloudPlatformError {
+                message,
+                resource_id: Some(sandbox_id.to_string()),
+            });
+            // Only a staged agent that is missing stays terminal: rebuilding the image is the
+            // fix. Anything else (out of memory, a start error, a pull hiccup) can pass on a
+            // later tick, so upkeep must keep going.
+            error.retryable = !missing_agent;
+            Err(error)
+        }
         None => Ok(()),
     }
 }
 
 /// The message when a pool pod's `check-staged-agent` init container failed, `None` when no pod
-/// shows that. The image is blamed on an older alien CLI only when the failure says the staged
+/// shows that, and whether the failure is the confirmed missing staged executable (not retryable). The image is blamed on an older alien CLI only when the failure says the staged
 /// executable is missing (its agent staged no file at `/opt/alien/alien-sandbox-agent`); any other
 /// failure reports the check container's own reason and message.
 pub(crate) fn older_cli_image_message(
     sandbox_id: &str,
     pods: &[k8s_openapi::api::core::v1::Pod],
-) -> Option<String> {
+) -> Option<(String, bool)> {
     use k8s_openapi::api::core::v1::ContainerState;
     // (reason, exit code, message) of a failed current state.
     fn failure(state: &ContainerState) -> Option<(String, Option<i32>, String)> {
@@ -1405,15 +1412,21 @@ pub(crate) fn older_cli_image_message(
         message.contains(agent) && message.contains("no such file or directory")
     };
     if failures.iter().any(|(_, _, message)| missing(message)) {
-        return Some(format!(
-            "sandbox {sandbox_id}: this sandbox image was built by an older alien CLI; rebuild \
-             and release it"
+        return Some((
+            format!(
+                "sandbox {sandbox_id}: this sandbox image was built by an older alien CLI; \
+                 rebuild and release it"
+            ),
+            true,
         ));
     }
     failures.into_iter().next().map(|(reason, exit_code, message)| {
         let exit = exit_code.map_or(String::new(), |code| format!(", exit code {code}"));
-        format!(
-            "sandbox {sandbox_id}: the check that runs the staged agent failed (reason {reason}{exit}): {message}"
+        (
+            format!(
+                "sandbox {sandbox_id}: the check that runs the staged agent failed (reason {reason}{exit}): {message}"
+            ),
+            false,
         )
     })
 }
@@ -1525,7 +1538,8 @@ mod tests {
             "box",
             &[pod_with_init(check, start_error_with(MISSING_AGENT))],
         )
-        .expect("the check failing is recognised");
+        .expect("the check failing is recognised")
+        .0;
         assert!(
             message.contains(
                 "this sandbox image was built by an older alien CLI; rebuild and release it"
@@ -1542,7 +1556,8 @@ mod tests {
             ..Default::default()
         };
         let message = super::older_cli_image_message("box", &[pod_with_init(check, exited)])
-            .expect("exit 128 with the message is recognised");
+            .expect("exit 128 with the message is recognised")
+            .0;
         assert!(message.contains("older alien CLI"), "{message}");
     }
 
@@ -1556,7 +1571,8 @@ mod tests {
                 start_error_with("failed to pull and unpack image: connection refused"),
             )],
         )
-        .expect("a failed check is reported");
+        .expect("a failed check is reported")
+        .0;
         assert!(!message.contains("older alien CLI"), "{message}");
         assert!(
             message.contains("StartError") && message.contains("connection refused"),
@@ -1571,7 +1587,8 @@ mod tests {
             ..Default::default()
         };
         let message = super::older_cli_image_message("box", &[pod_with_init(check, exited)])
-            .expect("a failed check is reported");
+            .expect("a failed check is reported")
+        .0;
         assert!(!message.contains("older alien CLI"), "{message}");
         assert!(
             message.contains("OOMKilled") && message.contains("137"),
@@ -1608,6 +1625,47 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn only_a_missing_staged_agent_is_a_terminal_failure_of_the_check() {
+        let check = super::super::kubernetes_spec::CHECK_STAGED_AGENT_CONTAINER;
+        let mut pods = alien_k8s_clients::kubernetes::pods::MockPodApi::new();
+        pods.expect_update_pod()
+            .returning(|_, _, pod| Ok(pod.clone()));
+        pods.expect_delete_pod().returning(|_, _| Ok(()));
+        let client: std::sync::Arc<dyn alien_k8s_clients::PodApi> = std::sync::Arc::new(pods);
+
+        // A fresh pod whose check was out of memory may pass on a later tick.
+        let mut oom = idle_with_hash("oom", Some("new-template"));
+        oom.status = pod_with_init(
+            check,
+            ContainerState {
+                terminated: Some(ContainerStateTerminated {
+                    exit_code: 137,
+                    reason: Some("OOMKilled".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .status;
+        let (stale, fresh) = split_idle_pods(vec![oom], "new-template");
+        let error = retire_then_judge(&client, "ns", "sbx", stale, Vec::new(), &fresh)
+            .await
+            .expect_err("the failed check is reported");
+        assert!(error.retryable, "{error:?}");
+        assert!(error.to_string().contains("OOMKilled"), "{error}");
+
+        // A missing staged agent needs a rebuilt image: it stays terminal.
+        let mut missing = idle_with_hash("missing", Some("new-template"));
+        missing.status = pod_with_init(check, start_error_with(MISSING_AGENT)).status;
+        let (stale, fresh) = split_idle_pods(vec![missing], "new-template");
+        let error = retire_then_judge(&client, "ns", "sbx", stale, Vec::new(), &fresh)
+            .await
+            .expect_err("the missing agent is reported");
+        assert!(!error.retryable, "{error:?}");
+        assert!(error.to_string().contains("older alien CLI"), "{error}");
     }
 
     #[tokio::test]
