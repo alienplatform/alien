@@ -1329,6 +1329,7 @@ impl KubernetesWorkerController {
 mod tests {
     use super::*;
     use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+    use crate::worker::certificate_wait::CERTIFICATE_WAIT_MAX_POLLS;
 
     #[tokio::test]
     async fn adopted_workload_accepts_ready_created_replicas() {
@@ -1559,9 +1560,9 @@ mod tests {
     }
 
     /// Managed certificates issue asynchronously, so a first install waits past the 60 polls
-    /// other endpoint waits get, and fails only when issuance itself fails.
+    /// other endpoint waits get, and fails when the 30-minute certificate bound runs out.
     #[tokio::test]
-    async fn endpoint_waits_while_the_certificate_issues_and_fails_when_issuance_fails() {
+    async fn endpoint_waits_while_the_certificate_issues_until_the_bound() {
         use alien_core::{
             CertificateStatus, DnsRecordStatus, DomainMetadata, KubernetesCertificateMode,
             KubernetesExposureSettings, KubernetesIngressRouteProfile, KubernetesRouteProfile,
@@ -1672,15 +1673,26 @@ mod tests {
             );
         }
 
+        // A failed attempt may be retried by the issuer, so it keeps waiting too, until the bound.
         harness.deployment_config_mut().domain_metadata = domain(CertificateStatus::Failed);
-        let error =
-            crate::core::ResourceController::step(&mut controller, &ctx_for(&harness, &url))
+        let mut failure = None;
+        for poll in 200..(CERTIFICATE_WAIT_MAX_POLLS + 10) {
+            match crate::core::ResourceController::step(&mut controller, &ctx_for(&harness, &url))
                 .await
-                .expect_err("a failed certificate fails the endpoint");
+            {
+                Ok(_) => {}
+                Err(error) => {
+                    failure = Some((poll, error));
+                    break;
+                }
+            }
+        }
+        let (poll, error) = failure.expect("the wait ends when the bound runs out");
         assert!(
-            error.to_string().contains("Certificate issuance failed"),
-            "{error}"
+            poll >= CERTIFICATE_WAIT_MAX_POLLS - 1,
+            "failed early at poll {poll}"
         );
+        assert!(error.to_string().contains("Polling timed out"), "{error}");
     }
 
     #[tokio::test]

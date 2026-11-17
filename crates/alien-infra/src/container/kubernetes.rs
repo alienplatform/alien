@@ -4574,7 +4574,8 @@ mod tests {
         let render = |security: Option<ContainerSecurity>| async move {
             let mut config = manifest_test_container(&[], false);
             config.security = security;
-            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
             manifest_test_controller()
                 .build_deployment(
                     &config,
@@ -4608,11 +4609,7 @@ mod tests {
         }))
         .await;
         assert_eq!(
-            restricted
-                .security_context
-                .as_ref()
-                .unwrap()
-                .run_as_non_root,
+            restricted.security_context.as_ref().unwrap().run_as_non_root,
             Some(true)
         );
         assert!(restricted.containers[0].security_context.is_some());

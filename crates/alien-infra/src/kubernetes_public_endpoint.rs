@@ -108,7 +108,9 @@ impl KubernetesEndpointAction {
     }
 
     /// Waiting for the managed certificate, which issues asynchronously and is not a failure.
-    /// It shares the bound the public workers on other clouds use.
+    /// It shares the bound the public workers on other clouds use: `CERTIFICATE_WAIT` (30 minutes,
+    /// `worker/certificate_wait.rs:7`), sized to cover several issuance attempts and their retry
+    /// backoff. A `Failed` status keeps waiting too, because the issuer retries failed attempts.
     fn waiting_for_certificate() -> Self {
         Self::Waiting {
             suggested_delay: Duration::from_secs(CERTIFICATE_WAIT_POLL_SECS),
@@ -1529,20 +1531,6 @@ fn resolve_endpoint_plan(
                             .to_string(),
                 }));
             };
-
-            if domain.certificate_status == CertificateStatus::Failed
-                && !matches!(
-                    certificate,
-                    KubernetesCertificateMode::None
-                        | KubernetesCertificateMode::AwsAcmArn { .. }
-                        | KubernetesCertificateMode::TlsSecretRef(_)
-                )
-            {
-                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: target.resource_id.to_string(),
-                    message: format!("Certificate issuance failed for {}", domain.fqdn),
-                }));
-            }
 
             if domain.certificate_status != CertificateStatus::Issued
                 && !matches!(
