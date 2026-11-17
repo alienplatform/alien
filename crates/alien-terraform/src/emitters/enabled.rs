@@ -38,12 +38,17 @@ pub fn kubernetes_network_gate(database_gate_inputs: &[&str]) -> String {
     )
 }
 
+/// Whether the gate is the Kubernetes network gate (see [`kubernetes_network_gate`]).
+pub(crate) fn is_kubernetes_network_gate(input_id: &str) -> bool {
+    input_id.starts_with(KUBERNETES_NETWORK_GATE_PREFIX)
+}
+
 /// Terraform expression carrying the gate's value.
 ///
 /// An input gate mirrors `terraform_stack_input_variable_name`; the compile-time check
 /// guarantees the input is a non-null boolean, so the expressions below never need a null
 /// guard.
-fn gate_variable(input_id: &str) -> String {
+pub(crate) fn gate_variable(input_id: &str) -> String {
     if let Some(inputs) = input_id.strip_prefix(KUBERNETES_NETWORK_GATE_PREFIX) {
         // Plain variables and locals only, so evaluating every operand is safe on any Terraform
         // version.

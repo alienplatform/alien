@@ -284,14 +284,13 @@ pub(super) async fn bootstrap_environment(
             format!("{}/{}", ctx.resource_prefix, sandbox.id),
         ),
     ];
-    // A root-boot pod has no NET_ADMIN, so the agent cannot install firewall rules inside it.
-    // NetworkPolicy and the gateway enforce the egress limit outside the pod.
-    if sandbox.image_user == Some(0) {
-        variables.push((
-            alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER,
-            "networkpolicy".into(),
-        ));
-    }
+    // No sandbox pod on Kubernetes has NET_ADMIN (root-boot or not), so the agent cannot install
+    // firewall rules inside it: NetworkPolicy and the gateway enforce the egress limit outside the
+    // pod, and the agent checks the command path accordingly.
+    variables.push((
+        alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER,
+        "networkpolicy".into(),
+    ));
     let mut environment: Vec<EnvVar> = variables
         .into_iter()
         .map(|(name, value)| EnvVar {
@@ -899,28 +898,27 @@ mod tests {
                 .as_deref(),
             Some("10.96.0.1:443,172.16.0.2:6443,172.16.0.3:6443")
         );
-        // A non-root image keeps its in-pod enforcement and gets no enforcer setting.
-        assert!(!environment
-            .iter()
-            .any(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER"));
-        let mut root_sandbox = sandbox.clone();
-        root_sandbox.image_user = Some(0);
-        let root_environment = bootstrap_environment(&ctx, &root_sandbox, "test-ns")
-            .await
-            .unwrap()
-            .unwrap();
-        let enforcers: Vec<_> = root_environment
-            .iter()
-            .filter(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER")
-            .collect();
-        assert_eq!(enforcers.len(), 1);
-        assert_eq!(enforcers[0].value.as_deref(), Some("networkpolicy"));
+        // Every gateway-egress pod is enforced by NetworkPolicy and the gateway, root image or not.
+        for image_user in [None, Some(0), Some(65534)] {
+            let mut variant = sandbox.clone();
+            variant.image_user = image_user;
+            let environment = bootstrap_environment(&ctx, &variant, "test-ns")
+                .await
+                .unwrap()
+                .unwrap();
+            let enforcers: Vec<_> = environment
+                .iter()
+                .filter(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER")
+                .collect();
+            assert_eq!(enforcers.len(), 1, "{image_user:?}");
+            assert_eq!(enforcers[0].value.as_deref(), Some("networkpolicy"));
+        }
         // The gateway lane probes the public address too.
         assert!(environment
             .iter()
             .any(|env| env.name == "ALIEN_SANDBOX_MUST_DROP_PUBLIC"
                 && env.value.as_deref() == Some("1.1.1.1:443")));
-        service.assert_hits_async(2).await;
+        service.assert_hits_async(4).await;
     }
 
     #[test]

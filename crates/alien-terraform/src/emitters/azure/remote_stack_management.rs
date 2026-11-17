@@ -1031,7 +1031,7 @@ fn runtime_role_conditions(
         if !alien_core::emits_package_scaffolding(
             entry,
             ctx.stack_settings.setup_management,
-            ctx.platform,
+            alien_core::SetupTarget::from_cloud(ctx.platform, ctx.targets_kubernetes),
         ) {
             return Err(alien_error::AlienError::new(
                 ErrorData::OperationNotSupported {
