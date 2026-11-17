@@ -1,0 +1,32 @@
+{
+  "id": "worker/dead-letter",
+  "description": "Allows reconciling the Pub/Sub service agent's subscriber grant on a worker's queue push subscriptions",
+  "platforms": {
+    "gcp": [
+      {
+        // A worker's push subscription for a queue trigger is named <stack prefix>-<worker>-<queue>,
+        // so the grant is limited to the stack's own subscriptions (the worker's for a resource
+        // binding). Creating and patching the subscription is already in worker/provision.
+        "grant": {
+          "permissions": ["pubsub.subscriptions.getIamPolicy", "pubsub.subscriptions.setIamPolicy"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "StackPushSubscriptions",
+              "expression": "resource.type == \"pubsub.googleapis.com/Subscription\" && resource.name.startsWith(\"projects/${projectName}/subscriptions/${stackPrefix}-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "WorkerPushSubscriptions",
+              "expression": "resource.type == \"pubsub.googleapis.com/Subscription\" && resource.name.startsWith(\"projects/${projectName}/subscriptions/${resourceName}-\")"
+            }
+          }
+        }
+      }
+    ]
+  }
+}
