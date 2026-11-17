@@ -30,7 +30,10 @@ mod storage;
 mod vault;
 mod worker;
 
-pub use ai::{AiBinding, BedrockAiBinding, ExternalAiBinding, FoundryAiBinding, VertexAiBinding};
+pub use ai::{
+    validate_aws_region, AiBinding, AmbientAiBinding, BedrockAiBinding, ExternalAi,
+    ExternalAiBinding, FoundryAiBinding, VertexAiBinding,
+};
 pub use artifact_registry::{
     AcrArtifactRegistryBinding, ArtifactRegistryBinding, EcrArtifactRegistryBinding,
     GarArtifactRegistryBinding, LocalArtifactRegistryBinding, LEGACY_REPOSITORY_PUSH_REFUSAL,
