@@ -7,8 +7,8 @@ settings:
 overrides:
   '@workflow/core>devalue': 5.9.3
   '@workflow/core>nanoid': 5.1.16
-  '@workflow/world-local>undici': 7.30.1
-  '@workflow/world-vercel>undici': 7.30.1
+  '@workflow/world-local>undici': 7.30.2
+  '@workflow/world-vercel>undici': 7.30.2
   next>postcss: 8.5.28
 
 importers:
@@ -4461,8 +4461,8 @@ packages:
     resolution: {integrity: sha512-EvRlUt/QqAEvXdQeRMYUfwOQsfzpDztykrG2owGEE/rBOBoYv9uF39ZzsNDh4lTFHhTr2XOZjKkYgueD12ZmGA==}
     engines: {node: '>=18.17'}
 
-  undici@7.30.1:
-    resolution: {integrity: sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg==}
+  undici@7.30.2:
+    resolution: {integrity: sha512-mLyPQnHwUxaM/rideoK/+KL8DaAJLRl4aBCfmX444aCSLnIaomqPLtNRe2jdCYcsk5wZzXrDIQC8ZeYNRAYyIA==}
     engines: {node: '>=20.18.1'}
 
   unicorn-magic@0.1.0:
@@ -6737,7 +6737,7 @@ snapshots:
       '@workflow/world': 4.5.0
       async-sema: 3.1.1
       ulid: 3.0.2
-      undici: 7.30.1
+      undici: 7.30.2
       zod: 4.3.6
 
   '@workflow/world-vercel@4.7.1':
@@ -6747,7 +6747,7 @@ snapshots:
       '@workflow/errors': 4.2.1
       '@workflow/world': 4.5.0
       cbor-x: 1.6.0
-      undici: 7.30.1
+      undici: 7.30.2
       zod: 4.3.6
 
   '@workflow/world@4.5.0':
@@ -8766,7 +8766,7 @@ snapshots:
 
   undici@6.29.1: {}
 
-  undici@7.30.1: {}
+  undici@7.30.2: {}
 
   unicorn-magic@0.1.0: {}
 
