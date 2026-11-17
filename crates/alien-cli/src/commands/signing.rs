@@ -1296,8 +1296,10 @@ async fn add_key(ctx: &ExecutionMode, name: &str, out: Option<&Path>) -> Result<
         "Trusting a new key, {name}, to sign releases of {}.",
         admin.chain.project()
     );
-    publish_ci_signer(&admin, name, None, &key).await?;
+    // The key is written before the list trusts it: a key that could not be
+    // written is never left trusted with nowhere to be found.
     show_ci_key(&key, out)?;
+    publish_ci_signer(&admin, name, None, &key).await?;
     eprintln!("✓ {name} can release (and sign debug sessions); it can't change the devices");
     Ok(())
 }
@@ -1368,6 +1370,10 @@ async fn rotate(ctx: &ExecutionMode, name: &str, revoke: bool, out: Option<&Path
         }
         None => None,
     };
+    if github.is_none() {
+        // Written before the list trusts it, so a failed write publishes nothing.
+        show_ci_key(&key, out)?;
+    }
     let mut body = list.body.clone();
     for signer in body.signers.iter_mut().filter(|signer| signer.id == old.id) {
         signer.key = key.public_key().as_str().to_string();
@@ -1382,10 +1388,7 @@ async fn rotate(ctx: &ExecutionMode, name: &str, revoke: bool, out: Option<&Path
             "✓ New key in the `{GITHUB_ENVIRONMENT}` environment of {}, which {who_can}; the old key can't sign",
             github.unwrap_or_default()
         ),
-        None => {
-            show_ci_key(&key, out)?;
-            eprintln!("✓ The old {name} key can't sign");
-        }
+        None => eprintln!("✓ The old {name} key can't sign"),
     }
     Ok(())
 }
@@ -1538,14 +1541,10 @@ fn revoke_target(
             ))
         }
     };
-    if named.is_empty() {
-        return Err(refuse(
-            "No statement of that release checks out against the device list, so there is nothing to refuse".to_string(),
-        ));
-    }
     // The signed sequence is the release. Any release the control plane lists under it that
     // is current on a channel stops the revoke, whichever id was named.
-    let sequences: Vec<u64> = named.iter().map(|fact| fact.sequence).collect();
+    let mut sequences: Vec<u64> = named.iter().map(|fact| fact.sequence).collect();
+    sequences.extend(sequence);
     if let Some((fact, channel)) = all
         .iter()
         .filter(|fact| sequences.contains(&fact.sequence))
@@ -1599,6 +1598,20 @@ pub async fn revoke_release(
     let mut body = admin.chain.current().body.clone();
     let lines = revoke_lines(&target);
     let mut entries: Vec<String> = Vec::new();
+    // A sequence the admin names is refused even when the control plane returns no
+    // statement for it: the sequence is what protected deployments check.
+    if let Some(sequence) = sequence {
+        let entry = alien_signing::release_deny_entry(sequence);
+        if !body.deny.contains(&entry) {
+            entries.push(entry);
+        }
+        if target.is_empty() {
+            println!(
+                "The control plane returned no statement signed as {sequence} ({}); refusing the sequence alone.",
+                signed_date(sequence)
+            );
+        }
+    }
     for fact in &target {
         for entry in [
             alien_signing::release_deny_entry(fact.sequence),
@@ -2786,6 +2799,13 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    #[test]
+    fn revoke_by_sequence_needs_no_statement_from_the_control_plane() {
+        let chain = chain();
+        let target = revoke_target(&chain, &[], &[], None, Some(1_700_000_000_000), false).unwrap();
+        assert!(target.is_empty());
     }
 
     #[test]

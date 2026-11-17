@@ -52,6 +52,8 @@ fn free_port() -> u16 {
 /// A TPM simulator, unless the environment already names one.
 struct Tpm {
     tcti: String,
+    /// "software" makes the CLI use software keys even where tpm2-tools exist.
+    backend: &'static str,
     _process: Option<Process>,
     _state: TempDir,
 }
@@ -61,6 +63,7 @@ fn start_tpm() -> Tpm {
     if let Ok(tcti) = std::env::var("TPM2TOOLS_TCTI") {
         return Tpm {
             tcti,
+            backend: "",
             _process: None,
             _state: state,
         };
@@ -96,6 +99,7 @@ fn start_tpm() -> Tpm {
     }
     Tpm {
         tcti,
+        backend: "",
         _process: Some(Process(child)),
         _state: state,
     }
@@ -204,6 +208,7 @@ impl World {
             .env("ALIEN_SIGNING_HOME", person.home.join("signing"))
             .env("ALIEN_DEVICE_KEY_PIN", PIN)
             .env("TPM2TOOLS_TCTI", &self.tpm.tcti)
+            .env("ALIEN_DEVICE_KEY_BACKEND", &self.tpm.backend)
             .env("USER", person.name)
             .env("GIT_CONFIG_GLOBAL", person.home.join("gitconfig"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -744,7 +749,7 @@ async fn signing_from_first_release_to_recovery() {
     );
     assert!(
         output.contains(&format!(
-            "Asked admins (alice@example.com) to trust {bob_id}."
+            "Asked admins (alice@example.com) to trust {bob_id} (tpm)."
         )),
         "{output}"
     );
@@ -1165,6 +1170,7 @@ async fn setup_templates_are_stored_as_signed() {
 fn no_tpm() -> Tpm {
     Tpm {
         tcti: "none".to_string(),
+        backend: "software",
         _process: None,
         _state: TempDir::new().unwrap(),
     }
@@ -1248,6 +1254,23 @@ async fn rotating_a_key_keeps_what_runs_and_revoke_keeps_nothing() {
     let opened1 = release1.open().unwrap();
 
     // Rotating it keeps that release by default, and prints exactly what it keeps.
+    // A key that can't be written is never trusted: nothing is published.
+    let before = lists(&world.manager).await.len();
+    let unwritable = ci_file.join("inside-a-file.pem");
+    for args in [
+        vec!["devices", "rotate", "ci", "--keep-running"],
+        vec!["devices", "add-key", "never"],
+    ] {
+        let mut args = args;
+        args.extend(["--out", unwritable.to_str().unwrap()]);
+        failed(world.run(&alice, &app, &args));
+        assert_eq!(
+            lists(&world.manager).await.len(),
+            before,
+            "{args:?} published a list although the key was not written"
+        );
+    }
+
     let ci2_file = world.work.path().join("ci2.pem");
     let output = ok(world.run(
         &alice,

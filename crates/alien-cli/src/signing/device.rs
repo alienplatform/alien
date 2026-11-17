@@ -67,6 +67,11 @@ impl Backend {
 
     /// The first hardware backend this machine has, if any.
     pub fn detect() -> Option<Backend> {
+        // Test builds can ask for a software key on a machine that has a TPM.
+        #[cfg(any(test, feature = "test-device-env"))]
+        if std::env::var("ALIEN_DEVICE_KEY_BACKEND").is_ok_and(|backend| backend == "software") {
+            return None;
+        }
         Self::ALL.into_iter().find(|backend| backend.available())
     }
 
