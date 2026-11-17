@@ -1,0 +1,180 @@
+use super::*;
+use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
+use alien_aws_clients::sqs::MockSqsApi;
+use alien_core::{QueueDeadLetter, Resource, ResourceRef};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+fn controller(name: &str) -> AwsQueueController {
+    AwsQueueController {
+        state: AwsQueueState::Ready,
+        queue_name: Some(format!("test-{name}")),
+        queue_url: Some(format!(
+            "https://sqs.us-east-1.amazonaws.com/123456789012/test-{name}"
+        )),
+        ..Default::default()
+    }
+}
+
+fn with_dead_letter(max_attempts: u32) -> Queue {
+    let mut queue = Queue::new("tasks".into()).build();
+    queue.dead_letter = Some(
+        QueueDeadLetter::builder()
+            .queue(ResourceRef::new(Queue::RESOURCE_TYPE, "failed"))
+            .max_attempts(max_attempts)
+            .build(),
+    );
+    queue
+}
+
+type Writes = Arc<Mutex<Vec<HashMap<String, String>>>>;
+
+fn provider(writes: &Writes) -> Arc<MockPlatformServiceProvider> {
+    let mut sqs = MockSqsApi::new();
+    let writes = writes.clone();
+    sqs.expect_set_queue_attributes()
+        .returning(move |_, request| {
+            writes.lock().unwrap().push(request.attributes.clone());
+            Ok(())
+        });
+    let sqs = Arc::new(sqs);
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_aws_sqs_client()
+        .returning(move |_| Ok(sqs.clone()));
+    Arc::new(provider)
+}
+
+async fn source(
+    current: Queue,
+    desired: Queue,
+    lifecycle: ResourceLifecycle,
+    authority: InitialSetupAuthority,
+    writes: &Writes,
+) -> crate::core::controller_test::SingleControllerExecutor {
+    let mut run = SingleControllerExecutor::builder()
+        .resource(current)
+        .controller(controller("tasks"))
+        .platform(Platform::Aws)
+        .resource_lifecycle(lifecycle)
+        .initial_setup_authority(authority)
+        .with_stack_resource(Queue::new("failed".into()).build(), lifecycle)
+        .service_provider(provider(writes))
+        .build()
+        .await
+        .unwrap();
+    *run.desired_resource_config_mut("tasks").unwrap() = Resource::new(desired);
+    run
+}
+
+#[tokio::test]
+async fn adding_then_removing_a_dead_letter_writes_and_clears_the_redrive_policy() {
+    let writes: Writes = Default::default();
+    let plain = Queue::new("tasks".into()).build();
+    let mut run = source(
+        plain.clone(),
+        with_dead_letter(7),
+        ResourceLifecycle::Live,
+        InitialSetupAuthority::DirectSetup,
+        &writes,
+    )
+    .await;
+    assert!(run.needs_update().unwrap());
+    run.update(with_dead_letter(7)).unwrap();
+    run.run_until_terminal().await.unwrap();
+    assert!(!run.needs_update().unwrap());
+    {
+        let writes = writes.lock().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(
+            writes[0].len(),
+            1,
+            "a source queue's retention is untouched"
+        );
+        let policy: Value = serde_json::from_str(&writes[0]["RedrivePolicy"]).unwrap();
+        assert_eq!(
+            policy,
+            json!({
+                "deadLetterTargetArn": "arn:aws:sqs:us-east-1:123456789012:test-failed",
+                "maxReceiveCount": 7
+            })
+        );
+    }
+
+    *run.desired_resource_config_mut("tasks").unwrap() = Resource::new(plain.clone());
+    assert!(run.needs_update().unwrap());
+    run.update(plain).unwrap();
+    run.run_until_terminal().await.unwrap();
+    let writes = writes.lock().unwrap();
+    assert_eq!(writes.len(), 2);
+    assert_eq!(
+        writes[1]["RedrivePolicy"], "",
+        "an empty value clears the policy"
+    );
+}
+
+#[tokio::test]
+async fn a_target_keeps_messages_fourteen_days_and_returns_to_the_default() {
+    let writes: Writes = Default::default();
+    let failed = Queue::new("failed".into()).build();
+    let mut run = SingleControllerExecutor::builder()
+        .resource(failed.clone())
+        .controller(controller("failed"))
+        .platform(Platform::Aws)
+        .resource_lifecycle(ResourceLifecycle::Live)
+        .initial_setup_authority(InitialSetupAuthority::DirectSetup)
+        .with_stack_resource(with_dead_letter(5), ResourceLifecycle::Live)
+        .service_provider(provider(&writes))
+        .build()
+        .await
+        .unwrap();
+    assert!(run.needs_update().unwrap());
+    run.update(failed.clone()).unwrap();
+    run.run_until_terminal().await.unwrap();
+    assert!(!run.needs_update().unwrap());
+    assert_eq!(
+        writes.lock().unwrap()[0],
+        HashMap::from([("MessageRetentionPeriod".to_string(), "1209600".to_string())])
+    );
+
+    *run.desired_resource_config_mut("tasks").unwrap() =
+        Resource::new(Queue::new("tasks".into()).build());
+    assert!(run.needs_update().unwrap());
+    run.update(failed).unwrap();
+    run.run_until_terminal().await.unwrap();
+    assert_eq!(
+        writes.lock().unwrap()[1]["MessageRetentionPeriod"],
+        "345600"
+    );
+}
+
+#[tokio::test]
+async fn a_setup_owned_queue_is_not_changed_by_the_runtime() {
+    let writes: Writes = Default::default();
+    let run = source(
+        Queue::new("tasks".into()).build(),
+        with_dead_letter(5),
+        ResourceLifecycle::Frozen,
+        InitialSetupAuthority::ImportedHandoff,
+        &writes,
+    )
+    .await;
+    assert!(!run.needs_update().unwrap());
+    assert!(writes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn queues_without_a_dead_letter_setting_are_never_written() {
+    let writes: Writes = Default::default();
+    let plain = Queue::new("tasks".into()).build();
+    let run = source(
+        plain.clone(),
+        plain,
+        ResourceLifecycle::Live,
+        InitialSetupAuthority::DirectSetup,
+        &writes,
+    )
+    .await;
+    assert!(!run.needs_update().unwrap());
+}

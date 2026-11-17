@@ -883,10 +883,7 @@ async fn an_automatic_setup_run_with_installer_credentials_still_creates_and_lat
         .clone();
     let mut runtime = automatic(&cloud, recorded, false).await;
     runtime.delete().expect("delete starts");
-    runtime
-        .run_until_terminal()
-        .await
-        .expect("delete finishes");
+    runtime.run_until_terminal().await.expect("delete finishes");
     assert_eq!(runtime.status(), ResourceStatus::Deleted);
     assert_eq!(
         cloud.lock().unwrap().calls,
@@ -915,10 +912,7 @@ async fn an_automatic_delete_finds_tagged_flow_log_objects_without_a_record() {
     controller.flow_logs = None;
     let mut runtime = automatic(&cloud, controller, false).await;
     runtime.delete().expect("delete starts");
-    runtime
-        .run_until_terminal()
-        .await
-        .expect("delete finishes");
+    runtime.run_until_terminal().await.expect("delete finishes");
     assert_eq!(runtime.status(), ResourceStatus::Deleted);
     let cloud = cloud.lock().unwrap();
     assert!(cloud.log_groups.is_empty() && cloud.roles.is_empty() && cloud.flow_logs.is_empty());
