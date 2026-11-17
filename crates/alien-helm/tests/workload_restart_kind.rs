@@ -381,3 +381,42 @@ fn the_cluster_admits_only_a_restart_from_the_operator() {
     );
     assert!(ok, "another account is not limited: {text}");
 }
+
+/// On a cluster that does not serve the admission policy API (before Kubernetes 1.30) the chart
+/// renders no workload `patch` and no policy, and the Role is otherwise unchanged. `helm
+/// template` cannot show this, because it does not ask a cluster what it serves.
+#[test]
+#[ignore = "requires a disposable cluster older than Kubernetes 1.30 named by ALIEN_WORKLOAD_RESTART_OLD_KIND_CONTEXT"]
+fn a_cluster_without_the_policy_api_gets_no_workload_patch() {
+    let context = std::env::var("ALIEN_WORKLOAD_RESTART_OLD_KIND_CONTEXT")
+        .expect("ALIEN_WORKLOAD_RESTART_OLD_KIND_CONTEXT names the cluster");
+    let _cleanup = Cleanup(&context);
+    let (ok, _) = run("kubectl", &["--context", &context, "create", "namespace", NAMESPACE], None);
+    assert!(ok);
+    let (_, resources) = run(
+        "kubectl",
+        &["--context", &context, "get", "--raw", "/apis/admissionregistration.k8s.io/v1"],
+        None,
+    );
+    assert!(
+        !resources.contains("validatingadmissionpolicies"),
+        "this cluster serves the policy API; use one older than Kubernetes 1.30"
+    );
+    let directory = tempfile::tempdir().unwrap();
+    write_chart(directory.path());
+    let (ok, rendered) = run(
+        "helm",
+        &[
+            "--kube-context", &context, "install", RELEASE, directory.path().to_str().unwrap(),
+            "--namespace", NAMESPACE, "--dry-run=server",
+        ],
+        None,
+    );
+    assert!(ok, "the chart renders on an older cluster: {rendered}");
+    assert!(rendered.contains("kind: Role\n"), "the Operator's Role is still rendered");
+    assert!(!rendered.contains("ValidatingAdmissionPolicy"), "no policy");
+    assert!(
+        !rendered.contains("verbs: ['patch']"),
+        "no workload patch is granted without its policy"
+    );
+}
