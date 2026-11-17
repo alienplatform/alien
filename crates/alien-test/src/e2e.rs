@@ -169,6 +169,9 @@ pub enum TestApp {
     AutomaticSetup,
     /// Two notifying buckets and a batched Worker recording every delivery.
     StorageNotifications,
+    /// A queue that dead-letters to a second queue and a batched Worker that always fails the
+    /// messages marked `poison` (`tests/e2e/test-apps/queue-dead-letter`).
+    QueueDeadLetter,
     /// A Live sandbox built from source and a Worker that opens a session in it and runs a
     /// command (`tests/e2e/test-apps/sandbox-session`).
     SandboxSession,
@@ -191,6 +194,7 @@ impl std::fmt::Display for TestApp {
             TestApp::ByoAi => write!(f, "byo-ai"),
             TestApp::AutomaticSetup => write!(f, "automatic-setup"),
             TestApp::StorageNotifications => write!(f, "storage-notifications"),
+            TestApp::QueueDeadLetter => write!(f, "queue-dead-letter"),
             TestApp::SandboxSession => write!(f, "sandbox-session"),
             TestApp::SandboxRemote => write!(f, "sandbox-remote"),
         }
@@ -426,6 +430,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::ByoAi => "test-apps/byo-ai",
         TestApp::AutomaticSetup => "test-apps/automatic-setup",
         TestApp::StorageNotifications => "test-apps/storage-notifications",
+        TestApp::QueueDeadLetter => "test-apps/queue-dead-letter",
         TestApp::SandboxSession => "test-apps/sandbox-session",
         TestApp::SandboxRemote => "test-apps/sandbox-remote",
     }
@@ -448,6 +453,7 @@ fn deployment_environment_variables(
         | TestApp::EnabledDemo
         | TestApp::AutomaticSetup
         | TestApp::StorageNotifications
+        | TestApp::QueueDeadLetter
         | TestApp::SandboxSession
         | TestApp::SandboxRemote => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
@@ -2008,6 +2014,7 @@ async fn setup_inner(
     // Only for push mode — pull-mode agents manage secrets directly.
     if model == DeploymentModel::Push
         && app != TestApp::StorageNotifications
+        && app != TestApp::QueueDeadLetter
         && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
     {
         if let Err(e) = provision_managed_test_secret(&manager, &deployment).await {
