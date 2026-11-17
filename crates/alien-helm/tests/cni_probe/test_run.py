@@ -83,6 +83,10 @@ class FakeCluster:
     def scheduled_at(self, pod):
         if self.node_up_at is None:
             return None
+        # A hostname label that no node carries matches nothing (the node's label is not its name).
+        label = pod["spec"]["spec"].get("nodeSelector", {}).get("kubernetes.io/hostname")
+        if label and label != "host-of-kata-1" and label != "host-of-kata-2":
+            return None
         return max(pod["created"] + self.role_pending.get(pod["role"], 0), self.node_up_at)
 
     def finish(self, pod, started):
@@ -110,7 +114,7 @@ class FakeCluster:
         return started + 1, 1, MARKER_FAILED
 
     def node_of(self, pod):
-        pin = pod["spec"]["spec"].get("nodeSelector", {}).get("kubernetes.io/hostname")
+        pin = pinned_node_name(pod)
         if pin and not self.ignore_pin:
             return pin
         return self.unpinned_nodes.get(pod["role"], "kata-1")
@@ -226,6 +230,16 @@ class Passing(unittest.TestCase):
             probe.STAGES = original
 
 
+def pinned_node_name(pod):
+    """The node a pod is pinned to by required nodeAffinity on the node's name, if any."""
+    affinity = pod["spec"]["spec"].get("affinity", {}).get("nodeAffinity", {})
+    for term in affinity.get("requiredDuringSchedulingIgnoredDuringExecution", {}).get("nodeSelectorTerms", []):
+        for field in term.get("matchFields", []):
+            if field["key"] == "metadata.name" and field["operator"] == "In":
+                return field["values"][0]
+    return None
+
+
 class SameNode(unittest.TestCase):
     def test_every_pod_after_the_first_control_is_pinned_to_its_node(self):
         cluster = FakeCluster(unpinned_nodes={"denied": "kata-2", "ingress-denied": "kata-2"})
@@ -235,11 +249,23 @@ class SameNode(unittest.TestCase):
                                                 and "labels" in b["metadata"] and "?" not in p else None) or original(m, p, b)
         cluster.run()
         self.assertIn("NetworkPolicy enforced", cluster.output[-1])
-        pins = {pod["metadata"]["labels"]["alien.dev/cni-role"]:
-                pod["spec"]["nodeSelector"].get("kubernetes.io/hostname") for pod in created}
+        pins = {pod["metadata"]["labels"]["alien.dev/cni-role"]: pinned_node_name({"spec": pod}) for pod in created}
         self.assertIsNone(pins["control"])
         for role in ("denied", "ingress-denied", "control-after", "ingress-control-after"):
             self.assertEqual(pins[role], "kata-1", role)
+
+    def test_the_pin_matches_the_node_name_not_a_hostname_label(self):
+        # The node's name differs from its kubernetes.io/hostname label: a pin on the label with
+        # the name matches no node and the later pods stay Pending.
+        cluster = FakeCluster()
+        created = []
+        original = cluster.request
+        cluster.request = lambda m, p, b=None: (created.append(b) if m == "POST" and b and "spec" in b
+                                                and "labels" in b["metadata"] and "?" not in p else None) or original(m, p, b)
+        cluster.run()
+        self.assertIn("NetworkPolicy enforced", cluster.output[-1])
+        for pod in created:
+            self.assertNotIn("kubernetes.io/hostname", pod["spec"].get("nodeSelector", {}))
 
     def test_a_denied_pod_on_another_node_than_the_control_fails(self):
         # The pin is not honored and the denied pod lands on a node that cannot route to the

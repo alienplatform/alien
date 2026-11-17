@@ -363,9 +363,13 @@ def run_probe(request, env, now=time.monotonic, sleep=time.sleep, out=print):
         # ingress into a sandbox pod, and the clients share its node.
         if runtime_class:
             spec["spec"]["runtimeClassName"] = runtime_class
-        if node_selector or pinned_node:
-            spec["spec"]["nodeSelector"] = {**node_selector, **({"kubernetes.io/hostname": pinned_node[0]}
-                                                                 if pinned_node else {})}
+        if node_selector:
+            spec["spec"]["nodeSelector"] = node_selector
+        if pinned_node:
+            # By the node's name: its kubernetes.io/hostname label can differ from it.
+            spec["spec"]["affinity"] = {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
+                "nodeSelectorTerms": [{"matchFields": [
+                    {"key": "metadata.name", "operator": "In", "values": [pinned_node[0]]}]}]}}}
         if tolerations:
             spec["spec"]["tolerations"] = tolerations
         return spec
