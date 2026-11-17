@@ -31,13 +31,15 @@ impl StackMutation for SandboxGatewayMutation {
     }
 
     fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
-        matches!(state.platform, Platform::Aws | Platform::Kubernetes)
-            && stack.resources().any(|(_, entry)| {
-                entry
-                    .config
-                    .downcast_ref::<Sandbox>()
-                    .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
-            })
+        matches!(
+            state.platform,
+            Platform::Aws | Platform::Kubernetes | Platform::Azure
+        ) && stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| matches!(sandbox.egress, SandboxEgress::Internet))
+        })
     }
 
     async fn mutate(
@@ -370,5 +372,14 @@ mod tests {
         assert!(prepared
             .resources()
             .all(|(_, entry)| entry.config.downcast_ref::<alien_core::Kv>().is_none()));
+    }
+
+    /// Azure setup reads the gateway container's image to create the gateway VMs, so the
+    /// preparation installs it there as on AWS and Kubernetes.
+    #[tokio::test]
+    async fn azure_internet_sandbox_gets_the_gateway_container() {
+        let (stack, _, config) = fixture();
+        let state = StackState::new(Platform::Azure);
+        assert!(SandboxGatewayMutation.should_run(&stack, &state, &config));
     }
 }

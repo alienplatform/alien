@@ -1755,6 +1755,9 @@ jobs:
             --features alien-egress-gateway/cloud,alien-egress-gateway/local \
             --target x86_64-unknown-linux-musl
 
+      - name: Gateway has the cloud providers compiled in
+        run: target/x86_64-unknown-linux-musl/release/alien-egress-gateway --self-check
+
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl

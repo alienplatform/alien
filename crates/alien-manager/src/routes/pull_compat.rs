@@ -176,6 +176,12 @@ pub(crate) const SIGNING_VERIFIER: Feature = feature(
     Action::Refuse,
     "older Operators cannot parse the resource type",
 );
+pub(crate) const AZURE_SANDBOX_INTERNET: Feature = feature(
+    "internet egress for Azure sandboxes",
+    NEXT_RELEASE,
+    Action::Refuse,
+    "the setup-created gateway's binding carries replica addresses and a protocol floor older Operators reject, and they have no Azure gateway to enforce the rules",
+);
 pub(crate) const CUSTOM_BASE_DOMAIN: Feature = feature(
     "custom base domains for Kubernetes endpoints",
     "3.3.44",
@@ -203,6 +209,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &SANDBOX_IMAGE_USER,
     &REDIS,
     &SIGNING_VERIFIER,
+    &AZURE_SANDBOX_INTERNET,
     &CUSTOM_BASE_DOMAIN,
 ];
 
@@ -392,6 +399,27 @@ pub(crate) fn apply(
         refuse(&CUSTOM_BASE_DOMAIN);
     }
     refused
+}
+
+/// The refusal for a feature that depends on the platform, which `apply` does
+/// not see: an Azure sandbox with `internet` egress gets a gateway binding with
+/// replica addresses and a protocol floor (`SandboxEgressReplicas.addresses`,
+/// `.min_protocol`). Operators before this release reject that state and have
+/// no Azure gateway, so the release is refused for them, never delivered
+/// without its enforcement.
+pub(crate) fn refuse_for_platform(
+    stack: &Stack,
+    platform: alien_core::Platform,
+    operator: &OperatorVersion,
+) -> Option<&'static Feature> {
+    let internet = platform == alien_core::Platform::Azure
+        && stack.resources().any(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| sandbox.egress == alien_core::SandboxEgress::Internet)
+        });
+    (internet && !operator.reads(&AZURE_SANDBOX_INTERNET)).then_some(&AZURE_SANDBOX_INTERNET)
 }
 
 /// Whether a declared `security` setting is one an older Operator would have
@@ -723,6 +751,55 @@ mod tests {
             serde_json::to_string(&copy).unwrap(),
             serde_json::to_string(&stack).unwrap()
         );
+    }
+
+    fn internet_sandbox() -> Stack {
+        let sandbox = Sandbox::new("box".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "img".to_string(),
+                bundled_from: None,
+            })
+            .egress(alien_core::SandboxEgress::Internet)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        Stack::new("app".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build()
+    }
+
+    #[test]
+    fn an_azure_internet_sandbox_is_refused_for_operators_before_its_gateway_binding() {
+        use alien_core::Platform;
+        let stack = internet_sandbox();
+        for version in [None, Some("3.3.31"), Some("3.3.62")] {
+            let operator = OperatorVersion::from_report(version);
+            assert_eq!(
+                refuse_for_platform(&stack, Platform::Azure, &operator)
+                    .map(|feature| feature.name),
+                Some("internet egress for Azure sandboxes"),
+                "{version:?}"
+            );
+            // AWS and Kubernetes gateways were read by these Operators already.
+            assert!(refuse_for_platform(&stack, Platform::Aws, &operator).is_none());
+            assert!(refuse_for_platform(&stack, Platform::Kubernetes, &operator).is_none());
+        }
+        let reads = OperatorVersion::from_report(Some(NEXT_RELEASE));
+        assert!(refuse_for_platform(&stack, Platform::Azure, &reads).is_none());
+        let mut none = stack.clone();
+        for (_, entry) in none.resources_mut() {
+            if let Some(sandbox) = entry.config.downcast_mut::<Sandbox>() {
+                sandbox.egress = alien_core::SandboxEgress::None;
+            }
+        }
+        assert!(refuse_for_platform(
+            &none,
+            Platform::Azure,
+            &OperatorVersion::from_report(None)
+        )
+        .is_none());
     }
 
     #[test]

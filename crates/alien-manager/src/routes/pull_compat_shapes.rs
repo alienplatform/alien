@@ -774,6 +774,16 @@ fn handled() -> Vec<(&'static str, &'static str, Handling)> {
             Out("import data the setup writes into the stack state, not part of a release target"),
         ),
         (
+            "SandboxEgressReplicas",
+            "addresses",
+            F(&AZURE_SANDBOX_INTERNET),
+        ),
+        (
+            "SandboxEgressReplicas",
+            "min_protocol",
+            F(&AZURE_SANDBOX_INTERNET),
+        ),
+        (
             "SandboxCapabilities",
             "interactive_commands",
             Out("a capability the sandbox backend reports at runtime, never authored in a release"),

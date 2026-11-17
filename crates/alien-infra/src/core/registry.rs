@@ -921,6 +921,17 @@ impl ResourceRegistry {
             >::new()),
         );
 
+        // Azure runs no Container: its only one is the egress gateway declaration, whose VMs
+        // setup creates.
+        #[cfg(feature = "azure")]
+        registry.register_controller_factory(
+            Container::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<
+                crate::container::AzureSandboxGatewayDeclarationController,
+            >::new()),
+        );
+
         // Register Kubernetes Container controller
         #[cfg(feature = "kubernetes")]
         registry.register_controller_factory(

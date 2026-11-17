@@ -6656,6 +6656,11 @@ fn compat_refusals(
     if signed && !supports_pod_security && downgrade_container_security(&mut stack) {
         refused.push(&super::pull_compat::UNREADABLE_SECURITY);
     }
+    if let Some(feature) = super::pull_compat::refuse_for_platform(&stack, platform, operator) {
+        if !refused.contains(&feature) {
+            refused.push(feature);
+        }
+    }
     refused
 }
 
