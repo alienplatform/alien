@@ -19,9 +19,10 @@ use crate::kubernetes_public_endpoint::{
 };
 use crate::kubernetes_workload_heartbeat::{
     deployment_has_ready_replicas, deployment_rollout, deployment_rollout_complete,
-    emit_kubernetes_workload_heartbeat, label_selector, recovery_check,
-    statefulset_has_ready_replicas, statefulset_rollout, track_rollout, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
+    deployment_stalled_rollout, emit_kubernetes_workload_heartbeat, label_selector, recovery_check,
+    stalled_rollout_message, statefulset_has_ready_replicas, statefulset_rollout,
+    statefulset_stalled_rollout, track_rollout, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
     KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -1036,7 +1037,25 @@ impl KubernetesContainerController {
             };
             let mut rollout_note = String::new();
             if healthy {
-                self.rollout_watch = None;
+                // Old pods can keep serving while the new version never becomes ready.
+                let stalled = match &workload {
+                    KubernetesWorkload::Deployment(deployment) => {
+                        self.rollout_watch = None;
+                        deployment_stalled_rollout(deployment)
+                    }
+                    KubernetesWorkload::StatefulSet(statefulset) => statefulset_stalled_rollout(
+                        &mut self.rollout_watch,
+                        statefulset,
+                        chrono::Utc::now().timestamp(),
+                    ),
+                    KubernetesWorkload::DaemonSet(_) => None,
+                };
+                if let Some(secs) = stalled {
+                    return Err(AlienError::new(ErrorData::ResourceDrift {
+                        resource_id: config.id.clone(),
+                        message: stalled_rollout_message(secs),
+                    }));
+                }
             } else {
                 let probe = match &workload {
                     KubernetesWorkload::Deployment(deployment) => deployment_rollout(deployment),
@@ -3767,6 +3786,84 @@ mod tests {
             } else {
                 assert!(
                     matches!(result, Ok(KubernetesContainerHandlerAction::Stay { .. })),
+                    "{result:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_rollout_past_its_bound_is_drift_even_while_the_previous_version_serves() {
+        let now = chrono::Utc::now().timestamp();
+        // (stateful, status, seconds the rollout has been seen, expect drift)
+        let stuck_deployment = serde_json::json!({"replicas":3,"updatedReplicas":1,"readyReplicas":2,
+            "availableReplicas":2,"observedGeneration":3,
+            "conditions":[{"type":"Progressing","status":"False","reason":"ProgressDeadlineExceeded"}]});
+        let rolling_deployment = serde_json::json!({"replicas":3,"updatedReplicas":1,"readyReplicas":2,
+            "availableReplicas":2,"observedGeneration":3,
+            "conditions":[{"type":"Progressing","status":"True","reason":"ReplicaSetUpdated"}]});
+        let statefulset = serde_json::json!({"replicas":2,"updatedReplicas":1,"readyReplicas":2,
+            "observedGeneration":3,"currentRevision":"web-1","updateRevision":"web-2"});
+        for (stateful, status, seen_for, expect_drift) in [
+            (false, stuck_deployment, 0, true),
+            (false, rolling_deployment, 0, false),
+            (true, statefulset.clone(), 700, true),
+            (true, statefulset, 100, false),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            let kind = if stateful {
+                "StatefulSet"
+            } else {
+                "Deployment"
+            };
+            let collection = if stateful {
+                "statefulsets"
+            } else {
+                "deployments"
+            };
+            server.mock(|when, then| {
+                when.method(httpmock::Method::GET).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}/web"));
+                then.status(200).json_body(serde_json::json!({
+                    "apiVersion":"apps/v1", "kind":kind,
+                    "metadata":{"name":"web", "generation":3},
+                    "spec":{"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"spec":{"containers":[]}}},
+                    "status":status
+                }));
+            });
+            let config = manifest_test_container(&[], stateful);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+            let mut ctx = harness.ctx();
+            point_at(&mut ctx, &server);
+            let mut controller = manifest_test_controller();
+            controller.is_stateful = stateful;
+            if seen_for > 0 {
+                controller.rollout_watch = Some(RolloutWatch {
+                    key: "generation-3-web-2".into(),
+                    first_seen_unix: now - seen_for,
+                });
+            }
+            if expect_drift {
+                let error = controller
+                    .ready(&ctx)
+                    .await
+                    .expect_err("the new version never rolled out");
+                assert_eq!(error.code, "RESOURCE_DRIFT");
+                assert!(
+                    error.message.contains("did not finish within")
+                        && error.message.contains("previous version is still serving"),
+                    "{}",
+                    error.message
+                );
+            } else {
+                // Inside the bound the previous version serving is healthy; the later
+                // steps need a full harness, so only the absence of drift is checked.
+                let result = controller.ready(&ctx).await;
+                assert!(
+                    result.is_ok()
+                        || !result
+                            .as_ref()
+                            .err()
+                            .is_some_and(|e| e.message.contains("did not finish within")),
                     "{result:?}"
                 );
             }

@@ -13,9 +13,10 @@ use crate::kubernetes_public_endpoint::{
 };
 use crate::kubernetes_workload_heartbeat::{
     deployment_has_ready_replicas, deployment_rollout, deployment_rollout_complete,
-    emit_kubernetes_workload_heartbeat, label_selector, recovery_check, track_rollout,
-    KubernetesWorkload, KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, RolloutWait,
-    RolloutWatch, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+    deployment_stalled_rollout, emit_kubernetes_workload_heartbeat, label_selector, recovery_check,
+    stalled_rollout_message, track_rollout, KubernetesWorkload, KubernetesWorkloadDataKind,
+    KubernetesWorkloadHeartbeatInput, RolloutWait, RolloutWatch,
+    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -492,6 +493,13 @@ impl KubernetesWorkerController {
             let mut rollout_note = String::new();
             if healthy {
                 self.rollout_watch = None;
+                // Old pods can keep serving while the new version never becomes ready.
+                if let Some(secs) = deployment_stalled_rollout(&deployment) {
+                    return Err(AlienError::new(ErrorData::ResourceDrift {
+                        resource_id: config.id.clone(),
+                        message: stalled_rollout_message(secs),
+                    }));
+                }
             } else {
                 match track_rollout(
                     &mut self.rollout_watch,
@@ -1751,6 +1759,56 @@ mod tests {
                 assert!(controller.rollout_watch.is_some());
             }
         }
+    }
+
+    #[tokio::test]
+    async fn worker_rollout_past_the_progress_deadline_is_drift_while_old_pods_serve() {
+        let server = httpmock::MockServer::start_async().await;
+        crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
+        server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
+            then.status(200).json_body(serde_json::json!({
+                "apiVersion":"apps/v1", "kind":"Deployment",
+                "metadata":{"name":"worker", "generation":3},
+                "spec":{"replicas":2,"selector":{"matchLabels":{"app":"worker"}},"template":{"spec":{"containers":[]}}},
+                "status":{"replicas":3,"updatedReplicas":1,"readyReplicas":2,"availableReplicas":2,
+                    "observedGeneration":3,
+                    "conditions":[{"type":"Progressing","status":"False","reason":"ProgressDeadlineExceeded"}]}
+            }));
+        });
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes client")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual client")
+        };
+        *server_url = server.base_url();
+        let mut controller = KubernetesWorkerController {
+            deployment_name: Some("worker".into()),
+            namespace: Some("test-ns".into()),
+            ..Default::default()
+        };
+        controller.state = KubernetesWorkerState::RefreshFailed;
+        controller.recovery_checks = 2;
+        let error = controller
+            .refresh_failed(&ctx)
+            .await
+            .expect_err("the new version never rolled out");
+        assert_eq!(error.code, "RESOURCE_DRIFT");
+        assert!(
+            error.message.contains("previous version is still serving"),
+            "{}",
+            error.message
+        );
+        assert_eq!(controller.recovery_checks, 0);
     }
 
     #[test]

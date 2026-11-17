@@ -192,6 +192,38 @@ pub(crate) fn track_rollout(
     }
 }
 
+/// Seconds of the progress deadline a Deployment's rollout exceeded, once Kubernetes has
+/// given up on it. Old pods can still be serving: the new version is not rolling out.
+pub(crate) fn deployment_stalled_rollout(deployment: &Deployment) -> Option<i64> {
+    deployment_progress_deadline_exceeded(deployment).then(|| {
+        deployment
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.progress_deadline_seconds)
+            .map(i64::from)
+            .unwrap_or(DEFAULT_PROGRESS_DEADLINE_SECS)
+    })
+}
+
+/// Seconds a StatefulSet rollout has been seen for, once past its bound. Old pods can still be
+/// serving: the new version is not rolling out.
+pub(crate) fn statefulset_stalled_rollout(
+    watch: &mut Option<RolloutWatch>,
+    statefulset: &StatefulSet,
+    now_unix: i64,
+) -> Option<i64> {
+    match track_rollout(watch, statefulset_rollout(statefulset), now_unix) {
+        RolloutWait::TimedOut { elapsed_secs } => Some(elapsed_secs),
+        _ => None,
+    }
+}
+
+pub(crate) fn stalled_rollout_message(secs: i64) -> String {
+    format!(
+        "the rollout of the new version did not finish within {secs} s; the previous version is still serving"
+    )
+}
+
 /// Counts consecutive healthy checks of a `RefreshFailed` resource. Returns true once there
 /// are `RECOVERY_HEALTHY_CHECKS` in a row; any unhealthy check starts the count again.
 pub(crate) fn recovery_check(healthy_checks: &mut u32, healthy: bool) -> bool {
