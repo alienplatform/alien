@@ -219,7 +219,6 @@ fn fully_populated_state() -> alien_core::DeploymentState {
         last_synced_env_vars_hash: Some("hash".to_string()),
         last_synced_secret_names: vec!["DB_PASSWORD".to_string()],
         vault_credentials_revoked: true,
-        setup_cleanup_recommended: vec!["service account 'api-sa'".to_string()],
         retained_storage_protection_hash: Some("hash".to_string()),
         retained_storage_protection_confirmed_at: Some(at),
         retained_data_protection_started_at: Some(at),

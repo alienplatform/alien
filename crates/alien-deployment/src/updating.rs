@@ -473,18 +473,7 @@ pub async fn handle_update_pending(
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let pending_prepared_release_id = target_release_id.map(str::to_string);
-    // What this release no longer asks for but the installed identities still hold. The update
-    // runs; the next setup update removes it, so the platform can recommend one.
-    // A setup update that authorized this release already applied the narrowing: nothing is left.
-    let setup_cleanup_recommended = old_stack_for_comparison
-        .as_deref()
-        .filter(|_| !setup_update_authorized)
-        .map(|installed| {
-            alien_preflights::compatibility::narrowing::leftover_grants(installed, &mutated_stack)
-        })
-        .unwrap_or_default();
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
-    runtime_metadata.setup_cleanup_recommended = setup_cleanup_recommended;
     runtime_metadata.pending_prepared_stack = Some(mutated_stack);
     runtime_metadata.pending_prepared_release_id = pending_prepared_release_id;
     runtime_metadata.persisted_gate_answers = persisted_gate_answers;
@@ -711,7 +700,14 @@ pub async fn handle_updating(
     // resource, which runtime may not apply. Only edges the state still records and whose
     // identity is still in the target; once setup re-imported the result, the state has none to
     // restore.
-    if !runtime_metadata.setup_cleanup_recommended.is_empty() {
+    let leftover = runtime_metadata
+        .prepared_stack
+        .as_ref()
+        .is_some_and(|installed| {
+            !alien_preflights::compatibility::narrowing::leftover_grants(installed, &target_stack)
+                .is_empty()
+        });
+    if leftover {
         let identities: HashSet<String> = target_stack
             .resources()
             .filter(|(_, entry)| {
@@ -948,7 +944,9 @@ pub async fn handle_updating(
         if let (Some(installed), Some(converged)) =
             (installed.as_ref(), runtime_metadata.prepared_stack.as_mut())
         {
-            if !runtime_metadata.setup_cleanup_recommended.is_empty() {
+            if !alien_preflights::compatibility::narrowing::leftover_grants(installed, converged)
+                .is_empty()
+            {
                 for (name, profile) in &installed.permissions.profiles {
                     if converged.permissions.profiles.get(name).is_some_and(|new| {
                         new != profile
@@ -1441,15 +1439,10 @@ mod tests {
         }
 
         async fn update(installed: Stack, target: Stack) -> Result<DeploymentStepResult> {
-            update_after(installed, target, Vec::new()).await
+            update_after(installed, target).await
         }
 
-        /// `earlier_cleanup`: what the previous release's preparation recommended removing.
-        async fn update_after(
-            installed: Stack,
-            target: Stack,
-            earlier_cleanup: Vec<String>,
-        ) -> Result<DeploymentStepResult> {
+        async fn update_after(installed: Stack, target: Stack) -> Result<DeploymentStepResult> {
             let (client, _server) = client().await;
             let state = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
             let prepared = alien_preflights::runner::PreflightRunner::new()
@@ -1501,7 +1494,6 @@ mod tests {
                     runtime_metadata: Some(RuntimeMetadata {
                         initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
                         prepared_stack: Some(prepared),
-                        setup_cleanup_recommended: earlier_cleanup,
                         ..Default::default()
                     }),
                     retry_requested: false,
@@ -1515,33 +1507,6 @@ mod tests {
             .await
         }
 
-        // The notice is replaced on every preparation: once the installed stack holds only what
-        // the release asks for (setup applied the narrowing), nothing is recommended any more.
-        #[tokio::test]
-        async fn the_cleanup_notice_clears_once_nothing_is_left_over() {
-            let eight = ["a", "b", "c", "d", "e", "f", "g", "h"];
-            let seven = ["a", "b", "c", "e", "f", "g", "h"];
-            let result = update_after(stack(&seven), stack(&seven), vec!["secret 'd'".into()])
-                .await
-                .expect("an unchanged release proceeds");
-            assert!(result
-                .state
-                .runtime_metadata
-                .unwrap()
-                .setup_cleanup_recommended
-                .is_empty());
-            // Still left over: still recommended.
-            let result = update_after(stack(&eight), stack(&seven), Vec::new())
-                .await
-                .unwrap();
-            assert!(!result
-                .state
-                .runtime_metadata
-                .unwrap()
-                .setup_cleanup_recommended
-                .is_empty());
-        }
-
         #[tokio::test]
         async fn removing_one_of_eight_secrets_runs_and_swapping_one_waits_for_setup() {
             let eight = ["a", "b", "c", "d", "e", "f", "g", "h"];
@@ -1550,12 +1515,7 @@ mod tests {
                 .await
                 .expect("removing one secret needs no setup");
             assert_eq!(result.state.status, DeploymentStatus::Updating);
-            let recommended = result
-                .state
-                .runtime_metadata
-                .unwrap()
-                .setup_cleanup_recommended;
-            assert!(!recommended.is_empty(), "{recommended:?}");
+            // The narrowing is named in the preflight warnings (covered in alien-preflights).
 
             let swapped = ["a", "b", "c", "e", "f", "g", "h", "new"];
             let error = update(stack(&eight), stack(&swapped))
@@ -2674,7 +2634,6 @@ mod aws_handoff_tests {
                     initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
                     prepared_stack: Some(baseline),
                     pending_prepared_stack: Some(target),
-                    setup_cleanup_recommended: vec!["permission profile 'api'".into()],
                     ..Default::default()
                 }),
                 retry_requested: false,

@@ -237,13 +237,6 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_setup_required: Option<CloudSetupRequired>,
 
-    /// Setup-owned grants the installed identities still hold although the last prepared
-    /// release no longer asks for them, one entry per permission profile or service account.
-    /// The release runs without setup; the next setup update removes them. Replaced on every
-    /// preparation, so it is empty once nothing is left over.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub setup_cleanup_recommended: Vec<String>,
-
     /// The Helm release the Operator reported it runs as.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub installed_helm_release: Option<InstalledHelmRelease>,
@@ -734,22 +727,5 @@ mod tests {
             }
         );
         assert_eq!(serde_json::to_value(&record).unwrap(), persisted);
-    }
-
-    /// State stored before the cleanup notice existed has no such field, and an empty notice is
-    /// not written back.
-    #[test]
-    fn old_runtime_metadata_reads_without_a_cleanup_notice() {
-        let metadata: RuntimeMetadata = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert!(metadata.setup_cleanup_recommended.is_empty());
-        assert!(serde_json::to_value(&metadata)
-            .unwrap()
-            .get("setupCleanupRecommended")
-            .is_none());
-        let metadata: RuntimeMetadata = serde_json::from_value(
-            serde_json::json!({ "setupCleanupRecommended": ["service account 'api-sa'"] }),
-        )
-        .unwrap();
-        assert_eq!(metadata.setup_cleanup_recommended.len(), 1);
     }
 }
