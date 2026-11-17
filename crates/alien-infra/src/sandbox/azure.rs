@@ -6,11 +6,14 @@
 //! `sandbox/execute` exists to hold — and deliberately withheld from this controller, whose
 //! `sandbox/provision` grant could otherwise assign itself that role.
 //!
-//! The group itself is setup-owned: the package creates it, which is what lets a role assignment
-//! name it at apply, and `terraform destroy` removes it. This controller adopts the imported
-//! group and heartbeats it. It cannot prove the linking resource's data-plane access by probing
-//! with its own credential (which lacks Data Owner by design); the execute grant that opens the
-//! data plane is authored on that resource's permission set by a preflight, not verified here.
+//! The group itself is setup-owned. A Terraform package creates it, which is what lets a role
+//! assignment name it at apply, and `terraform destroy` removes it; this controller adopts that
+//! imported group and heartbeats it. A direct setup (no package) creates it here, applies the
+//! grants the package would, reconciles them on each later setup run, and deletes it on destroy,
+//! but only a group it recorded an intent to create: a group that already exists under the name
+//! is refused, never taken over. It cannot prove the linking resource's data-plane access by
+//! probing with its own credential (which lacks Data Owner by design); the execute grant that
+//! opens the data plane is authored on that resource's permission set by a preflight.
 //!
 //! Internet-mode groups also use the management role's metadata list/delete verbs to reap
 //! sessions at the gateway identity's 24-hour ceiling, without reading guest contents.

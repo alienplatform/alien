@@ -2502,15 +2502,16 @@ async fn deploy_task_with_environment(
     // one whose update waits for setup needs setup authority this run must
     // bring: say so now instead of waiting for a lock nobody grants.
     let has_installed_release = deployment.current_release_id.is_some();
-    let direct_setup = serde_json::to_value(&deployment.runtime_metadata)
-        .ok()
-        .and_then(|metadata| {
-            metadata
-                .get("initialSetupAuthority")
-                .and_then(serde_json::Value::as_str)
-                .map(|authority| authority == "directSetup")
-        })
-        .unwrap_or(false);
+    // Read through the typed record, as the rest of this command does: a renamed field fails to
+    // compile instead of silently reading as "not a direct setup".
+    let direct_setup = deployment
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| serde_json::to_value(metadata).ok())
+        .and_then(|metadata| serde_json::from_value::<alien_core::RuntimeMetadata>(metadata).ok())
+        .is_some_and(|metadata| {
+            metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
+        });
     let initial_setup = existing_deployment_plan(
         &status,
         None,
