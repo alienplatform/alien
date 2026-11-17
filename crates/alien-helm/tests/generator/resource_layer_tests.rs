@@ -2247,3 +2247,93 @@ fn the_kube_api_discovery_role_is_named_per_install() {
     let second = names("customer-aa-two");
     assert_ne!(first, second);
 }
+
+/// Every egress mode is bounded by the session NetworkPolicy, so every sandbox chart proves the
+/// cluster enforces it before the install. Under `none` the policy is the only thing keeping a
+/// session off the network.
+#[test]
+fn every_sandbox_egress_mode_renders_the_network_policy_probe() {
+    for egress in [
+        SandboxEgress::None,
+        SandboxEgress::Internet,
+        SandboxEgress::Allow,
+    ] {
+        let stack = Stack::new("sandbox-probe-every-mode".to_string())
+            .add(
+                Sandbox::new("agent".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu:24.04".to_string(),
+                        bundled_from: None,
+                    })
+                    .egress(egress.clone())
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: Some(3600),
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let chart = render(&stack, StackSettings::default());
+        assert!(
+            chart.files.contains_key("templates/sandbox-cni-probe.yaml"),
+            "{egress:?}: {:?}",
+            chart.files.keys().collect::<Vec<_>>()
+        );
+    }
+}
+
+/// The probe refuses the `denied` pod on the listener's 8080 and shows, at the same moment and
+/// on the same address, that the pod reaches 8081: that port is the pod's only egress allow, and
+/// the listener admits it on 8081 alone besides.
+#[test]
+fn the_denied_pod_may_reach_only_the_listeners_allowed_port() {
+    let chart = render(&sandbox_with_linked_app(), StackSettings::default());
+    let rendered = super::test_utils::helm_template(&chart.files, None);
+    rendered.assert_ok("probe allowed port");
+    let documents = rendered_documents(&rendered);
+    let policy = |suffix: &str| {
+        documents
+            .iter()
+            .find(|doc| {
+                doc["kind"] == "NetworkPolicy"
+                    && doc["metadata"]["name"]
+                        .as_str()
+                        .is_some_and(|name| name.ends_with(&format!("-sandbox-cni-{suffix}")))
+            })
+            .unwrap_or_else(|| panic!("the probe installs its {suffix} policy"))
+    };
+    let egress = policy("denied-egress");
+    assert_eq!(
+        egress["spec"]["podSelector"]["matchLabels"]["alien.dev/cni-role"],
+        "denied"
+    );
+    let rules = egress["spec"]["egress"].as_sequence().unwrap();
+    assert_eq!(rules.len(), 1);
+    let ports = rules[0]["ports"].as_sequence().unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0]["port"], 8081);
+    assert_eq!(
+        rules[0]["to"][0]["podSelector"]["matchLabels"]["alien.dev/cni-role"],
+        "listener"
+    );
+    // The listener admits the two refused pods on 8081 in a rule of their own.
+    let ingress = policy("listener")["spec"]["ingress"].as_sequence().unwrap().clone();
+    let on_8081 = ingress
+        .iter()
+        .find(|rule| rule["ports"][0]["port"] == 8081)
+        .expect("a listener ingress rule for 8081");
+    let roles = serde_yaml::to_string(&on_8081["from"]).unwrap();
+    assert!(roles.contains("denied") && roles.contains("ingress-denied"), "{roles}");
+    assert!(!roles.contains("control"), "{roles}");
+    // The ingress-denied pod's egress admits 8081 too, so only the listener's ingress refuses it.
+    let probe_egress = policy("egress")["spec"]["egress"][0]["ports"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .map(|port| port["port"].as_u64().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(probe_egress, vec![8080, 8081]);
+    // Every probe pod, the listener too, runs in the sandbox runtime class.
+    assert!(rendered.stdout.contains("PROBE_RUNTIME_CLASS"));
+}
