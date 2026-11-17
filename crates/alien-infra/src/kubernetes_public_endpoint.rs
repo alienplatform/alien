@@ -41,8 +41,9 @@ const CERTIFICATE_WAIT_BOUND: Duration = Duration::from_secs(30 * 60);
 const CERTIFICATE_WAIT: Duration = Duration::from_secs(5);
 /// Load balancer address, DNS and health check: 60 polls of `ENDPOINT_WAIT`, as before.
 const ENDPOINT_WAIT_BOUND: Duration = Duration::from_secs(10 * 60);
-/// The managed ACM import's first step only saves a token and runs again after a second.
-const ACM_IMPORT_WAIT_BOUND: Duration = Duration::from_secs(30);
+/// A wait that was not polled for this long was interrupted (an update rollout, a retry after
+/// an error): its clock starts over. Polls come every few seconds, the longest delay is 30 s.
+const WAIT_INTERRUPTED_AFTER_SECS: i64 = 5 * 60;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KubernetesPublicEndpointState {
@@ -68,6 +69,9 @@ pub(crate) struct KubernetesPublicEndpointState {
     /// written by earlier releases.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) wait_started_unix: BTreeMap<EndpointWait, i64>,
+    /// When a wait was last polled (unix seconds); see `WAIT_INTERRUPTED_AFTER_SECS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) wait_last_poll_unix: Option<i64>,
     pub(crate) public_url: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) named_public_endpoints: HashMap<String, alien_core::PublicEndpointOutput>,
@@ -77,6 +81,11 @@ pub(crate) struct KubernetesPublicEndpointState {
 }
 
 impl KubernetesPublicEndpointState {
+    fn clear_waits(&mut self) {
+        self.wait_started_unix.clear();
+        self.wait_last_poll_unix = None;
+    }
+
     pub(crate) fn effective_public_url(&self) -> Option<String> {
         self.public_url.clone().or_else(|| {
             self.load_balancer_endpoint
@@ -118,8 +127,6 @@ pub(crate) enum KubernetesEndpointAction {
 pub(crate) enum EndpointWait {
     /// The managed certificate has not been issued yet.
     Certificate,
-    /// The first managed ACM import step.
-    AcmImport,
     /// Load balancer address, DNS or health check.
     Endpoint,
 }
@@ -128,7 +135,6 @@ impl EndpointWait {
     fn bound(self) -> Duration {
         match self {
             Self::Certificate => CERTIFICATE_WAIT_BOUND,
-            Self::AcmImport => ACM_IMPORT_WAIT_BOUND,
             Self::Endpoint => ENDPOINT_WAIT_BOUND,
         }
     }
@@ -136,7 +142,6 @@ impl EndpointWait {
     fn description(self) -> &'static str {
         match self {
             Self::Certificate => "the managed certificate to be issued",
-            Self::AcmImport => "the managed ACM certificate import to start",
             Self::Endpoint => "the load balancer address, DNS and health check",
         }
     }
@@ -172,11 +177,11 @@ fn apply_wait_deadline(
 ) -> Result<KubernetesEndpointAction> {
     match step {
         EndpointStep::Ready => {
-            state.wait_started_unix.clear();
+            state.clear_waits();
             Ok(KubernetesEndpointAction::Ready)
         }
         EndpointStep::CertificateFailed(fqdn) => {
-            state.wait_started_unix.clear();
+            state.clear_waits();
             Err(AlienError::new(ErrorData::CloudPlatformError {
                 message: format!("Certificate issuance failed for '{}'", fqdn),
                 resource_id: Some(resource_id.to_string()),
@@ -186,12 +191,20 @@ fn apply_wait_deadline(
             kind,
             suggested_delay,
         } => {
+            // Not polled for a while: an update or a retry came in between, so this is a new wait.
+            if state
+                .wait_last_poll_unix
+                .is_some_and(|last| now_unix.saturating_sub(last) > WAIT_INTERRUPTED_AFTER_SECS)
+            {
+                state.clear_waits();
+            }
+            state.wait_last_poll_unix = Some(now_unix);
             let started = *state.wait_started_unix.entry(kind).or_insert(now_unix);
             let elapsed = now_unix.saturating_sub(started).max(0) as u64;
             if elapsed >= kind.bound().as_secs() {
                 // The deployment fails and may be retried with this same state: the retry
                 // gets fresh windows instead of failing at once on the old start.
-                state.wait_started_unix.clear();
+                state.clear_waits();
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!(
                         "Timed out after {} seconds waiting for {}",
@@ -322,10 +335,7 @@ async fn reconcile_endpoint_step(
                 region.as_ref(),
             )?);
             state.managed_acm_import_token = Some(Uuid::new_v4().to_string());
-            return Ok(EndpointStep::Waiting {
-                kind: EndpointWait::AcmImport,
-                suggested_delay: Duration::from_secs(1),
-            });
+            return Ok(EndpointStep::endpoint(Duration::from_secs(1)));
         }
     }
     let previous_ingress_name = state.ingress_name.clone();
@@ -1686,11 +1696,16 @@ fn resolve_endpoint_plan(
                 domain.certificate_status,
                 CertificateStatus::Renewing | CertificateStatus::RenewalFailed
             );
+            // What is published must be the primary's current certificate on the same hostname, or
+            // the alias check below would vouch for a certificate that is not the one served.
             let keep_published = managed
                 && renewing
                 && !has_material
                 && (state.managed_tls_secret_name.is_some()
-                    || state.managed_acm_certificate_arn.is_some());
+                    || state.managed_acm_certificate_arn.is_some())
+                && state.published_certificate_id.as_deref()
+                    == Some(domain.certificate_id.as_str())
+                && state.public_url.as_deref() == Some(format!("https://{}", domain.fqdn).as_str());
             if managed && renewing && !has_material && !keep_published {
                 // Nothing was ever published: wait like a certificate that is still pending.
                 return Ok(EndpointPlanResolution::WaitingForCertificate);
@@ -4516,36 +4531,26 @@ mod tests {
                 .map(|tag| tag.value.as_str())
         }
 
-        /// The import's first step has a short window of its own and does not count against the
-        /// load balancer wait.
+        /// The import's first step only records the token and asks to run again at once.
         #[tokio::test]
-        async fn first_import_step_has_its_own_window() {
+        async fn first_import_step_runs_again_after_a_second() {
             let harness = harness(world_acm(
                 CertificateWorld::default(),
                 AcmCalls::default(),
                 0,
             ));
             let mut state = KubernetesPublicEndpointState::default();
-            reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
-                .await
-                .expect("records the token");
-            assert_eq!(
-                state.wait_started_unix.keys().collect::<Vec<_>>(),
-                [&EndpointWait::AcmImport]
-            );
-
-            let mut state = KubernetesPublicEndpointState::default();
-            state
-                .wait_started_unix
-                .insert(EndpointWait::AcmImport, chrono::Utc::now().timestamp() - 31);
-            let error =
+            let action =
                 reconcile_kubernetes_public_endpoint(&harness.ctx(), endpoint_target(), &mut state)
                     .await
-                    .expect_err("the window has passed");
-            assert!(
-                error.to_string().contains("ACM certificate import"),
-                "{error}"
+                    .expect("records the token");
+            assert_eq!(
+                action,
+                KubernetesEndpointAction::Waiting {
+                    suggested_delay: Duration::from_secs(1)
+                }
             );
+            assert!(state.managed_acm_import_token.is_some());
         }
 
         /// The first reconcile records the import token and stops before importing, so the
@@ -4690,7 +4695,7 @@ mod tests {
             assert!(world.lock().unwrap().is_empty(), "no certificate is left");
             // The reconcile that recorded the token also started its wait clock; that is not
             // something the certificate delete owns.
-            state.wait_started_unix.clear();
+            state.clear_waits();
             assert_eq!(state, KubernetesPublicEndpointState::default());
         }
 
@@ -4995,6 +5000,34 @@ mod tests {
             harness
         }
 
+        /// What a first install of the harness's endpoint leaves behind.
+        fn published_state() -> KubernetesPublicEndpointState {
+            KubernetesPublicEndpointState {
+                managed_tls_secret_name: Some("api-tls".to_string()),
+                published_certificate_id: Some("cert-1".to_string()),
+                public_url: Some("https://api.example.com".to_string()),
+                ..Default::default()
+            }
+        }
+
+        /// Polls every minute from `from` up to (not including) `to`, as a handler that stays does.
+        fn poll_every_minute(
+            state: &mut KubernetesPublicEndpointState,
+            step: fn() -> EndpointStep,
+            from: i64,
+            to: i64,
+        ) {
+            let mut at = from;
+            while at < to {
+                apply_wait_deadline("api", state, step(), at).expect("inside the bound");
+                at += 60;
+            }
+        }
+
+        fn endpoint_wait() -> EndpointStep {
+            EndpointStep::endpoint(ENDPOINT_WAIT)
+        }
+
         fn certificate_wait() -> EndpointStep {
             EndpointStep::Waiting {
                 kind: EndpointWait::Certificate,
@@ -5071,10 +5104,7 @@ mod tests {
                 CertificateStatus::RenewalFailed,
             ] {
                 let harness = harness(status, false);
-                let published = KubernetesPublicEndpointState {
-                    managed_tls_secret_name: Some("api-tls".to_string()),
-                    ..Default::default()
-                };
+                let published = published_state();
                 let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &published)
                     .expect("resolves");
                 assert!(
@@ -5124,10 +5154,7 @@ mod tests {
                 .expect("api")
                 .aliases
                 .push(alias);
-            let published = KubernetesPublicEndpointState {
-                managed_tls_secret_name: Some("api-tls".to_string()),
-                ..Default::default()
-            };
+            let published = published_state();
             let error = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &published)
                 .expect_err("separate alias certificate");
             assert!(error.message.contains("requires a separate certificate"));
@@ -5167,16 +5194,11 @@ mod tests {
             let mut state = KubernetesPublicEndpointState::default();
             apply_wait_deadline("api", &mut state, certificate_wait(), 1_000).expect("starts");
             // Issued: the endpoint waits for its load balancer instead.
-            apply_wait_deadline(
-                "api",
-                &mut state,
-                EndpointStep::endpoint(ENDPOINT_WAIT),
-                1_600,
-            )
-            .expect("endpoint wait");
+            poll_every_minute(&mut state, endpoint_wait, 1_060, 1_600);
             // The status falls back: the certificate wait did not restart.
-            apply_wait_deadline("api", &mut state, certificate_wait(), 2_000).expect("inside");
+            poll_every_minute(&mut state, certificate_wait, 1_600, 2_000);
             assert_eq!(state.wait_started_unix[&EndpointWait::Certificate], 1_000);
+            poll_every_minute(&mut state, certificate_wait, 2_000, 1_000 + 1_800);
             let error = apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 1_800)
                 .expect_err("the original start counts");
             assert!(error.to_string().contains("managed certificate"), "{error}");
@@ -5190,6 +5212,7 @@ mod tests {
         fn a_retry_after_a_timeout_gets_a_fresh_window() {
             let mut state = KubernetesPublicEndpointState::default();
             apply_wait_deadline("api", &mut state, certificate_wait(), 1_000).expect("starts");
+            poll_every_minute(&mut state, certificate_wait, 1_060, 1_000 + 1_800);
             apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 1_800)
                 .expect_err("timed out");
             let retry = apply_wait_deadline("api", &mut state, certificate_wait(), 3_000)
@@ -5224,6 +5247,73 @@ mod tests {
             )
             .expect("a new wait starts fresh");
             assert_eq!(state.wait_started_unix[&EndpointWait::Endpoint], 9_000);
+        }
+
+        /// A renewal keeps what is published only while it is the primary's current certificate
+        /// on the same hostname; otherwise the alias check would vouch for the wrong one.
+        #[test]
+        fn renewal_keeps_only_a_published_certificate_that_is_still_current() {
+            let harness = harness(CertificateStatus::Renewing, false);
+            for changed in [
+                KubernetesPublicEndpointState {
+                    published_certificate_id: Some("older-cert".to_string()),
+                    ..published_state()
+                },
+                KubernetesPublicEndpointState {
+                    public_url: Some("https://old.example.com".to_string()),
+                    ..published_state()
+                },
+            ] {
+                let plan = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &changed)
+                    .expect("resolves");
+                assert!(
+                    matches!(plan, EndpointPlanResolution::WaitingForCertificate),
+                    "{plan:?}"
+                );
+            }
+        }
+
+        /// A DNS lag in Running starts the endpoint clock; an update rollout then takes longer
+        /// than the bound before its endpoint step polls. That step starts a fresh window.
+        #[test]
+        fn an_update_after_a_dns_lag_gets_a_fresh_window() {
+            let mut state = KubernetesPublicEndpointState::default();
+            let endpoint = || EndpointStep::endpoint(ENDPOINT_WAIT);
+            apply_wait_deadline("api", &mut state, endpoint(), 1_000).expect("starts");
+            apply_wait_deadline("api", &mut state, endpoint(), 1_030).expect("polls");
+            // A 12 minute rollout, then the first not-ready poll of the update's endpoint step.
+            let after = 1_030 + 12 * 60;
+            let action = apply_wait_deadline("api", &mut state, endpoint(), after)
+                .expect("a fresh window, not 'timed out after 750 seconds'");
+            assert!(matches!(action, KubernetesEndpointAction::Waiting { .. }));
+            assert_eq!(state.wait_started_unix[&EndpointWait::Endpoint], after);
+            // The new window is still bounded.
+            poll_every_minute(&mut state, endpoint_wait, after + 60, after + 600);
+            apply_wait_deadline("api", &mut state, endpoint(), after + 600).expect_err("past");
+        }
+
+        /// A deployment that failed with another error (not a timeout) is retried hours later
+        /// with the same state: the retry's wait starts fresh.
+        #[test]
+        fn a_retry_hours_after_another_error_gets_a_fresh_window() {
+            let mut state = KubernetesPublicEndpointState::default();
+            apply_wait_deadline("api", &mut state, certificate_wait(), 1_000).expect("starts");
+            apply_wait_deadline("api", &mut state, certificate_wait(), 1_005).expect("polls");
+            // An API error ends the handler without touching the clocks; hours later:
+            let later = 1_005 + 3 * 3600;
+            apply_wait_deadline("api", &mut state, certificate_wait(), later)
+                .expect("a fresh window");
+            assert_eq!(state.wait_started_unix[&EndpointWait::Certificate], later);
+        }
+
+        /// Polls that keep coming (even with a slow API retry between) keep the original start.
+        #[test]
+        fn polls_without_a_long_gap_keep_the_start() {
+            let mut state = KubernetesPublicEndpointState::default();
+            apply_wait_deadline("api", &mut state, certificate_wait(), 1_000).expect("starts");
+            apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 290).expect("a");
+            apply_wait_deadline("api", &mut state, certificate_wait(), 1_000 + 580).expect("b");
+            assert_eq!(state.wait_started_unix[&EndpointWait::Certificate], 1_000);
         }
 
         /// State written before the wait clocks existed loads, and a state without waits writes
