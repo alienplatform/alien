@@ -42,7 +42,7 @@ use std::time::{Duration, Instant};
 use alien_bindings::traits::{CommandOutput, CreateSandboxRequest, RunCommandRequest};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{AzureClientConfig, AzureCredentials, ClientConfig, EgressPolicy};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 
 const ALLOWED: &str = "en.wikipedia.org";
 const OTHER: &str = "example.com";
@@ -876,7 +876,7 @@ async fn live_leak_probes() {
 }
 
 /// A long transfer through the proxy: CONNECT to the host, TLS, GET `/__down?bytes=N`, read
-/// throttled (about 1 MB/s) for `seconds`, and print one `XFER` line per event with epoch times:
+/// throttled (about 100 KB/s, so one 99 MB response spans the roll) for `seconds`, and print one `XFER` line per event with epoch times:
 /// connect, a progress line every 10 s, the cut (what error, at which byte) and each reconnect.
 /// A cut is not hidden: the transfer reconnects with a new request and the lines show the gap.
 const TRANSFER_PROBE: &str = r#"
@@ -900,7 +900,14 @@ def connect():
     if " 200 " not in line: raise RuntimeError("CONNECT " + line)
     t = ctx.wrap_socket(s, server_hostname=host)
     t.settimeout(30)
-    t.sendall(f"GET /__down?bytes=2000000000 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+    t.sendall(f"GET /__down?bytes=99000000 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+    head = b""
+    while b"\r\n\r\n" not in head:
+        d = t.recv(1024)
+        if not d: raise EOFError("closed before the response head")
+        head += d
+    status = head.split(b"\r\n")[0].decode(errors="replace")
+    if " 200 " not in status: raise RuntimeError("response " + status)
     return t
 attempt = 0
 while time.time() < end:
@@ -915,7 +922,7 @@ while time.time() < end:
             got += len(d); total += len(d)
             if time.time() - last >= 10:
                 last = time.time(); print("XFER", now(), "progress attempt", attempt, "bytes", got, flush=True)
-            time.sleep(0.015)
+            time.sleep(0.15)
         print("XFER", now(), "finished attempt", attempt, "bytes", got, flush=True)
     except Exception as e:
         print("XFER", now(), "CUT attempt", attempt, type(e).__name__, str(e)[:80], "after bytes", got, flush=True)
@@ -956,7 +963,7 @@ async fn live_gateway_replace() {
         ]))
     };
 
-    let outcome = async {
+    let outcome = std::panic::AssertUnwindSafe(async {
         let make = || async {
             sandbox
                 .create(CreateSandboxRequest {
@@ -1034,6 +1041,7 @@ async fn live_gateway_replace() {
             let mut counts: HashMap<String, u32> = Default::default();
             let mut worst: HashMap<&str, f64> = Default::default();
             let mut idle_first = false;
+            let mut tick = 0u32;
             for _ in 0..1700 {
                 let signal = vault
                     .get_secret("gw-replace-signal")
@@ -1045,6 +1053,10 @@ async fn live_gateway_replace() {
                 }
                 if stage == "vm0-back" && !idle_first {
                     idle_first = true;
+                    // An idle sandbox is paused by the platform; resuming it is the first thing
+                    // that happens to it, then its first connection.
+                    let resumed = sandbox.resume(&idle).await;
+                    note(format!("{} [{stage}] IDLE sandbox resume: {resumed:?}", now()));
                     let seen = proxy(sandbox, &idle, "example.com", 443, "").await;
                     note(format!(
                         "{} [{stage}] IDLE sandbox FIRST connection example.com: {seen}",
@@ -1077,6 +1089,17 @@ async fn live_gateway_replace() {
                 if stage == "done" {
                     break;
                 }
+                tick += 1;
+                if tick % 15 == 0 {
+                    let text = log.borrow().join("\n");
+                    let cut = text.len().saturating_sub(18_000);
+                    let _ = vault
+                        .set_secret(
+                            "azure-internet-proof-log",
+                            &format!("PARTIAL\n{}", &text[text.ceil_char_boundary(cut)..]),
+                        )
+                        .await;
+                }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
             let mut totals: Vec<_> = counts.into_iter().collect();
@@ -1105,10 +1128,13 @@ async fn live_gateway_replace() {
             Err(error) => note(format!("{} after: a NEW sandbox, {error}", now())),
         }
         Ok::<(), String>(())
-    }
+    })
+    .catch_unwind()
     .await;
-    if let Err(error) = outcome {
-        note(format!("error: {error}"));
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => note(format!("error: {error}")),
+        Err(_) => note("error: the test panicked".to_string()),
     }
     for id in created.borrow().iter() {
         let _ = sandbox.terminate(id).await;
