@@ -211,7 +211,10 @@ pub async fn check_pull(deployment: &TestDeployment, prefix: &str) -> BTreeMap<S
     )
     .await;
     assert_eq!(sent["sent"], GOOD + POISON);
-    await_pull(&client, url, prefix, GOOD).await
+    // Azure: `abandon_message` answers 411 on the base revision, so nack cannot be used there;
+    // the lock expires instead (same redelivery, a few minutes slower).
+    let nack = deployment.platform != "azure";
+    await_pull(&client, url, prefix, GOOD, nack).await
 }
 
 /// Consumes `pulled` until `good` good messages were seen and every poison message of `prefix`
@@ -221,6 +224,7 @@ async fn await_pull(
     url: &str,
     prefix: &str,
     good: usize,
+    nack: bool,
 ) -> BTreeMap<String, u64> {
     let started = Instant::now();
     let mut failed: BTreeMap<String, Value> = BTreeMap::new();
@@ -232,7 +236,7 @@ async fn await_pull(
             "the pull path did not finish: failed={failed:?} good_seen={}",
             good_seen.len()
         );
-        let seen = json_request(&client, client.post(format!("{url}/pull/consume"))).await;
+        let seen = json_request(&client, client.post(format!("{url}/pull/consume?nack={}", u8::from(nack)))).await;
         for entry in seen.as_array().unwrap() {
             let id = entry["id"].as_str().unwrap().to_string();
             let attempt = entry["attempt"].as_u64().unwrap();
@@ -269,7 +273,7 @@ async fn await_pull(
         );
     }
     sleep(Duration::from_secs(10)).await;
-    let left = json_request(&client, client.post(format!("{url}/pull/peek"))).await;
+    let left = json_request(&client, client.post(format!("{url}/pull/peek?nack={}", u8::from(nack)))).await;
     assert_eq!(left["visible"], 0, "pulled must end empty: {left}");
     info!(
         ?attempts,
@@ -307,7 +311,7 @@ pub async fn check_upgrade(ctx: &mut alien_test::TestContext) {
     .await
     .expect("adding a dead-letter setting must require and recover through setup");
     // The queues were updated in place: the messages sent before the rerun are still there.
-    await_pull(&client, &url, "up", 2).await;
+    await_pull(&client, &url, "up", 2, ctx.deployment.platform != "azure").await;
     check_dead_letter(&ctx.deployment, "after", false).await;
 
     alien_test::distribution::verify_dead_letter_update(

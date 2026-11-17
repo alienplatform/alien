@@ -122,8 +122,9 @@ app.post("/pull/consume", async c => {
         JSON.stringify({ id: task.id, poison: task.poison, attempt: message.attempt }),
       ),
     )
-    if (task.poison) await pulled.nack(message.receiptHandle)
-    else await pulled.ack(message.receiptHandle)
+    if (!task.poison) await pulled.ack(message.receiptHandle)
+    // `?nack=0`: leave a poison message locked and let the lock expire (the failure is the same).
+    else if (c.req.query("nack") !== "0") await pulled.nack(message.receiptHandle)
   }
   return c.json(seen)
 })
@@ -162,7 +163,9 @@ app.post("/pull/failed/drain", async c => {
 app.post("/pull/peek", async c => {
   const pulled = queue("pulled")
   const messages = await pulled.receive(10)
-  await Promise.all(messages.map(message => pulled.nack(message.receiptHandle)))
+  if (c.req.query("nack") !== "0") {
+    await Promise.all(messages.map(message => pulled.nack(message.receiptHandle)))
+  }
   return c.json({ visible: messages.length })
 })
 
