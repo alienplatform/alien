@@ -43,34 +43,54 @@ impl TfEmitter for AzureQueueEmitter {
 
         let lock_duration = lock_duration_for(ctx);
 
-        let q = resource_block(
-            "azurerm_servicebus_queue",
-            label,
-            [
-                attr("name", resource_prefix_template(queue.id())),
-                attr(
-                    "namespace_id",
-                    expr::traversal(["azurerm_servicebus_namespace", &parent_label, "id"]),
-                ),
-                attr("partitioning_enabled", Expression::Bool(false)),
-                attr(
-                    "lock_duration",
-                    Expression::String(iso8601_duration(lock_duration)),
-                ),
-                attr(
-                    "default_message_ttl",
-                    Expression::String("P14D".to_string()),
-                ),
-                attr(
-                    "max_delivery_count",
-                    Expression::Number(hcl::Number::from(10i64)),
-                ),
-                attr(
-                    "dead_lettering_on_message_expiration",
-                    Expression::Bool(true),
-                ),
-            ],
-        );
+        let mut attrs = vec![
+            attr("name", resource_prefix_template(queue.id())),
+            attr(
+                "namespace_id",
+                expr::traversal(["azurerm_servicebus_namespace", &parent_label, "id"]),
+            ),
+            attr("partitioning_enabled", Expression::Bool(false)),
+            attr(
+                "lock_duration",
+                Expression::String(iso8601_duration(lock_duration)),
+            ),
+            attr(
+                "default_message_ttl",
+                Expression::String("P14D".to_string()),
+            ),
+            // Ten is also the service default a queue returns to without a dead-letter setting.
+            attr(
+                "max_delivery_count",
+                Expression::Number(hcl::Number::from(
+                    queue
+                        .dead_letter
+                        .as_ref()
+                        .map_or(10i64, |dead_letter| i64::from(dead_letter.max_attempts)),
+                )),
+            ),
+            attr(
+                "dead_lettering_on_message_expiration",
+                Expression::Bool(true),
+            ),
+        ];
+        if let Some(dead_letter) = &queue.dead_letter {
+            // Messages that reach the delivery count move to the target queue of the same
+            // namespace; forwarding names the target queue.
+            let target_label = ctx.name_for(&dead_letter.queue.id).ok_or_else(|| {
+                alien_error::AlienError::new(alien_core::ErrorData::GenericError {
+                    message: format!(
+                        "Queue '{}' dead-letters to '{}', which has no Terraform label",
+                        queue.id(),
+                        dead_letter.queue.id
+                    ),
+                })
+            })?;
+            attrs.push(attr(
+                "forward_dead_lettered_messages_to",
+                expr::traversal(["azurerm_servicebus_queue", target_label, "name"]),
+            ));
+        }
+        let q = resource_block("azurerm_servicebus_queue", label, attrs);
 
         let mut fragment = TfFragment::default().with_resource(q);
         // A resource-scoped grant is on this queue; the permission sets' scope template

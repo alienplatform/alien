@@ -52,10 +52,10 @@ mod generator {
     pub mod gcp_protected_verifier_tests;
     pub mod k8s_overlay_tests;
     pub mod management_url_tests;
+    pub mod queue_dead_letter_tests;
     pub mod secrets_vault_management_tests;
     pub mod setup_management_tests;
     pub mod stack_input_tests;
-    pub mod queue_dead_letter_tests;
     pub mod storage_notifications_tests;
     pub mod terraform_1_9_tests;
     pub mod verified_setup_tests;
