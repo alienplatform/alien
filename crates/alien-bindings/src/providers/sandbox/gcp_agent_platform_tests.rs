@@ -4023,3 +4023,84 @@ async fn a_pause_whose_probe_fails_on_an_already_paused_sandbox_is_done() {
     client.expect_pause_sandbox().never();
     provider(client).pause("s1").await.expect("already paused");
 }
+
+/// The probe's wake is followed by a stale `PAUSED` read, then the truth: running. The pause is
+/// not reported done on the stale read.
+#[tokio::test]
+async fn a_stale_paused_read_after_a_waking_probe_does_not_end_the_pause() {
+    let fake = PausableSandbox::running("boot-a");
+    let probes = Arc::new(AtomicUsize::new(0));
+    let pauses = Arc::new(AtomicUsize::new(0));
+    // Reads after the first probe: PAUSED (stale), then RUNNING (the wake started).
+    let stale = Arc::new(std::sync::Mutex::new(Vec::<&'static str>::new()));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        let stale = stale.clone();
+        client.expect_get_sandbox().returning(move |_, id| {
+            let next = stale.lock().unwrap().pop();
+            if let Some(state) = next {
+                fake.set_state(state);
+            }
+            Ok(sandbox_in_state(id, *fake.state.lock().unwrap()))
+        });
+    }
+    {
+        let fake = fake.clone();
+        let probes = probes.clone();
+        let stale = stale.clone();
+        client.expect_execute().returning(move |_, _, input| {
+            if op_of(input) == "health" && probes.fetch_add(1, Ordering::SeqCst) == 0 {
+                *stale.lock().unwrap() = vec!["STATE_RUNNING", "STATE_PAUSED"];
+                return Err(http_error(503, "paused; resume has been initiated"));
+            }
+            fake.agent_reply(input)
+        });
+    }
+    {
+        let fake = fake.clone();
+        let pauses = pauses.clone();
+        client.expect_pause_sandbox().returning(move |_, _| {
+            pauses.fetch_add(1, Ordering::SeqCst);
+            fake.set_state("STATE_PAUSED");
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    provider(client).pause("s1").await.expect("paused");
+    assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
+    assert_eq!(pauses.load(Ordering::SeqCst), 1);
+}
+
+/// A sandbox that wakes after every `:pause` is an error after three attempts, not an Ok.
+#[tokio::test]
+async fn a_sandbox_that_keeps_waking_fails_the_pause_after_three_attempts() {
+    let fake = PausableSandbox::running("boot-a");
+    let pauses = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    {
+        let fake = fake.clone();
+        client
+            .expect_get_sandbox()
+            .returning(move |_, id| Ok(sandbox_in_state(id, *fake.state.lock().unwrap())));
+    }
+    {
+        let fake = fake.clone();
+        client
+            .expect_execute()
+            .returning(move |_, _, input| fake.agent_reply(input));
+    }
+    {
+        let pauses = pauses.clone();
+        client.expect_pause_sandbox().returning(move |_, _| {
+            // Accepted, but something wakes the sandbox at once: it stays running.
+            pauses.fetch_add(1, Ordering::SeqCst);
+            Ok(done_op(serde_json::json!({})))
+        });
+    }
+    let error = provider(client).pause("s1").await.expect_err("did not hold");
+    assert!(
+        error.to_string().contains("pause did not hold"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(pauses.load(Ordering::SeqCst), 3);
+}
