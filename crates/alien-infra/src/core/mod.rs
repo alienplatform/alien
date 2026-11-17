@@ -8,7 +8,7 @@ mod registry;
 pub use registry::*;
 mod executor;
 pub use executor::{
-    allow_denied_replaces_to_retry, served_by_kubernetes_controller, stack_needs_base_cloud,
+    allow_denied_replaces_to_retry, served_by_kubernetes_controller, stack_needs_base_cloud, state_needs_base_cloud,
     PlanResult, RunningObservation, RunningResourcePolicy, StackExecutor, StepResult,
     REPLACE_DELETE_DENIED_CODE,
 };

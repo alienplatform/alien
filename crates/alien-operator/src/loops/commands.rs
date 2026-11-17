@@ -533,6 +533,7 @@ async fn legacy_push_token(
     let ClientConfig::Kubernetes(kubernetes) = super::deployment::resolve_client_config(
         Platform::Kubernetes,
         None,
+        false,
         &config.data_dir,
         config.namespace.clone(),
         None,

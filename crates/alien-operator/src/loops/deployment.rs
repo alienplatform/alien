@@ -492,9 +492,16 @@ pub(crate) async fn run_deployment_continuously(
     .await?;
 
     // Resolve client config once (it doesn't change between steps)
+    let base_platform = enriched_config.base_platform.or(state.config.base_platform);
     let client_config = resolve_client_config(
         current.platform,
-        enriched_config.base_platform.or(state.config.base_platform),
+        base_platform,
+        deployment_needs_base_cloud(
+            &current,
+            &target_release.stack,
+            &enriched_config.stack_settings,
+            base_platform,
+        ),
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -710,9 +717,16 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
         Some(&release.stack),
     )
     .await?;
+    let base_platform = config.base_platform.or(state.config.base_platform);
     let client_config = resolve_client_config(
         current.platform,
-        config.base_platform.or(state.config.base_platform),
+        base_platform,
+        deployment_needs_base_cloud(
+            &current,
+            &release.stack,
+            &config.stack_settings,
+            base_platform,
+        ),
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -784,9 +798,16 @@ async fn renew_installed_credentials(state: &OperatorState) -> Result<()> {
         Some(&config_release.stack),
     )
     .await?;
+    let base_platform = config.base_platform.or(state.config.base_platform);
     let client_config = resolve_client_config(
         current.platform,
-        config.base_platform.or(state.config.base_platform),
+        base_platform,
+        deployment_needs_base_cloud(
+            &current,
+            &config_release.stack,
+            &config.stack_settings,
+            base_platform,
+        ),
         &state.config.data_dir,
         state.config.namespace.clone(),
         state.config.sync.as_ref(),
@@ -1185,66 +1206,39 @@ fn last_good_base_cloud(base_platform: Platform) -> Option<ClientConfig> {
         .map(|(_, cloud)| cloud)
 }
 
-/// Whether the pod's configuration names a base cloud identity: a region and a way to sign
-/// in (an IRSA role and token file, a Pod Identity credentials endpoint, access keys or an
-/// explicit profile for AWS). This reads only what is set on the pod; it never calls the
-/// cloud, so a slow or failing call can never change the answer.
-///
-/// Without it the base cloud stays a label and the deployment runs as plain Kubernetes.
-/// With it, a failing call is an error to wait out and retry, never "not configured".
-fn base_cloud_configured(base_platform: Platform, env: &HashMap<String, String>) -> bool {
-    let set = |name: &str| env.get(name).is_some_and(|value| !value.trim().is_empty());
-    match base_platform {
-        Platform::Aws => {
-            let region = set("AWS_REGION") || set("AWS_DEFAULT_REGION");
-            let sign_in = (set("AWS_ROLE_ARN") && set("AWS_WEB_IDENTITY_TOKEN_FILE"))
-                || (set("AWS_ACCESS_KEY_ID") && set("AWS_SECRET_ACCESS_KEY"))
-                || set("AWS_CONTAINER_CREDENTIALS_FULL_URI")
-                || set("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
-                || set("AWS_PROFILE");
-            region && sign_in
-        }
-        // The chart writes GCP_PROJECT_ID from basePlatformConfig.gcp.projectId. GKE Workload
-        // Identity needs no credential variable (the metadata server answers), so the project
-        // is what marks the install as configured; explicit credentials count too.
-        Platform::Gcp => [
-            "GCP_PROJECT_ID",
-            "GOOGLE_CLOUD_PROJECT",
-            "GCP_ACCESS_TOKEN",
-            "GOOGLE_SERVICE_ACCOUNT_KEY",
-            "GCP_SERVICE_ACCOUNT_KEY",
-            "GOOGLE_APPLICATION_CREDENTIALS",
-        ]
-        .iter()
-        .any(|name| set(name)),
-        // The chart writes AZURE_SUBSCRIPTION_ID (and tenant, region) from
-        // basePlatformConfig.azure; Azure Workload Identity injects the client id and token
-        // file into the pod.
-        Platform::Azure => {
-            set("AZURE_ACCESS_TOKEN")
-                || (set("AZURE_SUBSCRIPTION_ID")
-                    && (set("AZURE_CLIENT_ID")
-                        || set("AZURE_FEDERATED_TOKEN_FILE")
-                        || set("IDENTITY_ENDPOINT")))
-        }
-        _ => false,
-    }
+/// Whether this deployment needs the base cloud's API, decided by what its STACK needs and
+/// what is recorded, never by what the pod's environment happens to hold: the prepared stack
+/// when the pending step stored one (it has the preflight mutations), else the release's
+/// stack, through the one rule the manager and the controllers use
+/// (`alien_infra::stack_needs_base_cloud`). Recorded state wins: a resource whose controller
+/// is the base cloud's keeps needing it, whatever the stack says now.
+pub(super) fn deployment_needs_base_cloud(
+    current: &DeploymentState,
+    release_stack: &alien_core::Stack,
+    stack_settings: &alien_core::StackSettings,
+    base_platform: Option<Platform>,
+) -> bool {
+    let Some(base) = base_platform else {
+        return false;
+    };
+    let stack = current
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+        .unwrap_or(release_stack);
+    alien_infra::stack_needs_base_cloud(stack, current.platform, Some(base), stack_settings)
+        || current
+            .stack_state
+            .as_ref()
+            .is_some_and(|state| alien_infra::state_needs_base_cloud(state, base))
 }
 
-/// The base cloud client: `Ok(None)` when the pod names no base cloud identity (plain
-/// Kubernetes), `Ok(Some)` when it was built, and an error when an identity is configured
-/// but the cloud could not be reached. The error is retried on the next pass (a failed
-/// resolution is remembered for a while so each pass does not wait out a timeout again); a
-/// client that was ever built is kept meanwhile.
-async fn base_cloud_client(base_platform: Platform) -> Result<Option<ClientConfig>> {
-    let env: HashMap<String, String> = std::env::vars().collect();
-    if !base_cloud_configured(base_platform, &env) {
-        info!(
-            base_platform = %base_platform,
-            "No base cloud identity is set on the Operator pod; running as plain Kubernetes"
-        );
-        return Ok(None);
-    }
+/// The base cloud client, built through the SDK's default chain exactly as an install that
+/// always needed it does (environment, IRSA, Pod Identity, the node's instance role). When it
+/// cannot be built the pass fails with a retryable `BASE_CLOUD_UNAVAILABLE` naming what to set;
+/// it never falls back to plain Kubernetes. A failure is remembered for a while so each pass
+/// does not wait out a timeout again, and a client that was ever built is kept meanwhile.
+async fn base_cloud_client(base_platform: Platform) -> Result<ClientConfig> {
     let recent_failure = BASE_CLOUD_FAILURE
         .lock()
         .ok()
@@ -1254,7 +1248,7 @@ async fn base_cloud_client(base_platform: Platform) -> Result<Option<ClientConfi
         });
     if let Some((_, _, message)) = recent_failure {
         return match last_good_base_cloud(base_platform) {
-            Some(cloud) => Ok(Some(cloud)),
+            Some(cloud) => Ok(cloud),
             None => Err(AlienError::new(ErrorData::BaseCloudUnreachable { message })),
         };
     }
@@ -1266,7 +1260,7 @@ async fn base_cloud_client(base_platform: Platform) -> Result<Option<ClientConfi
             if let Ok(mut good) = BASE_CLOUD_LAST_GOOD.lock() {
                 *good = Some((base_platform, cloud.clone()));
             }
-            Ok(Some(cloud))
+            Ok(cloud)
         }
         Err(error) => {
             let last_good = last_good_base_cloud(base_platform);
@@ -1282,13 +1276,13 @@ async fn base_cloud_client(base_platform: Platform) -> Result<Option<ClientConfi
                 }
             );
             let message = format!(
-                "The {base_platform} cloud identity is configured on the Operator pod but its credentials could not be resolved ({error}). The Operator tries again; if this persists check the pod's role and that the cloud's identity service is reachable"
+                "This deployment needs its {base_platform} base cloud, but the Operator could not resolve its region or credentials ({error}). Set the region in the Helm values (basePlatformConfig) and give the Operator's service account a cloud identity (an IRSA role or EKS Pod Identity association on AWS, Workload Identity on GCP, Azure Workload Identity on Azure) or run it on a node role that has the access, then restart the Operator pod: it reads them only when it starts. Or install this deployment with Terraform instead"
             );
             if let Ok(mut failure) = BASE_CLOUD_FAILURE.lock() {
                 *failure = Some((base_platform, std::time::Instant::now(), message.clone()));
             }
             match last_good {
-                Some(cloud) => Ok(Some(cloud)),
+                Some(cloud) => Ok(cloud),
                 None => Err(AlienError::new(ErrorData::BaseCloudUnreachable { message })),
             }
         }
@@ -1299,6 +1293,7 @@ async fn base_cloud_client(base_platform: Platform) -> Result<Option<ClientConfi
 pub(super) async fn resolve_client_config(
     platform: Platform,
     base_platform: Option<Platform>,
+    needs_base_cloud: bool,
     data_dir: &str,
     namespace: Option<String>,
     _sync_config: Option<&crate::config::SyncConfig>,
@@ -1309,22 +1304,16 @@ pub(super) async fn resolve_client_config(
                     namespace,
                     additional_headers: None,
             };
-            // The base cloud is a label for the cluster until a resource needs the
-            // cloud's API. When the pod names no cloud identity the deployment runs as
-            // plain Kubernetes, and a resource that needs the cloud fails with
-            // `BaseCloudUnavailable`, which reaches the manager as the deployment's error.
-            // When an identity is configured but the cloud cannot be reached, the pass
-            // fails and is retried; it never falls back to plain Kubernetes.
-            if let Some(base_platform) = base_platform {
-                match base_cloud_client(base_platform).await? {
-                    Some(cloud) => Ok(ClientConfig::KubernetesCloud {
-                        kubernetes: Box::new(kubernetes),
-                        cloud: Box::new(cloud),
-                    }),
-                    None => Ok(ClientConfig::Kubernetes(Box::new(kubernetes))),
-                }
-            } else {
-                Ok(ClientConfig::Kubernetes(Box::new(kubernetes)))
+            // The base cloud is a label for the cluster unless the deployment needs its API
+            // (`needs_base_cloud`, decided from the stack by the caller). Then the cloud client
+            // is built as it always was and a failure is a retryable error; otherwise the
+            // deployment runs as plain Kubernetes and builds no cloud client at all.
+            match base_platform.filter(|_| needs_base_cloud) {
+                Some(base_platform) => Ok(ClientConfig::KubernetesCloud {
+                    kubernetes: Box::new(kubernetes),
+                    cloud: Box::new(base_cloud_client(base_platform).await?),
+                }),
+                None => Ok(ClientConfig::Kubernetes(Box::new(kubernetes))),
             }
         }
         Platform::Local => {
@@ -1371,6 +1360,7 @@ mod base_cloud_client_tests {
             .block_on(resolve_client_config(
                 Platform::Kubernetes,
                 Some(base),
+                true,
                 "/tmp/unused",
                 Some("alien".to_string()),
                 None,
@@ -1412,6 +1402,7 @@ mod base_cloud_client_tests {
             .block_on(resolve_client_config(
                 Platform::Kubernetes,
                 Some(base),
+                true,
                 "/tmp/unused",
                 Some("alien".to_string()),
                 None,
@@ -1434,8 +1425,8 @@ mod base_cloud_client_tests {
             let error = try_resolve(Platform::Aws).expect_err(
                 "a configured install whose sign-in fails must not become plain Kubernetes",
             );
-            assert!(error.message.contains("configured"), "{}", error.message);
-            assert_eq!(error.code, "BASE_CLOUD_UNREACHABLE");
+            assert!(error.message.contains("base cloud"), "{}", error.message);
+            assert_eq!(error.code, "BASE_CLOUD_UNAVAILABLE");
             // Still failing inside the retry window: the same error, no new wait.
             assert!(try_resolve(Platform::Aws).is_err());
             // The retry window passes and the identity service answers (access keys stand in
@@ -1460,87 +1451,114 @@ mod base_cloud_client_tests {
         reset_cache();
     }
 
-    /// GKE: the chart's project id marks the install as configured even though Workload
-    /// Identity sets no credential variable. A failing metadata server is retried, never
-    /// plain Kubernetes; no project at all is plain Kubernetes.
+    /// A stack that needs nothing from the base cloud runs as plain Kubernetes whatever the
+    /// pod holds: no cloud call is made, even with a region and keys set.
     #[test]
-    fn gcp_configured_by_the_project_is_retried_and_without_it_is_plain_kubernetes() {
-        let none = [
-            ("GCP_PROJECT_ID", None::<&str>),
-            ("GOOGLE_CLOUD_PROJECT", None),
-            ("GCP_ACCESS_TOKEN", None),
-            ("GOOGLE_SERVICE_ACCOUNT_KEY", None),
-            ("GCP_SERVICE_ACCOUNT_KEY", None),
-            ("GOOGLE_APPLICATION_CREDENTIALS", None),
-            ("GCP_REGION", None),
-            ("GCE_METADATA_HOST", Some("127.0.0.1:9")),
-        ];
-        temp_env::with_vars(none.clone(), || {
-            reset_cache();
-            let config = try_resolve(Platform::Gcp).expect("plain Kubernetes");
-            assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
-            temp_env::with_vars([("GCP_PROJECT_ID", Some("my-project"))], || {
-                let error = try_resolve(Platform::Gcp)
-                    .expect_err("a configured install whose metadata call fails is retried");
-                assert_eq!(error.code, "BASE_CLOUD_UNREACHABLE");
-            });
-        });
-        reset_cache();
+    fn a_stack_that_needs_no_cloud_builds_no_cloud_client() {
+        for base in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            temp_env::with_vars(
+                [
+                    ("AWS_REGION", Some("us-east-1")),
+                    ("AWS_ACCESS_KEY_ID", Some("AKIAEXAMPLE")),
+                    ("AWS_SECRET_ACCESS_KEY", Some("secret")),
+                    ("GCE_METADATA_HOST", Some("127.0.0.1:9")),
+                    ("AWS_EC2_METADATA_DISABLED", Some("true")),
+                ],
+                || {
+                    reset_cache();
+                    let started = std::time::Instant::now();
+                    let config = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap()
+                        .block_on(resolve_client_config(
+                            Platform::Kubernetes,
+                            Some(base),
+                            false,
+                            "/tmp/unused",
+                            Some("alien".to_string()),
+                            None,
+                        ))
+                        .expect("plain Kubernetes");
+                    assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
+                    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+                },
+            );
+        }
     }
 
-    /// AKS: the subscription from the chart plus the Workload Identity client id is
-    /// configured (a failing sign-in is retried); the subscription alone is plain Kubernetes.
+    /// A stack that needs the cloud and an install with no identity or region at all fails with
+    /// the retryable, actionable error. It never becomes plain Kubernetes.
     #[test]
-    fn azure_configured_by_the_identity_is_retried_and_without_it_is_plain_kubernetes() {
-        let base = [
-            ("AZURE_SUBSCRIPTION_ID", Some("sub")),
-            ("AZURE_CLIENT_ID", None::<&str>),
-            ("AZURE_FEDERATED_TOKEN_FILE", None),
-            ("IDENTITY_ENDPOINT", None),
-            ("AZURE_ACCESS_TOKEN", None),
-            ("AZURE_TENANT_ID", None),
-            ("AZURE_CLIENT_SECRET", None),
-        ];
-        temp_env::with_vars(base, || {
-            reset_cache();
-            let config = try_resolve(Platform::Azure).expect("plain Kubernetes");
-            assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
-            // The identity is there but the tenant is missing: the client cannot be built.
-            temp_env::with_vars([("AZURE_CLIENT_ID", Some("client"))], || {
-                let error = try_resolve(Platform::Azure)
-                    .expect_err("a configured install that cannot sign in is retried");
-                assert_eq!(error.code, "BASE_CLOUD_UNREACHABLE");
-            });
-        });
-        reset_cache();
-    }
-
-    /// A region and no way to sign in (the case the portal's Helm values produce on EKS
-    /// without IRSA) is plain Kubernetes at once, with no call to the cloud.
-    #[test]
-    fn a_region_without_a_sign_in_is_plain_kubernetes() {
+    fn a_stack_that_needs_the_cloud_without_an_identity_fails_clearly() {
         temp_env::with_vars(
             [
-                ("AWS_REGION", Some("us-east-1")),
-                ("AWS_ROLE_ARN", None),
-                ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
+                ("AWS_REGION", None::<&str>),
+                ("AWS_DEFAULT_REGION", None),
                 ("AWS_ACCESS_KEY_ID", None),
                 ("AWS_SECRET_ACCESS_KEY", None),
+                ("AWS_ROLE_ARN", None),
+                ("AWS_WEB_IDENTITY_TOKEN_FILE", None),
                 ("AWS_PROFILE", None),
                 ("AWS_CONTAINER_CREDENTIALS_FULL_URI", None),
                 ("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", None),
+                ("AWS_EC2_METADATA_DISABLED", Some("true")),
             ],
             || {
                 reset_cache();
-                let started = std::time::Instant::now();
-                let config = try_resolve(Platform::Aws).expect("plain Kubernetes");
-                assert!(matches!(config, ClientConfig::Kubernetes(_)), "{config:?}");
-                assert!(
-                    started.elapsed() < std::time::Duration::from_secs(2),
-                    "no cloud call is made"
-                );
+                let error = try_resolve(Platform::Aws).expect_err("must fail");
+                assert_eq!(error.code, "BASE_CLOUD_UNAVAILABLE");
+                assert!(error.retryable);
+                assert!(error.message.contains("IRSA"), "{}", error.message);
             },
         );
+        reset_cache();
+    }
+
+    /// The decision is the stack's, plus recorded state: a resource whose controller is the
+    /// base cloud's keeps needing it even when the stack alone would not.
+    #[test]
+    fn recorded_cloud_state_keeps_needing_the_cloud() {
+        use alien_core::{DeploymentState, StackResourceState, StackState};
+        let stack = alien_core::Stack::new("app".to_string()).build();
+        let settings = alien_core::StackSettings::default();
+        let mut current = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: alien_core::DeploymentStatus::Running,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        assert!(!super::deployment_needs_base_cloud(
+            &current,
+            &stack,
+            &settings,
+            Some(Platform::Aws)
+        ));
+        let mut stack_state = StackState::new(Platform::Kubernetes);
+        let mut resource = StackResourceState::new_pending(
+            "service-account".into(),
+            alien_core::Resource::new(alien_core::ServiceAccount::new("sa".into()).build()),
+            Some(alien_core::ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        resource.controller_platform = Some(Platform::Aws);
+        stack_state.resources.insert("sa".to_string(), resource);
+        current.stack_state = Some(stack_state);
+        assert!(super::deployment_needs_base_cloud(
+            &current,
+            &stack,
+            &settings,
+            Some(Platform::Aws)
+        ));
+        assert!(!super::deployment_needs_base_cloud(
+            &current, &stack, &settings, None
+        ));
     }
 
     /// Once the Operator has built the base cloud client it keeps using it: a later
@@ -1603,6 +1621,7 @@ mod base_cloud_client_tests {
                     .block_on(resolve_client_config(
                         Platform::Kubernetes,
                         Some(Platform::Gcp),
+                        false,
                         "/tmp/unused",
                         Some("alien".to_string()),
                         None,

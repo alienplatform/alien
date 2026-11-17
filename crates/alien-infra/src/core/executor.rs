@@ -378,6 +378,26 @@ fn imports_certificates_into_acm(settings: &alien_core::StackSettings) -> bool {
     )
 }
 
+/// True when the recorded state of a Kubernetes deployment has a resource owned by the base
+/// cloud's controller: one recorded with that controller, or an older record with none, which
+/// the cloud's controllers served. Recorded state wins over what the stack says now.
+pub fn state_needs_base_cloud(state: &alien_core::StackState, base_platform: Platform) -> bool {
+    state
+        .resources
+        .values()
+        .any(|resource| match resource.controller_platform {
+            Some(platform) => platform == base_platform,
+            None => {
+                controller_platform_for_entry(
+                    Platform::Kubernetes,
+                    Some(base_platform),
+                    resource.lifecycle.unwrap_or(ResourceLifecycle::Live),
+                    Some(&resource.config),
+                ) != Platform::Kubernetes
+            }
+        })
+}
+
 fn controller_platform_for_state(stack_platform: Platform, state: &StackResourceState) -> Platform {
     state.controller_platform.unwrap_or_else(|| {
         controller_platform_for_entry(
