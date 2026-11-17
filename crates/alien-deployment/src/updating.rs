@@ -703,6 +703,48 @@ pub async fn handle_updating(
             }
         }
     }
+    // A grant the release no longer asks for also drops the edge from the resource it covered
+    // to the identity (a vault or storage that carried the grant). The identity keeps the grant
+    // until setup, so the edge stays too: removing it would plan an update of a setup-owned
+    // resource, which runtime may not apply. Only edges the state still records and whose
+    // identity is still in the target; once setup re-imported the result, the state has none to
+    // restore.
+    if !runtime_metadata.setup_cleanup_recommended.is_empty() {
+        let identities: HashSet<String> = target_stack
+            .resources()
+            .filter(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<alien_core::ServiceAccount>()
+                    .is_some()
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for (resource_id, entry) in target_stack.resources.iter_mut() {
+            if entry.lifecycle != ResourceLifecycle::Frozen {
+                continue;
+            }
+            let Some(recorded) = stack_state
+                .resources
+                .get(resource_id)
+                .filter(|state| state.status != ResourceStatus::Deleted)
+            else {
+                continue;
+            };
+            let resource_type = entry.config.resource_type();
+            for dependency in &recorded.dependencies {
+                if identities.contains(dependency.id())
+                    && StackExecutor::grant_edge(
+                        resource_type.as_ref(),
+                        dependency.resource_type().as_ref(),
+                    )
+                    && !entry.dependencies.contains(dependency)
+                {
+                    entry.dependencies.push(dependency.clone());
+                }
+            }
+        }
+    }
     // The effective target is the new durable baseline. Persist it before
     // executor-only environment injection so a second release that also omits
     // a setup-owned resource cannot lose ownership information and delete it.
@@ -2294,5 +2336,145 @@ mod aws_handoff_tests {
             // The persisted baseline keeps what the role has installed.
             assert_eq!(prepared.resources["execution-sa"].config, before.config);
         }
+    }
+
+    /// A release that drops a secret's grant also drops the edge from the vault to the identity.
+    /// The installed role keeps the grant until setup, so the vault must not be planned for an
+    /// update: on an imported install its controller would refuse, ending as update-failed.
+    #[tokio::test]
+    async fn a_narrowing_that_drops_a_grant_edge_plans_no_update() {
+        let sa_ref = ResourceRef::new(ServiceAccount::RESOURCE_TYPE, "api-sa");
+        let account = |profile: PermissionProfile| {
+            ServiceAccount::from_permission_profile("api-sa".into(), &profile, |id| {
+                alien_permissions::get_permission_set(id).cloned()
+            })
+            .unwrap()
+        };
+        let installed_account =
+            account(PermissionProfile::new().resource("deployer-secrets", ["vault/data-read"]));
+        let stack = |account: ServiceAccount, vault_edge: bool| {
+            let mut stack = Stack::new("narrowing".into())
+                .add(
+                    alien_core::Vault::new("deployer-secrets".into()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(account, ResourceLifecycle::Frozen)
+                .build();
+            if vault_edge {
+                stack
+                    .resources
+                    .get_mut("deployer-secrets")
+                    .unwrap()
+                    .dependencies
+                    .push(sa_ref.clone());
+            }
+            stack
+        };
+        let baseline = stack(installed_account.clone(), true);
+        let target = stack(account(PermissionProfile::new()), false);
+        let config = DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(Default::default())
+            .allow_frozen_changes(false)
+            .build();
+        let mut saved = StackState::with_resource_prefix(Platform::Aws, "test".into());
+        for (id, entry) in baseline.resources() {
+            let mut resource = StackResourceState::new_pending(
+                entry.config.resource_type().to_string(),
+                entry.config.clone(),
+                Some(ResourceLifecycle::Frozen),
+                entry.dependencies.clone(),
+            );
+            resource.status = ResourceStatus::Running;
+            if id == "api-sa" {
+                let controller: AwsServiceAccountController =
+                    serde_json::from_value(serde_json::json!({
+                        "state": "ready", "roleArn": "arn:aws:iam::123456789012:role/test-api-sa",
+                        "roleName": "test-api-sa", "stackPermissionsApplied": true
+                    }))
+                    .unwrap();
+                resource
+                    .set_internal_controller(Some(Box::new(controller)))
+                    .unwrap();
+            } else {
+                let controller: alien_infra::AwsVaultController =
+                    serde_json::from_value(serde_json::json!({
+                        "state": "ready", "accountId": "123456789012", "region": "us-east-1",
+                        "vaultPrefix": "deployer-secrets"
+                    }))
+                    .unwrap();
+                resource
+                    .set_internal_controller(Some(Box::new(controller)))
+                    .unwrap();
+            }
+            saved.resources.insert(id.clone(), resource);
+        }
+        let before = saved.clone();
+        let result = handle_updating(
+            DeploymentState {
+                status: DeploymentStatus::Updating,
+                platform: Platform::Aws,
+                current_release: None,
+                target_release: None,
+                stack_state: Some(saved),
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(alien_core::RuntimeMetadata {
+                    initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
+                    prepared_stack: Some(baseline),
+                    pending_prepared_stack: Some(target),
+                    setup_cleanup_recommended: vec!["permission profile 'api'".into()],
+                    ..Default::default()
+                }),
+                retry_requested: false,
+                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            },
+            config,
+            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            Arc::new(MockPlatformServiceProvider::new()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result.state.status,
+            DeploymentStatus::Running,
+            "{:?}",
+            result.state.error
+        );
+        let after = result.state.stack_state.as_ref().unwrap();
+        for id in ["api-sa", "deployer-secrets"] {
+            assert_eq!(after.resources[id].status, ResourceStatus::Running);
+            assert_eq!(after.resources[id].config, before.resources[id].config);
+            assert_eq!(
+                after.resources[id].dependencies,
+                before.resources[id].dependencies
+            );
+            assert!(after.resources[id].previous_config.is_none());
+            assert!(after.resources[id].error.is_none());
+            assert_eq!(
+                after.resources[id].internal_state,
+                before.resources[id].internal_state
+            );
+        }
+        // The persisted baseline keeps the installed grant and its edge.
+        let prepared = result
+            .state
+            .runtime_metadata
+            .unwrap()
+            .prepared_stack
+            .unwrap();
+        assert_eq!(
+            prepared.resources["deployer-secrets"].dependencies,
+            vec![sa_ref]
+        );
+        assert_eq!(
+            prepared.resources["api-sa"].config,
+            Resource::new(installed_account)
+        );
     }
 }

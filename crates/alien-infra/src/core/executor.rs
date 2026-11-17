@@ -875,7 +875,7 @@ impl StackExecutor {
 
     /// Whether an edge from a resource of this type to that dependency carries permission
     /// grants: the resource's controller applies its resource-scoped grants to that identity.
-    fn grant_edge(resource_type: &str, dependency_type: &str) -> bool {
+    pub fn grant_edge(resource_type: &str, dependency_type: &str) -> bool {
         matches!(
             resource_type,
             "storage"
