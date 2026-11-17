@@ -652,3 +652,66 @@ fn management_publishes_to_commands_topics_by_name_only_when_it_dispatches_comma
         "no dispatch set, no grant"
     );
 }
+
+#[test]
+fn the_verifier_gains_dead_letter_permissions_only_for_a_stack_with_a_dead_letter() {
+    let stack = |dead_letter: bool| -> Stack {
+        let mut tasks = serde_json::json!({ "id": "tasks", "type": "queue" });
+        if dead_letter {
+            tasks["deadLetter"] = serde_json::json!({
+                "queue": { "type": "queue", "id": "failed" }, "maxAttempts": 5
+            });
+        }
+        serde_json::from_value(serde_json::json!({
+            "id": "app",
+            "resources": {
+                "verifier": {
+                    "config": { "id": "verifier", "type": "verifier" },
+                    "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+                },
+                "tasks": {
+                    "config": tasks, "lifecycle": "frozen",
+                    "dependencies": if dead_letter {
+                        serde_json::json!([{ "type": "queue", "id": "failed" }])
+                    } else { serde_json::json!([]) },
+                    "remoteAccess": false
+                },
+                "failed": {
+                    "config": { "id": "failed", "type": "queue" },
+                    "lifecycle": "frozen", "dependencies": [], "remoteAccess": false
+                }
+            },
+            "permissions": { "profiles": { "execution": {} }, "management": "auto" }
+        }))
+        .expect("stack")
+    };
+    let settings = || StackSettings {
+        signing: Some(StackSigning {
+            fingerprint: format!("SHA256:{}", "9f".repeat(32)),
+            channel: "production".to_string(),
+        }),
+        ..StackSettings::default()
+    };
+    let without = module_text(&render(&stack(false), TerraformTarget::Gcp, settings()));
+    assert!(!without.contains("pubsub.subscriptions.update"));
+    assert!(!without.contains("resourcemanager.projects.get"));
+    assert!(!without.contains("signing_verifier_project_read"));
+
+    let with = module_text(&render(&stack(true), TerraformTarget::Gcp, settings()));
+    let (roles, bindings) = verifier_custom_roles(&with);
+    for (permission, role) in [
+        ("pubsub.subscriptions.update", "signing_verifier_queues"),
+        ("resourcemanager.projects.get", "signing_verifier_project_read"),
+    ] {
+        let holders: Vec<&String> = roles
+            .iter()
+            .filter(|(_, permissions)| permissions.iter().any(|held| held == permission))
+            .map(|(label, _)| label)
+            .collect();
+        assert_eq!(holders, [role], "{permission}");
+    }
+    assert!(
+        bindings.contains(&("signing_verifier_queues".to_string(), true)),
+        "subscription updates stay under the name condition: {bindings:?}"
+    );
+}

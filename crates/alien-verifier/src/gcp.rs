@@ -259,6 +259,49 @@ impl Gcp {
         Ok(())
     }
 
+    /// Patch a Pub/Sub subscription with the request the controller built; the check has already
+    /// compared it with the signed stack.
+    pub async fn patch_pubsub_subscription(&self, name: &str, body: &Value) -> Result<()> {
+        let url = format!(
+            "https://pubsub.googleapis.com/v1/projects/{}/subscriptions/{name}",
+            self.project
+        );
+        self.call(
+            reqwest::Method::PATCH,
+            &url,
+            Some(body),
+            &format!("pubsub.subscriptions.patch {name}"),
+        )
+        .await?
+        .ok_or_else(|| AlienError::new(failed(format!("subscription {name} does not exist"))))?;
+        Ok(())
+    }
+
+    /// The project's Pub/Sub service agent, the one identity that moves dead letters: it is
+    /// named by the project number.
+    pub async fn pubsub_service_agent(&self) -> Result<String> {
+        let url = format!(
+            "https://cloudresourcemanager.googleapis.com/v1/projects/{}",
+            self.project
+        );
+        let response = self
+            .call(
+                reqwest::Method::GET,
+                &url,
+                None,
+                "resourcemanager.projects.get",
+            )
+            .await?
+            .ok_or_else(|| AlienError::new(failed("the project does not exist")))?;
+        let number = response["projectNumber"]
+            .as_str()
+            .filter(|number| !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()))
+            .ok_or_else(|| AlienError::new(failed("the project reports no project number")))?;
+        Ok(format!(
+            "service-{number}@gcp-sa-pubsub.iam.gserviceaccount.com"
+        ))
+    }
+
     /// Create a Cloud Scheduler job with the body the controller built; its `name` carries the
     /// location, which the check has already compared with the install's region.
     pub async fn create_scheduler_job(&self, body: &Value) -> Result<()> {
@@ -935,6 +978,23 @@ impl Backend for GcpBackend {
             }
             _ => return Ok(()),
         };
+        // Only a topic that is a dead-letter target and a subscription of a queue with a
+        // dead-letter setting may grant the Pub/Sub service agent, so the lookup is made only
+        // for them.
+        let pubsub_agent = match write {
+            ResourceWrite::SetTopicIamPolicy { .. }
+                if !alien_core::queues_dead_lettering_to(&facts.stack, facts.resource_id)
+                    .is_empty() =>
+            {
+                Some(self.0.pubsub_service_agent().await?)
+            }
+            ResourceWrite::SetSubscriptionIamPolicy { .. }
+                if alien_core::queue_has_dead_letter(&facts.stack, facts.resource_id) =>
+            {
+                Some(self.0.pubsub_service_agent().await?)
+            }
+            _ => None,
+        };
         // Only a topic that takes storage notifications may grant the Cloud Storage service
         // agent, so the lookup is made only for it.
         let agent = match write {
@@ -948,7 +1008,16 @@ impl Backend for GcpBackend {
             }
             _ => None,
         };
-        check_gcp_state(facts, write, &current, &self.0.region, agent.as_deref())
+        check_gcp_state(
+            facts,
+            write,
+            &current,
+            &self.0.region,
+            crate::cloud_write::resource::GcpAgents {
+                storage: agent.as_deref(),
+                pubsub: pubsub_agent.as_deref(),
+            },
+        )
     }
 
     async fn forward_resource_write(

@@ -127,7 +127,10 @@ fn gcp_subscription_gets_a_dead_letter_policy_and_minimal_service_agent_grants()
     assert_eq!(text.matches("roles/pubsub.publisher").count(), 1, "{text}");
     assert_eq!(text.matches("roles/pubsub.subscriber").count(), 1, "{text}");
     assert!(!text.contains("google_project_iam"), "{text}");
-    assert!(text.contains("gcp-sa-pubsub.iam.gserviceaccount.com"), "{text}");
+    assert!(
+        text.contains("gcp-sa-pubsub.iam.gserviceaccount.com"),
+        "{text}"
+    );
     assert_terraform_valid(&module, "GCP queue with a dead-letter target");
 }
 
