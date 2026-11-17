@@ -21,6 +21,53 @@ FIX_HINT = (
 )
 
 
+def client_code(url, marker):
+    """Source of the client pods. `DENIED` and `RECOVER` are set by the caller before it."""
+    return (
+        "import errno,socket,time,urllib.request,urllib.error\n"
+        "def require(condition,message):\n"
+        " if not condition: raise RuntimeError(message)\n"
+        "opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
+        # A recovering control waits, within the pod deadline, for a CNI that removes a
+        # deleted policy slowly; it must still be reached once.
+        "RECOVER=globals().get('RECOVER',False)\n"
+        "reached=False\n"
+        "for attempt in range(30 if RECOVER else 3):\n"
+        " try:\n"
+        f"  body=opener.open({url!r},timeout=3).read()\n"
+        f"  require(body=={marker.encode()!r}, 'wrong positive control body')\n"
+        "  require(not DENIED, 'NetworkPolicy did not block traffic')\n"
+        "  reached=True\n"
+        "  if RECOVER: break\n"
+        " except (urllib.error.URLError,TimeoutError,OSError) as error:\n"
+        "  reason=getattr(error,'reason',error)\n"
+        "  require((DENIED or RECOVER) and (isinstance(reason,TimeoutError) or "
+        "getattr(reason,'errno',None) in (errno.ECONNREFUSED,errno.ENETUNREACH,"
+        "errno.EHOSTUNREACH,errno.ETIMEDOUT)), repr(error))\n"
+        " time.sleep(1)\n"
+        "require(DENIED or reached, 'traffic did not resume after removing the policy')\n"
+    )
+
+
+# A successful negative result is only meaningful bracketed by working controls. The clients of
+# a stage do not depend on each other, so a stage starts them together and then waits for each:
+# on a runtime where a pod takes tens of seconds to start (a VM per pod), six one-after-the-other
+# starts do not fit in the install's wait. The `ingress-denied` pod may leave its own node; the
+# listener's ingress allow list is what refuses it.
+STAGES = [
+    [("control", False, False), ("denied", True, False), ("ingress-denied", True, False)],
+    [("control-after", False, False), ("ingress-control-after", False, True)],
+]
+
+
+def run_stages(start_client, wait_client):
+    for stage in STAGES:
+        for role, denied, recover in stage:
+            start_client(role, denied, recover)
+        for role, _, _ in stage:
+            wait_client(role)
+
+
 def main():
     namespace = os.environ["PROBE_NAMESPACE"]
     job = os.environ["PROBE_JOB"]
@@ -201,40 +248,14 @@ def main():
         ip = listener["status"]["podIP"]
         authority = f"[{ip}]" if ":" in ip else ip
         url = f"http://{authority}:8080/"
-        probe = (
-            "import errno,socket,time,urllib.request,urllib.error\n"
-            "def require(condition,message):\n"
-            " if not condition: raise RuntimeError(message)\n"
-            "opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n"
-            # A recovering control waits, within the pod deadline, for a CNI that removes a
-            # deleted policy slowly; it must still be reached once.
-            "RECOVER=globals().get('RECOVER',False)\n"
-            "reached=False\n"
-            "for attempt in range(30 if RECOVER else 3):\n"
-            " try:\n"
-            f"  body=opener.open({url!r},timeout=3).read()\n"
-            f"  require(body=={marker.encode()!r}, 'wrong positive control body')\n"
-            "  require(not DENIED, 'NetworkPolicy did not block traffic')\n"
-            "  reached=True\n"
-            "  if RECOVER: break\n"
-            " except (urllib.error.URLError,TimeoutError,OSError) as error:\n"
-            "  reason=getattr(error,'reason',error)\n"
-            "  require((DENIED or RECOVER) and (isinstance(reason,TimeoutError) or "
-            "getattr(reason,'errno',None) in (errno.ECONNREFUSED,errno.ENETUNREACH,"
-            "errno.EHOSTUNREACH,errno.ETIMEDOUT)), repr(error))\n"
-            " time.sleep(1)\n"
-            "require(DENIED or reached, 'traffic did not resume after removing the policy')\n"
+        probe = client_code(url, marker)
+        run_stages(
+            lambda role, denied, recover=False: create(
+                pods,
+                pod(role, f"DENIED={denied!r}\n" + ("RECOVER=True\n" if recover else "") + probe),
+            ),
+            lambda role: wait(role, lambda p: p.get("status", {}).get("phase") == "Succeeded"),
         )
-        # A successful negative result is only meaningful bracketed by working controls.
-        for role, denied in [("control", False), ("denied", True), ("control-after", False)]:
-            create(pods, pod(role, f"DENIED={denied!r}\n" + probe))
-            wait(role, lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        # An egress-only implementation must not pass the ingress endpoint gate: this pod may
-        # leave its own node, but the listener's ingress allow list does not admit it.
-        create(pods, pod("ingress-denied", "DENIED=True\n" + probe))
-        wait("ingress-denied", lambda p: p.get("status", {}).get("phase") == "Succeeded")
-        create(pods, pod("ingress-control-after", "DENIED=False\nRECOVER=True\n" + probe))
-        wait("ingress-control-after", lambda p: p.get("status", {}).get("phase") == "Succeeded")
         print("NetworkPolicy enforced: ingress and egress denied requests; all controls passed")
     finally:
         failures = []
