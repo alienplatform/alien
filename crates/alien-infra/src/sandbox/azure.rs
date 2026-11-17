@@ -1305,6 +1305,11 @@ impl AzureSandboxController {
                 .service_provider
                 .get_azure_sandbox_groups_client(ctx.get_azure_config()?)?;
             match arm.get_sandbox_group(&resource_group, &group).await {
+                // A group carrying this deployment's owner tag is the earlier attempt's own
+                // (the saved intent was lost), so the retry converges on it.
+                Ok(found)
+                    if found.tags.get(GROUP_OWNER_TAG).map(String::as_str)
+                        == Some(group_marker(ctx.resource_prefix, &config.id).as_str()) => {}
                 Ok(_) => {
                     return Err(AlienError::new(ErrorData::CloudPlatformError {
                         message: format!(
@@ -3701,6 +3706,71 @@ mod direct_setup_tests {
         assert!(!controller.created_group);
         assert!(controller.sandbox_group.is_none());
         assert_ne!(executor.status(), ResourceStatus::Running);
+    }
+
+    /// The saved intent is lost but the group carries this deployment's owner tag: it is the
+    /// earlier attempt's own, so setup converges on it instead of refusing. A tag naming another
+    /// deployment is still refused.
+    #[tokio::test]
+    async fn a_group_tagged_for_this_deployment_is_adopted_and_a_foreign_tag_is_refused() {
+        for (tag, adopted) in [
+            (group_marker("Test_Prefix", "box_one"), true),
+            ("other/box_one".to_string(), false),
+        ] {
+            let mut groups = MockSandboxGroupsApi::new();
+            groups
+                .expect_create_or_update_sandbox_group()
+                .times(usize::from(adopted))
+                .returning(|_, _, _, _| Ok(group("Succeeded")));
+            groups.expect_get_sandbox_group().returning(move |_, _| {
+                let mut found = group("Succeeded");
+                found.tags.insert(GROUP_OWNER_TAG.to_string(), tag.clone());
+                Ok(found)
+            });
+            let mut executor = executor(
+                AzureSandboxController::default(),
+                groups,
+                true,
+                SandboxEgress::None,
+            )
+            .await;
+            drive(&mut executor).await;
+            let controller = executor.internal_state::<AzureSandboxController>().unwrap();
+            assert_eq!(controller.created_group, adopted);
+        }
+    }
+
+    /// An install whose group an older build created has `created_group` in its state and no
+    /// tag on the group. Destroy still deletes it.
+    #[tokio::test]
+    async fn an_untagged_group_the_state_records_as_created_is_still_deleted() {
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_delete_sandbox_group()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut seen = 0;
+        groups.expect_get_sandbox_group().returning(move |_, _| {
+            seen += 1;
+            if seen > 1 {
+                return Err(not_found());
+            }
+            Ok(group("Succeeded"))
+        });
+        let controller = AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("g".to_string()),
+            region: Some("eastus".to_string()),
+            resource_group: Some("rg".to_string()),
+            created_group: true,
+            ..Default::default()
+        };
+        let mut executor = executor(controller, groups, true, SandboxEgress::None).await;
+        executor.delete().expect("delete is accepted");
+        executor
+            .run_until_status(ResourceStatus::Deleted)
+            .await
+            .expect("the delete finishes");
     }
 
     /// Every role assignment a direct setup makes for a sandbox, with scope, principal and role:
