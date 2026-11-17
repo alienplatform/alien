@@ -3305,7 +3305,33 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = run(program, args, current_dir);
+    let args: Vec<S> = args.into_iter().collect();
+    let namespace = args
+        .windows(2)
+        .find(|pair| pair[0].as_ref() == "--namespace")
+        .map(|pair| pair[1].as_ref().to_string_lossy().into_owned());
+    let output = run(program, &args, current_dir);
+    if !output.status.success() && program == "helm" {
+        // `--rollback-on-failure` removes the pods, but their events stay: print them
+        // so a pod that never became ready says why.
+        if let Some(namespace) = namespace {
+            for kubectl_args in [
+                vec!["get", "pods", "-o", "wide"],
+                vec!["get", "events", "--sort-by=.lastTimestamp"],
+            ] {
+                let dump = run(
+                    "kubectl",
+                    kubectl_args.iter().chain(["-n", namespace.as_str()].iter()),
+                    None,
+                );
+                eprintln!(
+                    "--- kubectl {} -n {namespace}\n{}",
+                    kubectl_args.join(" "),
+                    dump.diagnostic
+                );
+            }
+        }
+    }
     assert!(output.status.success(), "{}", output.diagnostic);
     output
 }
