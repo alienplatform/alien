@@ -7,12 +7,12 @@ use crate::error::{ErrorData, Result};
 use alien_aws_clients::sqs::{GetQueueAttributesResponse, SetQueueAttributesRequest};
 use alien_core::{
     bindings::{BindingValue, QueueBinding},
-    standard_resource_tags,
+    queues_dead_lettering_to, standard_resource_tags,
     storage_notifications::{storages_notifying_queue, AWS_QUEUE_INGRESS_SID},
     AwsSqsQueueHeartbeatData, HeartbeatBackend, InitialSetupAuthority, ObservedHealth, Platform,
     ProviderLifecycleState, Queue, QueueHeartbeatData, QueueHeartbeatStatus, QueueOutputs,
     ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus,
-    Worker, WorkerTrigger,
+    Worker, WorkerTrigger, AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS, AWS_DEFAULT_RETENTION_SECONDS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -31,6 +31,13 @@ pub struct AwsQueueController {
     /// Persist intent before a policy write, including recovery after a lost response.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) storage_ingress_pending: Option<Vec<String>>,
+    /// The `RedrivePolicy` last written to the queue. Absent while the queue has none, so
+    /// state of queues without a dead-letter setting is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) redrive_policy: Option<String>,
+    /// Whether the queue was last written with the 14 day retention of a dead-letter target.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) dead_letter_target: bool,
 }
 
 #[controller]
@@ -208,6 +215,18 @@ impl AwsQueueController {
         .await?;
 
         Ok(HandlerAction::Continue {
+            state: ConfiguringDeadLetter,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = ConfiguringDeadLetter, on_failure = CreateFailed, status = ResourceStatus::Provisioning)]
+    async fn configuring_dead_letter(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_dead_letter(ctx).await?;
+        Ok(HandlerAction::Continue {
             state: ConfiguringStorageIngress,
             suggested_delay: None,
         })
@@ -241,7 +260,8 @@ impl AwsQueueController {
         let queue = ctx.desired_resource_config::<Queue>()?;
         Ok(may_manage_storage_ingress(ctx, &queue.id)
             && (self.storage_ingress_pending.is_some()
-                || ingress_buckets(ctx, &queue.id) != self.storage_ingress_buckets))
+                || ingress_buckets(ctx, &queue.id) != self.storage_ingress_buckets
+                || self.dead_letter_changed(ctx)?))
     }
 
     // ─────────────── READY STATE ────────────────────────────────
@@ -318,6 +338,18 @@ impl AwsQueueController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         self.reconcile_storage_ingress(ctx).await?;
+        Ok(HandlerAction::Continue {
+            state: UpdatingDeadLetter,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(state = UpdatingDeadLetter, on_failure = UpdateFailed, status = ResourceStatus::Updating)]
+    async fn updating_dead_letter(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.reconcile_dead_letter(ctx).await?;
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -465,7 +497,83 @@ async fn set_queue_attributes(
         })
 }
 
+/// The `RedrivePolicy` a queue's dead-letter setting asks for. The target's ARN follows from its
+/// deterministic name, so the policy needs nothing from the target's controller.
+fn desired_redrive_policy(
+    ctx: &ResourceControllerContext<'_>,
+    queue: &Queue,
+) -> Result<Option<String>> {
+    let Some(dead_letter) = &queue.dead_letter else {
+        return Ok(None);
+    };
+    let cfg = ctx.get_aws_config()?;
+    let target = aws_prefixed_resource_name(ctx.resource_prefix, &dead_letter.queue.id);
+    Ok(Some(
+        serde_json::json!({
+            "deadLetterTargetArn": format!("arn:aws:sqs:{}:{}:{target}", cfg.region, cfg.account_id),
+            "maxReceiveCount": dead_letter.max_attempts,
+        })
+        .to_string(),
+    ))
+}
+
 impl AwsQueueController {
+    fn dead_letter_changed(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        let is_target = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
+        Ok(desired_redrive_policy(ctx, &queue)? != self.redrive_policy
+            || is_target != self.dead_letter_target)
+    }
+
+    /// Writes `RedrivePolicy` on a source queue and the 14 day retention on a target queue,
+    /// and clears both when the setting is removed. Queues without either are not written.
+    async fn reconcile_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        if !self.dead_letter_changed(ctx)? {
+            return Ok(());
+        }
+        let url = self.queue_url.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Queue URL not set in state".to_string(),
+                resource_id: Some(queue.id.clone()),
+            })
+        })?;
+        let desired = desired_redrive_policy(ctx, &queue)?;
+        let is_target = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
+        let mut attributes = std::collections::HashMap::new();
+        if desired != self.redrive_policy {
+            // An empty value removes the policy.
+            attributes.insert(
+                "RedrivePolicy".to_string(),
+                desired.clone().unwrap_or_default(),
+            );
+        }
+        if is_target != self.dead_letter_target {
+            let retention = if is_target {
+                AWS_DEAD_LETTER_TARGET_RETENTION_SECONDS
+            } else {
+                AWS_DEFAULT_RETENTION_SECONDS
+            };
+            attributes.insert("MessageRetentionPeriod".to_string(), retention.to_string());
+        }
+        let client = ctx
+            .service_provider
+            .get_aws_sqs_client(ctx.get_aws_config()?)
+            .await?;
+        set_queue_attributes(
+            ctx,
+            client.as_ref(),
+            &queue.id,
+            &url,
+            attributes,
+            format!("Failed to set the dead-letter configuration of SQS queue '{url}'"),
+        )
+        .await?;
+        self.redrive_policy = desired;
+        self.dead_letter_target = is_target;
+        Ok(())
+    }
+
     fn prepare_storage_ingress(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
         let queue = ctx.desired_resource_config::<Queue>()?;
         let desired = ingress_buckets(ctx, &queue.id);
@@ -1100,3 +1208,7 @@ mod tests {
 #[cfg(test)]
 #[path = "aws_notifications_tests.rs"]
 mod notifications_tests;
+
+#[cfg(test)]
+#[path = "aws_dead_letter_tests.rs"]
+mod dead_letter_tests;
