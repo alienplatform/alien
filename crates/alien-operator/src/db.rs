@@ -165,9 +165,49 @@ pub struct OperatorDb {
     /// holding the Operator's own credential. Kept in memory: the refresh
     /// runs again on the first sync after a restart.
     pull_secret_refreshed: std::sync::atomic::AtomicBool,
+    /// Where the enrolled identity lives when it is not in this database.
+    /// `None` keeps it here.
+    identity_store: Option<Arc<dyn crate::identity_store::IdentityStore>>,
+    /// Bytes of telemetry waiting to be sent, once measured. Inserts add to it;
+    /// any deletion forgets it, and the next capped insert measures again, so
+    /// the table is summed once per push cycle instead of once per insert.
+    queued_telemetry_bytes: std::sync::Mutex<Option<i64>>,
+    /// Most bytes of telemetry that may wait to be sent while connected; 0 means
+    /// no limit, which is how every existing install behaves.
+    telemetry_queue_cap: std::sync::atomic::AtomicI64,
 }
 
 impl OperatorDb {
+    /// Keep the enrolled identity in `store` instead of this database, which
+    /// is then a cache. Its canonical deployment ID is restored from the store.
+    pub(crate) async fn use_identity_store(
+        mut self,
+        store: Arc<dyn crate::identity_store::IdentityStore>,
+    ) -> Result<Self> {
+        if let Some(identity) = store.read().await? {
+            if !identity.deployment_id.is_empty() {
+                self.set_deployment_id(&identity.deployment_id).await?;
+            }
+        }
+        self.identity_store = Some(store);
+        Ok(self)
+    }
+
+    /// Why the identity cannot be saved right now, when it is kept outside
+    /// the database and that store is unavailable.
+    pub(crate) fn rotation_blocked(&self) -> Option<String> {
+        self.identity_store
+            .as_ref()
+            .and_then(|store| store.rotation_blocked())
+    }
+
+    /// The operator is stopping: the identity store writes nothing more.
+    pub(crate) fn stop_identity_writes(&self) {
+        if let Some(store) = &self.identity_store {
+            store.stop_writing();
+        }
+    }
+
     pub(crate) fn pull_secret_refreshed(&self) -> bool {
         self.pull_secret_refreshed
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -181,6 +221,9 @@ impl OperatorDb {
     pub(crate) async fn read_daily_identity(
         &self,
     ) -> Result<Option<crate::daily_identity::DailyIdentityState>> {
+        if let Some(store) = &self.identity_store {
+            return store.read().await;
+        }
         let conn = self.conn.lock().await;
         read_json(&conn, "daily_identity").await
     }
@@ -192,16 +235,20 @@ impl OperatorDb {
     pub(crate) async fn read_enrolled_daily_identity(
         &self,
     ) -> Result<Option<crate::daily_identity::DailyIdentityState>> {
-        Ok(self
-            .read_daily_identity()
-            .await?
-            .filter(|identity| !identity.deployment_id.is_empty()))
+        let saved = match &self.identity_store {
+            Some(store) => store.read_recent().await?,
+            None => self.read_daily_identity().await?,
+        };
+        Ok(saved.filter(|identity| !identity.deployment_id.is_empty()))
     }
 
     pub(crate) async fn write_daily_identity(
         &self,
         state: &crate::daily_identity::DailyIdentityState,
     ) -> Result<()> {
+        if let Some(store) = &self.identity_store {
+            return store.write(state).await;
+        }
         let conn = self.conn.lock().await;
         // A successful save must survive process loss before the server CAS.
         conn.execute("PRAGMA synchronous = FULL", ())
@@ -214,6 +261,9 @@ impl OperatorDb {
     /// Drop a saved key that never finished enrolling. An enrolled identity
     /// is kept.
     pub(crate) async fn clear_unenrolled_daily_identity(&self) -> Result<()> {
+        if let Some(store) = &self.identity_store {
+            return store.clear_unenrolled().await;
+        }
         let conn = self.conn.lock().await;
         conn.execute(
             "DELETE FROM state WHERE key = 'daily_identity'
@@ -232,6 +282,9 @@ impl OperatorDb {
         &self,
         state: &crate::daily_identity::DailyIdentityState,
     ) -> Result<()> {
+        if let Some(store) = &self.identity_store {
+            return store.check_enrolled(state).await;
+        }
         let conn = self.conn.lock().await;
         conn.execute("PRAGMA synchronous = FULL", ())
             .await
@@ -281,6 +334,10 @@ impl OperatorDb {
                     message: "Enrolled identity requires a deployment ID".into(),
                 },
             ));
+        }
+        if let Some(store) = &self.identity_store {
+            store.persist_enrolled(state).await?;
+            return self.set_deployment_id(&state.deployment_id).await;
         }
         let serialized = serde_json::to_string(state)
             .into_alien_error()
@@ -370,6 +427,9 @@ impl OperatorDb {
             published_runtime_credentials: Mutex::new(std::collections::HashMap::new()),
             runtime_credentials: Mutex::new(std::collections::HashMap::new()),
             pull_secret_refreshed: std::sync::atomic::AtomicBool::new(false),
+            identity_store: None,
+            queued_telemetry_bytes: std::sync::Mutex::new(None),
+            telemetry_queue_cap: std::sync::atomic::AtomicI64::new(0),
         })
     }
 
@@ -1441,8 +1501,51 @@ impl OperatorDb {
 
     /// Store telemetry for later push
     pub async fn store_telemetry(&self, telemetry_type: &str, data: &[u8]) -> Result<()> {
+        self.store_telemetry_capped(telemetry_type, data, None)
+            .await
+    }
+
+    /// Queue a telemetry batch, refusing it when the queue would pass
+    /// `max_queued_bytes`.
+    pub(crate) async fn store_telemetry_capped(
+        &self,
+        telemetry_type: &str,
+        data: &[u8],
+        max_queued_bytes: Option<i64>,
+    ) -> Result<()> {
         let conn = self.conn.lock().await;
         Self::ensure_telemetry_writable(&conn).await?;
+        if let Some(limit) = max_queued_bytes {
+            let cached = *self.queued_telemetry_bytes.lock().expect("queue size");
+            let queued = match cached {
+                Some(queued) => queued,
+                None => {
+                    let mut rows = conn
+                        .query("SELECT COALESCE(SUM(length(data)), 0) FROM telemetry", ())
+                        .await
+                        .into_alien_error()
+                        .context(database_error("Measuring queued telemetry"))?;
+                    match rows
+                        .next()
+                        .await
+                        .into_alien_error()
+                        .context(database_error("Reading queued telemetry size"))?
+                    {
+                        Some(row) => row
+                            .get(0)
+                            .into_alien_error()
+                            .context(database_error("Decoding queued telemetry size"))?,
+                        None => 0,
+                    }
+                }
+            };
+            *self.queued_telemetry_bytes.lock().expect("queue size") = Some(queued);
+            if queued.saturating_add(data.len() as i64) > limit {
+                return Err(alien_error::AlienError::new(
+                    ErrorData::TelemetryBufferFull { limit_bytes: limit },
+                ));
+            }
+        }
 
         conn.execute(
             "INSERT INTO telemetry (type, data, created_at) VALUES (?, ?, datetime('now'))",
@@ -1453,8 +1556,108 @@ impl OperatorDb {
         .context(ErrorData::DatabaseError {
             message: "Failed to store telemetry".to_string(),
         })?;
+        self.queue_grew(data.len());
 
         Ok(())
+    }
+
+    /// Limit the telemetry that may wait to be sent while connected. `None`
+    /// (the default) leaves the queue unbounded, as it always was.
+    pub fn set_telemetry_queue_cap(&self, bytes: Option<i64>) {
+        self.telemetry_queue_cap.store(
+            bytes.unwrap_or(0).max(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    pub(crate) fn telemetry_queue_cap(&self) -> Option<i64> {
+        match self
+            .telemetry_queue_cap
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => None,
+            cap => Some(cap),
+        }
+    }
+
+    fn queue_grew(&self, bytes: usize) {
+        if let Some(queued) = self
+            .queued_telemetry_bytes
+            .lock()
+            .expect("queue size")
+            .as_mut()
+        {
+            *queued = queued.saturating_add(bytes as i64);
+        }
+    }
+
+    fn queue_changed(&self) {
+        *self.queued_telemetry_bytes.lock().expect("queue size") = None;
+    }
+
+    /// The Pods that have a saved log cursor.
+    pub async fn pod_log_cursor_uids(&self) -> Result<std::collections::HashSet<String>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT DISTINCT pod_uid FROM pod_log_offsets", ())
+            .await
+            .into_alien_error()
+            .context(database_error("Listing Pod log cursors"))?;
+        let mut uids = std::collections::HashSet::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(database_error("Reading Pod log cursors"))?
+        {
+            uids.insert(
+                row.get::<String>(0)
+                    .into_alien_error()
+                    .context(database_error("Decoding Pod log cursor"))?,
+            );
+        }
+        Ok(uids)
+    }
+
+    /// Forget the log cursors of Pods that no longer exist, so the table does
+    /// not grow with every Pod the cluster ever ran. Returns how many Pods'
+    /// cursors were removed.
+    pub async fn prune_pod_log_offsets(
+        &self,
+        live_pod_uids: &std::collections::HashSet<String>,
+    ) -> Result<usize> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT DISTINCT pod_uid FROM pod_log_offsets", ())
+            .await
+            .into_alien_error()
+            .context(database_error("Listing Pod log cursors"))?;
+        let mut gone = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(database_error("Reading Pod log cursors"))?
+        {
+            let uid: String = row
+                .get(0)
+                .into_alien_error()
+                .context(database_error("Decoding Pod log cursor"))?;
+            if !live_pod_uids.contains(&uid) {
+                gone.push(uid);
+            }
+        }
+        drop(rows);
+        for uid in &gone {
+            conn.execute(
+                "DELETE FROM pod_log_offsets WHERE pod_uid = ?",
+                (uid.clone(),),
+            )
+            .await
+            .into_alien_error()
+            .context(database_error("Removing Pod log cursors"))?;
+        }
+        Ok(gone.len())
     }
 
     /// Return the cursor for one container incarnation. Pod UID prevents a
@@ -1686,7 +1889,7 @@ impl OperatorDb {
             .context(ErrorData::DatabaseError {
                 message: "Failed to queue Pod logs".to_string(),
             })?;
-            conn.execute(
+                        conn.execute(
                 "INSERT INTO pod_log_offsets (pod_uid, container, restart_count, timestamp, ordinal) VALUES (?, ?, ?, ?, ?) ON CONFLICT(pod_uid, container, restart_count) DO UPDATE SET timestamp = excluded.timestamp, ordinal = excluded.ordinal",
                 (
                     pod_uid.to_string(),
@@ -1714,6 +1917,9 @@ impl OperatorDb {
             .context(ErrorData::DatabaseError {
                 message: "Failed to commit Pod log batch".to_string(),
             })?;
+        // Only a committed batch changes the queue; the measured size grows by it
+        // instead of being forgotten, so the table is not summed again per insert.
+        self.queue_grew(data.len());
         Ok(())
     }
 
@@ -1773,6 +1979,7 @@ impl OperatorDb {
         }
 
         let conn = self.conn.lock().await;
+        self.queue_changed();
 
         for id in ids {
             conn.execute("DELETE FROM telemetry WHERE id = ?", (*id,))
@@ -2317,6 +2524,7 @@ impl OperatorDb {
     /// vendor has acknowledged receiving it.
     pub async fn delete_telemetry_through(&self, through: i64) -> Result<u64> {
         let conn = self.conn.lock().await;
+        self.queue_changed();
         conn.execute("DELETE FROM telemetry WHERE id <= ?", (through,))
             .await
             .into_alien_error()
@@ -2369,6 +2577,7 @@ impl OperatorDb {
             dropped += 1;
         }
         if let Some(through) = through {
+            self.queue_changed();
             conn.execute("DELETE FROM telemetry WHERE id <= ?", (through,))
                 .await
                 .into_alien_error()
@@ -3117,6 +3326,47 @@ mod tests {
                 .unwrap(),
             later
         );
+    }
+
+    #[tokio::test]
+    async fn cursors_of_pods_that_no_longer_exist_are_pruned() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let db = OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        let offset = PodLogOffset {
+            timestamp: "2026-09-27T00:00:00.000000001Z".to_string(),
+            ordinal: 1,
+        };
+        for uid in ["live", "gone"] {
+            db.store_pod_log_batch(uid, "api", 0, &offset, b"line")
+                .await
+                .unwrap();
+        }
+        let live = ["live".to_string()].into();
+        assert_eq!(db.prune_pod_log_offsets(&live).await.unwrap(), 1);
+        assert!(db.get_pod_log_offset("live", "api", 0).await.unwrap().is_some());
+        assert!(db.get_pod_log_offset("gone", "api", 0).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn pod_log_batches_grow_the_measured_queue_size_instead_of_forgetting_it() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let db = OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        db.store_telemetry_capped("logs", b"first", Some(1 << 20))
+            .await
+            .unwrap();
+        assert_eq!(*db.queued_telemetry_bytes.lock().unwrap(), Some(5));
+        let offset = PodLogOffset {
+            timestamp: "2026-09-27T00:00:00.000000001Z".to_string(),
+            ordinal: 1,
+        };
+        db.store_pod_log_batch("pod-uid", "api", 0, &offset, b"pod-line")
+            .await
+            .unwrap();
+        assert_eq!(*db.queued_telemetry_bytes.lock().unwrap(), Some(13));
     }
 
     #[tokio::test]

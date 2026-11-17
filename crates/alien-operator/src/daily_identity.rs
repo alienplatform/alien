@@ -22,7 +22,8 @@ use crate::{
 /// so an operator survives a manager outage longer than a day.
 pub const ROTATION_GRACE: chrono::Duration = chrono::Duration::days(7);
 
-/// Stored only in the encrypted local database; intentionally not Debug.
+/// Stored in the encrypted local database, or in the Kubernetes Secret named by
+/// `OPERATOR_IDENTITY_SECRET`; intentionally not Debug.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DailyIdentityState {
@@ -45,6 +46,9 @@ pub(crate) struct DailyIdentityState {
     /// newer key works.
     #[serde(default)]
     pub previous: Option<String>,
+    /// Which version of the Secret this state was read from. Not saved.
+    #[serde(skip)]
+    pub(crate) store_version: crate::identity_store::StoreVersion,
 }
 
 /// A re-enrollment whose response may have been lost. A retry with the same
@@ -73,6 +77,9 @@ pub(crate) struct DailyIdentity {
     /// unreadable answer. The saved candidate key is then the only way to
     /// finish the enrollment, so it is kept.
     enrollment_uncertain: std::sync::atomic::AtomicBool,
+    /// Set when the manager refused an enrollment code outright (a 4xx other
+    /// than a retry hint): it was already used, expired, or is not valid.
+    enrollment_refused: std::sync::atomic::AtomicBool,
 }
 
 impl DailyIdentity {
@@ -88,7 +95,14 @@ impl DailyIdentity {
             operation: db.daily_identity_operation.clone(),
             client,
             enrollment_uncertain: std::sync::atomic::AtomicBool::new(false),
+            enrollment_refused: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Whether the manager refused an enrollment code outright.
+    pub(crate) fn code_was_refused(&self) -> bool {
+        self.enrollment_refused
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Enroll with the configured code unless this operator is already
@@ -127,7 +141,18 @@ impl DailyIdentity {
                 return Err(failed("Saved operator belongs to another deployment"));
             }
         }
-        let state = match self.db.read_daily_identity().await? {
+        let mut saved = self.db.read_daily_identity().await?;
+        // A key saved for a refused first token belongs to nobody yet. A corrected
+        // token for another manager starts over, as it does for a Helm install.
+        if saved.as_ref().is_some_and(|state| {
+            state.deployment_id.is_empty()
+                && !(same_endpoint(&state.manager_url, manager_url)
+                    && same_endpoint(&state.audience, audience))
+        }) {
+            self.db.clear_unenrolled_daily_identity().await?;
+            saved = None;
+        }
+        let state = match saved {
             Some(state) => {
                 check_saved_identity(&state, manager_url, audience, deployment_id)?;
                 if !state.deployment_id.is_empty() {
@@ -148,6 +173,7 @@ impl DailyIdentity {
                     enrolled_code_hash: None,
                     pending_enrollment: None,
                     previous: None,
+                    store_version: Default::default(),
                 };
                 self.db.write_daily_identity(&state).await?;
                 state
@@ -224,6 +250,10 @@ impl DailyIdentity {
             Ok(Err(status)) => {
                 if status.is_server_error() || matches!(status.as_u16(), 408 | 429) {
                     self.mark_enrollment_uncertain();
+                }
+                if status.is_client_error() && !matches!(status.as_u16(), 408 | 429) {
+                    self.enrollment_refused
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                 }
                 return Err(refused(status));
             }
@@ -402,7 +432,7 @@ impl DailyIdentity {
         if !state.deployment_id.is_empty() {
             return Ok(false);
         }
-        if state.manager_url != manager_url {
+        if !same_endpoint(&state.manager_url, manager_url) {
             self.db.clear_unenrolled_daily_identity().await?;
             return Ok(false);
         }
@@ -474,14 +504,32 @@ impl DailyIdentity {
         })
     }
 
+    /// The key to prove identity with, rotating it when due. When another
+    /// operator saved to a shared identity store first, the write is refused:
+    /// start over with what it saved, which a pending key leads through the
+    /// usual recovery.
     async fn current_key(&self, audience: &str) -> Result<String> {
+        let mut attempts = 0;
+        loop {
+            match self.current_key_once(audience).await {
+                Err(error)
+                    if attempts < 3 && matches!(error.error, Some(ErrorData::IdentityConflict)) =>
+                {
+                    attempts += 1;
+                }
+                outcome => return outcome,
+            }
+        }
+    }
+
+    async fn current_key_once(&self, audience: &str) -> Result<String> {
         let _operation = self.operation.lock().await;
         let mut state = self
             .db
             .read_daily_identity()
             .await?
             .ok_or_else(|| failed("Component identity has not been enrolled"))?;
-        if state.audience != audience || state.deployment_id.is_empty() {
+        if !same_endpoint(&state.audience, audience) || state.deployment_id.is_empty() {
             return Err(failed(
                 "Component identity is not enrolled for this manager",
             ));
@@ -500,6 +548,11 @@ impl DailyIdentity {
                 Err(error)
             }
         };
+        // An identity store that cannot be written would lose the successor
+        // key if the process died after the manager accepted it.
+        if let Some(reason) = self.db.rotation_blocked() {
+            return keep_current(&state, failed(&reason));
+        }
         let had_pending = state.pending.is_some();
         if let Some(pending) = &state.pending {
             let probe = self.client.post(format!("{}/v1/identity/exchange", state.manager_url.trim_end_matches('/')))
@@ -564,7 +617,14 @@ impl DailyIdentity {
             }
             state.pending = Some(new_key()?);
             state.pending_started_at = Some(now);
-            self.db.write_daily_identity(&state).await?;
+            // Nothing has been sent yet, so a successor that cannot be saved
+            // only delays the swap: the current key keeps working.
+            if let Err(error) = self.db.write_daily_identity(&state).await {
+                if matches!(error.error, Some(ErrorData::IdentityConflict)) {
+                    return Err(error);
+                }
+                return keep_current(&state, error);
+            }
         }
         let mut pending = state
             .pending
@@ -707,13 +767,26 @@ impl RuntimeProofProvider for DailyIdentity {
     }
 }
 
+/// Whether two manager URLs (or audiences) name the same endpoint, ignoring a
+/// trailing slash and the case of the scheme and host.
+pub(crate) fn same_endpoint(a: &str, b: &str) -> bool {
+    fn normal(value: &str) -> String {
+        match reqwest::Url::parse(value) {
+            Ok(url) => url.as_str().trim_end_matches('/').to_owned(),
+            Err(_) => value.trim_end_matches('/').to_owned(),
+        }
+    }
+    normal(a) == normal(b)
+}
+
 fn check_saved_identity(
     state: &DailyIdentityState,
     manager_url: &str,
     audience: &str,
     deployment_id: Option<&str>,
 ) -> Result<()> {
-    if state.manager_url != manager_url || state.audience != audience {
+    if !same_endpoint(&state.manager_url, manager_url) || !same_endpoint(&state.audience, audience)
+    {
         return Err(failed(
             "Saved component identity belongs to another manager",
         ));
@@ -1118,6 +1191,7 @@ mod persistence_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
             expires_at: Utc::now() + chrono::Duration::hours(12),
         };
         db.write_daily_identity(&state).await.unwrap();
@@ -1287,6 +1361,7 @@ mod persistence_tests {
             enrolled_code_hash: Some(key_hash("ax_enroll_original")),
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
             expires_at,
         };
         db.write_daily_identity(&state).await.unwrap();
@@ -1301,6 +1376,34 @@ mod persistence_tests {
             code,
             deployment_id: Some("deployment-one"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_later_token_for_the_same_manager_with_a_trailing_slash_keeps_the_working_key() {
+        let (db, mut state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(20)).await;
+        // Enrolled with the manager URL as its audience, as a join token does.
+        state.audience = state.manager_url.clone();
+        db.write_daily_identity(&state).await.unwrap();
+        db.persist_enrolled_identity(&state).await.unwrap();
+        *manager.current.lock().await = key_hash(&state.current);
+        let slashed = format!("{}/", state.manager_url);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        let (deployment, _) = identity
+            .connect(EnrollmentRequest {
+                manager_url: &slashed,
+                audience: &slashed,
+                code: "ax_enroll_original",
+                deployment_id: Some("deployment-one"),
+            })
+            .await
+            .unwrap();
+        assert_eq!(deployment, "deployment-one");
+        // The key is unchanged.
+        assert_eq!(
+            db.read_daily_identity().await.unwrap().unwrap().current,
+            state.current
+        );
     }
 
     #[tokio::test]
@@ -1455,6 +1558,134 @@ mod persistence_tests {
 
     /// A code that the enroll step refuses leaves no saved key, so the
     /// Operator still starts in token mode.
+    fn saved(manager_url: &str, deployment_id: &str) -> DailyIdentityState {
+        DailyIdentityState {
+            manager_url: manager_url.into(),
+            audience: "manager-one".into(),
+            deployment_id: deployment_id.into(),
+            current: "ax_day_v1_current".into(),
+            pending: None,
+            pending_started_at: None,
+            expires_at: Utc::now() + chrono::Duration::hours(20),
+            enrolled_code_hash: None,
+            pending_enrollment: None,
+            previous: None,
+            store_version: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_trailing_slash_or_host_case_does_not_make_another_manager() {
+        assert!(same_endpoint("https://m.example", "https://m.example/"));
+        assert!(same_endpoint("https://M.Example/", "https://m.example"));
+        assert!(!same_endpoint("https://m.example", "https://n.example"));
+        assert!(same_endpoint("manager-one", "manager-one"));
+        assert!(!same_endpoint("manager-one", "manager-two"));
+    }
+
+    #[tokio::test]
+    async fn an_enrolled_operator_accepts_its_manager_url_with_a_trailing_slash() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        db.persist_enrolled_identity(&saved("https://m.example", "dep_1"))
+            .await
+            .unwrap();
+        let identity = DailyIdentity::new(db).unwrap();
+        let deployment = identity
+            .enroll(EnrollmentRequest {
+                manager_url: "https://m.example/",
+                audience: "manager-one",
+                code: "ax_enroll_unused",
+                deployment_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(deployment, "dep_1");
+    }
+
+    #[tokio::test]
+    async fn enrollment_works_when_the_managers_own_base_url_differs_from_the_url_in_the_token() {
+        // The manager answers on a custom domain while its own configured base
+        // URL (its audience) is another name. The operator never sends or checks
+        // an audience when it enrolls: the token's manager URL is the only
+        // address it needs and is stored as the audience.
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/v1/identity/enroll",
+            axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
+                assert!(body.get("audience").is_none() && body.get("managerAudience").is_none());
+                axum::Json(json!({
+                    "deploymentId": "dep_1",
+                    "componentId": "component_1",
+                    "revision": 1,
+                    "expiresAt": Utc::now() + chrono::Duration::hours(23),
+                }))
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        let deployment = identity
+            .enroll(EnrollmentRequest {
+                manager_url: &url,
+                audience: &url,
+                code: "ax_enroll_v1_x",
+                deployment_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(deployment, "dep_1");
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!((saved.manager_url, saved.audience), (url.clone(), url));
+    }
+
+    #[tokio::test]
+    async fn a_corrected_token_replaces_the_candidate_of_a_refused_first_token() {
+        let directory = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/v1/identity/enroll",
+            axum::routing::post(|| async { axum::http::StatusCode::UNAUTHORIZED }),
+        );
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap(),
+        );
+        // The first token named a manager that refused its code: an unenrolled candidate.
+        db.write_daily_identity(&saved("http://127.0.0.1:9", ""))
+            .await
+            .unwrap();
+        let identity = DailyIdentity::new(db.clone()).unwrap();
+        identity
+            .enroll(EnrollmentRequest {
+                manager_url: &url,
+                audience: "manager-one",
+                code: "ax_enroll_corrected",
+                deployment_id: None,
+            })
+            .await
+            .expect_err("this manager refuses the code too");
+        let candidate = db.read_daily_identity().await.unwrap().unwrap();
+        assert_eq!(
+            candidate.manager_url, url,
+            "the old candidate was discarded"
+        );
+        assert!(candidate.deployment_id.is_empty());
+    }
+
     #[tokio::test]
     async fn a_refused_token_enrollment_leaves_no_identity() {
         let directory = tempfile::tempdir().unwrap();
@@ -1516,6 +1747,229 @@ mod persistence_tests {
             .connect(request(&state, "ax_enroll_original"))
             .await
             .is_err());
+    }
+
+    /// An identity store that holds the state in memory and can be told to
+    /// refuse writes, as the Kubernetes Secret store does.
+    struct TestStore {
+        state: std::sync::Mutex<Option<DailyIdentityState>>,
+        conflicts: std::sync::atomic::AtomicUsize,
+        blocked: std::sync::Mutex<Option<String>>,
+        writes: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::identity_store::IdentityStore for TestStore {
+        async fn read(&self) -> Result<Option<DailyIdentityState>> {
+            Ok(self.state.lock().unwrap().clone())
+        }
+        async fn write(&self, state: &DailyIdentityState) -> Result<()> {
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.conflicts.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                self.conflicts
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(AlienError::new(ErrorData::IdentityConflict));
+            }
+            *self.state.lock().unwrap() = Some(state.clone());
+            Ok(())
+        }
+        async fn persist_enrolled(&self, state: &DailyIdentityState) -> Result<()> {
+            self.write(state).await
+        }
+        async fn clear_unenrolled(&self) -> Result<()> {
+            Ok(())
+        }
+        async fn check_enrolled(&self, _state: &DailyIdentityState) -> Result<()> {
+            Ok(())
+        }
+        fn rotation_blocked(&self) -> Option<String> {
+            self.blocked.lock().unwrap().clone()
+        }
+        fn stop_writing(&self) {}
+    }
+
+    async fn operator_on_store(
+        state: &DailyIdentityState,
+    ) -> (Arc<OperatorDb>, Arc<TestStore>, tempfile::TempDir) {
+        let store = Arc::new(TestStore {
+            state: std::sync::Mutex::new(Some(state.clone())),
+            conflicts: std::sync::atomic::AtomicUsize::new(0),
+            blocked: std::sync::Mutex::new(None),
+            writes: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let db = OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+            .await
+            .unwrap()
+            .use_identity_store(store.clone())
+            .await
+            .unwrap();
+        (Arc::new(db), store, directory)
+    }
+
+    /// Tells whether the loops can see an identity through the Operator's state.
+    struct SeesIdentity(Arc<std::sync::atomic::AtomicBool>);
+
+    #[async_trait::async_trait]
+    impl crate::loops::operations_exec::OperationsExecLoop for SeesIdentity {
+        async fn run(self: Arc<Self>, state: Arc<crate::OperatorState>) {
+            let seen = state.db.read_enrolled_daily_identity().await.unwrap().is_some();
+            self.0.store(seen, std::sync::atomic::Ordering::SeqCst);
+            state.cancel.cancelled().await;
+        }
+    }
+
+    /// The loops (sync, telemetry, operations) must use the database that holds the identity
+    /// store. A database of their own has no identity, so they fall back to the one-hour key
+    /// they started with: telemetry is refused for its role and the Operator drops off after an
+    /// hour.
+    #[tokio::test]
+    async fn the_running_loops_see_the_identity_kept_in_the_store() {
+        let (_db, state, _manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        let (db, _store, directory) = operator_on_store(&state).await;
+        let config = crate::OperatorConfig::builder()
+            .platform(alien_core::Platform::Local)
+            .data_dir(directory.path().to_string_lossy().to_string())
+            .encryption_key("a".repeat(64))
+            .otlp_server_port(0)
+            .sync(crate::SyncConfig {
+                url: "http://127.0.0.1:9/".parse().unwrap(),
+                token: "ax_cap_v1_start".to_string(),
+            })
+            .build();
+        let seen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let task = tokio::spawn(crate::run_operator_with_cancel_and_loops_and_runtime(
+            config,
+            None,
+            None,
+            None,
+            None,
+            Some(Arc::new(SeesIdentity(seen.clone()))),
+            None,
+            cancel.clone(),
+            crate::OperatorRuntimeOptions {
+                readiness_server_port: None,
+                identity_initialized_config_map: None,
+                runtime_deployment_scope: None,
+                pod_log_collection: None,
+            },
+            Some(db),
+        ));
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        cancel.cancel();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), task).await;
+        assert!(
+            seen.load(std::sync::atomic::Ordering::SeqCst),
+            "a loop saw no identity: it has a database of its own"
+        );
+    }
+
+    /// The identity cannot be saved (the Secret was deleted), so a rotation could
+    /// lose the successor key. The operator keeps its working key and does not rotate.
+    #[tokio::test]
+    async fn a_blocked_identity_store_keeps_the_working_key_and_does_not_rotate() {
+        let (_db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let (db, store, _directory) = operator_on_store(&state).await;
+        *store.blocked.lock().unwrap() = Some("the Secret was deleted".into());
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        let (_, token) = identity
+            .clone()
+            .connect(request(&state, "ax_enroll_original"))
+            .await
+            .expect("the current key still works");
+        assert_eq!(token, "ax_cap_v1_recovered");
+        assert_eq!(*manager.current.lock().await, key_hash(&state.current));
+        assert_eq!(store.writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A Secret the operator may read but not update. Rotation fails when the
+    /// successor key cannot be saved, before anything is sent: the key that
+    /// still works keeps working, even inside the last twelve hours.
+    #[tokio::test]
+    async fn without_update_permission_the_working_key_keeps_working_until_it_expires() {
+        use crate::identity_store::{PutOutcome, SecretBackend, SecretIdentityStore};
+        use k8s_openapi::{api::core::v1::Secret, ByteString};
+
+        struct ReadOnly(Secret);
+        #[async_trait::async_trait]
+        impl SecretBackend for ReadOnly {
+            async fn get(&self) -> Result<Option<Secret>> {
+                Ok(Some(self.0.clone()))
+            }
+            async fn put(&self, _secret: &Secret) -> Result<PutOutcome> {
+                Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "forbidden".into(),
+                }))
+            }
+        }
+
+        let (_db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let secret = Secret {
+            data: Some(
+                [
+                    (
+                        "identity".to_string(),
+                        ByteString(serde_json::to_vec(&state).unwrap()),
+                    ),
+                    ("encryptionKey".to_string(), ByteString(vec![b'a'; 64])),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let store = Arc::new(SecretIdentityStore::new(
+            Arc::new(ReadOnly(secret)),
+            "identity",
+        ));
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(directory.path().to_str().unwrap(), &"a".repeat(64))
+                .await
+                .unwrap()
+                .use_identity_store(store)
+                .await
+                .unwrap(),
+        );
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        for _ in 0..2 {
+            let (_, token) = identity
+                .clone()
+                .connect(request(&state, "ax_enroll_original"))
+                .await
+                .expect("the current key keeps working");
+            assert_eq!(token, "ax_cap_v1_recovered");
+        }
+        assert_eq!(*manager.current.lock().await, key_hash(&state.current));
+    }
+
+    /// Another operator saved first: the write is refused, and this one starts over
+    /// with what is saved and rotates.
+    #[tokio::test]
+    async fn a_conflicting_identity_write_is_retried_after_re_reading() {
+        let (_db, state, manager, _directory) =
+            recovery_fixture(Utc::now() + chrono::Duration::hours(6)).await;
+        *manager.current.lock().await = key_hash(&state.current);
+        let (db, store, _directory) = operator_on_store(&state).await;
+        store
+            .conflicts
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+        let identity = Arc::new(DailyIdentity::new(db.clone()).unwrap());
+        identity
+            .clone()
+            .connect(request(&state, "ax_enroll_original"))
+            .await
+            .expect("the rotation succeeds on the second try");
+        let saved = db.read_daily_identity().await.unwrap().unwrap();
+        assert_ne!(saved.current, state.current, "the key was rotated");
+        assert_eq!(key_hash(&saved.current), *manager.current.lock().await);
+        assert!(store.writes.load(std::sync::atomic::Ordering::SeqCst) >= 2);
     }
 
     /// The manager cannot rotate for hours. The key still has six hours, so
@@ -1700,6 +2154,7 @@ mod persistence_tests {
                 enrolled_code_hash: None,
                 pending_enrollment: None,
                 previous: None,
+                store_version: Default::default(),
                 expires_at: Utc::now() + chrono::Duration::hours(11),
             })
             .await
@@ -1830,6 +2285,7 @@ mod persistence_tests {
                 enrolled_code_hash: None,
                 pending_enrollment: None,
                 previous: None,
+                store_version: Default::default(),
             })
             .await
             .unwrap();
@@ -1880,6 +2336,7 @@ mod persistence_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         };
         db.write_daily_identity(&original).await.unwrap();
         let identity = DailyIdentity::new(db.clone()).unwrap();
@@ -2020,6 +2477,7 @@ mod grace_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         }
     }
 
@@ -2302,6 +2760,26 @@ mod lost_enrollment_tests {
         (db, url, manager, directory)
     }
 
+    /// A code the manager refuses outright (spent, expired) is told apart from
+    /// a lost answer, so the installer can say to issue a new code.
+    #[tokio::test]
+    async fn a_spent_code_is_a_refusal_and_a_lost_answer_is_not() {
+        for (answer, refused) in [(REFUSED, true), (LOST, false)] {
+            let (db, url, _manager, _directory) = fixture(answer).await;
+            let identity = DailyIdentity::new(db.clone()).unwrap();
+            identity
+                .enroll(EnrollmentRequest {
+                    manager_url: &url,
+                    audience: "manager-one",
+                    code: "ax_enroll_v1_spent",
+                    deployment_id: None,
+                })
+                .await
+                .expect_err("no identity is made");
+            assert_eq!(identity.code_was_refused(), refused);
+        }
+    }
+
     /// The manager installed the key and its reply was lost. The next start
     /// cannot get another code, since the deployment has a key, but it holds
     /// the key and proves it to the manager, which finishes the enrollment.
@@ -2464,6 +2942,7 @@ mod lost_enrollment_tests {
             enrolled_code_hash: None,
             pending_enrollment: None,
             previous: None,
+            store_version: Default::default(),
         };
         let error = identity
             .post_outcome(&state, "exchange", json!({}))
