@@ -86,6 +86,14 @@ app.post("/failed/drain", async c => {
   return c.json(drained)
 })
 
+/** Reads `tasks` with `receive` (the pull path) and gives every message back; shows what is left. */
+app.post("/tasks/peek", async c => {
+  const tasks = queue("tasks")
+  const messages = await tasks.receive(10)
+  await Promise.all(messages.map(message => tasks.nack(message.receiptHandle)))
+  return c.json({ visible: messages.length })
+})
+
 onQueueBatch<unknown>("*", async batch => {
   try {
     const parsed = batch.deliveries.map(delivery => ({

@@ -175,6 +175,10 @@ pub async fn check_dead_letter(
     for n in 0..GOOD {
         assert!(counts[&format!("{prefix}-good-{n}")] >= 1);
     }
+    // `tasks` ends empty: nothing is left to receive.
+    sleep(Duration::from_secs(20)).await;
+    let left = json_request(&client, client.post(format!("{url}/tasks/peek"))).await;
+    assert_eq!(left["visible"], 0, "tasks must end empty: {left}");
     info!(?counts, "dead-letter delivery counts");
     counts
 }
