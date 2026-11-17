@@ -535,11 +535,21 @@ differs from the container that answers. This holds in whatever state the sandbo
 sandbox whose container Google replaced, with no pause at all, gets `SANDBOX_MEMORY_LOST` from a
 routine `resume()`, and so does one that a request woke into a replaced container before `resume()`
 was called. A read that fails for another reason, including an image whose marker script cannot
-run, is reported as that failure (`pauseMarkerFailed`: the marker needs `/bin/sh` and a writable
-`/dev/shm` or `/tmp`), never as lost memory. A sandbox created before this contract has no tag:
+run, is reported as that failure (`pauseMarkerFailed`, `pauseMarkerUnreadable`), not as lost memory.
+
+The marker is best effort at create, and that has false reports as its price:
+- An image with `/bin/sh` where neither `/dev/shm` nor `/tmp` is writable, or where three writes
+  fail for a passing reason, only logs a warning at create. The sandbox is returned and tagged, has
+  no marker, and every later routine `resume()` on it, even a healthy running one, reports
+  `SANDBOX_MEMORY_LOST`. Pause first (which writes the marker again), or recreate.
+- An entrypoint or workload that wipes `/dev/shm` or `/tmp` removes the marker the same way, and
+  the next `resume()` reports `SANDBOX_MEMORY_LOST` although the memory was kept.
+- The first marker is written after the sandbox settles. A second caller that reaches the sandbox
+  by key about 20 seconds after its create time can get it before the marker exists, and its
+  `resume()` then reports `SANDBOX_MEMORY_LOST`. Retrying after the create finishes succeeds.
+A sandbox created before this contract has no tag:
 `resume()` on it is a no-op while it is running, and a marker is checked only if one exists.
 
-On Google Cloud, a resume of a sandbox that was never paused and whose first memory marker could not be written at create reports SANDBOX_MEMORY_LOST; pause first, or recreate.
 Pause in one process and resume in another are checked the same way.
 On Google Cloud, pause and resume talk to the sandbox's agent to check that memory survived, so the
 caller needs `sandbox/execute` (or `sandbox/remote-execute`) as well as `sandbox/management`. A

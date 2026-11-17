@@ -1621,6 +1621,8 @@ struct PausableSandbox {
     tagged: std::sync::atomic::AtomicBool,
     /// The image has no shell, so a marker script exits 127.
     no_shell: std::sync::atomic::AtomicBool,
+    /// Every marker write fails (neither `/dev/shm` nor `/tmp` is writable, or the agent drops it).
+    fail_marker_writes: std::sync::atomic::AtomicBool,
 }
 
 impl PausableSandbox {
@@ -1633,6 +1635,7 @@ impl PausableSandbox {
             marker_unreadable: std::sync::atomic::AtomicBool::new(false),
             tagged: std::sync::atomic::AtomicBool::new(false),
             no_shell: std::sync::atomic::AtomicBool::new(false),
+            fail_marker_writes: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -1651,6 +1654,10 @@ impl PausableSandbox {
                 }
                 if self.fail_marker_reads.load(Ordering::SeqCst) && script.contains("cat ") {
                     return Err(http_error(503, "the agent is not ready"));
+                }
+                if self.fail_marker_writes.load(Ordering::SeqCst) && script.contains("printf %s '")
+                {
+                    return Ok(ndjson(&[exit_frame(1)]));
                 }
                 let paths: Vec<&str> = script
                     .split_whitespace()
@@ -1925,6 +1932,48 @@ async fn a_tagged_sandbox_woken_into_a_replaced_container_is_lost_on_resume() {
         .resume("1234567890123456789")
         .await
         .expect_err("the container was replaced");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+}
+
+/// The tag says a marker belongs there; a running sandbox with no marker and no pause at all is
+/// reported lost by a routine `resume`.
+#[tokio::test]
+async fn a_tagged_running_sandbox_with_no_marker_is_lost_without_any_pause() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    let lost = provider(pausing_client(&fake, "boot-a"))
+        .resume("1234567890123456789")
+        .await
+        .expect_err("the marker is absent");
+    assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
+    assert!(!lost.retryable);
+}
+
+/// Documents the trade-off of a best-effort first marker: when every write at create fails, create
+/// still returns the sandbox, and a later routine `resume` on the healthy running sandbox reports
+/// SANDBOX_MEMORY_LOST because the tag promises a marker that was never written.
+#[tokio::test]
+async fn a_create_whose_marker_write_failed_reports_lost_on_the_next_resume() {
+    let fake = PausableSandbox::running("boot-a");
+    fake.tagged.store(true, Ordering::SeqCst);
+    fake.fail_marker_writes.store(true, Ordering::SeqCst);
+    let mut client = pausing_client(&fake, "boot-a");
+    client.expect_create_sandbox().returning(|_, _| {
+        Ok(done_op(
+            serde_json::json!({ "name": sandbox_name("1234567890123456789") }),
+        ))
+    });
+    let provider = provider(client);
+    let created = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds without the marker");
+    assert_eq!(created.sandbox_id, "1234567890123456789");
+    assert!(fake.file.lock().unwrap().is_none(), "no marker was written");
+    let lost = provider
+        .resume(&created.sandbox_id)
+        .await
+        .expect_err("the marker never existed");
     assert_eq!(lost.code, "SANDBOX_MEMORY_LOST", "{lost}");
 }
 
@@ -3495,6 +3544,54 @@ async fn a_race_of_two_converges_on_the_oldest_sandbox() {
         results[0].as_ref().unwrap().created,
         "the older one kept its own"
     );
+}
+
+/// Two sandboxes for one key, one made before the tag existed and one tagged: the key resolves to
+/// the oldest whichever kind it is, and the newer one yields.
+#[tokio::test(start_paused = true)]
+async fn the_oldest_wins_when_one_duplicate_is_tagged_and_one_is_not() {
+    for plain_is_older in [true, false] {
+        let engine = Arc::new(FakeEngine::default());
+        let tagged = provider_from(engine.clone())
+            .get_or_create(keyed("mixed"))
+            .await
+            .unwrap()
+            .sandbox
+            .sandbox_id;
+        let tagged_name = engine.names()[0].clone().expect("a display name");
+        let plain_name = tagged_name
+            .strip_suffix("-pm1")
+            .expect("tagged at create")
+            .to_string();
+        let long_ago = super::wall_now() - chrono::Duration::hours(1);
+        let plain_id = {
+            let mut state = engine.state.lock().unwrap();
+            let plain_id = "7000000000000000999".to_string();
+            if !plain_is_older {
+                state.sandboxes[0].created = long_ago;
+            }
+            state.sandboxes.push(FakeSandbox {
+                id: plain_id.clone(),
+                display: Some(plain_name),
+                state: "STATE_RUNNING".to_string(),
+                created: if plain_is_older {
+                    long_ago
+                } else {
+                    super::wall_now()
+                },
+                listed_from: tokio::time::Instant::now(),
+            });
+            plain_id
+        };
+        tokio::time::sleep(Duration::from_secs(120)).await;
+        let found = provider_from(engine.clone())
+            .get_or_create(keyed("mixed"))
+            .await
+            .unwrap();
+        let oldest = if plain_is_older { plain_id } else { tagged };
+        assert_eq!(found.sandbox.sandbox_id, oldest, "plain_is_older={plain_is_older}");
+        assert!(!found.created);
+    }
 }
 
 /// The review's three-caller case. A is the oldest and is listed late; B and C are listed fast. C's
