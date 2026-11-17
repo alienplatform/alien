@@ -23,7 +23,7 @@ use alien_core::{
 };
 use alien_terraform::{
     generate_product_terraform_module, generate_terraform_module, TerraformHelmInstall,
-    TerraformOptions, TerraformRegistration, TerraformTarget, TfRegistry,
+    TerraformOptions, TerraformRegistration, TerraformTarget, TfEmitter, TfFragment, TfRegistry,
 };
 
 fn storage_data_read_service_account() -> ServiceAccount {
@@ -880,7 +880,9 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
         assert!(compact.contains("management_url = var.management_url"));
         let readme = module.get("README.md").expect("README.md");
         assert!(
-            readme.contains("wait until its status is `teardown-required`, `retention-required` or `deleted`"),
+            readme.contains(
+                "wait until its status is `teardown-required`, `retention-required` or `deleted`"
+            ),
             "{mode} README names the erase-first order"
         );
         assert!(
@@ -1681,6 +1683,59 @@ fn eks_turns_on_network_policy_enforcement_only_when_the_stack_has_a_sandbox() {
     );
 }
 
+/// Azure fills in these node pool upgrade settings when a pool does not set
+/// them, so the generated pools state them. Otherwise every plan after the
+/// create shows the settings being removed.
+#[test]
+fn aks_node_pools_state_the_azure_default_upgrade_settings() {
+    use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "registry.example.com/agent:latest".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("aks-upgrade".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Aks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Live)
+        .build();
+    let module = render(&stack, TerraformTarget::Aks, StackSettings::default());
+    let rendered = whole_module(&module);
+    let compact = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let settings = "upgrade_settings { drain_timeout_in_minutes = 0 max_surge = \"10%\" node_soak_duration_in_minutes = 0 }";
+
+    let cluster = rendered
+        .split("resource \"azurerm_kubernetes_cluster\"")
+        .nth(1)
+        .expect("cluster resource");
+    let cluster = cluster.split("\nresource ").next().unwrap();
+    let pool_start = cluster.find("default_node_pool {").expect("default pool");
+    let default_pool = &cluster[pool_start..];
+    let default_pool = &default_pool[..default_pool.find("\n  }\n").unwrap_or(default_pool.len())];
+    assert!(compact(default_pool).contains(settings), "{default_pool}");
+
+    let kata = rendered
+        .split("resource \"azurerm_kubernetes_cluster_node_pool\"")
+        .nth(1)
+        .expect("kata pool");
+    let kata = kata.split("\nresource ").next().unwrap();
+    assert!(compact(kata).contains(settings), "{kata}");
+}
+
 #[test]
 fn aks_adds_a_kata_node_pool_only_when_the_stack_has_a_sandbox() {
     use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
@@ -1779,18 +1834,85 @@ fn declared_cluster(ownership: KubernetesClusterOwnership) -> KubernetesCluster 
         .build()
 }
 
+/// What an embedder registers for a database or cache: a resource setup creates. The module's
+/// content for it does not matter to these tests, only that setup creates it (a type with no
+/// emitter is left to the installer to bind).
+struct EmbedderDatabase;
+
+impl TfEmitter for EmbedderDatabase {
+    fn emit(&self, _ctx: &alien_core::import::EmitContext<'_>) -> alien_core::Result<TfFragment> {
+        Ok(TfFragment::default())
+    }
+
+    fn emit_import_ref(
+        &self,
+        _ctx: &alien_core::import::EmitContext<'_>,
+    ) -> alien_core::Result<hcl::expr::Expression> {
+        Ok(hcl::expr::Expression::Object(Default::default()))
+    }
+}
+
+fn registry_with_database_emitters() -> TfRegistry {
+    let mut registry = TfRegistry::built_in();
+    for platform in [
+        alien_core::Platform::Aws,
+        alien_core::Platform::Gcp,
+        alien_core::Platform::Azure,
+    ] {
+        registry.register(Postgres::RESOURCE_TYPE, platform, EmbedderDatabase);
+        registry.register(alien_core::Redis::RESOURCE_TYPE, platform, EmbedderDatabase);
+    }
+    registry
+}
+
 /// What the source stack adds to the one workload every case here deploys.
+#[derive(Clone, Copy)]
 enum Source {
     Workload,
     Database,
+    /// A cloud database and nothing that runs on the cluster, so no cluster is declared.
+    DatabaseOnly,
+    /// A Redis instance next to the workload.
+    Redis,
+    /// Postgres plus a Redis instance the deployer can decline (`redisEnabled`).
+    DatabaseWithGatedRedis,
     GatedDatabase,
 }
 
 /// An EKS module for `source`, rendered from the stack the preflights prepare for it, the way
 /// `alien render` does: the network and cluster are the ones the mutations add.
 async fn render_prepared_eks(source: Source) -> alien_terraform::ModuleFiles {
+    render_prepared(source, TerraformTarget::Eks).await
+}
+
+/// [`render_prepared_eks`] for any Kubernetes target.
+async fn render_prepared(source: Source, target: TerraformTarget) -> alien_terraform::ModuleFiles {
+    render_prepared_in(source, target, &TfRegistry::built_in()).await
+}
+
+/// [`render_prepared`] with a registry that has emitters for the databases and caches, as an
+/// embedder's does: setup creates them rather than leaving them to the installer.
+async fn render_prepared_with_emitters(
+    source: Source,
+    target: TerraformTarget,
+) -> alien_terraform::ModuleFiles {
+    render_prepared_in(source, target, &registry_with_database_emitters()).await
+}
+
+async fn render_prepared_in(
+    source: Source,
+    target: TerraformTarget,
+    registry: &TfRegistry,
+) -> alien_terraform::ModuleFiles {
+    let stack = prepared_stack(source, target).await;
+    super::helpers::render_with_registry(&stack, target, StackSettings::default(), registry)
+        .expect("module should render")
+}
+
+/// The source stack for `source`, prepared the way the preflights prepare it for `target`.
+async fn prepared_stack(source: Source, target: TerraformTarget) -> Stack {
     let mut builder =
-        Stack::new("eks-network-gate".to_string()).permission("app", PermissionProfile::new());
+        Stack::new("k8s-network-gate".to_string()).permission("app", PermissionProfile::new());
     if matches!(source, Source::GatedDatabase) {
         builder = builder.inputs(vec![gate_input(
             "databaseEnabled",
@@ -1798,10 +1920,33 @@ async fn render_prepared_eks(source: Source) -> alien_terraform::ModuleFiles {
             "Whether to create the database.",
         )]);
     }
-    builder = builder.add(app_workload(), ResourceLifecycle::Live);
+    if matches!(source, Source::DatabaseWithGatedRedis) {
+        builder = builder.inputs(vec![gate_input(
+            "redisEnabled",
+            "Enable Redis",
+            "Whether to create the cache.",
+        )]);
+    }
+    if !matches!(source, Source::DatabaseOnly) {
+        builder = builder.add(app_workload(), ResourceLifecycle::Live);
+    }
     builder = match source {
         Source::Workload => builder,
-        Source::Database => builder.add(
+        Source::DatabaseWithGatedRedis => builder
+            .add(
+                Postgres::new("db".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_enabled_when(
+                alien_core::Redis::new("cache".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "redisEnabled",
+            ),
+        Source::Redis => builder.add(
+            alien_core::Redis::new("cache".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        ),
+        Source::Database | Source::DatabaseOnly => builder.add(
             Postgres::new("db".to_string()).build(),
             ResourceLifecycle::Frozen,
         ),
@@ -1811,8 +1956,7 @@ async fn render_prepared_eks(source: Source) -> alien_terraform::ModuleFiles {
             "databaseEnabled",
         ),
     };
-    let stack = prepare_for_target(builder.build(), TerraformTarget::Eks).await;
-    render(&stack, TerraformTarget::Eks, StackSettings::default())
+    prepare_for_target(builder.build(), target).await
 }
 
 /// A stack that declares a cluster and has a `default-network` in it: one the stack declares
@@ -1901,6 +2045,41 @@ async fn eks_creates_and_registers_a_default_network_only_with_a_created_cluster
     assert_terraform_valid(&module, "eks_network_gated_on_cluster_mode");
 }
 
+/// The same rule holds for GKE and AKS: an existing cluster has its own network, so the module
+/// neither creates nor registers `default-network` unless it creates the cluster.
+#[tokio::test]
+async fn gke_and_aks_create_and_register_a_default_network_only_with_a_created_cluster() {
+    for target in [TerraformTarget::Gke, TerraformTarget::Aks] {
+        let module = render_prepared(Source::Workload, target).await;
+        let locals = compact(module.get("locals.tf").expect("locals.tf"));
+        assert!(
+            locals.contains(&format!(
+                "deployment_resources = concat({NETWORK_GATE} ? [{{ id = \"default-network\""
+            )),
+            "{target:?}: {locals}"
+        );
+        let network = compact(
+            module
+                .get("default_network.tf")
+                .expect("default_network.tf"),
+        );
+        assert!(network.contains(NETWORK_GATE), "{target:?}: {network}");
+        assert_terraform_valid(
+            &module,
+            &format!("{target:?}_network_gated_on_cluster_mode"),
+        );
+    }
+}
+
+/// A stack with a cloud database keeps its network in every mode on every cloud.
+#[tokio::test]
+async fn gke_and_aks_keep_the_default_network_for_a_stack_with_a_database() {
+    for target in [TerraformTarget::Gke, TerraformTarget::Aks] {
+        let module = render_prepared(Source::Database, target).await;
+        assert_network_in_every_mode(&module);
+    }
+}
+
 /// The manager still gives a stack with a cloud database a network of its own for an existing
 /// cluster (`kubernetes_requires_cloud_network`), so that network stays in every mode.
 #[tokio::test]
@@ -1971,8 +2150,10 @@ fn assert_network_in_every_mode(module: &alien_terraform::ModuleFiles) {
     let network = module
         .get("default_network.tf")
         .expect("default_network.tf");
+    // Kept in every mode: no resource waits on the cluster-mode gate. (The lookups name the
+    // cluster mode only in their preconditions.)
     assert!(
-        !network.contains("var.kubernetes_cluster_mode"),
+        !network.contains("deployment_requests_network"),
         "{network}"
     );
 }
@@ -2115,4 +2296,621 @@ fn destroy_guard_is_destroyed_before_every_other_resource() {
             }
         }
     }
+}
+
+/// A real plan, with mocked providers, of the module `source` renders for `target` against an
+/// existing cluster. `asserts` are HCL `assert` blocks over the plan.
+async fn plan_existing_cluster(target: TerraformTarget, source: Source, asserts: &str) {
+    plan_existing_cluster_with(
+        target,
+        source,
+        (
+            "projects/p/global/networks/cluster-net",
+            "projects/p/regions/europe-west1/subnetworks/cluster-subnet",
+        ),
+        "",
+        asserts,
+    )
+    .await
+}
+
+/// [`plan_existing_cluster`] with the network and subnetwork the GKE cluster reports, extra
+/// variables, and the body of the `run` block (`expect_failures` or asserts).
+async fn plan_existing_cluster_with(
+    target: TerraformTarget,
+    source: Source,
+    gke_cluster: (&str, &str),
+    extra_variables: &str,
+    asserts: &str,
+) {
+    let (cluster_network, cluster_subnetwork) = gke_cluster;
+    let (mocks, variables) = match target {
+        TerraformTarget::Gke => (
+            format!(r#"mock_provider "google" {{
+  mock_data "google_container_cluster" {{
+    defaults = {{
+      workload_identity_config = [{{ workload_pool = "p.svc.id.goog" }}]
+      network = "{cluster_network}"
+      subnetwork = "{cluster_subnetwork}"
+    }}
+  }}
+  mock_data "google_compute_network" {{
+    defaults = {{ self_link = "https://www.googleapis.com/compute/v1/projects/p/global/networks/cluster-net" }}
+  }}
+  mock_data "google_compute_subnetwork" {{
+    defaults = {{ self_link = "https://www.googleapis.com/compute/v1/projects/p/regions/europe-west1/subnetworks/cluster-subnet" }}
+  }}
+}}"#),
+            r#"gke_cluster_name = "c"
+  gke_cluster_location = "europe-west1-b"
+  gcp_project = "p"
+  gcp_region = "europe-west1""#,
+        ),
+        TerraformTarget::Aks => (
+            r#"mock_provider "azurerm" {
+  mock_data "azurerm_client_config" {
+    defaults = { tenant_id = "00000000-0000-0000-0000-000000000001", object_id = "00000000-0000-0000-0000-000000000001", client_id = "00000000-0000-0000-0000-000000000001" }
+  }
+}"#.to_string(),
+            r#"aks_cluster_name = "c"
+  aks_cluster_resource_group_name = "rg""#,
+        ),
+        TerraformTarget::Eks => (
+            r#"mock_provider "aws" {
+  mock_data "aws_availability_zones" {
+    defaults = { names = ["us-east-1a", "us-east-1b", "us-east-1c"] }
+  }
+  mock_data "aws_eks_cluster" {
+    defaults = { identity = [{ oidc = [{ issuer = "https://oidc.eks.example.com/id/ABC" }] }] }
+  }
+}
+mock_provider "tls" {
+  mock_data "tls_certificate" {
+    defaults = { certificates = [{ sha1_fingerprint = "0000000000000000000000000000000000000000" }] }
+  }
+}"#
+            .to_string(),
+            r#"eks_cluster_name = "c""#,
+        ),
+        other => panic!("not an EKS, GKE or AKS target: {other:?}"),
+    };
+    let module = render_prepared_with_emitters(source, target).await;
+    let mut files: indexmap::IndexMap<String, String> = module
+        .iter()
+        .filter(|(path, _)| path.ends_with(".tf"))
+        .map(|(path, body)| (path.to_string(), body.to_string()))
+        .collect();
+    // Every other variable the module requires gets a placeholder.
+    let required = hcl::parse(files.get("variables.tf").expect("variables.tf"))
+        .expect("variables.tf parses")
+        .blocks()
+        .filter(|block| block.identifier() == "variable")
+        .filter(|block| !block.body().attributes().any(|a| a.key() == "default"))
+        .filter_map(|block| {
+            block
+                .labels()
+                .first()
+                .map(|label| label.as_str().to_string())
+        })
+        .filter(|name| name != "kubernetes_cluster_mode" && !name.contains("cluster_"))
+        .filter(|name| !matches!(name.as_str(), "gcp_project" | "gcp_region"))
+        .map(|name| format!("{name} = \"xx\""))
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    files.insert(
+        "existing.tftest.hcl".to_string(),
+        format!(
+            r#"{mocks}
+variables {{
+  {required}
+  management_url = "https://manager.example.com"
+  kubernetes_cluster_mode = "existing"
+  {variables}
+  {extra_variables}
+}}
+run "existing_cluster" {{
+  command = plan
+{asserts}
+}}
+"#
+        ),
+    );
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok(format!("{target:?} existing-cluster plan"));
+}
+
+/// A real plan of the GKE/AKS module in existing-cluster mode: the module creates no network,
+/// registers none, and nothing that reads the network's outputs is evaluated (a gated network
+/// has no instance to read).
+#[tokio::test]
+async fn gke_and_aks_existing_cluster_plans_with_no_network() {
+    for target in [TerraformTarget::Gke, TerraformTarget::Aks] {
+        plan_existing_cluster(
+            target,
+            Source::Workload,
+            r#"  assert {
+    condition = !contains([for r in local.deployment_resources : r.id], "default-network")
+    error_message = "an existing cluster registers no network"
+  }
+  assert {
+    condition = try(local.deployment_settings.network, null) == null
+    error_message = "an existing cluster registers no network setting"
+  }"#,
+        )
+        .await;
+    }
+}
+
+/// A stack with a cloud database keeps a network in an existing cluster, and it is the
+/// cluster's: looked up from the cluster, created by no one, registered as one the deployer
+/// brought, with the settings that name it.
+#[tokio::test]
+async fn gke_existing_cluster_with_a_database_uses_the_cluster_network() {
+    plan_existing_cluster(
+        TerraformTarget::Gke,
+        Source::Database,
+        r#"  assert {
+    condition = length(google_compute_network.default_network) == 0 && length(google_compute_subnetwork.default_network_workload) == 0 && length(google_compute_router.default_network_router) == 0
+    error_message = "an existing cluster must not get a VPC, subnet or router"
+  }
+  assert {
+    condition = data.google_compute_network.default_network[0].name == "cluster-net" || local.existing_network_name == "cluster-net"
+    error_message = "the network is looked up by the cluster's network name"
+  }
+  assert {
+    condition = local.existing_subnet_name == "cluster-subnet" && local.existing_network_region == "europe-west1"
+    error_message = "the subnet and region are the cluster's"
+  }
+  assert {
+    condition = [for r in local.deployment_resources : r if r.id == "default-network"][0].importData.isByoVpc == true
+    error_message = "the cluster's network is registered as one setup does not own"
+  }
+  assert {
+    condition = local.deployment_settings.network.type == "byo-vpc-gcp" && local.deployment_settings.network.networkName == "cluster-net" && local.deployment_settings.network.subnetName == "cluster-subnet"
+    error_message = "the settings name the cluster's network"
+  }"#,
+    )
+    .await;
+}
+
+/// An install that created its cluster before the network was gated holds the network's blocks
+/// without an index. Gating them adds `count`, which moves every address to `[0]`; without a
+/// `moved` block Terraform would destroy the network under the running cluster on the next apply.
+#[tokio::test]
+async fn gating_the_network_moves_the_addresses_a_created_cluster_already_holds() {
+    for target in [
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+        TerraformTarget::Eks,
+    ] {
+        for (label, source) in [
+            ("workload", Source::Workload),
+            ("database", Source::Database),
+        ] {
+            let module = render_prepared(source, target).await;
+            let mut counted: Vec<String> = Vec::new();
+            let mut moved: Vec<String> = Vec::new();
+            for (name, text) in module.iter() {
+                if !name.ends_with(".tf") {
+                    continue;
+                }
+                let body = hcl::parse(text).expect("module file parses");
+                for block in body.blocks() {
+                    let labels: Vec<&str> = block.labels().iter().map(|l| l.as_str()).collect();
+                    match (block.identifier(), labels.as_slice()) {
+                        ("resource", [kind, label]) => {
+                            let count = block
+                                .body()
+                                .attributes()
+                                .find(|a| a.key() == "count")
+                                .map(|a| a.expr().to_string().replace(' ', ""));
+                            // Only a count that is exactly the gate is new; an emitter's own
+                            // count already indexed the address.
+                            if count.as_deref().is_some_and(|c| {
+                                c.contains("deployment_requests_network")
+                                    && c.ends_with("?1:0")
+                                    && !c.contains("network_mode")
+                            }) {
+                                counted.push(format!("{kind}.{label}"));
+                            }
+                        }
+                        ("moved", []) => {
+                            let attr = |key: &str| {
+                                block
+                                    .body()
+                                    .attributes()
+                                    .find(|a| a.key() == key)
+                                    .map(|a| a.expr().to_string().replace(' ', ""))
+                                    .unwrap_or_default()
+                            };
+                            moved.push(format!("{}->{}", attr("from"), attr("to")));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // EKS and GKE blocks carried their own `count` (the network mode) before the gate,
+            // so their addresses are already indexed. AKS blocks had none.
+            if target == TerraformTarget::Aks && label == "workload" {
+                assert!(
+                    !counted.is_empty(),
+                    "{target:?}/{label}: the AKS network blocks are gated"
+                );
+            } else {
+                // A stack with a database keeps its network in every mode: ungated, unmoved.
+                assert!(counted.is_empty(), "{target:?}/{label}: {counted:?}");
+            }
+            for address in &counted {
+                let expected = format!("{address}->{address}[0]");
+                assert!(
+                    moved.contains(&expected.replace(' ', "")),
+                    "{target:?}: {address} gains a count and needs a moved block; moved = {moved:?}"
+                );
+            }
+        }
+    }
+}
+
+/// An existing GKE cluster on a Shared VPC (its network belongs to a host project) or with its
+/// subnet in another region than `gcp_region` cannot take the database endpoint, which the module
+/// creates in its own project and region. The plan says so, before any lookup, instead of
+/// failing later with a missing network or an endpoint the cluster cannot reach.
+#[tokio::test]
+async fn an_existing_gke_cluster_the_database_cannot_reach_fails_at_plan_with_a_clear_message() {
+    for (network, subnetwork, failing) in [
+        (
+            "projects/host-project/global/networks/shared-net",
+            "projects/host-project/regions/europe-west1/subnetworks/shared-subnet",
+            "data.google_compute_network.default_network, data.google_compute_subnetwork.default_network_existing_subnet",
+        ),
+        (
+            "projects/p/global/networks/cluster-net",
+            "projects/p/regions/us-east1/subnetworks/cluster-subnet",
+            "data.google_compute_subnetwork.default_network_existing_subnet",
+        ),
+    ] {
+        plan_existing_cluster_with(
+            TerraformTarget::Gke,
+            Source::Database,
+            (network, subnetwork),
+            "",
+            &format!("  expect_failures = [{failing}]"),
+        )
+        .await;
+    }
+}
+
+/// A GKE stack with a database and nothing running on the cluster declares no cluster, so the
+/// module has no cluster to look the network up from: it must still validate, and use the
+/// module's own network inputs.
+#[tokio::test]
+async fn a_gke_stack_with_only_a_database_has_no_cluster_lookup() {
+    let module = render_prepared(Source::DatabaseOnly, TerraformTarget::Gke).await;
+    let text = whole_module(&module);
+    assert!(
+        !text.contains("kubernetes_existing"),
+        "no cluster is declared, so nothing may read its lookup"
+    );
+    assert_terraform_valid(&module, "gke_database_only");
+}
+
+/// A stack with only a Redis instance (no Postgres) still needs a network in every mode on every
+/// cloud: the Redis private endpoint refers to its subnet. One predicate answers it for the
+/// preflight and both generators.
+#[tokio::test]
+async fn a_redis_only_stack_keeps_the_default_network_in_every_mode() {
+    for target in [
+        TerraformTarget::Eks,
+        TerraformTarget::Gke,
+        TerraformTarget::Aks,
+    ] {
+        let module = render_prepared(Source::Redis, target).await;
+        assert_network_in_every_mode(&module);
+        assert_terraform_valid(&module, &format!("{target:?}_redis_only"));
+    }
+}
+
+/// An existing GKE cluster with a Redis instance keeps the module's own network inputs (as
+/// installed modules do): Memorystore replaces itself when its network changes, and its deletion
+/// protection refuses that. No cluster lookup is read for it.
+#[tokio::test]
+async fn an_existing_gke_cluster_with_redis_keeps_the_module_network_inputs() {
+    let module = render_prepared(Source::Redis, TerraformTarget::Gke).await;
+    let locals: String = whole_module(&module)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        locals.contains("effective_network_mode=var.network_mode"),
+        "{locals}"
+    );
+    assert!(
+        !locals.contains("kubernetes_existing[0].network"),
+        "{locals}"
+    );
+}
+
+/// Existing cluster, no database: the cluster may sit in another project (Shared VPC) and region
+/// than the module's. Nothing needs a network, so no lookup runs and no precondition fires.
+#[tokio::test]
+async fn an_existing_gke_cluster_in_another_project_and_region_plans_with_no_database() {
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::Workload,
+        (
+            "projects/host-project/global/networks/shared-net",
+            "projects/host-project/regions/us-east1/subnetworks/shared-subnet",
+        ),
+        "",
+        r#"  assert {
+    condition = length(data.google_compute_network.default_network) == 0 && length(data.google_compute_subnetwork.default_network_existing_subnet) == 0
+    error_message = "no network is kept, so no lookup runs"
+  }"#,
+    )
+    .await;
+}
+
+/// A database with no workload declares no cluster. In an existing-cluster mode the module
+/// creates its own network by `network_mode`, and registers exactly that network's settings.
+#[tokio::test]
+async fn a_gke_database_without_a_cluster_registers_the_network_it_creates() {
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::DatabaseOnly,
+        (
+            "projects/p/global/networks/unused",
+            "projects/p/regions/europe-west1/subnetworks/unused",
+        ),
+        "",
+        r#"  assert {
+    condition = length(google_compute_network.default_network) == 1
+    error_message = "the module creates the network"
+  }
+  assert {
+    condition = local.deployment_settings.network.type == "create"
+    error_message = "the registered settings describe the network that was created"
+  }"#,
+    )
+    .await;
+}
+
+/// Postgres plus a Redis instance the deployer can decline, in an existing GKE cluster: with
+/// Redis declined the database uses the cluster's network; with it accepted the module keeps its
+/// own network inputs (the instance's network cannot change). The registered settings follow.
+#[tokio::test]
+async fn a_declined_redis_leaves_the_database_on_the_clusters_network() {
+    let cluster = (
+        "projects/p/global/networks/cluster-net",
+        "projects/p/regions/europe-west1/subnetworks/cluster-subnet",
+    );
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::DatabaseWithGatedRedis,
+        cluster,
+        "input_redis_enabled = false",
+        r#"  assert {
+    condition = local.effective_network_mode == "use-existing" && length(google_compute_network.default_network) == 0
+    error_message = "with Redis declined the cluster's network is used and none is created"
+  }
+  assert {
+    condition = local.deployment_settings.network.type == "byo-vpc-gcp" && local.deployment_settings.network.networkName == "cluster-net"
+    error_message = "the settings name the cluster's network"
+  }"#,
+    )
+    .await;
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::DatabaseWithGatedRedis,
+        cluster,
+        "input_redis_enabled = true",
+        "  expect_failures = [terraform_data.existing_cluster_network_guard]",
+    )
+    .await;
+    // A deployer who brings the network names the cluster's own: that is theirs to choose.
+    plan_existing_cluster_with(
+        TerraformTarget::Gke,
+        Source::DatabaseWithGatedRedis,
+        cluster,
+        "input_redis_enabled = true\n  network_mode = \"use-existing\"\n  network_name = \"cluster-net\"\n  subnet_name = \"cluster-subnet\"",
+        r#"  assert {
+    condition = local.effective_network_mode == "use-existing" && length(google_compute_network.default_network) == 0
+    error_message = "the network the deployer names is used and none is created"
+  }"#,
+    )
+    .await;
+}
+
+/// Setup cannot put a cache or database endpoint on an existing cluster's network except a GCP
+/// Postgres, so the module fails the plan for every other cell with the message that says what
+/// to do instead. A cell that stays supported plans clean: Postgres on an existing GKE cluster.
+#[tokio::test]
+async fn every_database_an_existing_cluster_cannot_reach_is_refused_at_plan() {
+    let cluster = (
+        "projects/p/global/networks/cluster-net",
+        "projects/p/regions/europe-west1/subnetworks/cluster-subnet",
+    );
+    for (target, source, resource) in [
+        (TerraformTarget::Gke, Source::Redis, "redis"),
+        (
+            TerraformTarget::Gke,
+            Source::DatabaseWithGatedRedis,
+            "redis",
+        ),
+        (TerraformTarget::Aks, Source::Redis, "redis"),
+        (TerraformTarget::Aks, Source::Database, "postgres"),
+        (TerraformTarget::Eks, Source::Redis, "redis"),
+        (TerraformTarget::Eks, Source::Database, "postgres"),
+    ] {
+        let module = render_prepared_with_emitters(source, target).await;
+        let guard = whole_module(&module);
+        assert!(
+            guard.contains("Setup cannot yet place the")
+                && guard.contains("Use a cluster that setup creates"),
+            "{target:?} {resource}: the module carries the refusal"
+        );
+        let gated = matches!(source, Source::DatabaseWithGatedRedis);
+        plan_existing_cluster_with(
+            target,
+            source,
+            cluster,
+            if gated {
+                "input_redis_enabled = true"
+            } else {
+                ""
+            },
+            "  expect_failures = [terraform_data.existing_cluster_network_guard]",
+        )
+        .await;
+    }
+}
+
+/// The refusal does not touch a created cluster, nor the supported cell.
+#[tokio::test]
+async fn a_created_cluster_and_a_gke_postgres_are_not_refused() {
+    for (target, source) in [
+        (TerraformTarget::Gke, Source::Database),
+        (TerraformTarget::Gke, Source::Workload),
+        (TerraformTarget::Aks, Source::Workload),
+        (TerraformTarget::Eks, Source::Workload),
+    ] {
+        let module = render_prepared(source, target).await;
+        assert_terraform_valid(&module, &format!("{target:?}_supported_cell"));
+    }
+    plan_existing_cluster(
+        TerraformTarget::Gke,
+        Source::Database,
+        r#"  assert {
+    condition = local.effective_network_mode == "use-existing"
+    error_message = "the database goes on the cluster's network"
+  }"#,
+    )
+    .await;
+}
+
+/// A database the installer binds to infrastructure it already has (no emitter registered, as in
+/// the built-in registry) is the deployer's, so setup refuses nothing for it.
+#[tokio::test]
+async fn a_database_the_installer_binds_is_not_refused() {
+    for (target, source) in [
+        (TerraformTarget::Gke, Source::Redis),
+        (TerraformTarget::Aks, Source::Database),
+        (TerraformTarget::Eks, Source::Redis),
+    ] {
+        let module = render_prepared(source, target).await;
+        assert!(
+            module.get("existing-cluster-network-guard.tf").is_none(),
+            "{target:?}: nothing setup creates needs a guard"
+        );
+    }
+}
+
+fn existing_cluster_settings(network: Option<NetworkSettings>) -> StackSettings {
+    StackSettings {
+        kubernetes: Some(KubernetesSettings {
+            cluster: Some(alien_core::KubernetesClusterSettings {
+                ownership: KubernetesClusterOwnership::Existing,
+                namespace: None,
+                cloud: None,
+            }),
+            exposure: None,
+        }),
+        network,
+        ..Default::default()
+    }
+}
+
+/// A setup rendered for an existing cluster refuses at render time, with the error code and the
+/// plain sentence, what setup creates and the cluster could not reach. A database the installer
+/// binds, a supported cell and a network the deployer names are not refused.
+#[tokio::test]
+async fn rendering_for_an_existing_cluster_refuses_what_it_could_not_reach() {
+    for (target, source, refused) in [
+        (TerraformTarget::Gke, Source::Redis, true),
+        (TerraformTarget::Aks, Source::Database, true),
+        (TerraformTarget::Eks, Source::Redis, true),
+        (TerraformTarget::Gke, Source::Database, false),
+    ] {
+        let stack = prepared_stack(source, target).await;
+        let result = super::helpers::render_with_registry(
+            &stack,
+            target,
+            existing_cluster_settings(None),
+            &registry_with_database_emitters(),
+        );
+        if refused {
+            let error = result.expect_err("refused");
+            assert_eq!(error.code, "SETUP_PLACEMENT_UNSUPPORTED", "{target:?}");
+            assert_eq!(error.http_status_code, Some(422));
+            assert!(!error.retryable);
+            assert!(
+                error.message.starts_with("Setup cannot yet place the")
+                    && error.message.contains("Use a cluster that setup creates"),
+                "{target:?}: {}",
+                error.message
+            );
+        } else {
+            result.expect("a supported cell renders");
+        }
+        // Not created by setup: left to the installer.
+        super::helpers::render_with_registry(
+            &stack,
+            target,
+            existing_cluster_settings(None),
+            &TfRegistry::built_in(),
+        )
+        .expect("an installer-bound database is not refused");
+    }
+    // A network the deployer names is theirs to choose.
+    let stack = prepared_stack(Source::Redis, TerraformTarget::Gke).await;
+    super::helpers::render_with_registry(
+        &stack,
+        TerraformTarget::Gke,
+        existing_cluster_settings(Some(NetworkSettings::ByoVpcGcp {
+            network_name: "cluster-net".to_string(),
+            subnet_name: "cluster-subnet".to_string(),
+            region: "europe-west1".to_string(),
+        })),
+        &registry_with_database_emitters(),
+    )
+    .expect("a named network is not refused");
+}
+
+/// A cluster the stack names something other than `kubernetes` is looked up under its own label.
+#[test]
+fn a_gke_cluster_with_its_own_name_has_its_network_looked_up_under_that_name() {
+    let stack = Stack::new("named".to_string())
+        .add(
+            KubernetesCluster::new("primary".to_string())
+                .provider(KubernetesClusterProvider::Gke)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Postgres::new("db".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Network::new("default-network".to_string())
+                .settings(NetworkSettings::Create {
+                    cidr: None,
+                    availability_zones: 2,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = super::helpers::render_with_registry(
+        &stack,
+        TerraformTarget::Gke,
+        StackSettings::default(),
+        &registry_with_database_emitters(),
+    )
+    .expect("renders");
+    let text = whole_module(&module);
+    assert!(text.contains("primary_existing[0]"), "{text}");
+    assert!(!text.contains("kubernetes_existing"), "{text}");
+    assert_terraform_valid(&module, "gke_named_cluster_with_database");
 }
