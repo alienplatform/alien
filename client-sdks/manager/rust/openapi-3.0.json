@@ -10868,6 +10868,13 @@
             "type": "string",
             "nullable": true
           },
+          "setupCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the client's setup run can do, such as `create-keys`. A standalone manager\naccepts and ignores it; embedded managers forward it to their control plane.\nOlder clients omit it."
+          },
           "setupItem": {
             "type": "string",
             "description": "Customer setup item selected from the deployment-group contract.",
@@ -19723,6 +19730,11 @@
           },
           "remoteBindingParams": {
             "description": "Binding parameters for remote access.\nOnly populated when the resource has `remote_access: true` in its ResourceEntry.\nThis is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).\nPopulated by controllers during provisioning using get_binding_params()."
+          },
+          "requestedUpdateRan": {
+            "type": "string",
+            "description": "The rollout in which an update ran because the controller asked for one while the\nconfig was unchanged. While the controller keeps asking in that same rollout, its\ndependents no longer wait for it, so a check that never settles cannot hold them back\nfor good. A later rollout is a new request and is waited for again. Cleared once the\ncontroller stops asking. State written before this field existed (it was a flag then)\nreads as none.",
+            "nullable": true
           },
           "retryAttempt": {
             "type": "integer",

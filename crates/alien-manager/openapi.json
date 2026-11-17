@@ -12549,6 +12549,13 @@
               "null"
             ]
           },
+          "setupCapabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the client's setup run can do, such as `create-keys`. A standalone manager\naccepts and ignores it; embedded managers forward it to their control plane.\nOlder clients omit it."
+          },
           "setupItem": {
             "type": [
               "string",

@@ -3165,6 +3165,66 @@ platform = "aws"
         initialize.assert_async().await;
     }
 
+    #[tokio::test]
+    async fn initialize_declares_the_setup_capabilities() {
+        let server = MockServer::start_async().await;
+        let base_url = server.base_url();
+        let resolve = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/v1/resolve");
+                then.status(200)
+                    .json_body(serde_json::json!({"managerUrl": base_url}));
+            })
+            .await;
+        // Answer only an initialize request that declares `create-keys`, the one a
+        // platform needs before it admits a stack with encryption keys, and
+        // stop there so nothing is tracked or deployed.
+        let initialize = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST)
+                    .path("/v1/initialize")
+                    .json_body_partial(r#"{"name":"subdomain-app","setupCapabilities":["create-keys"]}"#);
+                then.status(409).json_body(serde_json::json!({
+                    "code": "STOP_AFTER_INITIALIZE",
+                    "message": "stop after initialize",
+                    "retryable": false,
+                    "internal": false
+                }));
+            })
+            .await;
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+name = "subdomain-app"
+platform = "aws"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--base-url",
+            &base_url,
+            "--manager-url",
+            &base_url,
+            "--token",
+            "test-capabilities-token",
+        ]);
+        let error = up_command(args, None)
+            .await
+            .expect_err("the mock stops the command after initialize");
+
+        assert!(
+            error.to_string().contains("stop after initialize"),
+            "{error:?}"
+        );
+        resolve.assert_async().await;
+        initialize.assert_async().await;
+    }
+
     /// The rendered install holds the one-use code, and no deployment token
     /// reaches the release Secret, its values or the Operator.
     #[test]
@@ -7202,6 +7262,11 @@ async fn initialize_deployment(
         // The Kubernetes CLI installs the Operator with Helm. Runtime work
         // starts inside that Operator, so this must use Helm's setup handoff.
         setup_method: (platform == Platform::Kubernetes).then(|| "helm".to_string()),
+        // Without this a platform refuses a stack with encryption keys.
+        setup_capabilities: alien_cli_common::SETUP_CAPABILITIES
+            .iter()
+            .map(|capability| capability.to_string())
+            .collect(),
         // Lets the manager show the exact `helm uninstall` command at teardown.
         helm_release,
     };

@@ -1355,10 +1355,7 @@ pub(crate) fn deployment_manager_http_client(
     }
 }
 
-/// What this CLI's direct setup can do, sent with every setup request. `create-keys`: it creates
-/// the stack's encryption keys (AWS KMS, Cloud KMS, Key Vault) with the admin's own credentials.
-/// A platform that does not know the field refuses a stack with keys instead.
-pub(super) const SETUP_CAPABILITIES: [&str; 1] = ["create-keys"];
+pub(super) use alien_cli_common::SETUP_CAPABILITIES;
 
 fn deployment_create_request_body(
     resolved_args: &ResolvedDeployArgs,
