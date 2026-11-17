@@ -78,10 +78,7 @@ async fn main() -> Result<()> {
         Arc::new(AtomicU64::new(0)),
     )
     .await?;
-    let proxy = TcpListener::bind(gateway.config.listen)
-        .await
-        .into_alien_error()
-        .context(failed("bind proxy"))?;
+    let proxy_address = gateway.config.listen;
     let admin_listener = TcpListener::bind(gateway.config.admin)
         .await
         .into_alien_error()
@@ -107,7 +104,30 @@ async fn main() -> Result<()> {
         }
     };
     let (shutdown, receiver) = tokio::sync::watch::channel(false);
-    let proxy = server::serve(proxy, gateway.clone(), receiver);
+    // The proxy port opens only once this replica has caught up its policies. A replica that
+    // listens before that accepts every connection and refuses it, and an agent fails over only
+    // when the connect itself fails: closed means "try the other replica", open-and-refusing
+    // would pin idle sandboxes to a replica that denies them all.
+    let proxy = {
+        let live = gateway.clone();
+        let mut closing = receiver.clone();
+        async move {
+            while !live.snapshot().is_some_and(|g| g.policies.ready()) {
+                if *closing.borrow() {
+                    return Ok(());
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                    _ = closing.changed() => {}
+                }
+            }
+            let listener = TcpListener::bind(proxy_address)
+                .await
+                .into_alien_error()
+                .context(failed("bind proxy"))?;
+            server::serve(listener, live, receiver).await
+        }
+    };
     let admin_shutdown = shutdown.subscribe();
     let admin = axum::serve(admin_listener, admin::router(gateway.clone())).with_graceful_shutdown(
         async move {

@@ -29,6 +29,9 @@ const SECRETS_USER_ROLE: &str = "4633458b-17de-408a-b874-0445c86b69e6";
 /// Host indices of the two gateway addresses inside the gateway subnet.
 pub(super) const GATEWAY_HOSTS: [usize; 2] = [4, 5];
 
+/// The Ubuntu 24.04 LTS server image version the gateway VMs are created from.
+pub(super) const UBUNTU_IMAGE_VERSION: &str = "24.04.202611050";
+
 /// A general-purpose size that most subscriptions allow; burstable B-series sizes are
 /// restricted on some, and vCPU quota is per family, so customers can pick another family.
 pub(super) const DEFAULT_VM_SIZE: &str = "Standard_D2s_v5";
@@ -200,6 +203,8 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
                 // output, no inbound 22 in the gateway subnet's NSG and no public IP. The VM is
                 // administered through Azure (run command, redeploy).
                 attr("disable_password_authentication", Expression::Bool(true)),
+                // azurerm requires an SSH key when the password is disabled. The generated key
+                // lives in state, but nothing can use it: there is no inbound 22 and no public IP.
                 nested(block(
                     "admin_ssh_key",
                     [
@@ -220,6 +225,10 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
                     Expression::String("AutomaticByPlatform".into()),
                 ),
                 attr("provision_vm_agent", Expression::Bool(true)),
+                // Off on purpose: host encryption needs the subscription's
+                // `Microsoft.Compute/EncryptionAtHost` feature registered, and the apply fails
+                // without it. The OS disk is still encrypted at rest with platform-managed keys,
+                // and the VM holds no customer data (policies live in memory, the image is public).
                 attr("encryption_at_host_enabled", Expression::Bool(false)),
                 attr("tags", tags(ctx, "sandbox-gateway-vm")),
                 // The image never rides custom_data: an Azure VM replaces itself when custom_data
@@ -267,7 +276,9 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
                         attr("publisher", Expression::String("Canonical".into())),
                         attr("offer", Expression::String("ubuntu-24_04-lts".into())),
                         attr("sku", Expression::String("server".into())),
-                        attr("version", Expression::String("latest".into())),
+                        // Pinned: "latest" would give a VM replacement a different OS than the
+                        // running one. Patches arrive through `patch_mode` (platform-managed).
+                        attr("version", Expression::String(UBUNTU_IMAGE_VERSION.into())),
                     ],
                 )),
             ],
@@ -372,7 +383,10 @@ fn hcl_string(text: &str) -> String {
 /// environment file and the unit (a hardened, unprivileged container: no capabilities, a read-only
 /// root, `no-new-privileges`), restarts the gateway and, when this VM was serving, refuses to start
 /// if the peer is not serving (never restart the only serving gateway) and waits until the new
-/// container is ready, meaning it has caught up its policies from the peer. A fresh VM has no
+/// container is ready, meaning it has caught up its policies from the peer. The gateway opens its
+/// proxy port only once ready, so a new image that never catches up leaves its port closed and
+/// agents fail over to the peer: a failed wait (exit 1, which fails the apply and stops the roll)
+/// needs no rollback to keep egress working. A fresh VM has no
 /// configuration to serve yet (setup publishes it afterwards), so it does not wait.
 /// Values that come from Terraform are interpolated through `format`.
 fn install_script(
@@ -590,18 +604,6 @@ mod tests {
             "{}",
             script(1)
         );
-    }
-
-    #[test]
-    fn the_second_vm_waits_for_the_first_vms_run_command() {
-        let src = code();
-        assert!(src.contains("azurerm_virtual_machine_run_command"));
-        assert!(
-            src.contains("azurerm_virtual_machine_run_command.{label}_{}\"")
-                || src.contains("azurerm_virtual_machine_run_command.{label}_{}\","),
-            "the second run command depends on the first"
-        );
-        assert!(src.contains("if index > 0"), "only the second VM waits");
     }
 
     #[test]

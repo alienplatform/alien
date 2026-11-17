@@ -218,7 +218,13 @@ impl Cluster {
     async fn ready_all(&self) {
         let deadline = Instant::now() + Duration::from_secs(12);
         loop {
-            if self.health(0).await && self.health(1).await && self.health(2).await {
+            // Ready means synchronized and serving: the proxy port opens a moment after health.
+            let mut all = true;
+            for index in 0..3 {
+                all &= self.health(index).await
+                    && TcpStream::connect(self.proxy[index]).await.is_ok();
+            }
+            if all {
                 return;
             }
             assert!(Instant::now() < deadline, "replicas never became ready");
@@ -352,7 +358,8 @@ async fn three_process_replication_survives_faults_and_exposes_total_loss_replay
         !cluster.health(2).await,
         "listed unreachable peers must prevent readiness"
     );
-    assert_eq!(cluster.connect(2, &token).await, 403);
+    // Not ready means not listening: the connect fails, so an agent tries the other replica.
+    assert!(TcpStream::connect(cluster.proxy[2]).await.is_err());
     cluster.isolate(2, Fault::Heal);
     cluster.ready_all().await;
     assert_eq!(
@@ -644,4 +651,39 @@ async fn a_delete_made_while_a_replica_is_away_is_not_served_by_it_afterwards() 
     // Never an allow from the replica that was away, whenever it is first asked.
     assert_eq!(cluster.connect(2, &token).await, 403);
     cluster.assert_all(&token, 403).await;
+}
+
+/// A replica that has not caught up from its peers does not open its proxy port. An agent fails
+/// over only when its connect fails, so a port that is open but refusing everything would hold
+/// idle sandboxes on a replica that denies them while the other replica is healthy.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replica_that_has_not_synchronized_does_not_open_its_proxy_port() {
+    let mut cluster = Cluster::new().await;
+    let token = identity();
+    cluster.stop(2).await;
+    cluster.isolate(2, Fault::Cut);
+    cluster.start(2);
+    // Long enough for several sync attempts, all of which fail.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(!cluster.health(2).await, "an isolated replica is not ready");
+    let refused = tokio::time::timeout(
+        Duration::from_secs(2),
+        TcpStream::connect(cluster.proxy[2]),
+    )
+    .await
+    .expect("the connect answers at once");
+    assert!(refused.is_err(), "the proxy port must be closed until synchronized");
+
+    cluster.isolate(2, Fault::Heal);
+    cluster.ready_all().await;
+    // The port opens within a poll of the replica becoming ready.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while TcpStream::connect(cluster.proxy[2]).await.is_err() {
+        assert!(Instant::now() < deadline, "the port never opened");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(cluster.connect(2, &token).await, 403, "serving once synchronized");
+    for index in 0..3 {
+        cluster.stop(index).await;
+    }
 }

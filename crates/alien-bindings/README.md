@@ -71,10 +71,21 @@ Accepted limitations of this version:
   VMs' custom data (which would replace both VMs at once); a run command on each VM
   pulls the image, restarts the gateway and waits until it is ready, meaning it has
   caught up its policies from the other gateway. The second VM's command waits for the
-  first, and a VM that is serving is not restarted unless its peer is serving. Running
-  sandboxes keep their egress through the update. Installs written by the previous
-  release keep their VMs (`ignore_changes` on custom data); only the gateway container
-  restarts, one VM at a time.
+  first, and a VM that is serving is not restarted unless its peer is serving. The gateway
+  opens its proxy port only after it has caught up, so while a gateway restarts (or a new
+  image never catches up) its port is closed and agents' connects fail over to the other
+  gateway; a failed wait fails the apply and stops the roll with the other gateway serving.
+  Idle sandboxes and new connections keep their egress through the update; a connection
+  that is open through the gateway being restarted is closed and the client reconnects.
+  Setups written by this module's earlier versions carried the image in custom data; they
+  keep their VMs (`ignore_changes` on custom data) and only the gateway container restarts,
+  one VM at a time.
+  Only the image rolls one at a time. A change that replaces or resizes the VMs
+  themselves (a size change, a new OS image version) acts on both VMs in the same apply,
+  and the gateways lose their in-memory policy together until the application re-registers
+  it: do those during a maintenance window.
+- **DNS.** An allowlist limits which hosts the gateway connects to; it cannot stop data
+  leaving through DNS queries, which the sandbox's resolver answers.
 - **Patching.** The VMs use platform-orchestrated patching (`AutomaticByPlatform`),
   so Azure patches the OS and they sit in an availability set so a reboot takes one
   gateway down at a time. A running sandbox keeps its egress while one VM is down:
