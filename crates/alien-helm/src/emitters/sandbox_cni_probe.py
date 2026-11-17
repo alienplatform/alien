@@ -22,12 +22,16 @@ FIX_HINT = (
 
 
 # Time budget of one run, in one place. The script's deadline and the Job's activeDeadlineSeconds
-# (sandbox_cni.rs reads JOB_DEADLINE_SECONDS from this file) come from these numbers; the Helm
-# install's own wait (`--timeout 15m` in the install instructions) must fit the Job with room for
-# the next hook. A pod start is ~35 s under a VM-per-pod runtime (Kata). A run that passes needs:
+# (sandbox_cni.rs reads JOB_DEADLINE_SECONDS from this file) come from these numbers. Helm's
+# timeout (`--timeout 15m` in the install instructions, `timeout: 15m` in the Flux HelmRelease)
+# applies to each hook, so the Job must fit inside it with room for the next hook. A pod start is
+# ~35 s under a VM-per-pod runtime (Kata). The listener is the first pod on the sandbox nodes: a
+# node pool that scales from zero has to provision a node for it, so it may stay Pending for
+# PENDING_CAUSE_BOUND_SECONDS (the wait the install had before this budget). The other pods then
+# land on that node. A run that passes needs:
 #   API_READY_SECONDS       60   the runner's own network is applied (the wait below)
 #   ADMISSION_SECONDS       30   both admission policies answer
-#   POD_START_SECONDS       35   the listener starts
+#   PENDING_CAUSE_BOUND    210   the listener is scheduled and starts (a node may be provisioned)
 #   stage 1: 35 + 35 + 85 + 6    the denied pods start, then the control (which needs their
 #                                addresses) starts, then the control runs until the denied pods
 #                                are done (CONTROL_RUN_SECONDS), which linger 6 s (LINGER_SECONDS)
@@ -35,9 +39,9 @@ FIX_HINT = (
 #   one recreate            45 + 35   (START_BOUND_SECONDS stuck, then a new start)
 #   CLEANUP_SECONDS         10   delete what was created
 #                          ---
-#                          444
-# The Job adds the runner's own start (image pull, 30 s) and a 30 s margin: 504 s. The install's
-# 15 minutes leave 396 s for the hooks and the rollout after it.
+#                          619
+# The Job adds the runner's own start (image pull, 30 s) and a 30 s margin: 679 s. The install's
+# 15 minutes (900 s) leave 221 s for the hooks and the rollout after it.
 API_READY_SECONDS = 60
 ADMISSION_SECONDS = 30
 POD_START_SECONDS = 35
@@ -61,17 +65,21 @@ CLEANUP_SECONDS = 10
 # How long a pod may stay Pending with a container the runtime failed to create, before it is
 # treated as not started and recreated. A retry the kubelet makes by itself succeeds within its
 # first backoff steps (10 s, then 20 s), so waiting longer than this is not worth the budget.
+# (This is the stuck-start bound; PENDING_CAUSE_BOUND_SECONDS below is a separate one.)
 START_BOUND_SECONDS = 45
 # How long a pod may stay Pending, unschedulable or failing to pull its image, before the run
 # fails naming that cause. The cause does not change by recreating the pod, so there is no retry.
-# A node that has to be provisioned for the pod is part of POD_START_SECONDS.
-PENDING_CAUSE_BOUND_SECONDS = 90
-SCRIPT_BUDGET_SECONDS = 444
+# It is at least the wait the install had before (210 s), so a node pool that scales from zero
+# is not failed early.
+PENDING_CAUSE_BOUND_SECONDS = 210
+SCRIPT_BUDGET_SECONDS = 619
 RUNNER_START_SECONDS = 30
 BUDGET_MARGIN_SECONDS = 30
-JOB_DEADLINE_SECONDS = 504
-# Each client pod's own deadline, counted by the kubelet from the pod's start.
-POD_DEADLINE_SECONDS = 240
+JOB_DEADLINE_SECONDS = 679
+# Every probe pod's own deadline (counted by the kubelet from the pod's start). The listener must
+# outlive every later control, so each pod gets the whole run's budget: the script's own deadline
+# ends the run, never a pod's.
+POD_DEADLINE_SECONDS = SCRIPT_BUDGET_SECONDS
 
 
 CLIENT = r'''
@@ -254,11 +262,12 @@ def runtime_start_failure(pod, pending_seconds):
         terminated = state.get("terminated")
         if terminated:
             started = terminated.get("startedAt") or ""
-            # The kubelet reports an unstarted container with a zero or missing start time, an
-            # exit code of 128 or a start-failure reason; a probe that ran exits 0 or 1.
+            # The kubelet reports a container the runtime could not start with a start-failure
+            # reason and a zero or missing start time. Either alone is not enough: a pod that ran
+            # and was lost with its node (ContainerStatusUnknown, exit 137) has no start time
+            # either, and it is judged by its failure, not recreated.
             never_started = (terminated.get("reason") in RUNTIME_START_REASONS
-                             or terminated.get("exitCode") == 128
-                             or not started or started[:4] in ("0001", "1970"))
+                             and (not started or started[:4] in ("0001", "1970")))
             if never_started:
                 return terminated.get("message") or terminated.get("reason") or "container not started"
         waiting = state.get("waiting")
@@ -316,9 +325,14 @@ def replace_object(request, path, resource, deadline, now=time.monotonic, sleep=
 
 
 def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hint,
-                 now=time.monotonic, sleep=time.sleep, out=print):
-    """Wait for a pod to satisfy `predicate`, recreating it once if the runtime failed to start it."""
-    first_seen = now()
+                 now=time.monotonic, sleep=time.sleep, out=print, created_at=None):
+    """Wait for a pod to satisfy `predicate`, recreating it once if the runtime failed to start it.
+
+    `created_at` is the time the pod was created (same clock as `now`). Pods of a stage are
+    created together and waited for one by one, so a pod's stuck time counts from its creation,
+    not from when this wait began.
+    """
+    first_seen = now() if created_at is None else created_at
     recreated = False
     current = {}
     while now() < deadline:
@@ -424,6 +438,8 @@ def main():
         "HTTPServer(('0.0.0.0',8080),Handler).serve_forever()\n"
     )
 
+    created_at = {}
+
     def create(path, resource):
         if owner_ref:
             resource["metadata"]["ownerReferences"] = owner_ref
@@ -436,6 +452,7 @@ def main():
                 raise
             # A previous run's object with the same fixed name; replace it.
             result = replace_object(request, path, resource, deadline)
+        created_at[name] = time.monotonic()
         track(path + "/" + result["metadata"]["name"])
         return result
 
@@ -446,6 +463,7 @@ def main():
     def recreate(role):
         resource = specs[prefix + "-" + role]
         result = replace_object(request, pods, resource, deadline)
+        created_at[prefix + "-" + role] = time.monotonic()
         track(pods + "/" + result["metadata"]["name"])
         return result
 
@@ -487,7 +505,7 @@ def main():
 
     def wait(role, predicate):
         return wait_for_pod(request, pods, prefix, role, predicate, deadline,
-                            recreate, FIX_HINT)
+                            recreate, FIX_HINT, created_at=created_at.get(prefix + "-" + role))
 
     # Pod and NetworkPolicy creation are confined by admission policies for this account.
     # Refuse to run unless each one rejects a request it must reject, with its own message.

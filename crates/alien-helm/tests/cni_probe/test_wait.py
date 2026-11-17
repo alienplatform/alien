@@ -50,12 +50,12 @@ class Cluster:
     def say(self, text, flush=False):
         self.output.append(text)
 
-    def wait(self, role="client", pending_bound_deadline=200):
+    def wait(self, role="client", pending_bound_deadline=400, created_at=None):
         return probe.wait_for_pod(
             self.request, "/pods", "probe", role,
             lambda p: p["status"]["phase"] == "Succeeded", pending_bound_deadline,
             lambda r: self.recreated.append(r), "FIX HINT",
-            now=self.now, sleep=self.sleep, out=self.say)
+            now=self.now, sleep=self.sleep, out=self.say, created_at=created_at)
 
 
 class RuntimeStartFailure(unittest.TestCase):
@@ -87,6 +87,28 @@ class RuntimeStartFailure(unittest.TestCase):
         self.assertEqual(cluster.recreated, ["client"])
 
 
+class PodCreatedBeforeItsWait(unittest.TestCase):
+    def test_a_pod_already_stuck_past_the_bound_when_its_wait_begins_is_recreated_at_once(self):
+        stuck = pod("Pending", waiting={"reason": "CreateContainerError", "message": START_MESSAGE})
+        cluster = Cluster(stuck, SUCCEEDED)
+        cluster.clock = 100.0
+        # Created 60 s ago, while an earlier pod was being waited for.
+        cluster.wait(created_at=100.0 - (probe.START_BOUND_SECONDS + 15))
+        self.assertEqual(cluster.recreated, ["client"])
+        self.assertEqual(cluster.clock, 101.0)
+
+    def test_a_pod_pending_past_the_cause_bound_when_its_wait_begins_fails_at_once(self):
+        unschedulable = {"spec": {}, "status": {"phase": "Pending", "conditions": [
+            {"type": "PodScheduled", "status": "False", "reason": "Unschedulable",
+             "message": "no nodes"}]}}
+        cluster = Cluster(unschedulable)
+        cluster.clock = 500.0
+        with self.assertRaises(RuntimeError):
+            cluster.wait(pending_bound_deadline=900,
+                         created_at=500.0 - (probe.PENDING_CAUSE_BOUND_SECONDS + 5))
+        self.assertEqual(cluster.clock, 500.0)
+
+
 class ProbeThatRan(unittest.TestCase):
     def test_a_probe_that_ran_and_failed_keeps_the_unproven_verdict_without_a_retry(self):
         cluster = Cluster(RAN_AND_FAILED)
@@ -95,6 +117,22 @@ class ProbeThatRan(unittest.TestCase):
         self.assertEqual(cluster.recreated, [])
         self.assertIn("client probe failed: NetworkPolicy enforcement is unproven", str(raised.exception))
         self.assertIn("NetworkPolicy did not block traffic", str(raised.exception))
+
+    def test_a_pod_that_ran_and_was_lost_with_its_node_fails_and_is_not_recreated(self):
+        # ContainerStatusUnknown: exit 137, no start time. It may have run and connected.
+        lost = pod("Failed", {"exitCode": 137, "reason": "ContainerStatusUnknown",
+                              "message": "The container could not be located when the pod was deleted."})
+        cluster = Cluster(lost)
+        with self.assertRaises(RuntimeError) as raised:
+            cluster.wait()
+        self.assertEqual(cluster.recreated, [])
+        self.assertIn("enforcement is unproven", str(raised.exception))
+
+    def test_a_pod_that_ran_and_failed_with_no_start_time_is_not_recreated(self):
+        cluster = Cluster(pod("Failed", {"exitCode": 1, "message": "RuntimeError: boom"}))
+        with self.assertRaises(RuntimeError):
+            cluster.wait()
+        self.assertEqual(cluster.recreated, [])
 
     def test_a_pod_that_succeeds_is_returned_unchanged(self):
         cluster = Cluster(pod("Running"), SUCCEEDED)
@@ -132,7 +170,7 @@ class PodThatNeverRuns(unittest.TestCase):
         self.assertEqual(cluster.recreated, [])
 
     def test_a_pod_pending_within_the_bound_is_only_slow(self):
-        cluster = Cluster(*([UNSCHEDULABLE] * 20 + [SUCCEEDED]))
+        cluster = Cluster(*([UNSCHEDULABLE] * (probe.PENDING_CAUSE_BOUND_SECONDS - 10) + [SUCCEEDED]))
         cluster.wait()
         self.assertEqual(cluster.recreated, [])
 
