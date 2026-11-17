@@ -145,6 +145,7 @@ fn workload_patch_is_a_mutating_tier_rule_for_three_kinds_only() {
     };
     for resource in ["deployments", "statefulsets", "daemonsets"] {
         assert_eq!(validate(rule("apps", resource, "patch"), "mutating"), true);
+        assert_eq!(validate(rule("apps", resource, "patch"), "destructive"), true);
         assert_eq!(validate(rule("apps", resource, "patch"), "read-only"), false);
     }
     // No other write verb or workload resource is newly allowed.

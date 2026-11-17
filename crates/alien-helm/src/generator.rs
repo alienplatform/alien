@@ -89,6 +89,8 @@ pub enum OperatorPermission {
     /// Diagnose workloads without changing them.
     Diagnostics,
     /// Diagnose workloads and run explicitly approved Kubernetes remediation.
+    /// A workload restart is admitted by a cluster policy shipped with the chart
+    /// (Kubernetes 1.30 or later): the Operator's patch can change nothing else.
     Remediation,
 }
 
@@ -2993,10 +2995,13 @@ fn restart_grants(
             }) {
                 continue;
             }
-            if let Some(kind) = workload_restart::restart_kind(&rule.resource) {
+            if let Some(resource) = workload_restart::RESTART_RESOURCES
+                .iter()
+                .find(|resource| **resource == rule.resource)
+            {
                 grants
                     .entry(RestartGrant {
-                        resource: kind.resource,
+                        resource,
                         resource_names: rule.resource_names.iter().cloned().collect(),
                     })
                     .or_default()
@@ -3010,7 +3015,7 @@ fn restart_grants(
     RestartGrants(grants)
 }
 
-/// The admission policy and binding for each workload kind the Operator may
+/// The admission policy and binding for the workload kinds the Operator may
 /// patch, or nothing when no `patch` rule is rendered.
 fn workload_restart_policy_docs(
     operator_name: &str,
@@ -3018,6 +3023,10 @@ fn workload_restart_policy_docs(
     labels: &BTreeMap<String, String>,
     grants: &RestartGrants,
 ) -> Vec<String> {
+    let resources: BTreeSet<&str> = grants.0.keys().map(|grant| grant.resource).collect();
+    if resources.is_empty() {
+        return Vec::new();
+    }
     // A template-valued name (`{{ include ... }}`) is used as the expression it
     // wraps; a literal name is quoted.
     let name_expression = match operator_name
@@ -3028,54 +3037,53 @@ fn workload_restart_policy_docs(
         Some(expression) => format!("({})", expression.trim()),
         None => helm_string(operator_name),
     };
-    let resources: BTreeSet<&str> = grants.0.keys().map(|grant| grant.resource).collect();
-    let mut docs = Vec::new();
-    for resource in resources {
-        let kind = workload_restart::restart_kind(resource)
-            .expect("restart grants are only built for restart kinds");
-        // Cluster-scoped objects must not collide across releases.
-        let object_name = format!(
-            "{{{{ printf \"%s-restart-%s-%s\" {name_expression} {} (sha256sum (printf \"%s/%s\" .Release.Namespace .Release.Name) | trunc 8) }}}}",
-            helm_string(resource)
+    // Cluster-scoped objects must not collide across releases.
+    let object_name = format!(
+        "{{{{ printf \"%s-restart-%s\" {name_expression} (sha256sum (printf \"%s/%s\" .Release.Namespace .Release.Name) | trunc 8) }}}}"
+    );
+    let mut metadata = String::from("metadata:\n");
+    metadata.push_str(&format!("  name: {object_name}\n  labels:\n"));
+    append_operator_labels(&mut metadata, labels, 4);
+    let resource_list = resources
+        .iter()
+        .map(|resource| yaml_string(resource))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut policy = format!(
+        "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\n{metadata}spec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n      - apiGroups: ['apps']\n        apiVersions: ['v1']\n        operations: ['UPDATE']\n        resources: [{resource_list}]\n  matchConditions:\n    - name: operator-account\n      expression: {{{{ printf \"request.userInfo.username == 'system:serviceaccount:%s:%s'\" .Release.Namespace {name_expression} | quote }}}}\n  variables:\n"
+    );
+    for (name, expression) in workload_restart::VARIABLES {
+        policy.push_str(&format!(
+            "    - name: {name}\n      expression: {}\n",
+            helm_string(expression)
+        ));
+    }
+    policy.push_str("  validations:\n");
+    for (expression, message) in workload_restart::validations() {
+        policy.push_str(&format!(
+            "    - expression: {}\n      message: {}\n",
+            helm_string(&expression),
+            helm_string(message)
+        ));
+    }
+    let mut binding = format!(
+        "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\n{metadata}spec:\n  policyName: {object_name}\n  validationActions: ['Deny']\n"
+    );
+    // A namespaced install's Role covers its own namespace only.
+    if !scope.is_cluster_wide() {
+        binding.push_str(
+            "  matchResources:\n    namespaceSelector:\n      matchLabels:\n        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}\n",
         );
-        let mut metadata = String::from("metadata:\n");
-        metadata.push_str(&format!("  name: {object_name}\n  labels:\n"));
-        append_operator_labels(&mut metadata, labels, 4);
-        let mut policy = format!(
-            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicy\n{metadata}spec:\n  failurePolicy: Fail\n  matchConstraints:\n    resourceRules:\n      - apiGroups: ['apps']\n        apiVersions: ['v1']\n        operations: ['UPDATE']\n        resources: [{}]\n  matchConditions:\n    - name: operator-account\n      expression: {{{{ printf \"request.userInfo.username == 'system:serviceaccount:%s:%s'\" .Release.Namespace {name_expression} | quote }}}}\n  variables:\n",
-            yaml_string(resource)
-        );
-        for (name, expression) in workload_restart::VARIABLES {
-            policy.push_str(&format!(
-                "    - name: {name}\n      expression: {}\n",
-                helm_string(expression)
-            ));
-        }
-        policy.push_str("  validations:\n");
-        for (expression, message) in workload_restart::validations(kind) {
-            policy.push_str(&format!(
-                "    - expression: {}\n      message: {}\n",
-                helm_string(&expression),
-                helm_string(message)
-            ));
-        }
-        let mut binding = format!(
-            "apiVersion: admissionregistration.k8s.io/v1\nkind: ValidatingAdmissionPolicyBinding\n{metadata}spec:\n  policyName: {object_name}\n  validationActions: ['Deny']\n"
-        );
-        // A namespaced install's Role covers its own namespace only.
-        if !scope.is_cluster_wide() {
-            binding.push_str(
-                "  matchResources:\n    namespaceSelector:\n      matchLabels:\n        kubernetes.io/metadata.name: {{ .Release.Namespace | quote }}\n",
-            );
-        }
-        for doc in [policy, binding] {
-            docs.push(format!(
+    }
+    [policy, binding]
+        .into_iter()
+        .map(|doc| {
+            format!(
                 "{{{{- if {} }}}}\n{doc}{{{{- end }}}}\n",
                 workload_restart::POLICY_API_CONDITION
-            ));
-        }
-    }
-    docs
+            )
+        })
+        .collect()
 }
 
 /// The access-request `CustomResourceDefinition`, white-labeled from `names`.
