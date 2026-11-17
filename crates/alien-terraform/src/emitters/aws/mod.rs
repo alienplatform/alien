@@ -4,6 +4,9 @@
 //! returns `hcl::Block` / `hcl::Expression` directly (no intermediate IR).
 //! Shared helpers live in [`helpers`].
 
+pub mod compute_cluster;
+pub mod postgres;
+pub mod redis;
 pub mod ai;
 pub mod artifact_registry;
 pub mod build;
@@ -37,3 +40,6 @@ pub use service_account::AwsServiceAccountEmitter;
 pub use storage::AwsStorageEmitter;
 pub use vault::AwsVaultEmitter;
 pub use worker::AwsWorkerEmitter;
+pub use compute_cluster::AwsComputeClusterEmitter;
+pub use postgres::AwsPostgresEmitter;
+pub use redis::AwsRedisEmitter;

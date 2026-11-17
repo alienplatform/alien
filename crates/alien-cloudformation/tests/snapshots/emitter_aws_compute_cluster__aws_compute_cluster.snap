@@ -1,0 +1,679 @@
+---
+source: crates/alien-cloudformation/tests/emitter_aws_compute_cluster.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: aws_compute_cluster
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Network
+      Parameters:
+      - NetworkMode
+      - VpcCidr
+      - AvailabilityZones
+      - VpcId
+      - PublicSubnetIds
+      - PrivateSubnetIds
+      - SecurityGroupIds
+    - Label:
+        default: Custom domain
+      Parameters:
+      - DomainName
+      - HostedZoneId
+      - CertificateArn
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      AvailabilityZones:
+        default: Availability zones
+      CertificateArn:
+        default: Certificate ARN
+      DomainName:
+        default: Domain name
+      HeartbeatsMode:
+        default: Heartbeats
+      HostedZoneId:
+        default: Hosted zone ID
+      ManagingAccountId:
+        default: Image account ID
+      ManagingRoleArn:
+        default: Management role ARN
+      NetworkMode:
+        default: Network
+      PrivateSubnetIds:
+        default: Private subnet IDs
+      PublicSubnetIds:
+        default: Public subnet IDs
+      SecurityGroupIds:
+        default: Security group IDs
+      TelemetryMode:
+        default: Telemetry
+      UpdatesMode:
+        default: Updates
+      VpcCidr:
+        default: VPC CIDR
+      VpcId:
+        default: VPC ID
+Parameters:
+  ManagingRoleArn:
+    Type: String
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID for the management account that hosts application container images.
+    Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: use-existing
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  VpcCidr:
+    Type: String
+    Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
+    Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
+  AvailabilityZones:
+    Type: Number
+    Description: Only used with create-new. Number of availability zones for the new VPC.
+    Default: 2
+    AllowedValues:
+    - 1
+    - 2
+    - 3
+  VpcId:
+    Type: String
+    Description: Only used with use-existing. Existing VPC ID.
+    Default: vpc-0123456789abcdef0
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing public subnet IDs.
+    Default: subnet-public-a
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: each entry must not contain double quotes, backslashes or control characters
+  PrivateSubnetIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing private subnet IDs.
+    Default: subnet-private-a
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: each entry must not contain double quotes, backslashes or control characters
+  SecurityGroupIds:
+    Type: CommaDelimitedList
+    Description: Only used with use-existing. Existing security group IDs.
+    Default: sg-0123456789abcdef0
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: each entry must not contain double quotes, backslashes or control characters
+  DomainName:
+    Type: String
+    Description: Optional custom domain. Leave unset to use the deployment-managed endpoint.
+    Default: ''
+    AllowedPattern: ^[^"\\\x00-\x1F]*$
+    ConstraintDescription: must not contain double quotes, backslashes or control characters
+  HostedZoneId:
+    Type: String
+    Description: Route 53 hosted zone ID for the custom domain. Not needed for the auto-generated domain.
+    Default: ''
+  CertificateArn:
+    Type: String
+    Description: ACM certificate ARN for the custom domain. Required when DomainName is set.
+    Default: ''
+    AllowedPattern: ^$|^arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/[^"\\\x00-\x1F]+$
+    ConstraintDescription: must be empty or an ACM certificate ARN
+  EndpointAccess:
+    Type: String
+    Description: Who can reach this deployment's endpoints. Private access requires AWS managed containers and cannot change after setup.
+    Default: internet
+    AllowedValues:
+    - internet
+    - private
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after setup registration.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - auto
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+Conditions:
+  HasPublicSubnetIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: PublicSubnetIds
+      - ''
+  HasPrivateSubnetIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: PrivateSubnetIds
+      - ''
+  HasSecurityGroupIds:
+    Fn::Not:
+    - Fn::Equals:
+      - Fn::Join:
+        - ''
+        - Ref: SecurityGroupIds
+      - ''
+  NetworkModeCreate:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - create-new
+  NetworkModeUseExisting:
+    Fn::Equals:
+    - Ref: NetworkMode
+    - use-existing
+  HasVpcCidr:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: VpcCidr
+      - ''
+  HasDomainName:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: DomainName
+      - ''
+Rules:
+  CustomDomainCertificate:
+    Assertions:
+    - Assert:
+        Fn::Or:
+        - Fn::Equals:
+          - Ref: DomainName
+          - ''
+        - Fn::Not:
+          - Fn::Equals:
+            - Ref: CertificateArn
+            - ''
+      AssertDescription: CertificateArn must be set to an AWS ACM certificate ARN when DomainName is set.
+Resources:
+  ComputeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-compute
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: ComputeClusterExecute
+        PolicyDocument:
+          Statement:
+          - Action:
+            - ecr:GetAuthorizationToken
+            Effect: Allow
+            Resource:
+            - '*'
+            Sid: ComputeClusterExecuteEcrGetAuthorizationToken
+          - Action:
+            - ecr:BatchGetImage
+            - ecr:GetDownloadUrlForLayer
+            Effect: Allow
+            Resource:
+            - Fn::Sub:
+              - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
+              - ManagingAccountId:
+                  Fn::Select:
+                  - 4
+                  - Fn::Split:
+                    - ':'
+                    - Ref: ManagingRoleArn
+            Sid: ComputeClusterExecuteReadEcrImages
+          - Action:
+            - sts:AssumeRole
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
+            Sid: ComputeClusterExecuteStsAssumeRole
+          - Action:
+            - ec2:AttachVolume
+            - ec2:DetachVolume
+            Condition:
+              StringEquals:
+                aws:ResourceTag/deployment:
+                  Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: runtime
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+            - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*
+            Sid: ComputeClusterExecuteInspectCloudNetworking
+          - Action:
+            - ec2:DescribeTags
+            - ec2:DescribeVolumes
+            Effect: Allow
+            Resource:
+            - '*'
+            Sid: ObserveEc2RuntimeState
+          - Action:
+            - elasticloadbalancing:DescribeTargetHealth
+            Effect: Allow
+            Resource:
+            - '*'
+            Sid: ObserveLoadBalancerTargetHealth
+          - Action:
+            - elasticloadbalancing:DeregisterTargets
+            - elasticloadbalancing:RegisterTargets
+            Condition:
+              StringEquals:
+                aws:ResourceTag/deployment:
+                  Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: runtime
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/*/*
+            Sid: ComputeClusterExecuteElasticloadbalancingRegisterTargetsPermissions
+          Version: 2012-10-17
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: compute
+      - Key: resource-type
+        Value: compute-cluster
+  ComputeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+      - Ref: ComputeInstanceRole
+    DependsOn:
+    - ComputeInstanceRole
+  ComputeIsolationV1Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-compute-isolation-v1
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: ComputeClusterExecute
+        PolicyDocument:
+          Statement:
+          - Action:
+            - ecr:GetAuthorizationToken
+            Effect: Allow
+            Resource:
+            - '*'
+            Sid: ComputeClusterExecuteEcrGetAuthorizationToken
+          - Action:
+            - ecr:BatchGetImage
+            - ecr:GetDownloadUrlForLayer
+            Effect: Allow
+            Resource:
+            - Fn::Sub:
+              - arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*
+              - ManagingAccountId:
+                  Fn::Select:
+                  - 4
+                  - Fn::Split:
+                    - ':'
+                    - Ref: ManagingRoleArn
+            Sid: ComputeClusterExecuteReadEcrImages
+          - Action:
+            - sts:AssumeRole
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-sa
+            Sid: ComputeClusterExecuteStsAssumeRole
+          - Action:
+            - ec2:AttachVolume
+            - ec2:DetachVolume
+            Condition:
+              StringEquals:
+                aws:ResourceTag/deployment:
+                  Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: runtime
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+            - Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:volume/*
+            Sid: ComputeClusterExecuteInspectCloudNetworking
+          - Action:
+            - ec2:DescribeTags
+            - ec2:DescribeVolumes
+            Effect: Allow
+            Resource:
+            - '*'
+            Sid: ObserveEc2RuntimeState
+          - Action:
+            - elasticloadbalancing:DescribeTargetHealth
+            Effect: Allow
+            Resource:
+            - '*'
+            Sid: ObserveLoadBalancerTargetHealth
+          - Action:
+            - elasticloadbalancing:DeregisterTargets
+            - elasticloadbalancing:RegisterTargets
+            Condition:
+              StringEquals:
+                aws:ResourceTag/deployment:
+                  Fn::Sub: ${AWS::StackName}
+                aws:ResourceTag/managed-by: runtime
+            Effect: Allow
+            Resource:
+            - Fn::Sub: arn:${AWS::Partition}:elasticloadbalancing:${AWS::Region}:${AWS::AccountId}:targetgroup/*/*
+            Sid: ComputeClusterExecuteElasticloadbalancingRegisterTargetsPermissions
+          Version: 2012-10-17
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: compute
+      - Key: resource-type
+        Value: compute-cluster
+  ComputeIsolationV1Profile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+      - Ref: ComputeIsolationV1Role
+    DependsOn:
+    - ComputeIsolationV1Role
+  ComputeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Compute cluster machine security group
+      VpcId:
+        Ref: VpcId
+      SecurityGroupEgress:
+        Fn::If:
+        - NetworkModeCreate
+        - - IpProtocol: '-1'
+            CidrIp: 0.0.0.0/0
+            Description: Outbound runtime traffic
+        - Fn::If:
+          - NetworkModeUseExisting
+          - - IpProtocol: '-1'
+              CidrIp: 0.0.0.0/0
+              Description: Outbound runtime traffic
+          - Ref: AWS::NoValue
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: compute
+      - Key: resource-type
+        Value: compute-cluster
+  ComputeSecurityGroupContainerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::GetAtt:
+        - ComputeSecurityGroup
+        - GroupId
+      IpProtocol: '-1'
+      CidrIp: 10.244.0.0/16
+      Description: Container network
+  ComputeSecurityGroupPeerIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::GetAtt:
+        - ComputeSecurityGroup
+        - GroupId
+      IpProtocol: '-1'
+      SourceSecurityGroupId:
+        Fn::GetAtt:
+        - ComputeSecurityGroup
+        - GroupId
+      Description: Compute node peer traffic
+  ExecutionSaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-execution-sa
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS:
+              Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+          Action: sts:AssumeRole
+          Condition:
+            ArnEquals:
+              aws:PrincipalArn:
+              - Fn::GetAtt:
+                - ComputeInstanceRole
+                - Arn
+              - Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-compute-isolation-v1
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: execution-sa
+      - Key: resource-type
+        Value: service-account
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentResourcePrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Stable physical resource prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup registration payload format version.
+  DeploymentSetupFingerprintVersion:
+    Value: 1
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::Join:
+      - ''
+      - - '{"platform":"aws","managingRoleArn":"'
+        - Ref: ManagingRoleArn
+        - '"}'
+    Description: Deployment registration management configuration JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::Join:
+      - ''
+      - - '{"deploymentModel":"push","endpointAccess":"'
+        - Ref: EndpointAccess
+        - '","updates":"'
+        - Ref: UpdatesMode
+        - '","telemetry":"'
+        - Ref: TelemetryMode
+        - '","heartbeats":"'
+        - Ref: HeartbeatsMode
+        - '","network":'
+        - Fn::If:
+          - NetworkModeCreate
+          - Fn::Join:
+            - ''
+            - - '{"type":"create","cidr":'
+              - Fn::If:
+                - HasVpcCidr
+                - Fn::Join:
+                  - ''
+                  - - '"'
+                    - Ref: VpcCidr
+                    - '"'
+                - 'null'
+              - ',"availability_zones":"'
+              - Ref: AvailabilityZones
+              - '"}'
+          - Fn::Join:
+            - ''
+            - - Fn::If:
+                - NetworkModeUseExisting
+                - Fn::Join:
+                  - ''
+                  - - '{"type":"byo-vpc-aws","vpc_id":"'
+                    - Ref: VpcId
+                    - '","public_subnet_ids":'
+                    - Fn::If:
+                      - HasPublicSubnetIds
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Fn::Join:
+                            - '","'
+                            - Ref: PublicSubnetIds
+                          - '"]'
+                      - '[]'
+                    - ',"private_subnet_ids":'
+                    - Fn::If:
+                      - HasPrivateSubnetIds
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Fn::Join:
+                            - '","'
+                            - Ref: PrivateSubnetIds
+                          - '"]'
+                      - '[]'
+                    - ',"security_group_ids":'
+                    - Fn::If:
+                      - HasSecurityGroupIds
+                      - Fn::Join:
+                        - ''
+                        - - '["'
+                          - Fn::Join:
+                            - '","'
+                            - Ref: SecurityGroupIds
+                          - '"]'
+                      - '[]'
+                    - '}'
+                - '{"type":"use-default"}'
+        - ',"domains":'
+        - Fn::If:
+          - HasDomainName
+          - Fn::Join:
+            - ''
+            - - '{"customDomains":{"api":{"domain":"'
+              - Ref: DomainName
+              - '","certificate":{"aws":{"certificateArn":"'
+              - Ref: CertificateArn
+              - '"}}}}}'
+          - 'null'
+        - '}'
+    Description: Deployment registration settings JSON.
+  DeploymentResources:
+    Value:
+      Fn::Join:
+      - ''
+      - - '[{"id":"default-network","type":"network","importData":{"vpcId":"'
+        - Ref: VpcId
+        - '","publicSubnetIds":'
+        - Fn::If:
+          - HasPublicSubnetIds
+          - Fn::Join:
+            - ''
+            - - '["'
+              - Fn::Join:
+                - '","'
+                - Ref: PublicSubnetIds
+              - '"]'
+          - '[]'
+        - ',"privateSubnetIds":'
+        - Fn::If:
+          - HasPrivateSubnetIds
+          - Fn::Join:
+            - ''
+            - - '["'
+              - Fn::Join:
+                - '","'
+                - Ref: PrivateSubnetIds
+              - '"]'
+          - '[]'
+        - ',"securityGroupId":'
+        - Fn::If:
+          - HasSecurityGroupIds
+          - Fn::Join:
+            - ''
+            - - '"'
+              - Fn::Select:
+                - 0
+                - Ref: SecurityGroupIds
+              - '"'
+          - 'null'
+        - ',"availabilityZones":[],"isByoVpc":true}},{"id":"compute","type":"compute-cluster","importData":{"clusterId":"'
+        - Fn::Sub: ${AWS::StackName}-compute
+        - '","instanceProfileArn":"'
+        - Fn::GetAtt:
+          - ComputeInstanceProfile
+          - Arn
+        - '","isolatedInstanceProfileArn":"'
+        - Fn::GetAtt:
+          - ComputeIsolationV1Profile
+          - Arn
+        - '","securityGroupId":"'
+        - Fn::GetAtt:
+          - ComputeSecurityGroup
+          - GroupId
+        - '"}},{"id":"execution-sa","type":"service-account","importData":{"roleName":"'
+        - Ref: ExecutionSaRole
+        - '","roleArn":"'
+        - Fn::GetAtt:
+          - ExecutionSaRole
+          - Arn
+        - '","stackPermissionsApplied":true}}]'
+    Description: Deployment registration resources JSON.
