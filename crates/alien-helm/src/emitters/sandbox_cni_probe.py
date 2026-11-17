@@ -32,49 +32,44 @@ FIX_HINT = (
 #   API_READY_SECONDS       60   the runner's own network is applied (the wait below)
 #   ADMISSION_SECONDS       30   both admission policies answer
 #   PENDING_CAUSE_BOUND    210   the listener is scheduled and starts (a node may be provisioned)
-#   stage 1: 35 + 35 + 119 + 6   the denied pods start, then the control (which needs their
-#                                addresses) starts, then the control runs until the denied pods
-#                                are done (CONTROL_RUN_SECONDS), which linger 6 s (LINGER_SECONDS)
+#   stage 1: 35 + 147            the control starts, then runs CONTROL_RUN_SECONDS: the denied pods
+#                                start (35) and finish within it, with a margin
 #   stage 2: 35 + 33             the controls start together; the recovering one waits up to 30 s
 #   one recreate            45 + 35   (START_BOUND_SECONDS stuck, then a new start)
 #   CLEANUP_SECONDS         10   delete what was created
 #                          ---
-#                          653
-# The Job adds the runner's own start (image pull, 30 s) and a 30 s margin: 713 s. The install's
-# 15 minutes (900 s) leave 187 s for the hooks and the rollout after it.
+#                          640
+# The Job adds the runner's own start (image pull, 30 s) and a 30 s margin: 700 s. The install's
+# 15 minutes (900 s) leave 200 s for the hooks and the rollout after it.
 API_READY_SECONDS = 60
 ADMISSION_SECONDS = 30
 POD_START_SECONDS = 35
-# A denied pod: how long it waits for the control to reach it (the control's own pod start, then
-# one request), how long a refusal may take to appear, and how long refusals must then hold.
-# It covers the other denied pod's start, the control's start, one recreate of the control
-# (START_BOUND_SECONDS stuck, then a new start) and the control's first request.
-DENIED_SERVED_WAIT_SECONDS = 35 + 35 + 45 + 35 + 20
+# Every request times out after REQUEST_TIMEOUT_SECONDS.
+REQUEST_TIMEOUT_SECONDS = 3
+# A denied pod first waits, this long, for its first answer on the allowed port (the listener's
+# address on the one port its policies admit). Policies land a moment after a pod starts, so the
+# first answer may come late; refusals before it say nothing and are not looked at.
+SERVE_WAIT_SECONDS = 20
+# Then it counts: how long a refusal may take to appear, and how long refusals must then hold.
 ENFORCEMENT_WINDOW_SECONDS = 45
 HOLD_SECONDS = 10
-# After it is done a denied pod keeps answering, so the control can read that it is done.
-LINGER_SECONDS = 6
-# The control: how long it may take to reach each denied pod once, and its whole run: until every
-# denied pod has finished. Every request times out after REQUEST_TIMEOUT_SECONDS.
-REQUEST_TIMEOUT_SECONDS = 3
-SERVE_WAIT_SECONDS = 20
 # A denied pod's tick: the allowed port, the listener, then a 1 s sleep. The window and the hold
 # each end after the tick that is running when they expire, so each can overrun by one tick.
 DENIED_TICK_SECONDS = 2 * REQUEST_TIMEOUT_SECONDS + 1
-# The control's tick: the listener, each of the two denied pods, then a 1 s sleep. It reads that
-# a denied pod is done one tick after it is.
-CONTROL_TICK_SECONDS = 3 * REQUEST_TIMEOUT_SECONDS + 1
-# The longest a denied pod can need after the control starts: 20 + 45 + 10 + 2 * 7 = 89.
-DENIED_WORST_CASE_SECONDS = (SERVE_WAIT_SECONDS + ENFORCEMENT_WINDOW_SECONDS + HOLD_SECONDS
-                             + 2 * DENIED_TICK_SECONDS)
-# 89 + 10 (the control reads "done") + 20 margin = 119.
+# The longest a denied pod can run once it has started: the wait for its first answer (and that
+# answer's request), the window and the hold, each with one tick of overrun: 23 + 45 + 10 + 14 = 92.
+DENIED_WORST_CASE_SECONDS = (SERVE_WAIT_SECONDS + REQUEST_TIMEOUT_SECONDS + ENFORCEMENT_WINDOW_SECONDS
+                             + HOLD_SECONDS + 2 * DENIED_TICK_SECONDS)
+# The control reaches the listener every second for this long, counted from its own start. The denied
+# pods are created when it runs, so it covers their start, their worst case and a margin: it
+# is still reaching the listener when the last denied pod is done. 35 + 92 + 20 = 147.
 CONTROL_RUN_MARGIN_SECONDS = 20
-CONTROL_RUN_SECONDS = DENIED_WORST_CASE_SECONDS + CONTROL_TICK_SECONDS + CONTROL_RUN_MARGIN_SECONDS
+CONTROL_RUN_SECONDS = POD_START_SECONDS + DENIED_WORST_CASE_SECONDS + CONTROL_RUN_MARGIN_SECONDS
 # A stage-2 control may retry for this long before its first reply (nothing is deleted: the
 # policies stay, and a new pod's rules may take a moment to be applied).
 RECOVER_SECONDS = 30
 RECOVER_RUN_SECONDS = RECOVER_SECONDS + 3
-STAGE_ONE_SECONDS = 35 + 35 + CONTROL_RUN_SECONDS + LINGER_SECONDS
+STAGE_ONE_SECONDS = POD_START_SECONDS + CONTROL_RUN_SECONDS
 STAGE_TWO_SECONDS = 35 + RECOVER_RUN_SECONDS
 CLEANUP_SECONDS = 10
 # How long a pod may stay Pending with a container the runtime failed to create, before it is
@@ -88,14 +83,12 @@ START_BOUND_SECONDS = 45
 # is not failed early.
 PENDING_CAUSE_BOUND_SECONDS = 210
 # The pods after the listener land on the node the listener started on, so they are not waiting
-# for a node. A pod that stays Pending that long fails naming its cause. It is shorter than a
-# denied pod's wait for the control, so when the control cannot be scheduled the run names that,
-# before the denied pods give up on a control that never came.
+# for a node. A pod that stays Pending that long fails naming its cause.
 FOLLOWER_PENDING_CAUSE_BOUND_SECONDS = 90
-SCRIPT_BUDGET_SECONDS = 653
+SCRIPT_BUDGET_SECONDS = 640
 RUNNER_START_SECONDS = 30
 BUDGET_MARGIN_SECONDS = 30
-JOB_DEADLINE_SECONDS = 713
+JOB_DEADLINE_SECONDS = 700
 # Every probe pod's own deadline (counted by the kubelet from the pod's start). The listener must
 # outlive every later control, so each pod gets the whole run's budget: the script's own deadline
 # ends the run, never a pod's.
@@ -103,20 +96,16 @@ POD_DEADLINE_SECONDS = SCRIPT_BUDGET_SECONDS
 
 
 CLIENT = r'''
-import errno,http.server,socket,threading,time,urllib.request,urllib.error
+import errno,time,urllib.request,urllib.error
 def require(condition,message):
     if not condition: raise RuntimeError(message)
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 DENIED=globals().get('DENIED',False)
+CONTROL=globals().get('CONTROL',False)
 RECOVER=globals().get('RECOVER',0)
-TARGETS=globals().get('TARGETS',[])
 LOG=globals().get('LOG','/dev/termination-log')
-BIND=globals().get('BIND','0.0.0.0')
-PORT=globals().get('PORT',@PORT@)
 WINDOW=globals().get('WINDOW',@WINDOW@)
 HOLD=globals().get('HOLD',@HOLD@)
-LINGER=globals().get('LINGER',@LINGER@)
-SERVED_WAIT=globals().get('SERVED_WAIT',@SERVED_WAIT@)
 SERVE_WAIT=globals().get('SERVE_WAIT',@SERVE_WAIT@)
 CONTROL_RUN=globals().get('CONTROL_RUN',@CONTROL_RUN@)
 BLOCKED=(errno.ECONNREFUSED,errno.ENETUNREACH,errno.EHOSTUNREACH,errno.ETIMEDOUT)
@@ -138,39 +127,35 @@ def reach_allowed():
     require(body is None or body==@MARKER@, 'wrong allowed port body')
     return body is not None
 def note(text):
+    # The one-line verdict: the runner reads it from the pod's status (the kubelet's termination
+    # message), not from logs.
     print(text,flush=True)
     try:
-        with open(LOG,'w') as log: log.write(text)
+        with open(LOG,'w') as log: log.write(text[:2048])
     except OSError: pass
-if DENIED:
-    # A denied pod serves too (its policy is egress-only), so the control can prove that this
-    # pod's own network is up; a refusal only counts once it has been reached.
-    state={'served':False,'state':'waiting'}
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            state['served']=True
-            self.send_response(200); self.end_headers()
-            self.wfile.write(@MARKER@+(b' '+state['state'].encode() if self.path=='/state' else b''))
-        def log_message(self,*args): pass
-    server=http.server.ThreadingHTTPServer((BIND,PORT),Handler)
-    threading.Thread(target=server.serve_forever,daemon=True).start()
-    try:
-        waited=time.monotonic()
-        while not state['served']:
-            require(time.monotonic()-waited<SERVED_WAIT,'the control did not reach this pod in time: the control pod may not have started or may have been refused, see its status')
-            time.sleep(0.2)
-        state['state']='counting'
+def run():
+    if DENIED:
+        # A denied pod proves its own network from inside: it must first reach the allowed port, then
+        # on every tick reach it again while the other port is refused. Same pod, same address, same
+        # moment: only the port, and so the policy, differs.
+        NOT_UP='allowed port never reachable: its own network is not up'
+        LOST='the denied pod cannot reach the listener on the allowed port: a refusal proves nothing'
+        begun=time.monotonic()
+        while True:
+            try:
+                up=reach_allowed()
+            except RuntimeError:
+                up=False
+            if up: break
+            require(time.monotonic()-begun<SERVE_WAIT,NOT_UP)
+            time.sleep(1)
         # The policy may need a moment to reach a new pod: wait, bounded, for the first refusal, then
         # require refusals to hold. Reaching the listener after a refusal, or never being refused
         # within the window, is a failure.
-        # On every tick the allowed port must answer: the same pod, the same destination address,
-        # the same moment, only the port (and so the policy) differs. If it does not, a refusal on
-        # the other port proves nothing.
-        NOT_UP='the denied pod cannot reach the listener on the allowed port: a refusal proves nothing'
         start=time.monotonic()
         reachable=0
         while True:
-            require(reach_allowed(),NOT_UP)
+            require(reach_allowed(),LOST)
             if not reach(): break
             reachable+=1
             require(time.monotonic()-start<WINDOW,'NetworkPolicy did not block traffic')
@@ -179,60 +164,44 @@ if DENIED:
         hold_until=time.monotonic()+HOLD
         while time.monotonic()<hold_until:
             time.sleep(1)
-            require(reach_allowed(),NOT_UP)
+            require(reach_allowed(),LOST)
             require(not reach(),'NetworkPolicy did not block traffic: reachable again after a refusal')
-        state['state']='done'
         note('blocked after %.1fs (%d reachable attempts first), held %ds'%(blocked_after,reachable,HOLD))
-        time.sleep(LINGER)
-    finally:
-        server.shutdown(); server.server_close()
-elif TARGETS:
-    # The positive control of the denied pods: it reaches the listener every second for as long as
-    # they count refusals, so a refusal cannot be an outage of the listener. It reaches each denied
-    # pod once, which starts that pod's count, and stops when every one of them says it is done.
-    seen=set(); done=set()
-    begun=time.monotonic()
-    while len(done)<len(TARGETS):
-        require(time.monotonic()-begun<CONTROL_RUN,'denied pods did not finish in time')
-        try:
-            up=reach()
-        except RuntimeError:
-            up=False
-        require(up,'listener unreachable from the control: a refusal proves nothing')
-        for target in TARGETS:
-            if target in done: continue
-            try:
-                body=get(target+'state')
-            except RuntimeError:
-                body=None
-            if body is None:
-                require(target not in seen and time.monotonic()-begun<SERVE_WAIT,
-                        'denied pod unreachable from the control: its own network is not up')
-            else:
-                seen.add(target)
-                require(body.startswith(@MARKER@),'wrong denied pod body')
-                if body.endswith(b' done'): done.add(target)
-        time.sleep(1)
-    note('listener reachable throughout; %d denied pods finished'%len(TARGETS))
-elif RECOVER:
-    # A recovering control waits, within the pod deadline, for a CNI that removes a deleted
-    # policy slowly; it must still be reached once.
-    until=time.monotonic()+RECOVER
-    reached=reach()
-    while not reached and time.monotonic()<until:
-        time.sleep(1)
+    elif CONTROL:
+        # The positive control of the denied pods: it reaches the listener every second for a fixed
+        # time that outlasts them, so a refusal cannot be an outage of the listener. One miss fails.
+        begun=time.monotonic()
+        count=0
+        while time.monotonic()-begun<CONTROL_RUN:
+            require(reach(),'listener unreachable from the control: a refusal proves nothing')
+            count+=1
+            time.sleep(1)
+        note('listener reachable on all %d attempts over %ds'%(count,CONTROL_RUN))
+    elif RECOVER:
+        # A recovering control waits, within the pod deadline, for a CNI that removes a deleted
+        # policy slowly; it must still be reached once.
+        until=time.monotonic()+RECOVER
         reached=reach()
-    require(reached,'traffic did not resume after removing the policy')
-else:
-    for _ in range(3):
-        require(reach(),'positive control was not reached')
-        time.sleep(1)
+        while not reached and time.monotonic()<until:
+            time.sleep(1)
+            reached=reach()
+        require(reached,'traffic did not resume after removing the policy')
+        note('reached the listener after the policy was removed')
+    else:
+        for _ in range(3):
+            require(reach(),'positive control was not reached')
+            time.sleep(1)
+        note('reached the listener')
+try:
+    run()
+except BaseException as error:
+    note('FAILED: %s'%error)
+    raise
 '''
 
 
 LISTENER_PORT = 8080
 ALLOWED_PORT = 8081
-DENIED_POD_PORT = 8080
 
 
 def pod_url(ip, port):
@@ -242,15 +211,15 @@ def pod_url(ip, port):
 
 
 def client_code(url, marker, allowed_url):
-    """Source of the client pods. The caller sets `DENIED`, `RECOVER` or `TARGETS` before it.
+    """Source of the client pods. The caller sets `DENIED`, `CONTROL` or `RECOVER` before it.
 
     `url` is the listener's port the denied pods must be refused on, `allowed_url` the port of the
     same address that their policies admit.
     """
     constants = {
-        "@WINDOW@": ENFORCEMENT_WINDOW_SECONDS, "@HOLD@": HOLD_SECONDS, "@LINGER@": LINGER_SECONDS,
-        "@SERVED_WAIT@": DENIED_SERVED_WAIT_SECONDS, "@SERVE_WAIT@": SERVE_WAIT_SECONDS,
-        "@CONTROL_RUN@": CONTROL_RUN_SECONDS, "@URL@": repr(url), "@ALLOWED_URL@": repr(allowed_url), "@PORT@": DENIED_POD_PORT, "@MARKER@": repr(marker.encode()),
+        "@WINDOW@": ENFORCEMENT_WINDOW_SECONDS, "@HOLD@": HOLD_SECONDS,
+        "@SERVE_WAIT@": SERVE_WAIT_SECONDS, "@CONTROL_RUN@": CONTROL_RUN_SECONDS,
+        "@URL@": repr(url), "@ALLOWED_URL@": repr(allowed_url), "@MARKER@": repr(marker.encode()),
     }
     source = CLIENT
     for token, value in constants.items():
@@ -260,26 +229,71 @@ def client_code(url, marker, allowed_url):
 
 # A successful negative result is only meaningful bracketed by working controls, and a refusal
 # only counts while the listener is shown to be up and the denied pod's own network is shown to
-# be up. Stage 1: the denied pods start first and serve; once they run, the control starts with
-# their addresses, reaches the listener every second for as long as they count, and reaches each
-# denied pod once. The `ingress-denied` pod may leave its own node; the listener's ingress allow
-# list is what refuses it. Stage 2 starts its two controls together, after the denied pods are
-# done: the recovering one retries for RECOVER_SECONDS before its first reply, the other must
-# get it at once.
+# be up. Stage 1: the control starts (the listener is up) and reaches the listener every second
+# for a fixed time; the denied pods then start. Each proves its own network from inside (the
+# allowed port answers on every tick) and exits 0 only on a held refusal. The `ingress-denied` pod
+# may leave its own node; the listener's ingress allow list is what refuses it. The runner decides
+# from the pods' status: every denied pod and the control ended with exit code 0, and the control
+# ended last. Stage 2 starts its two controls together, after the denied pods are done: the
+# recovering one retries for RECOVER_SECONDS before its first reply, the other must get it at once.
 DENIED_ROLES = ["denied", "ingress-denied"]
 CONTROL_ROLE = "control"
 PODS_OF_THE_RUN = ["listener", CONTROL_ROLE, *DENIED_ROLES, "control-after", "ingress-control-after"]
 AFTER_ROLES = [("control-after", 0), ("ingress-control-after", RECOVER_SECONDS)]
 
 
-def run_stages(start_client, wait_client, wait_running):
-    """`start_client(role, **settings)` creates a pod; `wait_running(role)` returns it Running."""
+def _time(text):
+    import datetime
+    return datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def finished(role, pod):
+    """The (startedAt, finishedAt) of a pod whose probe container ended with exit code 0."""
+    statuses = pod.get("status", {}).get("containerStatuses", [])
+    terminated = (statuses[0].get("state", {}).get("terminated") if statuses else None) or {}
+    if not terminated:
+        raise RuntimeError(f"{role} pod had not finished")
+    if terminated.get("exitCode") != 0:
+        raise RuntimeError(f"{role} pod ended with exit code {terminated.get('exitCode')}: "
+                           + (terminated.get("message") or terminated.get("reason") or "no message")[:512])
+    if not terminated.get("startedAt") or not terminated.get("finishedAt"):
+        raise RuntimeError(f"{role} pod's status has no start or finish time")
+    return _time(terminated["startedAt"]), _time(terminated["finishedAt"])
+
+
+def check_run(control, denied):
+    """Pass only if the control and every denied pod ended with exit code 0 and the control ran
+    the whole time the denied pods did: it started no later and finished no earlier than each."""
+    control_start, control_end = finished(CONTROL_ROLE, control)
+    for role, pod in denied.items():
+        start, end = finished(role, pod)
+        if control_end < end:
+            raise RuntimeError(f"the control finished before the {role} pod: the listener was not "
+                               "shown to be up for the whole run")
+        if control_start > start:
+            raise RuntimeError(f"the control started after the {role} pod: the listener was not "
+                               "shown to be up for the whole run")
+
+
+def run_stages(start_client, wait_client, wait_running, now=time.monotonic):
+    """`start_client(role, **settings)` creates a pod; `wait_running(role)` returns it Running;
+    `wait_client(role, bound=None, unfinished=None)` returns it Succeeded, failing at once if it
+    fails, or after `bound` seconds with the message `unfinished`."""
+    start_client(CONTROL_ROLE, CONTROL=True)
+    wait_running(CONTROL_ROLE)
+    began = now()
     for role in DENIED_ROLES:
         start_client(role, DENIED=True)
-    addresses = [pod_url(wait_running(role)["status"]["podIP"], DENIED_POD_PORT) for role in DENIED_ROLES]
-    start_client(CONTROL_ROLE, TARGETS=addresses)
-    for role in [CONTROL_ROLE, *DENIED_ROLES]:
-        wait_client(role)
+    # The control ends CONTROL_RUN_SECONDS after it started; a denied pod that is not done by then
+    # has not shown anything. Name it.
+    denied = {}
+    for role in DENIED_ROLES:
+        denied[role] = wait_client(
+            role, bound=max(1, CONTROL_RUN_SECONDS - (now() - began)),
+            unfinished=f"the {role} pod did not finish before the control did: "
+                       "no refusal was shown to hold")
+    control = wait_client(CONTROL_ROLE)
+    check_run(control, denied)
     for role, recover in AFTER_ROLES:
         start_client(role, RECOVER=recover)
     for role, _ in AFTER_ROLES:
@@ -375,7 +389,7 @@ def replace_object(request, path, resource, deadline, now=time.monotonic, sleep=
 
 def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hint,
                  now=time.monotonic, sleep=time.sleep, out=print, created_at=None,
-                 cause_bound=PENDING_CAUSE_BOUND_SECONDS):
+                 cause_bound=PENDING_CAUSE_BOUND_SECONDS, unfinished=None):
     """Wait for a pod to satisfy `predicate`, recreating it once if the runtime failed to start it.
 
     `created_at` is the time the pod was created (same clock as `now`). Pods of a stage are
@@ -416,6 +430,8 @@ def wait_for_pod(request, pods, prefix, role, predicate, deadline, recreate, hin
     cause = pending_cause(current, float("inf"))
     if cause:
         raise RuntimeError(f"{role} pod never ran before the probe's deadline, so NetworkPolicy was not tested: {cause}")
+    if unfinished:
+        raise RuntimeError(unfinished)
     raise RuntimeError(f"{role} probe deadline: refusing unproven NetworkPolicy enforcement. " + hint)
 
 
@@ -548,7 +564,7 @@ def main():
                 **({"imagePullSecrets": pull_secrets} if pull_secrets else {}),
                 "containers": [{"name": "probe", "image": image,
                     "command": ["python3", "-B", "-c", code],
-                    "terminationMessagePolicy": "FallbackToLogsOnError",
+                    "terminationMessagePolicy": "File",
                     "securityContext": {"allowPrivilegeEscalation": False,
                                         "readOnlyRootFilesystem": True,
                                         "capabilities": {"drop": ["ALL"]}},
@@ -557,11 +573,12 @@ def main():
             },
         }
 
-    def wait(role, predicate):
-        bound = PENDING_CAUSE_BOUND_SECONDS if role == "listener" else FOLLOWER_PENDING_CAUSE_BOUND_SECONDS
-        return wait_for_pod(request, pods, prefix, role, predicate, deadline,
+    def wait(role, predicate, bound=None, unfinished=None):
+        cause_bound = PENDING_CAUSE_BOUND_SECONDS if role == "listener" else FOLLOWER_PENDING_CAUSE_BOUND_SECONDS
+        until = deadline if bound is None else min(deadline, time.monotonic() + bound)
+        return wait_for_pod(request, pods, prefix, role, predicate, until,
                             recreate, FIX_HINT, created_at=created_at.get(prefix + "-" + role),
-                            cause_bound=bound)
+                            cause_bound=cause_bound, unfinished=unfinished)
 
     # Pod and NetworkPolicy creation are confined by admission policies for this account.
     # Refuse to run unless each one rejects a request it must reject, with its own message.
@@ -622,7 +639,8 @@ def main():
 
         run_stages(
             start,
-            lambda role: wait(role, lambda p: p.get("status", {}).get("phase") == "Succeeded"),
+            lambda role, bound=None, unfinished=None: wait(
+                role, lambda p: p.get("status", {}).get("phase") == "Succeeded", bound, unfinished),
             lambda role: wait(role, lambda p: p.get("status", {}).get("phase") == "Running"
                               and bool(p["status"].get("podIP"))),
         )

@@ -16,56 +16,35 @@ class Budget(unittest.TestCase):
         start = probe.POD_START_SECONDS
         total = (probe.API_READY_SECONDS + probe.ADMISSION_SECONDS
                  + probe.PENDING_CAUSE_BOUND_SECONDS                       # listener (a node may be provisioned)
-                 + start + start + probe.CONTROL_RUN_SECONDS + probe.LINGER_SECONDS  # stage 1
+                 + start + probe.CONTROL_RUN_SECONDS                       # stage 1
                  + start + probe.RECOVER_RUN_SECONDS                       # stage 2
                  + probe.START_BOUND_SECONDS + start                       # one recreate
                  + probe.CLEANUP_SECONDS)
         self.assertEqual(probe.SCRIPT_BUDGET_SECONDS, total)
+        self.assertEqual(total, 60 + 30 + 210 + (35 + 147) + (35 + 33) + (45 + 35) + 10)
         self.assertEqual(probe.STAGE_ONE_SECONDS + probe.STAGE_TWO_SECONDS,
                          total - probe.API_READY_SECONDS - probe.ADMISSION_SECONDS
                          - probe.PENDING_CAUSE_BOUND_SECONDS
                          - probe.START_BOUND_SECONDS - start - probe.CLEANUP_SECONDS)
 
-    def test_the_control_outlasts_the_longest_denied_pod(self):
-        # A denied pod is served at most SERVE_WAIT after the control starts, then counts for a
-        # window and a hold; the control must still be probing the listener until it is done.
-        self.assertGreater(
-            probe.CONTROL_RUN_SECONDS,
-            probe.SERVE_WAIT_SECONDS + probe.ENFORCEMENT_WINDOW_SECONDS + probe.HOLD_SECONDS)
-
     def test_the_control_outlasts_the_denied_pods_worst_case_with_margin(self):
-        # 20 serve wait + 45 window + 10 hold + two denied ticks of 7 s = 89; the control reads
-        # "done" one tick (10 s) later; 20 s margin.
-        self.assertEqual(probe.DENIED_WORST_CASE_SECONDS, 20 + 45 + 10 + 2 * 7)
-        self.assertEqual(probe.CONTROL_RUN_SECONDS, 89 + 10 + 20)
+        # A denied pod starts (35 s) after the control, waits up to 20 s for its first answer on the
+        # allowed port (that request: 3 s), counts for a window (45 s) and a hold (10 s), each
+        # overrunning by one tick of 7 s: 35 + 23 + 45 + 10 + 14 = 127; margin 20 = 147.
+        self.assertEqual(probe.DENIED_WORST_CASE_SECONDS, 20 + 3 + 45 + 10 + 2 * 7)
+        self.assertEqual(probe.CONTROL_RUN_SECONDS, 35 + 92 + 20)
         self.assertGreaterEqual(
             probe.CONTROL_RUN_SECONDS,
-            probe.DENIED_WORST_CASE_SECONDS + probe.CONTROL_TICK_SECONDS + 20)
+            probe.POD_START_SECONDS + probe.DENIED_WORST_CASE_SECONDS + probe.CONTROL_RUN_MARGIN_SECONDS)
 
-    def test_a_control_that_cannot_be_scheduled_is_named_before_the_denied_pods_give_up(self):
-        # The second denied pod starts (35 s) before the control is created; the denied pods then
-        # wait DENIED_SERVED_WAIT_SECONDS. The runner's verdict on the control comes first, with margin.
-        self.assertLess(probe.FOLLOWER_PENDING_CAUSE_BOUND_SECONDS + probe.POD_START_SECONDS + 20,
-                        probe.DENIED_SERVED_WAIT_SECONDS)
+    def test_a_control_that_cannot_be_scheduled_is_named_by_the_runner(self):
+        # A pod after the listener that stays Pending fails naming its cause well before the
+        # control's run is over.
+        self.assertLess(probe.FOLLOWER_PENDING_CAUSE_BOUND_SECONDS, probe.CONTROL_RUN_SECONDS)
         self.assertLessEqual(probe.FOLLOWER_PENDING_CAUSE_BOUND_SECONDS, probe.PENDING_CAUSE_BOUND_SECONDS)
 
-    def test_a_denied_pod_waits_long_enough_for_the_control_to_start_and_reach_it(self):
-        self.assertGreaterEqual(
-            probe.DENIED_SERVED_WAIT_SECONDS, probe.POD_START_SECONDS + probe.SERVE_WAIT_SECONDS)
-
-    def test_a_denied_pod_waits_through_the_start_and_one_recreate_of_the_control(self):
-        # The other denied pod's start, the control's start, one recreate of the control, and the
-        # control's first request: a retry the run budgets for must not fail the denied pod.
-        start = probe.POD_START_SECONDS
-        self.assertGreaterEqual(
-            probe.DENIED_SERVED_WAIT_SECONDS,
-            start + start + probe.START_BOUND_SECONDS + start + probe.SERVE_WAIT_SECONDS)
-
     def test_a_denied_pod_fits_its_own_pod_deadline(self):
-        self.assertGreater(
-            probe.POD_DEADLINE_SECONDS,
-            probe.DENIED_SERVED_WAIT_SECONDS + probe.ENFORCEMENT_WINDOW_SECONDS
-            + probe.HOLD_SECONDS + probe.LINGER_SECONDS)
+        self.assertGreater(probe.POD_DEADLINE_SECONDS, probe.CONTROL_RUN_SECONDS)
 
     def test_the_install_instructions_wait_as_long_as_this_test_assumes(self):
         generator = (RUST.parent.parent / "generator.rs").read_text()

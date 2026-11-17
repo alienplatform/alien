@@ -1898,36 +1898,34 @@ fn the_probe_runs_in_the_sandbox_namespace_with_the_narrowest_grant() {
     assert!(probe_objects(&documents, "ClusterRole").is_empty());
 }
 
-/// The denied pods serve the control, so under default-deny networking they admit ingress from
-/// the control alone, and only the control gains egress to them.
+/// A denied pod proves its own network from inside, by reaching the listener's allowed port; no
+/// pod reaches it, and no policy other than the deny-all one gives it more than that port.
 #[test]
-fn only_the_control_reaches_the_denied_pods() {
+fn the_denied_pods_are_not_reached_by_any_pod() {
     let documents = probe_documents("");
-    let policy = |suffix: &str| {
-        probe_objects(&documents, "NetworkPolicy")
-            .into_iter()
-            .find(|policy| policy["metadata"]["name"].as_str().unwrap().ends_with(suffix))
-            .unwrap_or_else(|| panic!("{suffix}"))
-            .clone()
-    };
-    let ingress = policy("-denied-ingress");
-    assert_eq!(ingress["spec"]["policyTypes"], serde_yaml::from_str::<serde_yaml::Value>("[Ingress]").unwrap());
-    assert_eq!(
-        ingress["spec"]["ingress"][0]["from"][0]["podSelector"]["matchLabels"]["alien.dev/cni-role"],
-        "control"
-    );
-    let control = policy("-control");
-    assert_eq!(control["spec"]["policyTypes"], serde_yaml::from_str::<serde_yaml::Value>("[Egress]").unwrap());
-    assert_eq!(control["spec"]["podSelector"]["matchLabels"]["alien.dev/cni-role"], "control");
-    // No policy other than the deny-all one gives the denied pods any egress.
-    for other in probe_objects(&documents, "NetworkPolicy") {
-        let selects_denied = other["spec"]["podSelector"]["matchExpressions"]
-            .as_sequence()
-            .is_some_and(|expressions| {
-                expressions.iter().any(|e| e["operator"] == "In" && e["values"].as_sequence().is_some_and(|v| v.iter().any(|x| x == "denied")))
-            });
+    let names: Vec<String> = probe_objects(&documents, "NetworkPolicy")
+        .iter()
+        .map(|policy| policy["metadata"]["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(!names.iter().any(|name| name.ends_with("-denied-ingress") || name.ends_with("-control")), "{names:?}");
+    // No policy selecting a denied pod admits ingress, and its egress is the allowed port only.
+    for policy in probe_objects(&documents, "NetworkPolicy") {
+        let name = policy["metadata"]["name"].as_str().unwrap();
+        let selects_denied = policy["spec"]["podSelector"]["matchLabels"]["alien.dev/cni-role"] == "denied";
         if selects_denied {
-            assert_eq!(other["spec"]["policyTypes"], serde_yaml::from_str::<serde_yaml::Value>("[Ingress]").unwrap());
+            assert_eq!(
+                policy["spec"]["policyTypes"],
+                serde_yaml::from_str::<serde_yaml::Value>("[Egress]").unwrap(),
+                "{name}"
+            );
+            let ports: Vec<_> = policy["spec"]["egress"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .flat_map(|rule| rule["ports"].as_sequence().unwrap().iter())
+                .map(|port| port["port"].as_u64().unwrap())
+                .collect();
+            assert_eq!(ports, vec![8081], "{name}");
         }
     }
 }
