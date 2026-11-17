@@ -94,10 +94,14 @@ pub enum DevicesCommand {
     Remove {
         /// The device's name, as `alien devices list` shows it.
         name: String,
-        /// Keep none of what the device signed: refuse the releases and configs that are
-        /// current. By default they keep running, and the command prints each one.
-        #[arg(long)]
+        /// The device was leaked or stolen: keep none of what it signed, so protected
+        /// deployments refuse every release and config it signed.
+        #[arg(long, conflicts_with = "keep_running")]
         revoke: bool,
+        /// The device was only lost or retired: keep what is current on a channel or running
+        /// in a protected deployment, and print each one.
+        #[arg(long)]
+        keep_running: bool,
     },
     /// Trust GitHub Actions in a repository to sign releases
     AddCi {
@@ -116,10 +120,14 @@ pub enum DevicesCommand {
     Rotate {
         /// The key's name, as `alien devices list` shows it.
         name: String,
-        /// Keep none of what the old key signed: refuse the releases and configs that are
-        /// current. By default they keep running, and the command prints each one.
-        #[arg(long)]
+        /// The key leaked: keep none of what it signed, so protected deployments refuse
+        /// every release and config it signed. Use this after a leak.
+        #[arg(long, conflicts_with = "keep_running")]
         revoke: bool,
+        /// The key was not leaked: keep what is current on a channel or running in a
+        /// protected deployment, and print each one.
+        #[arg(long)]
+        keep_running: bool,
         /// For a key made by `add-key`: write the new key to this file (mode 0600) instead of printing it.
         #[arg(long)]
         out: Option<PathBuf>,
@@ -631,11 +639,26 @@ pub async fn devices_task(args: DevicesArgs, ctx: ExecutionMode) -> Result<()> {
     match args.command.unwrap_or(DevicesCommand::List) {
         DevicesCommand::Init { project } => init(&ctx, project.as_deref()).await,
         DevicesCommand::List => list(&ctx, args.json).await,
-        DevicesCommand::Remove { name, revoke } => remove(&ctx, &name, revoke).await,
+        DevicesCommand::Remove {
+            name,
+            revoke,
+            keep_running,
+        } => remove(&ctx, &name, intent(revoke, keep_running, "device")?).await,
         DevicesCommand::AddCi { repository } => add_ci(&ctx, &repository).await,
         DevicesCommand::AddKey { name, out } => add_key(&ctx, &name, out.as_deref()).await,
-        DevicesCommand::Rotate { name, revoke, out } => {
-            rotate(&ctx, &name, revoke, out.as_deref()).await
+        DevicesCommand::Rotate {
+            name,
+            revoke,
+            keep_running,
+            out,
+        } => {
+            rotate(
+                &ctx,
+                &name,
+                intent(revoke, keep_running, "key")?,
+                out.as_deref(),
+            )
+            .await
         }
         DevicesCommand::Recover => recover(&ctx).await,
     }
@@ -1033,6 +1056,56 @@ fn add_keeps(body: &mut SignerListBody, keeps: Vec<Keep>) -> Result<()> {
     Ok(())
 }
 
+/// Whether the admin says the key leaked: `true` keeps nothing it signed.
+///
+/// The control plane can only say what is current, and a thief with the key can make
+/// its own release current. So the admin states the intent: `--revoke` (leaked) or
+/// `--keep-running` (not leaked). With neither, a terminal is asked; without a terminal
+/// the command refuses.
+fn intent(revoke: bool, keep_running: bool, what: &str) -> Result<bool> {
+    let interactive = crate::output::can_prompt();
+    resolve_intent(revoke, keep_running, what, interactive, || {
+        use std::io::{BufRead, Write};
+        print!("Was this {what} leaked or lost? (leaked/no) ");
+        let _ = std::io::stdout().flush();
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line).ok();
+        line
+    })
+}
+
+fn resolve_intent(
+    revoke: bool,
+    keep_running: bool,
+    what: &str,
+    interactive: bool,
+    ask: impl FnOnce() -> String,
+) -> Result<bool> {
+    let invalid = |message: String| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "revoke".to_string(),
+            message,
+        })
+    };
+    match (revoke, keep_running) {
+        (true, true) => Err(invalid(
+            "Pass only one of --revoke and --keep-running".to_string(),
+        )),
+        (true, false) => Ok(true),
+        (false, true) => Ok(false),
+        (false, false) if !interactive => Err(invalid(format!(
+            "Say what happened to the {what}: pass --revoke if it leaked (keeps nothing it signed), or --keep-running if it did not (keeps what is current and prints it)"
+        ))),
+        (false, false) => match ask().trim().to_lowercase().as_str() {
+            "leaked" | "l" => Ok(true),
+            "no" | "n" => Ok(false),
+            other => Err(invalid(format!(
+                "Answer 'leaked' or 'no', not '{other}'. Nothing was changed."
+            ))),
+        },
+    }
+}
+
 /// Ask the control plane for what `signer`'s key signed that is current and print it.
 /// Returns what to keep: all of it, or none with `revoke`. Prints exactly what is kept.
 async fn keep_current(
@@ -1416,6 +1489,7 @@ fn revoke_target(
     channels: &[serde_json::Value],
     id: Option<&str>,
     sequence: Option<u64>,
+    force: bool,
 ) -> Result<Vec<SignedFacts>> {
     let refuse = |message: String| {
         AlienError::new(ErrorData::ValidationError {
@@ -1477,12 +1551,21 @@ fn revoke_target(
         .filter(|fact| sequences.contains(&fact.sequence))
         .find_map(|fact| fact.current_on.first().map(|channel| (fact, channel)))
     {
-        return Err(refuse(format!(
-            "The release signed as {} ({}) is current on {channel} (the control plane calls it {}). Promote another release first.",
-            fact.sequence,
-            signed_date(fact.sequence),
-            fact.called
-        )));
+        if force {
+            println!(
+                "Warning: the control plane says the release signed as {} ({}) is current on {channel} (it calls it {}). Revoking it anyway because of --force.",
+                fact.sequence,
+                signed_date(fact.sequence),
+                fact.called
+            );
+        } else {
+            return Err(refuse(format!(
+                "The release signed as {} ({}) is current on {channel} (the control plane calls it {}). Promote another release first, or pass --force to revoke it anyway (for example when the control plane itself is not trusted).",
+                fact.sequence,
+                signed_date(fact.sequence),
+                fact.called
+            )));
+        }
     }
     let mut all_named = named;
     for fact in all
@@ -1505,13 +1588,14 @@ pub async fn revoke_release(
     ctx: &ExecutionMode,
     id: Option<&str>,
     sequence: Option<u64>,
+    force: bool,
 ) -> Result<()> {
     let admin = admin(ctx).await?;
     let project = admin.chain.project().to_string();
     let query = api::project_query(ctx, &project).await?;
     let releases = all_items(ctx, "/v1/releases", &query).await?;
     let channels = all_items(ctx, "/v1/release-channels", &query).await?;
-    let target = revoke_target(&admin.chain, &releases, &channels, id, sequence)?;
+    let target = revoke_target(&admin.chain, &releases, &channels, id, sequence, force)?;
     let mut body = admin.chain.current().body.clone();
     let lines = revoke_lines(&target);
     let mut entries: Vec<String> = Vec::new();
@@ -2656,7 +2740,7 @@ mod tests {
             &[("aws", aws.clone()), ("gcp", gcp.clone())],
         )];
         for (id, sequence) in [(Some("rel_old"), None), (None, Some(1_700_000_000_000))] {
-            let target = revoke_target(&chain, &releases, &[], id, sequence).unwrap();
+            let target = revoke_target(&chain, &releases, &[], id, sequence, false).unwrap();
             assert_eq!(target.len(), 2);
             let lines = revoke_lines(&target).join("\n");
             assert!(
@@ -2680,7 +2764,7 @@ mod tests {
         let old = release_statement("aws", "production", 1_700_000_000_000, ("alice", 1));
         let live = release_statement("gcp", "production", 1_700_000_000_999, ("alice", 1));
         let mixed = vec![release_json("rel_old", &[], &[("aws", old), ("gcp", live)])];
-        let error = revoke_target(&chain, &mixed, &[], Some("rel_old"), None).unwrap_err();
+        let error = revoke_target(&chain, &mixed, &[], Some("rel_old"), None, false).unwrap_err();
         assert!(
             error.message.contains("not one signed release"),
             "{}",
@@ -2691,12 +2775,12 @@ mod tests {
         let a = release_statement("aws", "production", 5, ("alice", 1));
         let b = release_statement("gcp", "dev", 5, ("alice", 1));
         let mixed = vec![release_json("rel_x", &[], &[("aws", a), ("gcp", b)])];
-        assert!(revoke_target(&chain, &mixed, &[], Some("rel_x"), None).is_err());
+        assert!(revoke_target(&chain, &mixed, &[], Some("rel_x"), None, false).is_err());
 
         // A statement that is not signed by the list is an error, not a deny entry.
         let forged = release_statement("aws", "production", 6, ("alice", 2));
         let releases = vec![release_json("rel_f", &[], &[("aws", forged)])];
-        let error = revoke_target(&chain, &releases, &[], Some("rel_f"), None).unwrap_err();
+        let error = revoke_target(&chain, &releases, &[], Some("rel_f"), None, false).unwrap_err();
         assert!(
             error.message.contains("doesn't check out"),
             "{}",
@@ -2717,13 +2801,45 @@ mod tests {
         let channels =
             vec![serde_json::json!({"name": "production", "currentReleaseId": "rel_live"})];
         for (id, sequence) in [(Some("rel_old"), None), (None, Some(1_700_000_000_000))] {
-            let error = revoke_target(&chain, &releases, &channels, id, sequence).unwrap_err();
+            let error =
+                revoke_target(&chain, &releases, &channels, id, sequence, false).unwrap_err();
             assert!(
                 error.message.contains("current on production"),
                 "{}",
                 error.message
             );
         }
+    }
+
+    #[test]
+    fn force_revokes_a_release_the_control_plane_says_is_current() {
+        let chain = chain();
+        let one = release_statement("aws", "production", 1_700_000_000_000, ("alice", 1));
+        let releases = vec![release_json("rel_live", &[], &[("aws", one)])];
+        let channels =
+            vec![serde_json::json!({"name": "production", "currentReleaseId": "rel_live"})];
+        let refused =
+            revoke_target(&chain, &releases, &channels, Some("rel_live"), None, false).unwrap_err();
+        assert!(refused.message.contains("--force"), "{}", refused.message);
+        let target =
+            revoke_target(&chain, &releases, &channels, Some("rel_live"), None, true).unwrap();
+        assert_eq!(target.len(), 1);
+    }
+
+    #[test]
+    fn a_leaked_key_is_revoked_a_kept_one_is_not_and_nothing_given_is_asked_or_refused() {
+        let never = || -> String { panic!("must not ask") };
+        // Flags decide, with or without a terminal.
+        assert!(resolve_intent(true, false, "key", false, never).unwrap());
+        assert!(!resolve_intent(false, true, "key", false, never).unwrap());
+        assert!(resolve_intent(true, true, "key", true, never).is_err());
+        // No terminal and no flag: refuse, and say what to pass.
+        let error = resolve_intent(false, false, "key", false, never).unwrap_err();
+        assert!(error.message.contains("--revoke") && error.message.contains("--keep-running"));
+        // A terminal is asked.
+        assert!(resolve_intent(false, false, "key", true, || "leaked\n".into()).unwrap());
+        assert!(!resolve_intent(false, false, "key", true, || "no\n".into()).unwrap());
+        assert!(resolve_intent(false, false, "key", true, || "maybe\n".into()).is_err());
     }
 
     /// Revoking reads every release and deployment, so it follows the server's

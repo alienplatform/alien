@@ -890,11 +890,20 @@ async fn signing_from_first_release_to_recovery() {
     );
 
     // CI is not an admin: it can't approve or change the devices.
-    let output = failed(world.run_ci(&app, &ci_key, &["devices", "remove", bob_id]));
+    let output = failed(world.run_ci(
+        &app,
+        &ci_key,
+        &["devices", "remove", bob_id, "--keep-running"],
+    ));
     assert!(output.contains("This device"), "{output}");
 
     // Bob is removed; his device can no longer sign.
-    let output = ok(world.run_in_terminal(&alice, &app, &["devices", "remove", bob_id], &[]));
+    let output = ok(world.run_in_terminal(
+        &alice,
+        &app,
+        &["devices", "remove", bob_id, "--keep-running"],
+        &[],
+    ));
     assert!(
         output.contains(&format!("{bob_id} can no longer sign")),
         "{output}"
@@ -1247,6 +1256,7 @@ async fn rotating_a_key_keeps_what_runs_and_revoke_keeps_nothing() {
             "devices",
             "rotate",
             "ci",
+            "--keep-running",
             "--out",
             ci2_file.to_str().unwrap(),
         ],

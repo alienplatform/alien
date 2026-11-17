@@ -64,9 +64,9 @@ pub struct Ledger {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_list: Option<Entry>,
     /// Digests of the releases and configs the install accepted, oldest
-    /// first. One in this list keeps running after its signer leaves the
-    /// list, unless the deny-list names it. It is still checked against the
-    /// signer list version it was signed under.
+    /// first. This is history only: it does not let a statement of a removed
+    /// signer verify. That comes only from the `keep` entries of the current
+    /// signer list.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub accepted: Vec<String>,
 }

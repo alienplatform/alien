@@ -89,6 +89,9 @@ pub enum ReleasesCmd {
         /// release by what its statements sign instead of by the control plane's id.
         #[arg(long)]
         sequence: Option<u64>,
+        /// Revoke even when the control plane says the release is current on a channel.
+        #[arg(long)]
+        force: bool,
     },
     /// Delete a non-production release channel
     DeleteChannel {
@@ -196,9 +199,11 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
             }
             create_channel_task(&ctx, &name, project.as_deref(), release.as_deref(), json).await
         }
-        ReleasesCmd::Revoke { id, sequence } => {
-            crate::commands::signing::revoke_release(&ctx, id.as_deref(), sequence).await
-        }
+        ReleasesCmd::Revoke {
+            id,
+            sequence,
+            force,
+        } => crate::commands::signing::revoke_release(&ctx, id.as_deref(), sequence, force).await,
         ReleasesCmd::DeleteChannel { name, project } => {
             if !ctx.is_platform() {
                 let client = manager_client(&ctx, project.as_deref(), false).await?;
