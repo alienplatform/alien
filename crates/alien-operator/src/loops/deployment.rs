@@ -2679,8 +2679,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-            signed: None,
-            signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
         };
         db.set_deployment_state(&DeploymentState {
             status: DeploymentStatus::UpdatePending,
