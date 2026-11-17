@@ -66,7 +66,15 @@ static QUEUE_SPEC: StoreSpec = StoreSpec {
 #[derive(Debug)]
 pub struct LocalQueue {
     store: LocalStore,
+    /// Tests stop a dead-letter move at a chosen point, as a crash would.
+    #[cfg(test)]
+    fault: std::sync::atomic::AtomicU8,
 }
+
+#[cfg(test)]
+const FAIL_BEFORE_TARGET_INSERT: u8 = 1;
+#[cfg(test)]
+const FAIL_AFTER_TARGET_INSERT: u8 = 2;
 
 /// Build the standard queue operation error context.
 fn queue_error(operation: &str, reason: String) -> ErrorData {
@@ -121,6 +129,8 @@ impl LocalQueue {
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
         Ok(Self {
             store: LocalStore::open(data_dir, &QUEUE_SPEC, Sharing::MultiProcess).await?,
+            #[cfg(test)]
+            fault: Default::default(),
         })
     }
 
@@ -137,6 +147,8 @@ impl LocalQueue {
     pub async fn single_process(data_dir: PathBuf) -> Result<Self> {
         Ok(Self {
             store: LocalStore::open(data_dir, &QUEUE_SPEC, Sharing::SingleProcess).await?,
+            #[cfg(test)]
+            fault: Default::default(),
         })
     }
 
@@ -231,7 +243,24 @@ impl LocalQueue {
                     };
                     moving.push((id, payload_type, payload_data));
                 }
+                #[cfg(test)]
+                if self.fault.load(std::sync::atomic::Ordering::SeqCst) == FAIL_BEFORE_TARGET_INSERT
+                {
+                    return Err(AlienError::new(queue_error(
+                        "dead_letter",
+                        "injected failure before the target insert".to_string(),
+                    )));
+                }
+                // The target commits first: the source row is deleted only after this returns.
                 target.insert_raw(&moving).await?;
+                #[cfg(test)]
+                if self.fault.load(std::sync::atomic::Ordering::SeqCst) == FAIL_AFTER_TARGET_INSERT
+                {
+                    return Err(AlienError::new(queue_error(
+                        "dead_letter",
+                        "injected failure after the target insert".to_string(),
+                    )));
+                }
                 for (id, _, _) in &moving {
                     tx.execute("DELETE FROM messages WHERE id = ?1", (*id,))
                         .await
@@ -656,6 +685,55 @@ mod tests {
         (queue, temp_dir)
     }
 
+    /// The target is committed before the source row is deleted, so a failure at either point
+    /// leaves the message in the source and at most a duplicate in the target, never a loss.
+    #[tokio::test]
+    async fn a_failed_move_never_loses_the_message() {
+        use std::sync::atomic::Ordering;
+        let (source, _source_dir) = create_test_queue().await;
+        let (target, _target_dir) = create_test_queue().await;
+        source
+            .send("q", MessagePayload::Text("poison".into()))
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            source
+                .receive_inner(1, Duration::from_millis(0))
+                .await
+                .unwrap();
+        }
+
+        // Fails before anything is written: nothing moved, nothing duplicated.
+        source
+            .fault
+            .store(FAIL_BEFORE_TARGET_INSERT, Ordering::SeqCst);
+        source.move_dead_letters(&target, 3, 10).await.unwrap_err();
+        assert_eq!(source.stats().await.unwrap().total, 1);
+        assert_eq!(target.stats().await.unwrap().total, 0);
+
+        // Fails after the target committed, before the source delete: the message is in both.
+        source
+            .fault
+            .store(FAIL_AFTER_TARGET_INSERT, Ordering::SeqCst);
+        source.move_dead_letters(&target, 3, 10).await.unwrap_err();
+        assert_eq!(
+            source.stats().await.unwrap().total,
+            1,
+            "the source row survives"
+        );
+        assert_eq!(
+            target.stats().await.unwrap().total,
+            1,
+            "a duplicate, not a loss"
+        );
+
+        // The retry completes the move: one more copy in the target, none left in the source.
+        source.fault.store(0, Ordering::SeqCst);
+        assert_eq!(source.move_dead_letters(&target, 3, 10).await.unwrap(), 1);
+        assert_eq!(source.stats().await.unwrap().total, 0);
+        assert_eq!(target.stats().await.unwrap().total, 2);
+    }
+
     #[tokio::test]
     async fn exhausted_messages_move_to_the_target_with_their_payload() {
         let (source, _source_dir) = create_test_queue().await;
@@ -670,7 +748,10 @@ mod tests {
             .unwrap();
         // Fail "poison" three times: each delivery's lease expires at once.
         for _ in 0..3 {
-            let got = source.receive_inner(1, Duration::from_millis(0)).await.unwrap();
+            let got = source
+                .receive_inner(1, Duration::from_millis(0))
+                .await
+                .unwrap();
             assert_eq!(payload_text(&got[0]), "poison");
         }
 
