@@ -3984,6 +3984,74 @@ mod tests {
             assert!(!saved_text.contains("s3cret"), "{saved_text}");
         }
 
+        /// A failed update whose machine list is refreshed keeps the update's own error when a
+        /// held value changed after planning: the refresh does not start, and nothing is saved.
+        #[tokio::test]
+        async fn a_failed_update_keeps_its_error_when_a_held_value_cannot_be_loaded() {
+            alien_deployment::set_ephemeral_secrets_digest_key();
+            let fixture = Fixture::new(DeploymentStatus::UpdateFailed, transient_error()).await;
+            fixture
+                .credentials
+                .unavailable
+                .store(false, Ordering::SeqCst);
+            let original = serde_json::to_value(AlienError::new(GenericError {
+                message: "the update failed".to_string(),
+            }))
+            .unwrap();
+            fixture
+                .db
+                .execute(&format!(
+                    "UPDATE deployments SET error = '{}'",
+                    original.to_string().replace('\'', "''")
+                ))
+                .await
+                .unwrap();
+            let store = fixture
+                .manager
+                .values
+                .clone()
+                .expect("standalone value store");
+            let scope = crate::values::ValueScope::deployment(&fixture.id).unwrap();
+            let slot: crate::values::ValueSlot = "env:API_TOKEN".parse().unwrap();
+            let planned = store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "first".into(),
+                )
+                .await
+                .unwrap();
+            store
+                .put(
+                    &scope,
+                    &slot,
+                    crate::values::ValueKind::Secret,
+                    "second".into(),
+                )
+                .await
+                .unwrap();
+            let config = config_naming_slots(vec![alien_core::ValueSlotRef {
+                slot: "env:API_TOKEN".to_string(),
+                kind: alien_core::EnvironmentVariableType::Secret,
+                digest: planned.digest,
+                env_name: None,
+                targets: None,
+            }]);
+            let before = fixture.record().await;
+
+            fixture
+                .process_with(&fixture.runner(), |record| {
+                    record.deployment_config = Some(config)
+                })
+                .await;
+
+            let after = fixture.record().await;
+            assert_eq!(after.status, "update-failed");
+            assert_eq!(after.error, Some(original));
+            assert_eq!(after.updated_at, before.updated_at);
+        }
+
         /// A held value that still matches its digest does not stop the step.
         #[tokio::test]
         async fn a_held_value_that_matches_its_digest_does_not_stop_the_update() {
