@@ -1963,10 +1963,16 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 // compare.
                 match self.probe_agent(PAUSE, sandbox_id).await {
                     Ok(generation) => {
-                        last_probe_error = None;
-                        self.write_pause_marker(PAUSE, sandbox_id, generation)
-                            .await?;
-                        self.request_pause(sandbox_id).await?;
+                        // The marker write and the pause request can also wake or race a sandbox
+                        // another pause just paused, so their failures go the same way as a
+                        // failed probe.
+                        let step = async {
+                            self.write_pause_marker(PAUSE, sandbox_id, generation)
+                                .await?;
+                            self.request_pause(sandbox_id).await
+                        }
+                        .await;
+                        last_probe_error = step.err();
                     }
                     // A failed probe may be the wake of a sandbox another pause just paused. The
                     // end check below decides; it is not a result on its own.
