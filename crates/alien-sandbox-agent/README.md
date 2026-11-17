@@ -580,3 +580,68 @@ Egress `none` (`internetAccess: false`) blocks TCP to public addresses, the meta
 resolution, measured on the default network placement. The platform has no client token on create,
 so a retried create can leave an extra sandbox; `get_or_create` reuses a running sandbox with the
 same id.
+
+## Kubernetes: metadata credentials
+
+On Kubernetes the agent runs without capabilities and installs no packet redirect, so a
+NetworkPolicy is what shapes a command's network path. Whether the node's metadata address
+`169.254.169.254` is reachable depends on the cluster, so the agent does not require it to be
+silent. Instead, as the identity that runs commands, it checks that no cloud credentials or
+instance identity can be obtained.
+
+The check fails when anything other than a refusal comes back. These count as "nothing
+obtainable": no connection (refused, or a dropped connection, which is how a NetworkPolicy
+blocks traffic), and an HTTP 401, 403 or 404. Data, a redirect, a 429 or 5xx, an unparseable or
+cut-off reply, and a read timeout after the connection opened (the token request included) fail
+the check, and the agent log names the cloud and path.
+
+What is asked for:
+
+- `169.254.169.254`, AWS: an IMDSv2 token, then with and without it `iam/security-credentials/`,
+  `instance-id`, `user-data`, `iam/info`, the instance's own credentials under
+  `identity-credentials/ec2/`, and the signed identity document, `pkcs7` and `signature`.
+  A token with no data behind it is fine. The top-level `meta-data/` listing is read as a list:
+  only `placement/` and `services/` (what the EKS Auto Mode service serves to a pod) may appear;
+  any other entry fails the check.
+- `169.254.169.254`, GCP and Azure: the default service account token, the Azure instance
+  document and the Azure managed identity token. An Azure 400 "Identity not found" means the
+  node has no identity and passes; a 400 asking for a `client_id` means several identities exist
+  and fails the check. The GCP instance id is not asked for: GKE Workload Identity serves it to
+  every pod and it is not a credential.
+- Other addresses that hand out credentials, probed in parallel with the same rule: EKS Pod
+  Identity `169.254.170.23:80`, the ECS task credential endpoint `169.254.170.2:80`, the IPv6
+  EC2 metadata service `[fd00:ec2::254]:80`, the GKE metadata server `169.254.169.252:988` and
+  Azure's wire server `168.63.129.16:80`. Pod Identity answers a request without a token with a
+  400; that passes only while the command identity has no token to present. When
+  `AWS_CONTAINER_AUTHORIZATION_TOKEN`, the file named by
+  `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`, the default Pod Identity token file, or a mounted
+  service account token is readable, the check presents it, and credentials coming back fail the
+  check.
+
+The AWS-shaped requests also reach the metadata services of other clouds. A 400 or 405 reply
+that carries `Metadata-Flavor: Google`, or an Azure 400 "Required metadata header not specified",
+is read as "this is not an AWS service" for those requests only. It never excuses data: a 2xx
+with a body, a redirect or a server error fails whatever the headers say, and every probe is
+judged on its own reply. A request that could not be made for a local reason (out of file
+descriptors, an unsupported address family) fails the check; only a refused connection, a
+timeout and a missing route count as nothing answering. A reply has to start with `HTTP/` and has
+to be complete: exactly `Content-Length` bytes of body, a chunked body with its terminating chunk,
+or a clean end of stream. A read error, a stall or a short body after the headers fails the check,
+for every probe.
+
+This check has been exercised on EKS. GKE and AKS with gateway egress have not been run on a
+real cluster yet; their handling is covered by tests that use reply shapes from the providers'
+documentation.
+
+The sandbox NetworkPolicy allows and denies by IPv4 range and carries no IPv6 rule, so IPv6
+egress is denied by omission; the chart's tests pin that.
+
+The cluster has to keep pod access to node credentials closed: for AWS, IMDSv2 required and hop
+limit 1, with no instance profile credentials exposed to pods; for GKE, Workload Identity with no
+binding for the sandbox ServiceAccount; for AKS, no node-assigned identity the sandbox must not
+use.
+
+`alien-sandbox-agent check-metadata` runs the same check and exits non-zero naming what it found;
+run it under the command uid to verify a cluster. The check runs wherever the network is enforced
+outside the agent (`ALIEN_SANDBOX_NETWORK_ENFORCER=networkpolicy`); everywhere else (Local, the
+AWS guest) nothing may answer on `169.254.169.254` at all, whichever user the agent runs as.
