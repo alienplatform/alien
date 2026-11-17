@@ -86,6 +86,85 @@ app.post("/failed/drain", async c => {
   return c.json(drained)
 })
 
+/** The pull path: `pulled` has no trigger. */
+app.post("/pull/send", async c => {
+  const request = sendRequest.parse(await c.req.json())
+  const messages: Task[] = [
+    ...Array.from({ length: request.good }, (_, n) => ({
+      id: `${request.prefix}-good-${n}`,
+      poison: false,
+    })),
+    ...Array.from({ length: request.poison }, (_, n) => ({
+      id: `${request.prefix}-poison-${n}`,
+      poison: true,
+    })),
+  ]
+  const pulled = queue("pulled")
+  for (let start = 0; start < messages.length; start += 10) {
+    await pulled.sendBatch(messages.slice(start, start + 10))
+  }
+  return c.json({ sent: messages.length })
+})
+
+/** Receives from `pulled` once: acknowledges good messages, nacks (fails) the poison ones. */
+app.post("/pull/consume", async c => {
+  const pulled = queue("pulled")
+  const results = storage("results")
+  const messages = await pulled.receive(10)
+  const seen: { id: string; poison: boolean; attempt: number }[] = []
+  for (const message of messages) {
+    const task = taskSchema.parse(JSON.parse(message.payload))
+    seen.push({ id: task.id, poison: task.poison, attempt: message.attempt })
+    await results.put(
+      `pull-deliveries/${randomUUID()}.json`,
+      new TextEncoder().encode(
+        JSON.stringify({ id: task.id, poison: task.poison, attempt: message.attempt }),
+      ),
+    )
+    if (task.poison) await pulled.nack(message.receiptHandle)
+    else await pulled.ack(message.receiptHandle)
+  }
+  return c.json(seen)
+})
+
+app.get("/pull/deliveries", async c => {
+  const results = storage("results")
+  const records = await results.list("pull-deliveries/")
+  return c.json(
+    await Promise.all(
+      records.map(async record => {
+        const value = await results.get(record.location)
+        return JSON.parse(new TextDecoder().decode(value.data)) as unknown
+      }),
+    ),
+  )
+})
+
+app.post("/pull/failed/drain", async c => {
+  const failed = queue("pulled-failed")
+  const drained: { task: unknown; attempt: number }[] = []
+  for (;;) {
+    const messages = await failed.receive(10)
+    if (messages.length === 0) break
+    for (const message of messages) {
+      drained.push({
+        task: message.payloadType === "json" ? JSON.parse(message.payload) : message.payload,
+        attempt: message.attempt,
+      })
+    }
+    await failed.ackBatch(messages.map(message => message.receiptHandle))
+  }
+  return c.json(drained)
+})
+
+/** Reads `pulled` and gives every message back; shows what is left. */
+app.post("/pull/peek", async c => {
+  const pulled = queue("pulled")
+  const messages = await pulled.receive(10)
+  await Promise.all(messages.map(message => pulled.nack(message.receiptHandle)))
+  return c.json({ visible: messages.length })
+})
+
 /** Reads `tasks` with `receive` (the pull path) and gives every message back; shows what is left. */
 app.post("/tasks/peek", async c => {
   const tasks = queue("tasks")

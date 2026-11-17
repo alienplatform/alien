@@ -110,6 +110,7 @@ pub async fn check_without_dead_letter(
 pub async fn check_dead_letter(
     deployment: &TestDeployment,
     prefix: &str,
+    peek_tasks: bool,
 ) -> BTreeMap<String, usize> {
     let url = super::bindings::deployment_url(deployment).unwrap();
     let client = Client::builder()
@@ -180,19 +181,101 @@ pub async fn check_dead_letter(
     for n in 0..GOOD {
         assert!(counts[&format!("{prefix}-good-{n}")] >= 1);
     }
-    // `tasks` ends empty: nothing is left to receive.
-    sleep(Duration::from_secs(20)).await;
-    let left = json_request(&client, client.post(format!("{url}/tasks/peek"))).await;
-    assert_eq!(left["visible"], 0, "tasks must end empty: {left}");
     info!(?counts, "dead-letter delivery counts");
+    if peek_tasks {
+        // `tasks` ends empty: nothing is left to receive. (On GCP the queue's default pull
+        // subscription also holds a copy of every message for `receive` consumers, so the
+        // trigger path is judged by its deliveries instead.)
+        sleep(Duration::from_secs(20)).await;
+        let left = json_request(&client, client.post(format!("{url}/tasks/peek"))).await;
+        assert_eq!(left["visible"], 0, "tasks must end empty: {left}");
+    }
     counts
 }
 
-/// The dead-letter check, or the same run without the setting when `DLQ_E2E_NO_DEAD_LETTER=1`.
-pub async fn check(deployment: &TestDeployment, prefix: &str) -> BTreeMap<String, usize> {
+/// The pull path: `pulled` has no trigger; the Worker consumes it with `receive`, acknowledging
+/// good messages and failing (nacking) the poison ones. Each poison message must end in
+/// `pulled-failed` with its payload after about five deliveries, and `pulled` ends empty.
+pub async fn check_pull(deployment: &TestDeployment, prefix: &str) -> BTreeMap<String, u64> {
+    let url = super::bindings::deployment_url(deployment).unwrap();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .unwrap();
+    warm_up(&client, url).await;
+    let sent = json_request(
+        &client,
+        client
+            .post(format!("{url}/pull/send"))
+            .json(&json!({"good": GOOD, "poison": POISON, "prefix": prefix})),
+    )
+    .await;
+    assert_eq!(sent["sent"], GOOD + POISON);
+
+    let started = Instant::now();
+    let mut failed: BTreeMap<String, Value> = BTreeMap::new();
+    let mut attempts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut good_seen = BTreeSet::new();
+    while !(failed.len() == POISON && good_seen.len() == GOOD) {
+        assert!(
+            started.elapsed() < Duration::from_secs(30 * 60),
+            "the pull path did not finish: failed={failed:?} good_seen={}",
+            good_seen.len()
+        );
+        let seen = json_request(&client, client.post(format!("{url}/pull/consume"))).await;
+        for entry in seen.as_array().unwrap() {
+            let id = entry["id"].as_str().unwrap().to_string();
+            let attempt = entry["attempt"].as_u64().unwrap();
+            if entry["poison"].as_bool().unwrap() {
+                let highest = attempts.entry(id).or_default();
+                *highest = (*highest).max(attempt);
+            } else {
+                good_seen.insert(id);
+            }
+        }
+        let drained = json_request(&client, client.post(format!("{url}/pull/failed/drain"))).await;
+        for entry in drained.as_array().unwrap() {
+            let id = entry["task"]["id"].as_str().unwrap().to_string();
+            failed.insert(id, entry.clone());
+        }
+        if seen.as_array().unwrap().is_empty() {
+            sleep(Duration::from_secs(5)).await;
+        }
+    }
+    for n in 0..POISON {
+        let id = format!("{prefix}-poison-{n}");
+        let entry = failed
+            .get(&id)
+            .unwrap_or_else(|| panic!("{id} not dead-lettered"));
+        assert_eq!(
+            entry["task"],
+            json!({"id": id, "poison": true}),
+            "payload intact"
+        );
+        let highest = attempts[&id];
+        assert!(
+            (MAX_ATTEMPTS - 1..=MAX_ATTEMPTS + 1).contains(&highest),
+            "{id}: the last reported attempt was {highest}; about {MAX_ATTEMPTS} expected"
+        );
+    }
+    sleep(Duration::from_secs(10)).await;
+    let left = json_request(&client, client.post(format!("{url}/pull/peek"))).await;
+    assert_eq!(left["visible"], 0, "pulled must end empty: {left}");
+    info!(
+        ?attempts,
+        "pull path: highest attempt reported per poison message"
+    );
+    attempts
+}
+
+/// The dead-letter check on the trigger path and on the pull path, or the same run without the
+/// setting when `DLQ_E2E_NO_DEAD_LETTER=1`. `peek_tasks` is false where the trigger's queue also
+/// keeps a pull copy of every message (GCP).
+pub async fn check(deployment: &TestDeployment, prefix: &str, peek_tasks: bool) {
     if std::env::var("DLQ_E2E_NO_DEAD_LETTER").as_deref() == Ok("1") {
-        check_without_dead_letter(deployment, prefix).await
+        check_without_dead_letter(deployment, prefix).await;
     } else {
-        check_dead_letter(deployment, prefix).await
+        check_dead_letter(deployment, prefix, peek_tasks).await;
+        check_pull(deployment, prefix).await;
     }
 }

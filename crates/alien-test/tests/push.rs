@@ -343,7 +343,7 @@ e2e_test_context!(
 #[test_context(AwsQueueDeadLetter)]
 #[tokio::test]
 async fn push_aws_queue_dead_letter(ctx: &mut AwsQueueDeadLetter) {
-    common::queue_dead_letter::check(&ctx.ctx.deployment, "m").await;
+    common::queue_dead_letter::check(&ctx.ctx.deployment, "m", true).await;
 }
 
 e2e_test_context!(
@@ -356,7 +356,7 @@ e2e_test_context!(
 #[test_context(GcpQueueDeadLetter)]
 #[tokio::test]
 async fn push_gcp_queue_dead_letter(ctx: &mut GcpQueueDeadLetter) {
-    common::queue_dead_letter::check(&ctx.ctx.deployment, "m").await;
+    common::queue_dead_letter::check(&ctx.ctx.deployment, "m", false).await;
 }
 
 e2e_test_context!(
@@ -369,5 +369,5 @@ e2e_test_context!(
 #[test_context(AzureQueueDeadLetter)]
 #[tokio::test]
 async fn push_azure_queue_dead_letter(ctx: &mut AzureQueueDeadLetter) {
-    common::queue_dead_letter::check(&ctx.ctx.deployment, "m").await;
+    common::queue_dead_letter::check(&ctx.ctx.deployment, "m", true).await;
 }
