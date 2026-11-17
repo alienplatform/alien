@@ -151,6 +151,7 @@ use utoipa::OpenApi;
     AiOutputs,
     Queue,
     QueueOutputs,
+    QueueDeadLetter,
     Sandbox,
     SandboxOutputs,
     SandboxCode,
