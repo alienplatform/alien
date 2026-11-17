@@ -793,7 +793,13 @@ pub fn create_azure_http_error_with_context(
     };
 
     // Add the service-specific context to the HTTP error
-    http_error.context(service_context)
+    let mut error = http_error.context(service_context);
+    // A failed precondition (If-Match) is refused again for the same request; resending it
+    // cannot succeed. The caller has to read the resource again.
+    if status == StatusCode::PRECONDITION_FAILED {
+        error.retryable = false;
+    }
+    error
 }
 
 // -----------------------------------------------------------------------------

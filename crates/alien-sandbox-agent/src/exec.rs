@@ -44,6 +44,13 @@ pub struct ExecRequest {
     /// everything the command gets beyond `PATH` and the uid/gid/session-root contract.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Bytes of encoded reply each output stream may take, if the caller's transport limits one
+    /// reply (the GCP `:execute` proxy). Each kept frame is charged what it will cost on the
+    /// wire: its JSON, base64-encoded once more by the transport, so short lines cost their
+    /// framing and not only their data. Output past it is dropped and the result is marked
+    /// `truncated`, as with the agent's own cap. Older agents ignore the field.
+    #[serde(default)]
+    pub reply_budget: Option<usize>,
 }
 
 /// One frame of output, serialized as a line of NDJSON.
@@ -151,6 +158,7 @@ pub async fn stream(
         Duration::from_millis(request.timeout_ms),
         output_cap,
         sandbox_process::Framing::Lines,
+        request.reply_budget,
         frames,
         None::<fn()>,
     )
@@ -165,6 +173,7 @@ pub(crate) async fn pump(
     timeout: Duration,
     output_cap: usize,
     framing: sandbox_process::Framing,
+    reply_budget: Option<usize>,
     frames: mpsc::Sender<Frame>,
     exited: Option<impl FnOnce() + Send>,
 ) {
@@ -180,11 +189,15 @@ pub(crate) async fn pump(
     // command that prints nothing never produces a frame to fail on, so without `closed()` it
     // would run to its deadline for a receiver that is already gone.
     let forward = async move {
+        let mut budget = ReplyBudget::new(reply_budget);
         loop {
             tokio::select! {
                 frame = incoming.recv() => match frame {
                     Some(frame) => {
-                        if frames.send(Frame::from(frame)).await.is_err() {
+                        let Some(frame) = budget.admit(Frame::from(frame)) else {
+                            continue;
+                        };
+                        if frames.send(frame).await.is_err() {
                             break;
                         }
                     }
@@ -196,6 +209,60 @@ pub(crate) async fn pump(
     };
 
     tokio::join!(produce, forward);
+}
+
+/// What a frame costs in a reply: its JSON and the newline or comma that separates it, base64-
+/// encoded as the transport will encode it.
+pub fn frame_wire_cost(frame: &Frame) -> usize {
+    let json = serde_json::to_vec(frame).map_or(usize::MAX / 4, |bytes| bytes.len() + 1);
+    json.div_ceil(3).saturating_mul(4)
+}
+
+/// What one stream of a command's output may still add to a reply.
+///
+/// A frame is charged its JSON plus the newline or comma that separates it, base64-encoded as the
+/// transport will encode it. Both streams get the same allowance, so one cannot crowd out the
+/// other, and the terminal frame is never charged: it is small and must always arrive.
+struct ReplyBudget {
+    remaining: Option<[usize; 2]>,
+    /// Per stream: once a frame is dropped, every later one is, so what is kept is a clean prefix
+    /// and not a prefix with a smaller frame's data after a gap.
+    dropped: [bool; 2],
+}
+
+impl ReplyBudget {
+    fn new(per_stream: Option<usize>) -> Self {
+        Self {
+            remaining: per_stream.map(|bytes| [bytes, bytes]),
+            dropped: [false; 2],
+        }
+    }
+
+    /// The frame to forward, or `None` when it does not fit. An exit frame carries whether
+    /// anything was dropped.
+    fn admit(&mut self, frame: Frame) -> Option<Frame> {
+        let Some(remaining) = self.remaining.as_mut() else {
+            return Some(frame);
+        };
+        let stream = match &frame {
+            Frame::Stdout { .. } => 0,
+            Frame::Stderr { .. } => 1,
+            Frame::Exit { code, truncated } => {
+                return Some(Frame::Exit {
+                    code: *code,
+                    truncated: *truncated || self.dropped.iter().any(|d| *d),
+                });
+            }
+            Frame::Error { .. } => return Some(frame),
+        };
+        let cost = frame_wire_cost(&frame);
+        if self.dropped[stream] || cost > remaining[stream] {
+            self.dropped[stream] = true;
+            return None;
+        }
+        remaining[stream] -= cost;
+        Some(frame)
+    }
 }
 
 /// Validates a request and spawns its command under `identity`, or returns the frame that says
@@ -350,6 +417,7 @@ mod tests {
             timeout_ms,
             cwd: None,
             env: BTreeMap::new(),
+            reply_budget: None,
         }
     }
 
@@ -365,6 +433,42 @@ mod tests {
         }
         #[cfg(not(unix))]
         ExecIdentity { uid: 0, gid: 0 }
+    }
+
+    /// Once a frame does not fit, nothing later on that stream is kept, however small, so the kept
+    /// output is a clean prefix; the other stream keeps its own allowance.
+    #[test]
+    fn a_stream_stops_at_its_first_dropped_frame() {
+        let big = Frame::Stdout {
+            seq: 0,
+            data: "A".repeat(400),
+        };
+        let small = |seq| Frame::Stdout {
+            seq,
+            data: "A".to_string(),
+        };
+        let mut budget = ReplyBudget::new(Some(frame_wire_cost(&small(1)) * 2));
+        assert!(budget.admit(big).is_none());
+        assert!(
+            budget.admit(small(1)).is_none(),
+            "a gap must not be filled in"
+        );
+        assert!(budget
+            .admit(Frame::Stderr {
+                seq: 2,
+                data: "A".to_string()
+            })
+            .is_some());
+        assert!(matches!(
+            budget.admit(Frame::Exit {
+                code: 0,
+                truncated: false
+            }),
+            Some(Frame::Exit {
+                truncated: true,
+                ..
+            })
+        ));
     }
 
     fn terminal(frames: &[Frame]) -> &Frame {

@@ -3464,8 +3464,6 @@ impl StackExecutor {
                 .map(|entry| entry.publishes_binding_params())
                 .unwrap_or(false);
 
-            let was_refresh_failed = current_resource_state.status == ResourceStatus::RefreshFailed;
-            let kept_error = current_resource_state.error.clone();
             let mut next_state = next_state.with_updates(|state| {
                 state.status = next_status;
                 state.outputs = next_outputs;
@@ -3475,15 +3473,19 @@ impl StackExecutor {
                     None
                 };
                 state.retry_attempt = next_retry_attempt;
-                // A resource that stays in RefreshFailed has not recovered: its step did nothing,
-                // so the reason it failed stays on it until it leaves that state.
-                let still_failed_observation = was_refresh_failed
-                    && next_status == ResourceStatus::RefreshFailed
-                    && next_error.is_none();
-                state.error = if still_failed_observation {
-                    kept_error
-                } else {
-                    next_error
+                // Stepping a failed resource that stays failed does nothing and succeeds; that
+                // is not a reason to forget why it failed.
+                let stays_failed = next_status == current_resource_state.status
+                    && matches!(
+                        next_status,
+                        ResourceStatus::ProvisionFailed
+                            | ResourceStatus::UpdateFailed
+                            | ResourceStatus::DeleteFailed
+                            | ResourceStatus::RefreshFailed
+                    );
+                state.error = match next_error {
+                    None if stays_failed => current_resource_state.error.clone(),
+                    other => other,
                 };
             });
 
