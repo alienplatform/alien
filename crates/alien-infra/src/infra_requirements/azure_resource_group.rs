@@ -270,12 +270,14 @@ impl AzureResourceGroupController {
         let azure_config = ctx.get_azure_config()?;
         let config = ctx.desired_resource_config::<AzureResourceGroup>()?;
 
-        let group_name = self.resource_group_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message: "Resource group name not set in state".to_string(),
-            })
-        })?;
+        // Nothing was recorded: creation never ran or was refused (a group this deployment
+        // did not create), so there is nothing of ours to delete.
+        let Some(group_name) = self.resource_group_name.as_ref() else {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
 
         info!(group_name=%group_name, "Initiating Azure Resource Group deletion");
 
@@ -669,6 +671,22 @@ mod tests {
         controller.resource_group_name = Some("test-default-resource-group".to_string());
         let mut executor = executor(api, controller).await;
         executor.step().await.expect("retry goes on");
+    }
+
+    /// A refused create recorded nothing: destroy has nothing to delete and succeeds without
+    /// touching the group.
+    #[tokio::test]
+    async fn delete_after_a_refused_create_deletes_nothing() {
+        let mut api = MockResourcesApi::new();
+        api.expect_get_resource_group().times(0);
+        api.expect_delete_resource_group().times(0);
+        let mut executor = executor(api, AzureResourceGroupController::default()).await;
+        executor.delete().expect("delete starts");
+        executor.step().await.expect("delete step");
+        executor
+            .run_until_status(ResourceStatus::Deleted)
+            .await
+            .expect("deleted");
     }
 
     /// Destroy leaves a group tagged for another deployment, deletes an untagged one an older
