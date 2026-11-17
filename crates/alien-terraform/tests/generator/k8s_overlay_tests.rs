@@ -826,7 +826,7 @@ fn registered_kubernetes_module_destroys_the_retained_data_guard_first() {
             ResourceLifecycle::Frozen,
         )
         .build();
-    let registry = TfRegistry::built_in();
+    let registry = registry_without_database_emitters();
     let options = |helm_install| TerraformOptions {
         setup_identity: None,
         pins: alien_core::SetupPins::compiled_in(),
@@ -945,7 +945,7 @@ fn destroy_guard_is_the_only_change_between_old_and_new_registered_modules() {
             ResourceLifecycle::Frozen,
         )
         .build();
-    let registry = TfRegistry::built_in();
+    let registry = registry_without_database_emitters();
     let render = |destroy_guard: bool, product: bool| {
         let options = TerraformOptions {
             setup_identity: None,
@@ -1046,7 +1046,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
             ResourceLifecycle::Frozen,
         )
         .build();
-    let registry = TfRegistry::built_in();
+    let registry = registry_without_database_emitters();
     let module = generate_product_terraform_module(
         &stack,
         TerraformTarget::Eks,
@@ -1233,7 +1233,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
             ResourceLifecycle::Frozen,
         )
         .build();
-    let registry = TfRegistry::built_in();
+    let registry = registry_without_database_emitters();
     let module = generate_product_terraform_module(
         &stack,
         TerraformTarget::Gke,
@@ -1506,11 +1506,13 @@ fn eks_stack_with_databases() -> Stack {
 /// IMPORT_REGISTRATION_MISSING.
 #[test]
 fn eks_module_leaves_out_resources_the_installer_binds() {
-    let module = render(
+    let module = super::helpers::render_with_registry(
         &eks_stack_with_databases(),
         TerraformTarget::Eks,
         StackSettings::default(),
-    );
+        &registry_without_database_emitters(),
+    )
+    .expect("renders");
     let all = whole_module(&module);
     assert!(
         !all.contains("aws_rds") && !all.contains("aws_rds_cluster"),
@@ -1556,7 +1558,7 @@ fn a_registered_emitter_still_renders_its_resource() {
         }
     }
 
-    let mut registry = TfRegistry::built_in();
+    let mut registry = registry_without_database_emitters();
     registry.register("postgres", alien_core::Platform::Aws, Marker);
     let module = super::helpers::render_with_registry(
         &eks_stack_with_databases(),
@@ -1852,6 +1854,21 @@ impl TfEmitter for EmbedderDatabase {
     }
 }
 
+/// The built-in set minus the database and cache emitters: what a registry that leaves them to
+/// the installer looks like.
+fn registry_without_database_emitters() -> TfRegistry {
+    let mut registry = TfRegistry::built_in();
+    for platform in [
+        alien_core::Platform::Aws,
+        alien_core::Platform::Gcp,
+        alien_core::Platform::Azure,
+    ] {
+        registry.unregister(Postgres::RESOURCE_TYPE, platform);
+        registry.unregister(alien_core::Redis::RESOURCE_TYPE, platform);
+    }
+    registry
+}
+
 fn registry_with_database_emitters() -> TfRegistry {
     let mut registry = TfRegistry::built_in();
     for platform in [
@@ -1887,7 +1904,7 @@ async fn render_prepared_eks(source: Source) -> alien_terraform::ModuleFiles {
 
 /// [`render_prepared_eks`] for any Kubernetes target.
 async fn render_prepared(source: Source, target: TerraformTarget) -> alien_terraform::ModuleFiles {
-    render_prepared_in(source, target, &TfRegistry::built_in()).await
+    render_prepared_in(source, target, &registry_without_database_emitters()).await
 }
 
 /// [`render_prepared`] with a registry that has emitters for the databases and caches, as an
@@ -2196,7 +2213,7 @@ fn guard_depends_on(block_text: &str) -> Vec<String> {
 /// files) in its `depends_on`, so Terraform destroys the guard first.
 #[test]
 fn destroy_guard_is_destroyed_before_every_other_resource() {
-    let registry = TfRegistry::built_in();
+    let registry = registry_without_database_emitters();
     for (target, provider) in [
         (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
         (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
@@ -2856,7 +2873,7 @@ async fn rendering_for_an_existing_cluster_refuses_what_it_could_not_reach() {
             &stack,
             target,
             existing_cluster_settings(None),
-            &TfRegistry::built_in(),
+            &registry_without_database_emitters(),
         )
         .expect("an installer-bound database is not refused");
     }

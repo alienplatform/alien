@@ -445,7 +445,8 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
         )
         .build();
 
-    let registry = CfRegistry::built_in();
+    let mut registry = CfRegistry::built_in();
+    registry.unregister("compute-cluster", alien_core::Platform::Aws);
     let err = generate_cloudformation_template(
         &stack,
         alien_cloudformation::CloudFormationOptions {
@@ -462,7 +463,7 @@ fn aws_container_cluster_without_platform_extension_errors_cleanly() {
             management_trust: Default::default(),
         },
     )
-    .expect_err("OSS registry should not register container_cluster");
+    .expect_err("no compute-cluster emitter is registered");
 
     match err.error.as_ref().expect("typed error") {
         ErrorData::ImportRegistrationMissing {

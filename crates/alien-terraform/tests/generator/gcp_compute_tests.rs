@@ -149,7 +149,8 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
         )
         .build();
 
-    let registry = TfRegistry::built_in();
+    let mut registry = TfRegistry::built_in();
+    registry.unregister("compute-cluster", alien_core::Platform::Gcp);
     let err = generate_terraform_module(
         &stack,
         TerraformTarget::Gcp,
@@ -164,7 +165,7 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
             supported_aws_regions: Vec::new(),
         },
     )
-    .expect_err("OSS registry should not register container_cluster");
+    .expect_err("no compute-cluster emitter is registered");
 
     match err.error.as_ref().expect("typed error") {
         ErrorData::ImportRegistrationMissing {

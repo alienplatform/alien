@@ -58,6 +58,20 @@ impl TfRegistry {
         self
     }
 
+    /// Remove the emitter for `(resource_type, platform)`, if any. Tests use it to
+    /// check what a registry without that emitter does.
+    pub fn unregister(
+        &mut self,
+        resource_type: impl Into<ResourceType>,
+        platform: Platform,
+    ) -> &mut Self {
+        self.emitters.remove(&Key {
+            resource_type: resource_type.into(),
+            platform,
+        });
+        self
+    }
+
     /// Look up an emitter. The generator returns a typed error if a registered
     /// resource has no emitter \u2014 see [`Self::require`].
     pub fn emitter(
