@@ -1541,6 +1541,7 @@ dependencies = [
  "alien-permissions",
  "alien-preflights",
  "alien-signing",
+ "alien-terraform",
  "hcl-rs",
  "indexmap 2.14.1",
  "insta",
