@@ -61,6 +61,19 @@ TF
 terraform -chdir="$minimum" init -backend=false -input=false >/dev/null
 cp -R "$minimum/.terraform/providers/." "$mirror/"
 
+# The Azure Postgres cloud-free validation test pins azurerm 4.81.0 exactly.
+azure_pin="$work/azure-pin"
+mkdir -p "$azure_pin"
+cat > "$azure_pin/main.tf" <<'TF'
+terraform {
+  required_providers {
+    azurerm = { source="hashicorp/azurerm", version="= 4.81.0" }
+  }
+}
+TF
+terraform -chdir="$azure_pin" init -backend=false -input=false >/dev/null
+cp -R "$azure_pin/.terraform/providers/." "$mirror/"
+
 # Route exactly the mirrored providers (host/namespace/type) to the mirror.
 providers="$(cd "$mirror" && find . -mindepth 3 -maxdepth 3 -type d | sed 's|^\./||' | sort)"
 list="$(printf '%s\n' "$providers" | awk 'NF { printf "%s\"%s\"", (n++ ? ", " : ""), $0 }')"
