@@ -662,19 +662,27 @@ pub async fn handle_updating(
                 .resources
                 .get(resource_id)
                 .filter(|state| state.status != ResourceStatus::Deleted);
+            // For an account the installed role is what the controller compares the target
+            // with, so its recorded definition decides: any difference from it is an IAM write
+            // on the workload role, which setup alone may make. The baseline can differ from
+            // the record (an earlier narrowing, captured metadata).
             let keep_installed = match target_stack.resources.get(resource_id) {
                 None => installed_state.is_some(),
-                Some(target) => {
-                    installed_state.is_some_and(|state| state.config == entry.config)
-                        && alien_preflights::compatibility::narrowing::service_account_narrowed(
-                            &target_stack,
-                            &entry.config,
-                            &target.config,
-                        )
-                }
+                Some(target) => installed_state.is_some_and(|state| {
+                    alien_preflights::compatibility::narrowing::service_account_narrowed(
+                        &target_stack,
+                        &state.config,
+                        &target.config,
+                    )
+                }),
             };
             if keep_installed {
                 let mut retained = entry.clone();
+                if let Some(state) = installed_state {
+                    if target_stack.resources.contains_key(resource_id) {
+                        retained.config = state.config.clone();
+                    }
+                }
                 if let Some(target) = target_stack.resources.get(resource_id) {
                     retained.display_name = target.display_name.clone();
                     retained.description = target.description.clone();
@@ -2146,7 +2154,7 @@ mod aws_handoff_tests {
 
     #[tokio::test]
     async fn repeated_setup_keeps_new_ordering_while_retaining_installed_grants() {
-        for narrow_grants in [false, true] {
+        for (narrow_grants, installed_broader) in [(false, false), (true, false), (true, true)] {
             let account = ServiceAccount::from_permission_profile(
                 "execution-sa".into(),
                 &PermissionProfile::new().resource("objects", ["storage/data-read"]),
@@ -2201,6 +2209,20 @@ mod aws_handoff_tests {
                     Vec::new(),
                 );
                 resource.status = ResourceStatus::Running;
+                if id == "execution-sa" && installed_broader {
+                    // The role holds more than the baseline records, as after an earlier narrowing.
+                    resource.config = Resource::new(
+                        ServiceAccount::from_permission_profile(
+                            "execution-sa".into(),
+                            &PermissionProfile::new().resource(
+                                "objects",
+                                ["storage/data-read", "storage/data-write"],
+                            ),
+                            |id| alien_permissions::get_permission_set(id).cloned(),
+                        )
+                        .unwrap(),
+                    );
+                }
                 if id == "execution-sa" {
                     resource.dependencies = target.resources[id].dependencies.clone();
                     let controller: AwsServiceAccountController = serde_json::from_value(serde_json::json!({
@@ -2262,6 +2284,7 @@ mod aws_handoff_tests {
                 prepared.resources["execution-sa"].dependencies,
                 vec![dependency]
             );
+            // The persisted baseline keeps what the role has installed.
             assert_eq!(prepared.resources["execution-sa"].config, before.config);
         }
     }

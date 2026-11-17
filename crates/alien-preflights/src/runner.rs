@@ -2068,6 +2068,93 @@ mod setup_update_authorization_tests {
         assert!(!error.message.contains("target:"), "{}", error.message);
     }
 
+    /// A release that only drops grants from a profile and its frozen identity runs without
+    /// setup. One that also gains a grant, or loses its whole profile, still waits for setup.
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn a_release_that_only_narrows_runs_and_one_that_also_adds_waits() {
+        let stack = |scopes: &[(&str, &[&str])]| {
+            let mut profile = alien_core::PermissionProfile::new();
+            for (scope, grants) in scopes {
+                profile = if *scope == "*" {
+                    profile.global(grants.iter().copied())
+                } else {
+                    profile.resource(*scope, grants.iter().copied())
+                };
+            }
+            let account = alien_core::ServiceAccount::from_permission_profile(
+                "api-sa".to_string(),
+                &profile,
+                |name| alien_permissions::get_permission_set(name).cloned(),
+            )
+            .unwrap();
+            let mut stack = Stack::new("stack".to_string())
+                .add(account, alien_core::ResourceLifecycle::Frozen)
+                .build();
+            stack.permissions.profiles.insert("api".to_string(), profile);
+            stack
+        };
+        let installed = stack(&[
+            ("*", &["storage/data-read"]),
+            ("secrets", &["storage/data-write"]),
+        ]);
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        let runner = PreflightRunner::with_registry(crate::PreflightRegistry::new());
+        let state = StackState::new(Platform::Aws);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+        let run = |target: Stack| {
+            let runner = &runner;
+            let config = &config;
+            let state = &state;
+            let client = &client;
+            let installed = &installed;
+            async move {
+                runner
+                    .run_deployment_time_preflights(
+                        target,
+                        state,
+                        config,
+                        client,
+                        Some(installed),
+                        None,
+                        None,
+                    )
+                    .await
+            }
+        };
+
+        let narrowed = stack(&[("*", &["storage/data-read"])]);
+        let (_, _, authorized) = run(narrowed).await.expect("only narrowing needs no setup");
+        assert!(!authorized);
+
+        let narrowed_and_added = stack(&[
+            ("*", &["storage/data-read"]),
+            ("workspaces", &["storage/data-read"]),
+        ]);
+        let error = run(narrowed_and_added)
+            .await
+            .expect_err("a release that also adds a grant needs setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+
+        let widened = stack(&[
+            ("*", &["storage/data-read", "storage/data-write"]),
+            ("secrets", &["storage/data-write"]),
+        ]);
+        let error = run(widened).await.expect_err("widening needs setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+    }
+
     #[cfg(feature = "runtime-checks")]
     #[tokio::test]
     async fn permission_updates_require_exact_setup_authority() {
