@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::copy_bidirectional;
+use tokio::io::{copy_bidirectional, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 /// The gateway replicas' proxy addresses, comma separated (`ip:port,ip:port`).
@@ -26,7 +26,8 @@ pub const ENV_PROXY_LISTEN: &str = "ALIEN_SANDBOX_PROXY_LISTEN";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 const PASSES: usize = 2;
 
-/// Failover is by TCP connect only, on purpose. A replica that is up but has not synchronized a
+/// Failover is by TCP connect, plus one replay of a CONNECT that got no answer byte (see `relay`).
+/// It does not retry refusals, on purpose. A replica that is up but has not synchronized a
 /// grant yet (a restarted one, or one a new sandbox's grant has not reached) answers `407`/`403`
 /// and refuses, which is the fail-closed answer, never a wider one: both replicas enforce the same
 /// signed policy and a missing grant only ever denies. Retrying a refused CONNECT on the other
@@ -53,6 +54,11 @@ impl Replicas {
 
     /// Dials the preferred replica, then the others, for `PASSES` passes. Remembers the winner.
     pub async fn dial(&self) -> Option<TcpStream> {
+        self.dial_index().await.map(|(stream, _)| stream)
+    }
+
+    /// Like `dial`, with the winner's index so a caller can demote it.
+    async fn dial_index(&self) -> Option<(TcpStream, usize)> {
         let count = self.addresses.len();
         if count == 0 {
             return None;
@@ -68,7 +74,7 @@ impl Replicas {
                 .await;
                 if let Ok(Ok(stream)) = attempt {
                     self.preferred.store(index, Ordering::Relaxed);
-                    return Some(stream);
+                    return Some((stream, index));
                 }
             }
         }
@@ -76,11 +82,44 @@ impl Replicas {
     }
 }
 
+/// A replica that accepted the connection but closed or reset it before one response byte (it is
+/// stopping, or its proxy is not ready): the other replica goes first from now on.
+fn demote(replicas: &Replicas, index: usize) {
+    let count = replicas.addresses.len().max(1);
+    replicas
+        .preferred
+        .store((index + 1) % count, Ordering::Relaxed);
+}
+
 async fn relay(replicas: Arc<Replicas>, mut guest: TcpStream) {
-    let Some(mut gateway) = replicas.dial().await else {
-        return;
+    let mut head = vec![0u8; 8192];
+    let read = match guest.read(&mut head).await {
+        Ok(read) if read > 0 => read,
+        _ => return,
     };
-    let _ = copy_bidirectional(&mut guest, &mut gateway).await;
+    head.truncate(read);
+    // Only a CONNECT that got no answer byte is replayed: nothing was tunnelled, so the other
+    // replica sees the same request. Other requests (a plain proxied POST) are never replayed.
+    let attempts = if head.starts_with(b"CONNECT ") { 2 } else { 1 };
+    for _ in 0..attempts {
+        let Some((mut gateway, index)) = replicas.dial_index().await else {
+            return;
+        };
+        let mut answer = vec![0u8; 8192];
+        let first = match gateway.write_all(&head).await {
+            Ok(()) => gateway.read(&mut answer).await,
+            Err(error) => Err(error),
+        };
+        match first {
+            Ok(read) if read > 0 => {
+                if guest.write_all(&answer[..read]).await.is_ok() {
+                    let _ = copy_bidirectional(&mut guest, &mut gateway).await;
+                }
+                return;
+            }
+            _ => demote(&replicas, index),
+        }
+    }
 }
 
 /// Accept loop. Returns only if the listener fails.
@@ -198,14 +237,21 @@ mod tests {
         let good = echo_server().await;
         // 192.0.2.0/24 (TEST-NET-1) is never routed: the connect neither completes nor fails
         // quickly on a host with a default route, and the timeout moves on.
-        let got = through(vec!["192.0.2.1:3128".into(), good], Duration::from_millis(300)).await;
+        let got = through(
+            vec!["192.0.2.1:3128".into(), good],
+            Duration::from_millis(300),
+        )
+        .await;
         assert_eq!(got.as_deref(), Some(&b"hello"[..]));
     }
 
     #[tokio::test]
     async fn the_last_good_replica_is_tried_first_next_time() {
         let good = echo_server().await;
-        let replicas = Replicas::new(vec!["192.0.2.1:3128".into(), good], Duration::from_millis(300));
+        let replicas = Replicas::new(
+            vec!["192.0.2.1:3128".into(), good],
+            Duration::from_millis(300),
+        );
         assert!(replicas.dial().await.is_some());
         let started = std::time::Instant::now();
         assert!(replicas.dial().await.is_some());
@@ -213,6 +259,57 @@ mod tests {
             started.elapsed() < Duration::from_millis(250),
             "the second dial skipped the dead replica"
         );
+    }
+
+    /// Accepts, reads the request, and closes without a byte back.
+    async fn closing_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0u8; 64];
+                let _ = stream.read(&mut buffer).await;
+            }
+        });
+        address
+    }
+
+    async fn send(replicas: Vec<String>, request: &[u8]) -> usize {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local = listener.local_addr().unwrap();
+        tokio::spawn(serve(
+            listener,
+            Arc::new(Replicas::new(replicas, Duration::from_millis(300))),
+        ));
+        let mut client = TcpStream::connect(local).await.unwrap();
+        client.write_all(request).await.unwrap();
+        let mut buffer = [0u8; 64];
+        tokio::time::timeout(Duration::from_secs(5), client.read(&mut buffer))
+            .await
+            .unwrap()
+            .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn a_connect_closed_before_any_byte_goes_to_the_other_replica() {
+        let good = echo_server().await;
+        let got = send(
+            vec![closing_server().await, good],
+            b"CONNECT a:443 HTTP/1.1\r\n\r\n",
+        )
+        .await;
+        assert!(got > 0);
+    }
+
+    #[tokio::test]
+    async fn a_non_connect_request_is_not_replayed() {
+        let good = echo_server().await;
+        let got = send(
+            vec![closing_server().await, good],
+            b"POST http://a/ HTTP/1.1\r\n\r\n",
+        )
+        .await;
+        assert_eq!(got, 0);
     }
 
     #[tokio::test]
