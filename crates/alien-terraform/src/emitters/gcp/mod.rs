@@ -5,6 +5,10 @@
 //! (downcast, labels, IAM member binding, service-account email
 //! resolution) live in [`helpers`].
 
+pub(crate) mod cmek;
+pub mod compute_cluster;
+pub mod postgres;
+pub mod redis;
 pub mod agent_platform_engine;
 pub mod ai;
 pub mod artifact_registry;
@@ -40,3 +44,6 @@ pub use service_activation::GcpServiceActivationEmitter;
 pub use storage::GcpStorageEmitter;
 pub use vault::GcpVaultEmitter;
 pub use worker::GcpWorkerEmitter;
+pub use compute_cluster::GcpComputeClusterEmitter;
+pub use postgres::GcpPostgresEmitter;
+pub use redis::GcpRedisEmitter;

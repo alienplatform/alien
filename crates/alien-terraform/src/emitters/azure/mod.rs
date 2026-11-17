@@ -11,6 +11,10 @@
 //! Per-resource design notes cover storage-account naming convergence,
 //! cross-tenant federated-identity trust, and AKS overlay activation.
 
+pub(crate) mod cmek;
+pub mod compute_cluster;
+pub mod postgres;
+pub mod redis;
 pub mod ai;
 pub mod artifact_registry;
 pub mod build;
@@ -54,3 +58,6 @@ pub use storage::AzureStorageEmitter;
 pub use storage_account::AzureStorageAccountEmitter;
 pub use vault::AzureVaultEmitter;
 pub use worker::AzureWorkerEmitter;
+pub use compute_cluster::AzureComputeClusterEmitter;
+pub use postgres::AzurePostgresEmitter;
+pub use redis::AzureRedisEmitter;
