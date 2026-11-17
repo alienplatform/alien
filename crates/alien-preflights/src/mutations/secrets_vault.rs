@@ -3131,52 +3131,10 @@ mod tests {
     async fn dropping_a_deployer_secret_input_is_not_a_setup_change() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
             let (installed, updated, config) = prepared_with_and_without_the_input(platform).await;
-            let fz = FrozenResourcesUnchangedCheck { platform }
-                .check_with_config(&installed, &updated, &config, platform)
-                .await
-                .unwrap();
-            eprintln!("RESULT {platform:?} frozen errors: {:?}", fz.errors);
-            eprintln!(
-                "RESULT {platform:?} api-sa installed: {:?}",
-                installed.resources["api-sa"]
-                    .config
-                    .downcast_ref::<alien_core::ServiceAccount>()
-                    .map(|a| (
-                        a.stack_permission_sets
-                            .iter()
-                            .map(|s| s.id.clone())
-                            .collect::<Vec<_>>(),
-                        a.resource_permission_sets
-                            .iter()
-                            .map(|(k, v)| (
-                                k.clone(),
-                                v.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
-                            ))
-                            .collect::<Vec<_>>()
-                    ))
-            );
-            eprintln!(
-                "RESULT {platform:?} api-sa updated: {:?}",
-                updated.resources["api-sa"]
-                    .config
-                    .downcast_ref::<alien_core::ServiceAccount>()
-                    .map(|a| (
-                        a.stack_permission_sets
-                            .iter()
-                            .map(|s| s.id.clone())
-                            .collect::<Vec<_>>(),
-                        a.resource_permission_sets
-                            .iter()
-                            .map(|(k, v)| (
-                                k.clone(),
-                                v.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
-                            ))
-                            .collect::<Vec<_>>()
-                    ))
-            );
-            eprintln!(
-                "RESULT {platform:?} vault in updated: {}",
-                updated.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID)
+            // The installed vault stays in the target for the install, only its grant goes.
+            assert!(
+                updated.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID),
+                "{platform:?}"
             );
             for result in [
                 PermissionProfilesUnchangedCheck

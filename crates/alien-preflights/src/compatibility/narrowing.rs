@@ -27,11 +27,41 @@ pub fn profile_narrowed(old: &PermissionProfile, new: &PermissionProfile) -> boo
             !held(old) || held(new)
         });
     keeps_guards
+        && keeps_denies(old, new)
         && new.0.iter().all(|(scope, grants)| {
             old.0
                 .get(scope)
                 .is_some_and(|old_grants| grants.iter().all(|grant| grant_kept(old_grants, grant)))
         })
+}
+
+/// Whether an inline set holds a `Deny` entry.
+fn has_deny(set: &PermissionSet) -> bool {
+    serde_json::to_value(set).is_ok_and(|value| {
+        fn deny(value: &serde_json::Value) -> bool {
+            match value {
+                serde_json::Value::Object(map) => {
+                    map.get("effect").is_some_and(|e| e == "Deny") || map.values().any(deny)
+                }
+                serde_json::Value::Array(items) => items.iter().any(deny),
+                _ => false,
+            }
+        }
+        deny(&value)
+    })
+}
+
+/// Whether every inline set of `old` that denies something is still in `new`, unchanged and in
+/// the same scope. Dropping a denial widens access, even when the whole set goes.
+fn keeps_denies(old: &PermissionProfile, new: &PermissionProfile) -> bool {
+    old.0.iter().all(|(scope, grants)| {
+        grants.iter().all(|grant| match grant {
+            PermissionSetReference::Inline(set) if has_deny(set) => {
+                new.0.get(scope).is_some_and(|kept| kept.contains(grant))
+            }
+            _ => true,
+        })
+    })
 }
 
 /// Whether `grant` is one of `old_grants`, or an inline set that only lost resources.
@@ -147,20 +177,25 @@ fn spec_narrowed(old: &mut serde_json::Value, new: &mut serde_json::Value) -> bo
         o.remove("resources");
         n.remove("resources");
     }
-    // A GCP condition lists one alternative per resource, joined with `||`.
-    let terms = |spec: &Value| {
+    // A GCP condition lists one alternative per resource, joined with `||`. Only the generated
+    // form may shrink: a condition with a negation, a conjunction or grouping is judged only
+    // when it did not change, because removing a term from it can grant more.
+    let expression = |spec: &Value| {
         spec.pointer("/condition/expression")
             .and_then(Value::as_str)
-            .map(|expression| {
-                expression
-                    .split(" || ")
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
+            .map(str::to_string)
     };
-    if let (Some(old_terms), Some(new_terms)) = (terms(old), terms(new)) {
-        if !new_terms.iter().all(|term| old_terms.contains(term)) {
-            return false;
+    if let (Some(old_expression), Some(new_expression)) = (expression(old), expression(new)) {
+        if old_expression != new_expression {
+            let (Some(old_terms), Some(new_terms)) = (
+                generated_terms(&old_expression),
+                generated_terms(&new_expression),
+            ) else {
+                return false;
+            };
+            if !new_terms.iter().all(|term| old_terms.contains(term)) {
+                return false;
+            }
         }
         for spec in [old, new] {
             if let Some(condition) = spec
@@ -172,6 +207,25 @@ fn spec_narrowed(old: &mut serde_json::Value, new: &mut serde_json::Value) -> bo
         }
     }
     true
+}
+
+/// The alternatives of a condition in the generated form, `resource.name == "x"` or
+/// `resource.name.startsWith("x/")` joined with ` || `; `None` for anything else.
+fn generated_terms(expression: &str) -> Option<Vec<&str>> {
+    let quoted = |rest: &str| !rest.is_empty() && !rest.contains(['"', '!', '&', '(', ')', '|']);
+    expression
+        .split(" || ")
+        .map(|term| {
+            let name = term
+                .strip_prefix("resource.name == \"")
+                .and_then(|rest| rest.strip_suffix('"'))
+                .or_else(|| {
+                    term.strip_prefix("resource.name.startsWith(\"")
+                        .and_then(|rest| rest.strip_suffix("/\")"))
+                })?;
+            quoted(name).then_some(term)
+        })
+        .collect()
 }
 
 /// Whether the management permissions only lost grants. `Auto` derives its
@@ -214,6 +268,22 @@ pub fn service_account_narrowed(new_stack: &Stack, old: &Resource, new: &Resourc
     let kept = |old_sets: &[PermissionSet], set: &PermissionSet| {
         old_sets.iter().any(|old| permission_set_narrowed(old, set))
     };
+    // A set that denies something stays, unchanged.
+    let denies_kept = |old_sets: &[PermissionSet], new_sets: &[PermissionSet]| {
+        old_sets
+            .iter()
+            .all(|set| !has_deny(set) || new_sets.contains(set))
+    };
+    if !denies_kept(&old.stack_permission_sets, &new.stack_permission_sets)
+        || !old.resource_permission_sets.iter().all(|(resource, sets)| {
+            new.resource_permission_sets
+                .get(resource)
+                .is_some_and(|new_sets| denies_kept(sets, new_sets))
+                || !sets.iter().any(has_deny)
+        })
+    {
+        return false;
+    }
     new.stack_permission_sets
         .iter()
         .all(|set| kept(&old.stack_permission_sets, set))
@@ -300,6 +370,73 @@ mod tests {
         assert!(!permission_set_narrowed(
             &deny,
             &set("Deny", &["ssm:GetParameter"], &["a"])
+        ));
+    }
+
+    fn gcp_set(expression: &str) -> PermissionSet {
+        serde_json::from_value(serde_json::json!({
+            "id": "vault/example",
+            "description": "d",
+            "platforms": { "gcp": [{
+                "grant": { "predefinedRoles": ["roles/secretmanager.secretAccessor"] },
+                "binding": { "resource": {
+                    "scope": "projects/${projectName}",
+                    "condition": { "title": "t", "expression": expression }
+                } }
+            }] }
+        }))
+        .unwrap()
+    }
+
+    fn generated(names: &[&str]) -> String {
+        names
+            .iter()
+            .map(|n| format!("resource.name == \"{n}\" || resource.name.startsWith(\"{n}/\")"))
+            .collect::<Vec<_>>()
+            .join(" || ")
+    }
+
+    /// Only the generated condition form may shrink; removing a term from a negated condition
+    /// grants more.
+    #[test]
+    fn a_gcp_condition_narrows_only_in_the_generated_form() {
+        let old = gcp_set(&generated(&["a", "b", "c"]));
+        assert!(permission_set_narrowed(
+            &old,
+            &gcp_set(&generated(&["a", "c"]))
+        ));
+        assert!(!permission_set_narrowed(
+            &old,
+            &gcp_set(&generated(&["a", "d"]))
+        ));
+        let negated_old = gcp_set(
+            "!(resource.name == \"a\" || resource.name == \"b\" || resource.name == \"c\")",
+        );
+        let negated_new = gcp_set("!(resource.name == \"a\" || resource.name == \"c\")");
+        assert!(!permission_set_narrowed(&negated_old, &negated_new));
+        assert!(permission_set_narrowed(&negated_old, &negated_old));
+        let conjunction = gcp_set("resource.name == \"a\" && resource.type == \"x\"");
+        assert!(!permission_set_narrowed(
+            &gcp_set("resource.name == \"a\" && resource.type == \"x\" || resource.name == \"b\""),
+            &conjunction
+        ));
+    }
+
+    /// A profile that drops one of its own inline sets holding a `Deny` widens access.
+    #[test]
+    fn dropping_a_whole_inline_deny_set_is_not_narrowing() {
+        let allow = PermissionSetReference::Inline(set("Allow", &["ssm:GetParameter"], &["a"]));
+        let deny = PermissionSetReference::Inline(set("Deny", &["ssm:PutParameter"], &["a"]));
+        let old = PermissionProfile::new().resource("*", [allow.clone(), deny.clone()]);
+        assert!(profile_narrowed(&old, &old));
+        assert!(!profile_narrowed(
+            &old,
+            &PermissionProfile::new().resource("*", [allow.clone()])
+        ));
+        // Dropping an allow set is still narrowing.
+        assert!(profile_narrowed(
+            &old,
+            &PermissionProfile::new().resource("*", [deny])
         ));
     }
 }
