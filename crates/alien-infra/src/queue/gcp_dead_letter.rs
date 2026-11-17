@@ -76,6 +76,36 @@ pub(crate) async fn pubsub_service_agent(
     ))
 }
 
+/// Read-modify-write of one subscription policy with direct (non-verifier) writes: adds or removes
+/// only the Pub/Sub service agent's subscriber binding.
+pub(crate) async fn set_subscriber(
+    client: &dyn alien_gcp_clients::pubsub::PubSubApi,
+    resource_id: &str,
+    subscription: &str,
+    agent: &str,
+    enabled: bool,
+) -> Result<()> {
+    let mut policy = client
+        .get_subscription_iam_policy(subscription.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            resource_id: Some(resource_id.to_string()),
+            message: format!("Read the dead-letter subscriber policy of '{subscription}'"),
+        })?;
+    if set_role_member(&mut policy, SUBSCRIBER, agent, enabled) {
+        client
+            .set_subscription_iam_policy(subscription.to_string(), policy)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                resource_id: Some(resource_id.to_string()),
+                message: format!(
+                    "Change the Pub/Sub service agent's subscriber grant on '{subscription}'"
+                ),
+            })?;
+    }
+    Ok(())
+}
+
 /// Adds or removes `member` from `role`, preserving unrelated and conditional grants and the
 /// optimistic-concurrency etag. Returns whether the policy changed.
 pub(crate) fn set_role_member(
