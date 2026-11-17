@@ -38,15 +38,7 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
                 )
                 .with_egress(Some(bound.clone())),
             ),
-            Box::new(
-                GcpAgentPlatformSandbox::new(
-                    Arc::new(alien_gcp_clients::agent_platform::MockAgentPlatformApi::new()),
-                    "engine".to_string(),
-                    "template".to_string(),
-                    None,
-                )
-                .with_egress(Some(bound.clone())),
-            ),
+            // Google Cloud differs (it accepts `internet`); see its own test below.
             Box::new(AzureSandbox::new(
                 Arc::new(
                     alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi::new(),
@@ -137,6 +129,63 @@ async fn every_provider_refuses_requested_policy_without_a_gateway_before_io() {
                     code
                 );
             }
+        }
+    }
+}
+
+/// Google Cloud has no outbound allowlist: a runtime policy is refused at create and at
+/// `update_egress` with a message that says so, before any backend call (the mock has no
+/// expectations, so a call would panic).
+#[tokio::test]
+async fn gcp_names_the_missing_allowlist_for_every_runtime_policy() {
+    let gcp = GcpAgentPlatformSandbox::new(
+        Arc::new(alien_gcp_clients::agent_platform::MockAgentPlatformApi::new()),
+        "engine".to_string(),
+        "template".to_string(),
+        None,
+    )
+    .with_egress(Some(SandboxEgress::Internet));
+    // Without an `internet` declaration no runtime policy is accepted at all.
+    let undeclared = GcpAgentPlatformSandbox::new(
+        Arc::new(alien_gcp_clients::agent_platform::MockAgentPlatformApi::new()),
+        "engine".to_string(),
+        "template".to_string(),
+        None,
+    )
+    .with_egress(Some(SandboxEgress::Allow));
+    assert_eq!(
+        undeclared
+            .update_egress("existing", EgressPolicy::Internet)
+            .await
+            .unwrap_err()
+            .code,
+        "SANDBOX_EGRESS_REQUIRES_INTERNET"
+    );
+    // `internet` equals the declaration, so it is accepted (and no backend call is made).
+    gcp.update_egress("existing", EgressPolicy::Internet)
+        .await
+        .expect("internet equals the declaration");
+    for policy in [EgressPolicy::Allow {
+        allow: vec!["api.example.com".into()],
+    }] {
+        let request = CreateSandboxRequest {
+            sandbox_id: Some("existing".to_string()),
+            egress: Some(policy.clone()),
+            ..Default::default()
+        };
+        for error in [
+            gcp.create(request.clone()).await.unwrap_err(),
+            gcp.get_or_create(request).await.unwrap_err(),
+            gcp.update_egress("existing", policy).await.unwrap_err(),
+        ] {
+            assert!(
+                error
+                    .to_string()
+                    .contains("Google Cloud sandboxes have no outbound allowlist"),
+                "{error}"
+            );
+            assert!(!error.retryable);
+            assert_eq!(error.code, "SANDBOX_EGRESS_ALLOWLIST_UNSUPPORTED");
         }
     }
 }

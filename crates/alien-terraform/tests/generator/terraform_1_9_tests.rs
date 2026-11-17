@@ -203,7 +203,10 @@ async fn manager_expected_ids(
             alien_core::emits_package_scaffolding(
                 entry,
                 StackSettings::default().setup_management,
-                alien_core::Platform::Aws,
+                alien_core::SetupTarget::new(
+                    alien_core::Platform::Kubernetes,
+                    Some(alien_core::Platform::Aws),
+                ),
             )
         })
         .map(|(id, _)| id.to_string())

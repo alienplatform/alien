@@ -12,6 +12,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, ContextError};
 use k8s_openapi::api::core::v1::EnvVar;
+use std::collections::BTreeMap;
 
 use super::{egress, KubernetesSandboxController};
 
@@ -283,14 +284,13 @@ pub(super) async fn bootstrap_environment(
             format!("{}/{}", ctx.resource_prefix, sandbox.id),
         ),
     ];
-    // A root-boot pod has no NET_ADMIN, so the agent cannot install firewall rules inside it.
-    // NetworkPolicy and the gateway enforce the egress limit outside the pod.
-    if sandbox.image_user == Some(0) {
-        variables.push((
-            alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER,
-            "networkpolicy".into(),
-        ));
-    }
+    // No sandbox pod on Kubernetes has NET_ADMIN (root-boot or not), so the agent cannot install
+    // firewall rules inside it: NetworkPolicy and the gateway enforce the egress limit outside the
+    // pod, and the agent checks the command path accordingly.
+    variables.push((
+        alien_core::ENV_ALIEN_SANDBOX_NETWORK_ENFORCER,
+        "networkpolicy".into(),
+    ));
     let mut environment: Vec<EnvVar> = variables
         .into_iter()
         .map(|(name, value)| EnvVar {
@@ -418,6 +418,225 @@ async fn kube_api_environment(
     })
 }
 
+/// Name of the per-sandbox policy that admits the gateway Service address.
+pub(super) fn gateway_service_policy_name(sandbox_id: &str) -> String {
+    format!("alien-sbx-{sandbox_id}-gateway-service")
+}
+
+/// The one rule the chart cannot write: egress to the gateway Service's ClusterIP.
+///
+/// The chart's sandbox policy admits the gateway pods by label. A network plugin that filters
+/// before the Service address is translated to a pod (the EKS VPC CNI is one) drops traffic to
+/// the Service's ClusterIP, which is the only address a sandbox pod is given, so a session never
+/// reaches the gateway. The ClusterIP is not known when the chart renders (Argo CD renders
+/// without lookups), so the Operator, which reads the Service to hand the address to the pod,
+/// writes this policy: egress to `<ClusterIP>/32` on the proxy port 3128 only, for that
+/// sandbox's pods only. It widens nothing else, and goes with the sandbox.
+pub(super) fn gateway_service_policy(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+    namespace: &str,
+    gateway: std::net::Ipv4Addr,
+) -> k8s_openapi::api::networking::v1::NetworkPolicy {
+    use k8s_openapi::api::networking::v1::{
+        IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyPeer, NetworkPolicyPort,
+        NetworkPolicySpec,
+    };
+    use k8s_openapi::apimachinery::pkg::{
+        apis::meta::v1::{LabelSelector, ObjectMeta},
+        util::intstr::IntOrString,
+    };
+    NetworkPolicy {
+        metadata: ObjectMeta {
+            name: Some(gateway_service_policy_name(sandbox_id)),
+            namespace: Some(namespace.into()),
+            labels: Some(crate::core::kubernetes_cleanup_resource_labels(
+                ctx, sandbox_id,
+            )),
+            ..Default::default()
+        },
+        spec: Some(NetworkPolicySpec {
+            pod_selector: LabelSelector {
+                match_labels: Some(BTreeMap::from([(
+                    super::kubernetes_spec::LABEL_SANDBOX.to_string(),
+                    sandbox_id.to_string(),
+                )])),
+                ..Default::default()
+            },
+            policy_types: Some(vec!["Egress".into()]),
+            egress: Some(vec![NetworkPolicyEgressRule {
+                to: Some(vec![NetworkPolicyPeer {
+                    ip_block: Some(IPBlock {
+                        cidr: format!("{gateway}/32"),
+                        except: None,
+                    }),
+                    ..Default::default()
+                }]),
+                ports: Some(vec![NetworkPolicyPort {
+                    port: Some(IntOrString::Int(3128)),
+                    protocol: Some("TCP".into()),
+                    end_port: None,
+                }]),
+            }]),
+            ..Default::default()
+        }),
+    }
+}
+
+fn owned_by_deployment(
+    policy: &k8s_openapi::api::networking::v1::NetworkPolicy,
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+) -> bool {
+    let labels = policy.metadata.labels.as_ref();
+    crate::core::kubernetes_cleanup_resource_labels(ctx, sandbox_id)
+        .iter()
+        .all(|(key, value)| labels.and_then(|labels| labels.get(key)) == Some(value))
+}
+
+fn is_not_found(error: &AlienError<alien_client_core::ErrorData>) -> bool {
+    matches!(
+        error.error,
+        Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+    )
+}
+
+/// Writes (or corrects) the gateway Service policy for an internet sandbox. A policy by that name
+/// that this deployment does not own is refused, never overwritten.
+pub(super) async fn reconcile_gateway_service_policy(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+    gateway: std::net::Ipv4Addr,
+) -> Result<()> {
+    let client = ctx
+        .service_provider
+        .get_kubernetes_network_policy_client(ctx.get_kubernetes_config()?)
+        .await?;
+    let name = gateway_service_policy_name(&sandbox.id);
+    let mut desired = gateway_service_policy(ctx, &sandbox.id, namespace, gateway);
+    let failed = |message: &str| ErrorData::CloudPlatformError {
+        message: message.into(),
+        resource_id: Some(sandbox.id.clone()),
+    };
+    match client.get_network_policy(namespace, &name).await {
+        Ok(existing) => {
+            if !owned_by_deployment(&existing, ctx, &sandbox.id) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Refusing to change NetworkPolicy '{name}', which this deployment does not own"
+                    ),
+                    resource_id: Some(sandbox.id.clone()),
+                }));
+            }
+            if existing.spec == desired.spec {
+                return Ok(());
+            }
+            desired.metadata.resource_version = existing.metadata.resource_version;
+            client
+                .update_network_policy(namespace, &name, &desired)
+                .await
+                .map_err(|error| {
+                    error.context(failed("Failed to update the gateway Service NetworkPolicy"))
+                })?;
+        }
+        Err(error) if is_not_found(&error) => {
+            client
+                .create_network_policy(namespace, &desired)
+                .await
+                .map_err(|error| {
+                    error.context(failed("Failed to create the gateway Service NetworkPolicy"))
+                })?;
+        }
+        Err(error) => {
+            return Err(error.context(failed(
+                "Failed to inspect the gateway Service NetworkPolicy",
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Keeps the gateway Service policy in step with the sandbox's egress mode: written for an
+/// internet sandbox, and removed (when this deployment owns it) once the sandbox no longer uses
+/// the gateway, because the policy's selector would still match its pods. `gateway` is the
+/// address the pool pods were given, if any.
+pub(super) async fn sync_gateway_service_policy(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+    gateway: Option<std::net::Ipv4Addr>,
+) -> Result<()> {
+    match gateway {
+        Some(gateway) if sandbox.egress == SandboxEgress::Internet => {
+            reconcile_gateway_service_policy(ctx, sandbox, namespace, gateway).await
+        }
+        _ if sandbox.egress != SandboxEgress::Internet => {
+            release_gateway_service_policy(ctx, sandbox, namespace).await
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Removes the gateway Service policy when the sandbox goes away or stops using the gateway.
+///
+/// For an internet sandbox the policy is part of the install, so a failure is an error. A sandbox
+/// that never used the gateway usually has none; an install whose Role predates the
+/// NetworkPolicy verbs in a separate sandbox namespace answers Forbidden, and that must not stop
+/// such a sandbox's pool or its deletion, so the failure is only logged.
+pub(super) async fn release_gateway_service_policy(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox: &Sandbox,
+    namespace: &str,
+) -> Result<()> {
+    let result = delete_gateway_service_policy(ctx, &sandbox.id, namespace).await;
+    if sandbox.egress == SandboxEgress::Internet {
+        return result;
+    }
+    if let Err(error) = result {
+        tracing::warn!(
+            sandbox_id = %sandbox.id,
+            error = %error,
+            "Could not remove a gateway Service policy for a sandbox that does not use the gateway"
+        );
+    }
+    Ok(())
+}
+
+/// Removes the policy with its sandbox. Already gone is the desired end state; a policy this
+/// deployment does not own is left alone.
+pub(super) async fn delete_gateway_service_policy(
+    ctx: &ResourceControllerContext<'_>,
+    sandbox_id: &str,
+    namespace: &str,
+) -> Result<()> {
+    let client = ctx
+        .service_provider
+        .get_kubernetes_network_policy_client(ctx.get_kubernetes_config()?)
+        .await?;
+    let name = gateway_service_policy_name(sandbox_id);
+    let failed = |message: &str| ErrorData::CloudPlatformError {
+        message: message.into(),
+        resource_id: Some(sandbox_id.into()),
+    };
+    match client.get_network_policy(namespace, &name).await {
+        Ok(existing) if owned_by_deployment(&existing, ctx, sandbox_id) => {
+            match client.delete_network_policy(namespace, &name).await {
+                Ok(()) => Ok(()),
+                Err(error) if is_not_found(&error) => Ok(()),
+                Err(error) => {
+                    Err(error.context(failed("Failed to delete the gateway Service NetworkPolicy")))
+                }
+            }
+        }
+        Ok(_) => Ok(()),
+        Err(error) if is_not_found(&error) => Ok(()),
+        Err(error) => Err(error.context(failed(
+            "Failed to inspect the gateway Service NetworkPolicy",
+        ))),
+    }
+}
+
 #[cfg(all(test, feature = "local"))]
 mod tests {
     use super::*;
@@ -432,7 +651,12 @@ mod tests {
         StackState, Vault,
     };
     use httpmock::prelude::*;
+    use regex::Regex;
     use serde_json::json;
+
+    /// Tests that set or depend on the Operator Service variable take this, so a value set by one
+    /// does not reach another running at the same time.
+    static OPERATOR_SERVICE_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     #[tokio::test]
     async fn gateway_configuration_reuses_keys_and_bootstrap_waits_for_owned_service() {
@@ -674,28 +898,27 @@ mod tests {
                 .as_deref(),
             Some("10.96.0.1:443,172.16.0.2:6443,172.16.0.3:6443")
         );
-        // A non-root image keeps its in-pod enforcement and gets no enforcer setting.
-        assert!(!environment
-            .iter()
-            .any(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER"));
-        let mut root_sandbox = sandbox.clone();
-        root_sandbox.image_user = Some(0);
-        let root_environment = bootstrap_environment(&ctx, &root_sandbox, "test-ns")
-            .await
-            .unwrap()
-            .unwrap();
-        let enforcers: Vec<_> = root_environment
-            .iter()
-            .filter(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER")
-            .collect();
-        assert_eq!(enforcers.len(), 1);
-        assert_eq!(enforcers[0].value.as_deref(), Some("networkpolicy"));
+        // Every gateway-egress pod is enforced by NetworkPolicy and the gateway, root image or not.
+        for image_user in [None, Some(0), Some(65534)] {
+            let mut variant = sandbox.clone();
+            variant.image_user = image_user;
+            let environment = bootstrap_environment(&ctx, &variant, "test-ns")
+                .await
+                .unwrap()
+                .unwrap();
+            let enforcers: Vec<_> = environment
+                .iter()
+                .filter(|env| env.name == "ALIEN_SANDBOX_NETWORK_ENFORCER")
+                .collect();
+            assert_eq!(enforcers.len(), 1, "{image_user:?}");
+            assert_eq!(enforcers[0].value.as_deref(), Some("networkpolicy"));
+        }
         // The gateway lane probes the public address too.
         assert!(environment
             .iter()
             .any(|env| env.name == "ALIEN_SANDBOX_MUST_DROP_PUBLIC"
                 && env.value.as_deref() == Some("1.1.1.1:443")));
-        service.assert_hits_async(2).await;
+        service.assert_hits_async(4).await;
     }
 
     #[test]
@@ -862,11 +1085,211 @@ mod tests {
             .json_body(json!({"apiVersion":"v1","kind":"Secret","metadata":{"name":"created"}}));
     }
 
+    /// An internet sandbox's pods may reach the gateway Service's ClusterIP, on the proxy port
+    /// only, through a policy the Operator writes; it never overwrites one it does not own and
+    /// goes away with the sandbox. Without the rule the ClusterIP is dropped on a network plugin
+    /// that filters before Service translation, and no session can reach the gateway.
+    #[tokio::test]
+    async fn the_operator_admits_only_the_gateway_cluster_ip_for_an_internet_sandbox() {
+        let sandbox = internet_sandbox("subject");
+        let stack = Stack::new("test".into())
+            .add(sandbox.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let state = deployment_state(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(sandbox.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        let path = "/apis/networking.k8s.io/v1/namespaces/test-ns/networkpolicies";
+        let named = format!("{path}/alien-sbx-subject-gateway-service");
+        let gateway: std::net::Ipv4Addr = "10.96.0.7".parse().unwrap();
+        let labels = crate::core::kubernetes_cleanup_resource_labels(&ctx, "subject");
+
+        // Absent: created with exactly one rule, one address, one port, for that sandbox's pods.
+        let mut absent = server
+            .mock_async(|when, then| {
+                when.method(GET).path(named.clone());
+                then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
+            })
+            .await;
+        let create = server
+            .mock_async(|when, then| {
+                when.method(POST).path(path).matches(|request| {
+                    let body: serde_json::Value =
+                        serde_json::from_slice(request.body.as_deref().unwrap_or_default())
+                            .unwrap_or_default();
+                    body["metadata"]["name"] == "alien-sbx-subject-gateway-service"
+                        && body["spec"]["podSelector"]["matchLabels"]
+                            == json!({"alien.dev/sandbox": "subject"})
+                        && body["spec"]["policyTypes"] == json!(["Egress"])
+                        && body["spec"]["egress"]
+                            == json!([{"to":[{"ipBlock":{"cidr":"10.96.0.7/32"}}],"ports":[{"port":3128,"protocol":"TCP"}]}])
+                });
+                then.status(201).json_body(json!({"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"alien-sbx-subject-gateway-service"}}));
+            })
+            .await;
+        reconcile_gateway_service_policy(&ctx, &sandbox, "test-ns", gateway)
+            .await
+            .unwrap();
+        create.assert_async().await;
+        absent.delete_async().await;
+
+        // Present and identical: no write. Present with another address: replaced.
+        let desired = gateway_service_policy(&ctx, "subject", "test-ns", gateway);
+        let existing = server
+            .mock_async(|when, then| {
+                when.method(GET).path(named.clone());
+                let mut stored = serde_json::to_value(&desired).unwrap();
+                stored["metadata"]["resourceVersion"] = json!("41");
+                then.status(200).json_body(stored);
+            })
+            .await;
+        reconcile_gateway_service_policy(&ctx, &sandbox, "test-ns", gateway)
+            .await
+            .unwrap();
+        create.assert_hits_async(1).await;
+        let replace = server
+            .mock_async(|when, then| {
+                when.method(PUT).path(named.clone()).matches(|request| {
+                    let body: serde_json::Value =
+                        serde_json::from_slice(request.body.as_deref().unwrap_or_default())
+                            .unwrap_or_default();
+                    body["metadata"]["resourceVersion"] == "41"
+                        && body["spec"]["egress"]
+                            == json!([{"to":[{"ipBlock":{"cidr":"10.96.0.8/32"}}],"ports":[{"port":3128,"protocol":"TCP"}]}])
+                });
+                then.status(200)
+                    .json_body(serde_json::to_value(&desired).unwrap());
+            })
+            .await;
+        reconcile_gateway_service_policy(&ctx, &sandbox, "test-ns", "10.96.0.8".parse().unwrap())
+            .await
+            .unwrap();
+        replace.assert_async().await;
+        existing.delete_async().await;
+
+        // A policy of that name this deployment does not own is refused and left alone.
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(named.clone());
+                then.status(200).json_body(json!({"apiVersion":"networking.k8s.io/v1","kind":"NetworkPolicy","metadata":{"name":"alien-sbx-subject-gateway-service"},"spec":{"podSelector":{}}}));
+            })
+            .await;
+        assert_eq!(
+            reconcile_gateway_service_policy(&ctx, &sandbox, "test-ns", gateway)
+                .await
+                .unwrap_err()
+                .code,
+            "RESOURCE_CONFIG_INVALID"
+        );
+        replace.assert_hits_async(1).await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(DELETE).path(named.clone());
+                then.status(200)
+                    .json_body(json!({"kind":"Status","apiVersion":"v1","status":"Success"}));
+            })
+            .await;
+        delete_gateway_service_policy(&ctx, "subject", "test-ns")
+            .await
+            .unwrap();
+        delete.assert_hits_async(0).await;
+        let _ = labels;
+    }
+
+    /// A sandbox that stops using the gateway (internet -> none) must not keep the policy that
+    /// admits the gateway Service: its selector still matches the sandbox's pods. The Operator
+    /// removes the policy it owns, leaves one it does not own, and an absent policy is fine.
+    #[tokio::test]
+    async fn a_sandbox_that_leaves_the_gateway_loses_the_policy_it_had() {
+        let sandbox = internet_sandbox("subject");
+        let mut none = sandbox.clone();
+        none.egress = SandboxEgress::None;
+        let stack = Stack::new("test".into())
+            .add(none.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let state = deployment_state(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(none.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        let named = "/apis/networking.k8s.io/v1/namespaces/test-ns/networkpolicies/alien-sbx-subject-gateway-service";
+        let gateway: std::net::Ipv4Addr = "10.96.0.7".parse().unwrap();
+
+        // Not allowed to look (a Role that predates the NetworkPolicy verbs): the sandbox's
+        // upkeep goes on, because it does not use the gateway.
+        let mut forbidden = server
+            .mock_async(|when, then| {
+                when.method(GET).path(named);
+                then.status(403).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403,"message":"networkpolicies is forbidden"}));
+            })
+            .await;
+        sync_gateway_service_policy(&ctx, &none, "test-ns", None)
+            .await
+            .unwrap();
+        release_gateway_service_policy(&ctx, &none, "test-ns")
+            .await
+            .unwrap();
+        // For an internet sandbox the same refusal is an error.
+        assert!(release_gateway_service_policy(&ctx, &sandbox, "test-ns")
+            .await
+            .is_err());
+        forbidden.delete_async().await;
+
+        // Absent: nothing to do, no error.
+        let mut absent = server
+            .mock_async(|when, then| {
+                when.method(GET).path(named);
+                then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
+            })
+            .await;
+        sync_gateway_service_policy(&ctx, &none, "test-ns", None)
+            .await
+            .unwrap();
+        absent.delete_async().await;
+
+        // Owned and still there: removed.
+        let owned = gateway_service_policy(&ctx, "subject", "test-ns", gateway);
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(named);
+                then.status(200)
+                    .json_body(serde_json::to_value(&owned).unwrap());
+            })
+            .await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(DELETE).path(named);
+                then.status(200)
+                    .json_body(json!({"kind":"Status","apiVersion":"v1","status":"Success"}));
+            })
+            .await;
+        sync_gateway_service_policy(&ctx, &none, "test-ns", None)
+            .await
+            .unwrap();
+        delete.assert_hits_async(1).await;
+
+        // An internet sandbox keeps (and rewrites) its policy: no delete.
+        let internet_stack = Stack::new("test".into())
+            .add(sandbox.clone(), ResourceLifecycle::Frozen)
+            .build();
+        ctx.desired_stack = &internet_stack;
+        sync_gateway_service_policy(&ctx, &sandbox, "test-ns", Some(gateway))
+            .await
+            .unwrap();
+        delete.assert_hits_async(1).await;
+    }
+
     /// The policy canary is the Operator Service's ClusterIP, not the Operator pod's address,
     /// and a Service that cannot be read is an error rather than a pod without the proof.
     #[tokio::test]
     async fn the_policy_canary_is_the_operator_service_cluster_ip() {
         use crate::sandbox::{kubernetes::resolve_operator_address, kubernetes_spec};
+        let _env = OPERATOR_SERVICE_ENV.lock().await;
         let sandbox = internet_sandbox("subject");
         let stack = Stack::new("test".into())
             .add(sandbox.clone(), ResourceLifecycle::Frozen)
@@ -980,6 +1403,27 @@ mod tests {
             .await;
         let mut plain = sandbox.clone();
         plain.egress = SandboxEgress::None;
+        // The sandbox used to be an internet sandbox: the gateway Service policy it left in its
+        // own namespace is removed by the same pass that refills its pool, so a restarted
+        // Operator (which remembers nothing) cleans it up too.
+        let leftover =
+            gateway_service_policy(&ctx, "subject", "sandboxes", "10.96.0.7".parse().unwrap());
+        let leftover_path =
+            "/apis/networking.k8s.io/v1/namespaces/sandboxes/networkpolicies/alien-sbx-subject-gateway-service";
+        elsewhere
+            .mock_async(|when, then| {
+                when.method(GET).path(leftover_path);
+                then.status(200)
+                    .json_body(serde_json::to_value(&leftover).unwrap());
+            })
+            .await;
+        let removed = elsewhere
+            .mock_async(|when, then| {
+                when.method(DELETE).path(leftover_path);
+                then.status(200)
+                    .json_body(json!({"kind":"Status","apiVersion":"v1","status":"Success"}));
+            })
+            .await;
         // Later requests are unmocked and fail; only where the Service is read matters here.
         let _ = crate::sandbox::kubernetes::replenish_warm_pool(
             &ctx,
@@ -991,6 +1435,7 @@ mod tests {
         )
         .await;
         service.assert_hits_async(1).await;
+        removed.assert_hits_async(1).await;
         unsafe { std::env::remove_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) };
         kubernetes_spec::forget_operator_address();
     }
@@ -1417,5 +1862,193 @@ mod tests {
         )
         .unwrap();
         assert!(kube_api_targets(&service, &empty).is_err());
+    }
+
+    /// An idle pod as an earlier pass left it: built for `egress`, with a template digest that no
+    /// longer matches. Named, labelled idle, and carrying the gateway variable when asked.
+    fn idle_pod_for(name: &str, with_gateway: bool) -> serde_json::Value {
+        let mut pod = crate::sandbox::kubernetes_spec::idle_pool_pod_with_labels(
+            &internet_sandbox("subject"),
+            "sandboxes",
+            "gvisor",
+            None,
+            None,
+            Default::default(),
+        );
+        pod.metadata.generate_name = None;
+        pod.metadata.name = Some(name.into());
+        pod.metadata.annotations = Some(
+            [(
+                crate::sandbox::kubernetes::ANNOTATION_TEMPLATE_HASH.to_string(),
+                "built-for-another-egress".to_string(),
+            )]
+            .into(),
+        );
+        if with_gateway {
+            pod.spec.as_mut().unwrap().containers[0]
+                .env
+                .get_or_insert_default()
+                .push(EnvVar {
+                    name: "ALIEN_SANDBOX_EGRESS_GATEWAY".into(),
+                    value: Some("10.96.0.7:3128".into()),
+                    value_from: None,
+                });
+        }
+        serde_json::to_value(pod).unwrap()
+    }
+
+    /// Mocks everything one pool pass reads, with `idle` as the idle pods. Returns the update and
+    /// delete mocks for pod `name`.
+    async fn pool_pass_cluster<'a>(
+        server: &'a MockServer,
+        idle: Vec<serde_json::Value>,
+        gateway_service: bool,
+    ) -> (httpmock::Mock<'a>, httpmock::Mock<'a>) {
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/api/v1/namespaces/sandboxes/pods")
+                    .matches(|request| {
+                        request.query_params.as_ref().is_some_and(|params| {
+                            params.iter().any(|(name, value)| {
+                                name == "labelSelector" && value.contains("sandbox-pool=idle")
+                            })
+                        })
+                    });
+                then.status(200).json_body(
+                    json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":idle}),
+                );
+            })
+            .await;
+        // Nothing is waiting to be deleted from an earlier pass.
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/api/v1/namespaces/sandboxes/pods")
+                    .matches(|request| {
+                        request.query_params.as_ref().is_some_and(|params| {
+                            params.iter().any(|(name, value)| {
+                                name == "labelSelector" && value.contains("sandbox-pool=retired")
+                            })
+                        })
+                    });
+                then.status(200).json_body(
+                    json!({"apiVersion":"v1","kind":"PodList","metadata":{},"items":[]}),
+                );
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/namespaces/default/services/kubernetes");
+                then.status(200).json_body(json!({"kind":"Service","apiVersion":"v1","metadata":{"name":"kubernetes"},"spec":{"clusterIP":"10.96.0.1","ports":[{"port":443}]}}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/apis/discovery.k8s.io/v1/namespaces/default/endpointslices/kubernetes");
+                then.status(200).json_body(json!({"apiVersion":"discovery.k8s.io/v1","kind":"EndpointSlice","metadata":{"name":"kubernetes"},"addressType":"IPv4","endpoints":[{"addresses":["172.16.0.2"]}],"ports":[{"port":6443}]}));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(
+                    "/apis/networking.k8s.io/v1/namespaces/sandboxes/networkpolicies/alien-sbx-subject-gateway-service",
+                );
+                then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
+            })
+            .await;
+        if !gateway_service {
+            server
+                .mock_async(|when, then| {
+                    when.method(GET)
+                        .path_matches(Regex::new("/api/v1/namespaces/test-ns/services/.*egress-gateway").unwrap());
+                    then.status(404).json_body(json!({"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"not found"}));
+                })
+                .await;
+        }
+        let update = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path("/api/v1/namespaces/sandboxes/pods/stale");
+                then.status(200).json_body(idle_pod_for("stale", true));
+            })
+            .await;
+        let delete = server
+            .mock_async(|when, then| {
+                when.method(DELETE)
+                    .path("/api/v1/namespaces/sandboxes/pods/stale");
+                then.status(200)
+                    .json_body(json!({"kind":"Status","apiVersion":"v1","status":"Success"}));
+            })
+            .await;
+        (update, delete)
+    }
+
+    /// A sandbox that goes from `internet` to `none` builds its pods without the gateway
+    /// variable, so an idle pod made with it no longer matches and is replaced.
+    #[tokio::test]
+    async fn an_idle_pod_made_for_internet_is_replaced_when_the_sandbox_has_no_egress() {
+        let _env = OPERATOR_SERVICE_ENV.lock().await;
+        unsafe { std::env::remove_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) };
+        let mut none = internet_sandbox("subject");
+        none.egress = SandboxEgress::None;
+        let stack = Stack::new("test".into())
+            .add(none.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let state = deployment_state(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(none.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        let (update, delete) =
+            pool_pass_cluster(&server, vec![idle_pod_for("stale", true)], true).await;
+
+        let _ = crate::sandbox::kubernetes::replenish_warm_pool(
+            &ctx,
+            &none,
+            "sandboxes",
+            "gvisor",
+            1,
+            None,
+        )
+        .await;
+        update.assert_hits_async(1).await;
+        delete.assert_hits_async(1).await;
+    }
+
+    /// The other direction: an internet sandbox whose gateway is not up yet has no pod that can
+    /// serve it, and an idle pod without the gateway variable must not stay claimable meanwhile.
+    #[tokio::test]
+    async fn an_idle_pod_without_the_gateway_is_replaced_for_an_internet_sandbox() {
+        let _env = OPERATOR_SERVICE_ENV.lock().await;
+        unsafe { std::env::remove_var(alien_core::ENV_ALIEN_SANDBOX_OPERATOR_SERVICE) };
+        let sandbox = internet_sandbox("subject");
+        let stack = Stack::new("test".into())
+            .add(sandbox.clone(), ResourceLifecycle::Frozen)
+            .build();
+        let state = deployment_state(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(sandbox.clone()), vec![]);
+        let mut ctx = harness.ctx();
+        ctx.state = &state;
+        ctx.desired_stack = &stack;
+        let server = MockServer::start_async().await;
+        point_at(&mut ctx, &server);
+        let (update, delete) =
+            pool_pass_cluster(&server, vec![idle_pod_for("stale", false)], false).await;
+
+        let _ = crate::sandbox::kubernetes::replenish_warm_pool(
+            &ctx,
+            &sandbox,
+            "sandboxes",
+            "gvisor",
+            1,
+            None,
+        )
+        .await;
+        update.assert_hits_async(1).await;
+        delete.assert_hits_async(1).await;
     }
 }

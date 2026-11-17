@@ -42,6 +42,16 @@ pub enum ErrorData {
     )]
     SandboxEgressGatewayUnavailable { reason: String },
 
+    /// The platform has no outbound allowlist to apply a requested policy to.
+    #[error(
+        code = "SANDBOX_EGRESS_ALLOWLIST_UNSUPPORTED",
+        message = "This sandbox platform does not support an outbound allowlist: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    SandboxEgressAllowlistUnsupported { reason: String },
+
     /// The agent's self-check found an unsafe or unverified outbound path.
     #[error(
         code = "EGRESS_PATH_UNEXPECTED",

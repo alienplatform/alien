@@ -239,10 +239,14 @@ pub(crate) fn sandbox_pod_with_labels(
                     }))
                     .collect(),
             ),
-            init_containers: root_boot.then(|| vec![stage_protected_files(&image)]),
+            init_containers: root_boot
+                .then(|| vec![stage_protected_files(&image), check_staged_agent(&image)]),
             containers: vec![Container {
                 name: "sandbox".to_string(),
                 image: Some(image.clone()),
+                // A root pod runs the staged copy inside the read-only mount, not the image's own.
+                command: root_boot
+                    .then(|| vec![alien_core::sandbox_image::STAGED_AGENT_PATH.to_string()]),
                 env: container_env(sandbox, capability_public_key, root_boot),
                 volume_mounts: Some(
                     [
@@ -334,6 +338,10 @@ const PROTECTED_VOLUME: &str = "alien-protected";
 const PROTECTED_VOLUME_LIMIT: &str = "256Mi";
 const PROTECTED_STAGING_PATH: &str = "/stage";
 const PROTECTED_METADATA_PATH: &str = "/opt/alien";
+const STAGE_CONTAINER: &str = "stage-protected-files";
+/// Name of the init container that runs the staged agent once before the sandbox container does.
+/// The Operator reads a failure of this container as an image built by an older alien CLI.
+pub(crate) const CHECK_STAGED_AGENT_CONTAINER: &str = "check-staged-agent";
 
 /// A pod's default seccomp profile blocks `unshare`, so the agent cannot protect its own files
 /// with a private mount namespace here. The pod does it: this init container copies the agent
@@ -344,7 +352,7 @@ const PROTECTED_METADATA_PATH: &str = "/opt/alien";
 /// holds no capability, cannot gain one, and has a read-only root filesystem.
 fn stage_protected_files(image: &str) -> Container {
     Container {
-        name: "stage-protected-files".to_string(),
+        name: STAGE_CONTAINER.to_string(),
         image: Some(image.to_string()),
         command: Some(vec![
             alien_core::sandbox_image::AGENT_PATH.to_string(),
@@ -379,23 +387,35 @@ fn stage_protected_files(image: &str) -> Container {
     }
 }
 
+/// Runs the staged agent once (it prints its uid and gid and exits). An image built by an older
+/// alien CLI stages the agent at the top of the volume only, so the file the sandbox container
+/// starts is missing and this container fails by itself, ahead of the sandbox container, with a
+/// name that says why. The staging step cannot report it: it is that older agent and succeeds.
+/// This is a diagnostic only: an image can be made to pass it. The agent's own check at start
+/// (the mounted directory must be read-only) is the protection.
+fn check_staged_agent(image: &str) -> Container {
+    Container {
+        name: CHECK_STAGED_AGENT_CONTAINER.to_string(),
+        command: Some(vec![
+            alien_core::sandbox_image::STAGED_AGENT_PATH.to_string(),
+            alien_core::sandbox_image::AGENT_IDENTITY_ARGUMENT.to_string(),
+        ]),
+        volume_mounts: Some(protected_mounts()),
+        ..stage_protected_files(image)
+    }
+}
+
+/// One directory mount, never a single-file mount: a VM-based runtime does not list a single-file
+/// bind mount in the guest's mount table, so the agent could not prove it read-only there. The
+/// agent binary sits inside this directory and the container starts it from there.
 fn protected_mounts() -> Vec<VolumeMount> {
-    vec![
-        VolumeMount {
-            name: PROTECTED_VOLUME.to_string(),
-            mount_path: alien_core::sandbox_image::AGENT_PATH.to_string(),
-            sub_path: Some(alien_core::sandbox_image::STAGED_AGENT_NAME.to_string()),
-            read_only: Some(true),
-            ..Default::default()
-        },
-        VolumeMount {
-            name: PROTECTED_VOLUME.to_string(),
-            mount_path: PROTECTED_METADATA_PATH.to_string(),
-            sub_path: Some(alien_core::sandbox_image::STAGED_METADATA_NAME.to_string()),
-            read_only: Some(true),
-            ..Default::default()
-        },
-    ]
+    vec![VolumeMount {
+        name: PROTECTED_VOLUME.to_string(),
+        mount_path: PROTECTED_METADATA_PATH.to_string(),
+        sub_path: Some(alien_core::sandbox_image::STAGED_METADATA_NAME.to_string()),
+        read_only: Some(true),
+        ..Default::default()
+    }]
 }
 
 fn plain_env(name: &str, value: String) -> EnvVar {
@@ -957,18 +977,40 @@ mod tests {
             value("ALIEN_SANDBOX_PROTECTED_MOUNTS").as_deref(),
             Some("true")
         );
-        // The agent binary and /opt/alien come from a volume mounted read-only, filled by an
-        // init container that holds no capability.
+        // The agent binary lives in /opt/alien, a directory from a volume mounted read-only and
+        // filled by an init container that holds no capability. Only directories are mounted
+        // (a VM runtime does not list single-file mounts), and the agent runs from the directory.
         let mounts = container.volume_mounts.as_ref().expect("mounts");
-        for path in ["/usr/local/bin/alien-sandbox-agent", "/opt/alien"] {
-            let mount = mounts
+        let mount = mounts
+            .iter()
+            .find(|mount| mount.mount_path == "/opt/alien")
+            .expect("/opt/alien is mounted");
+        assert_eq!(mount.read_only, Some(true));
+        assert_eq!(mount.sub_path.as_deref(), Some("opt"));
+        assert!(
+            !mounts
                 .iter()
-                .find(|mount| mount.mount_path == path)
-                .unwrap_or_else(|| panic!("{path} is mounted"));
-            assert_eq!(mount.read_only, Some(true), "{path}");
-            assert!(mount.sub_path.is_some(), "{path}");
-        }
-        let init = &spec.init_containers.expect("the staging init container")[0];
+                .any(|mount| mount.mount_path == "/usr/local/bin/alien-sandbox-agent"),
+            "no single-file mount"
+        );
+        assert_eq!(
+            container.command,
+            Some(vec!["/opt/alien/alien-sandbox-agent".to_string()])
+        );
+        let inits = spec.init_containers.expect("the init containers");
+        let check = &inits[1];
+        assert_eq!(check.name, CHECK_STAGED_AGENT_CONTAINER);
+        assert_eq!(
+            check.command,
+            Some(vec![
+                "/opt/alien/alien-sandbox-agent".to_string(),
+                "identity".to_string()
+            ])
+        );
+        let check_mount = &check.volume_mounts.as_ref().expect("check mounts")[0];
+        assert_eq!(check_mount.mount_path, "/opt/alien");
+        assert_eq!(check_mount.read_only, Some(true));
+        let init = &inits[0];
         let init_security = init.security_context.as_ref().expect("init security");
         assert_eq!(init_security.read_only_root_filesystem, Some(true));
         assert_eq!(init_security.allow_privilege_escalation, Some(false));
@@ -1004,6 +1046,10 @@ mod tests {
                 assert_ne!(variable.name, "ALIEN_SANDBOX_PROTECTED_MOUNTS");
             }
             assert!(spec.init_containers.is_none());
+            assert!(
+                container.command.is_none(),
+                "a non-root pod runs the image's own entrypoint"
+            );
             assert_eq!(container.volume_mounts.as_ref().unwrap().len(), 2);
         }
     }

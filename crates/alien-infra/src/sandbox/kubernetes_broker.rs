@@ -154,6 +154,17 @@ async fn claim_session_with_scope(
         deployment_label_key,
         deployment_label_value
     );
+    // An idle pod is handed out only if it was built from the template that is published now.
+    // After a chart upgrade the pool pass has not yet replaced the old pods, and one of them can
+    // carry a different network setup. A template that cannot be read is an error, never a claim
+    // that skips the check.
+    let template = pod_template(secrets, namespace, secret_name).await?;
+    let current_hash = template
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get(crate::sandbox::ANNOTATION_TEMPLATE_HASH))
+        .cloned();
     let idle = pods
         .list_pods(namespace, Some(selector), None)
         .await
@@ -166,6 +177,14 @@ async fn claim_session_with_scope(
         let Some(name) = pod.metadata.name.clone() else {
             continue;
         };
+        let built_from = pod
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|annotations| annotations.get(crate::sandbox::ANNOTATION_TEMPLATE_HASH));
+        if current_hash.is_none() || built_from != current_hash.as_ref() {
+            continue;
+        }
         // A deleted pod keeps its idle label until its grace period ends. It would take the
         // claim, and the session would die with it (and could not be reattached meanwhile).
         if pod.metadata.deletion_timestamp.is_some() {
@@ -234,7 +253,6 @@ async fn claim_session_with_scope(
 
     // The pool is a speed-up, not a limit: with no idle pod the broker builds one from the
     // template the controller published and waits for it to start.
-    let template = pod_template(secrets, namespace, secret_name).await?;
     cold_create(
         pods,
         &signing_key,
@@ -596,7 +614,10 @@ pub(crate) async fn reattach_session_for_deployment(
     // handed out against the then-current Operator, so a restart does not strand it) or a check
     // that still points at this Operator. A claimed pod with neither (a cold pod that became
     // Ready against a dead address) is not handed out.
-    if !reattachable_for(&pod, super::kubernetes_spec::operator_address_for_checks().as_deref()) {
+    if !reattachable_for(
+        &pod,
+        super::kubernetes_spec::operator_address_for_checks().as_deref(),
+    ) {
         return Err(AlienError::new(ErrorData::CloudPlatformError {
             message: format!("session '{session_id}' is not ready yet"),
             resource_id: Some(sandbox_id.to_string()),
@@ -632,7 +653,10 @@ pub(crate) async fn reattach_session_for_deployment(
 /// dead address says nothing about the policy. Such a pod is not handed out and the controller
 /// replaces it. One built without the gate is Ready when its container runs.
 pub(crate) fn pod_is_ready(pod: &Pod) -> bool {
-    pod_is_ready_for(pod, super::kubernetes_spec::operator_address_for_checks().as_deref())
+    pod_is_ready_for(
+        pod,
+        super::kubernetes_spec::operator_address_for_checks().as_deref(),
+    )
 }
 
 /// Why a running pod is still not Ready, when the cause is the policy gate: its container runs
@@ -1633,12 +1657,20 @@ mod tests {
         labels
     }
 
+    /// The digest the published template carries in these tests; an idle pod built from it is
+    /// claimable.
+    const CURRENT_HASH: &str = "current";
+
     fn idle_pod(name: &str, ip: &str) -> Pod {
         Pod {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
                 uid: Some(format!("uid-{name}")),
                 labels: Some(sandbox_labels()),
+                annotations: Some(BTreeMap::from([(
+                    crate::sandbox::ANNOTATION_TEMPLATE_HASH.to_string(),
+                    CURRENT_HASH.to_string(),
+                )])),
                 ..Default::default()
             },
             status: Some(PodStatus {
@@ -1736,6 +1768,10 @@ mod tests {
                 name: Some(name.to_string()),
                 uid: Some(format!("uid-{name}")),
                 labels: Some(sandbox_labels()),
+                annotations: Some(BTreeMap::from([(
+                    crate::sandbox::ANNOTATION_TEMPLATE_HASH.to_string(),
+                    CURRENT_HASH.to_string(),
+                )])),
                 ..Default::default()
             },
             // Ready but with no address: the window between the condition and the status write
@@ -1761,12 +1797,41 @@ mod tests {
                 ])),
                 ..Default::default()
             },
-            data: Some(BTreeMap::from([(
-                "signingKey".to_string(),
-                k8s_openapi::ByteString(pair.as_ref().to_vec()),
-            )])),
+            data: Some(BTreeMap::from([
+                (
+                    "signingKey".to_string(),
+                    k8s_openapi::ByteString(pair.as_ref().to_vec()),
+                ),
+                (
+                    crate::sandbox::POD_TEMPLATE_SECRET_KEY.to_string(),
+                    k8s_openapi::ByteString(
+                        serde_json::to_vec(&Pod {
+                            metadata: ObjectMeta {
+                                labels: Some(sandbox_labels()),
+                                annotations: Some(BTreeMap::from([(
+                                    crate::sandbox::ANNOTATION_TEMPLATE_HASH.to_string(),
+                                    CURRENT_HASH.to_string(),
+                                )])),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        })
+                        .unwrap(),
+                    ),
+                ),
+            ])),
             ..Default::default()
         }
+    }
+
+    fn key_secret_without_template() -> Secret {
+        let mut secret = key_secret();
+        secret
+            .data
+            .as_mut()
+            .unwrap()
+            .remove(crate::sandbox::POD_TEMPLATE_SECRET_KEY);
+        secret
     }
 
     fn pods_returning(items: Vec<Pod>) -> MockPodApi {
@@ -3106,6 +3171,104 @@ mod tests {
         secret
     }
 
+    fn claim_secrets() -> Arc<dyn SecretsApi> {
+        let mut secrets = MockSecretsApi::new();
+        no_reservation(&mut secrets);
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(key_secret()));
+        Arc::new(secrets)
+    }
+
+    fn with_hash(mut pod: Pod, hash: Option<&str>) -> Pod {
+        let annotations = pod.metadata.annotations.get_or_insert_default();
+        match hash {
+            Some(hash) => {
+                annotations.insert(
+                    crate::sandbox::ANNOTATION_TEMPLATE_HASH.to_string(),
+                    hash.to_string(),
+                );
+            }
+            None => {
+                annotations.remove(crate::sandbox::ANNOTATION_TEMPLATE_HASH);
+            }
+        }
+        pod
+    }
+
+    /// Right after an upgrade the pool pass has not replaced the old idle pods yet. A claim must
+    /// skip a pod built from another template and take one built from the current one.
+    #[tokio::test]
+    async fn a_claim_skips_an_idle_pod_built_from_another_template() {
+        let stale = with_hash(idle_pod("pool-old", "10.1.2.3"), Some("old"));
+        let missing = with_hash(idle_pod("pool-bare", "10.1.2.5"), None);
+        let current = idle_pod("pool-new", "10.1.2.4");
+        let mut pods = pods_returning(vec![stale, missing, current]);
+        pods.expect_update_pod().times(1).returning(|_, name, pod| {
+            assert_eq!(name, "pool-new");
+            Ok(pod.clone())
+        });
+
+        let claimed = claim_session(
+            &(Arc::new(pods) as Arc<dyn PodApi>),
+            &claim_secrets(),
+            "sbx",
+            "ns",
+            "s1",
+            "alien-sandbox-sbx-capability",
+            1_000,
+        )
+        .await
+        .expect("the current pod is claimable");
+
+        assert_eq!(claimed.endpoint, "http://10.1.2.4:8971");
+    }
+
+    /// With only pods from another template in the pool, the claim builds a new pod from the
+    /// published template instead of handing one out.
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_with_only_old_idle_pods_creates_a_pod_cold() {
+        let pods = pods_returning(vec![with_hash(
+            idle_pod("pool-old", "10.1.2.3"),
+            Some("old"),
+        )]);
+        let mut pods = pods;
+        pods.expect_update_pod().times(0);
+        pods.expect_create_pod().times(1).returning(|_, pod| {
+            let mut created = pod.clone();
+            created.metadata.name = Some("cold-0".to_string());
+            created.metadata.uid = Some("uid-cold-0".to_string());
+            created.status = Some(PodStatus {
+                phase: Some("Running".to_string()),
+                pod_ip: Some("10.9.9.9".to_string()),
+                conditions: Some(ready_condition(true)),
+                ..Default::default()
+            });
+            Ok(created)
+        });
+        pods.expect_get_pod().returning(|_, name| {
+            let mut pod = idle_pod(name, "10.9.9.9");
+            pod.status.as_mut().unwrap().phase = Some("Running".to_string());
+            Ok(pod)
+        });
+        pods.expect_update_pod()
+            .returning(|_, _, pod| Ok(pod.clone()));
+
+        let claimed = claim_session(
+            &(Arc::new(pods) as Arc<dyn PodApi>),
+            &claim_secrets(),
+            "sbx",
+            "ns",
+            "s1",
+            "alien-sandbox-sbx-capability",
+            1_000,
+        )
+        .await
+        .expect("a cold create serves the claim");
+
+        assert_eq!(claimed.endpoint, "http://10.9.9.9:8971");
+    }
+
     /// A create never fails because the pool is empty: the broker builds the pod from the
     /// published template, already claimed, and returns once it has an address.
     #[tokio::test(start_paused = true)]
@@ -3309,7 +3472,7 @@ mod tests {
         no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
-            .returning(|_, _| Ok(key_secret()));
+            .returning(|_, _| Ok(key_secret_without_template()));
 
         let error = claim_session(
             &(Arc::new(pods) as Arc<dyn PodApi>),
@@ -3339,7 +3502,7 @@ mod tests {
         no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
-            .returning(|_, _| Ok(key_secret()));
+            .returning(|_, _| Ok(key_secret_without_template()));
 
         let error = claim_session(
             &(Arc::new(pods) as Arc<dyn PodApi>),
@@ -3370,7 +3533,7 @@ mod tests {
         no_reservation(&mut secrets);
         secrets
             .expect_get_secret()
-            .returning(|_, _| Ok(key_secret()));
+            .returning(|_, _| Ok(key_secret_without_template()));
 
         let error = claim_session(
             &(Arc::new(pods) as Arc<dyn PodApi>),
@@ -3518,10 +3681,14 @@ mod tests {
                     ])),
                     ..Default::default()
                 },
-                data: Some(BTreeMap::from([(
-                    "signingKey".to_string(),
-                    k8s_openapi::ByteString(stored.clone()),
-                )])),
+                data: Some({
+                    let mut data = key_secret().data.unwrap();
+                    data.insert(
+                        "signingKey".to_string(),
+                        k8s_openapi::ByteString(stored.clone()),
+                    );
+                    data
+                }),
                 ..Default::default()
             })
         });

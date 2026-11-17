@@ -168,12 +168,10 @@ impl StackMutation for NetworkMutation {
 /// Kubernetes workloads and logical compute pools use the existing cluster network.
 /// Cloud databases and a setup-managed cluster still need cloud network resources.
 fn kubernetes_requires_cloud_network(stack: &Stack, config: &DeploymentConfig) -> bool {
-    if stack.resources().any(|(_, entry)| {
-        entry
-            .config
-            .downcast_ref::<alien_core::Postgres>()
-            .is_some()
-    }) {
+    if stack
+        .resources()
+        .any(|(_, entry)| alien_core::is_network_database(entry))
+    {
         return true;
     }
     if let Some(cluster) = stack
@@ -692,6 +690,35 @@ mod tests {
                     .settings,
                 NetworkSettings::Create { .. }
             ));
+        }
+    }
+
+    /// A Redis instance (no Postgres) keeps a network for an existing cluster on every cloud, as a
+    /// Postgres one does: the same predicate answers it.
+    #[tokio::test]
+    async fn an_existing_kubernetes_cluster_with_only_redis_still_gets_a_cloud_network() {
+        for provider in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let state = create_stack_state(Platform::Kubernetes);
+            let config = create_deployment_config_with_base(None, provider);
+            let mut stack = create_stack_with_container();
+            add_frozen(
+                &mut stack,
+                alien_core::KubernetesCluster::new("kubernetes".to_string())
+                    .provider(alien_core::KubernetesClusterProvider::Generic)
+                    .ownership(alien_core::KubernetesClusterOwnership::Existing)
+                    .namespace("application".to_string())
+                    .heartbeat_mode(alien_core::KubernetesHeartbeatMode::KubernetesApi)
+                    .build(),
+            );
+            assert!(!NetworkMutation.should_run(&stack, &state, &config));
+            add_frozen(
+                &mut stack,
+                alien_core::Redis::new("cache".to_string()).build(),
+            );
+            assert!(
+                NetworkMutation.should_run(&stack, &state, &config),
+                "{provider:?}: Redis needs a network"
+            );
         }
     }
 

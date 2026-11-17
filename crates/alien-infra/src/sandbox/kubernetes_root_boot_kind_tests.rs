@@ -364,7 +364,8 @@ async fn kubernetes_root_boot_kind_a_non_root_image_still_runs_restricted() {
 /// tries everything that would let image code replace the next boot's agent or its metadata.
 const ATTACK: &str = r#"
 import ctypes, errno, os, sys
-agent = "/usr/local/bin/alien-sandbox-agent"
+agent = "/opt/alien/alien-sandbox-agent"
+old_agent = "/usr/local/bin/alien-sandbox-agent"
 meta = "/opt/alien"
 assert os.getuid() == 0
 libc = ctypes.CDLL(None, use_errno=True)
@@ -400,6 +401,28 @@ refused("umount agent", lambda: libc.umount(agent.encode()))
 refused("umount meta", lambda: libc.umount(meta.encode()))
 refused("bind over agent", lambda: mount(b"/tmp", agent.encode(), None, MS_BIND))
 refused("bind over meta", lambda: mount(b"/tmp", meta.encode(), None, MS_BIND))
+# The image's own copy at the old path is not mounted over, so root can replace it. The running
+# agent is the staged one: it started from /opt/alien and a replacement at the old path changes
+# neither that file nor what runs.
+import hashlib
+def digest():
+    return hashlib.sha256(open(agent, "rb").read()).hexdigest()
+before = digest()
+started_from = open("/proc/1/cmdline", "rb").read().split(b"\0")[0].decode()
+if started_from != agent:
+    fails.append("the agent runs from " + started_from)
+try:
+    os.unlink(old_agent)
+except OSError:
+    pass
+try:
+    open(old_agent, "wb").write(b"replaced")
+except OSError:
+    pass
+if digest() != before:
+    fails.append("a write to the old path changed the running agent's file")
+if open("/proc/1/cmdline", "rb").read().split(b"\0")[0].decode() != agent:
+    fails.append("the running agent changed")
 # The agent is PID 1 of the container; a same-uid root without SYS_PTRACE must not attach.
 PTRACE_ATTACH = 16
 refused("ptrace attach to the agent", lambda: libc.ptrace(PTRACE_ATTACH, 1, 0, 0))

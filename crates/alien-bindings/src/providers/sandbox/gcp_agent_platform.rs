@@ -1041,6 +1041,27 @@ impl GcpAgentPlatformSandbox {
 
 impl Binding for GcpAgentPlatformSandbox {}
 
+/// A runtime policy is validated like on every backend, then refused: Google Cloud has no
+/// outbound allowlist. `Ok` when the caller asked for none.
+fn refuse_runtime_policy(
+    requested: Option<&alien_core::EgressPolicy>,
+    declaration: Option<&SandboxEgress>,
+) -> Result<()> {
+    let Some(requested) = requested else {
+        return Ok(());
+    };
+    super::egress::validate(requested, declaration)?;
+    // `internet` equals what the sandbox already declares, so portable code may pass it.
+    if *requested == alien_core::EgressPolicy::Internet {
+        return Ok(());
+    }
+    Err(AlienError::new(
+        ErrorData::SandboxEgressAllowlistUnsupported {
+            reason: alien_core::GCP_NO_EGRESS_ALLOWLIST.to_string(),
+        },
+    ))
+}
+
 #[async_trait]
 impl Sandbox for GcpAgentPlatformSandbox {
     fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
@@ -1048,6 +1069,15 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    /// Google's outbound path has no enforcement point of ours, so no policy can change.
+    async fn update_egress(
+        &self,
+        _sandbox_id: &str,
+        egress: alien_core::EgressPolicy,
+    ) -> Result<()> {
+        refuse_runtime_policy(Some(&egress), self.egress_declaration())
     }
 
     /// The platform's row, unnarrowed. `sandboxLifetime` stays true even with no declared ttl:
@@ -1058,7 +1088,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+        refuse_runtime_policy(request.egress.as_ref(), self.egress_declaration())?;
         // A sandbox takes no environment of its own: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
@@ -1184,7 +1214,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::egress::require_default(request.egress.as_ref(), self.egress_declaration())?;
+        refuse_runtime_policy(request.egress.as_ref(), self.egress_declaration())?;
         let Some(key) = request.sandbox_id.clone() else {
             return self.create(request).await.map(ResolvedSandbox::created);
         };
