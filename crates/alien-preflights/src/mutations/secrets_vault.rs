@@ -141,8 +141,9 @@ impl StackMutation for SecretsVaultMutation {
         //
         // On AWS, GCP and Azure management only writes here: environment sync, the AWS sandbox
         // egress key and the gateway configuration are write-only, so the vendor-side identity
-        // cannot read the deployment's secrets back. GCP and Azure refuse internet sandboxes at
-        // plan time (`SandboxPlatformSupportCheck`), so no controller there reads this vault.
+        // cannot read the deployment's secrets back. Azure refuses internet sandboxes at plan time
+        // (`SandboxPlatformSupportCheck`), and GCP's `internet` is Google's own open outbound
+        // path with no gateway, so no controller there reads this vault.
         // Kubernetes keeps the read: its gateway controllers read the configuration back.
         if !(stack_state.platform == Platform::Aws
             && config.stack_settings.setup_management == alien_core::SetupManagement::Automatic)

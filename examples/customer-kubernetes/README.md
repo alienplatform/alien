@@ -411,3 +411,7 @@ subdomains need corresponding certificate coverage too.
 
 Use `mode: custom` with `domain: api.example.com` to retain a single literal hostname.
 The base-domain mode checks DNS names and hostname collisions before deployment.
+
+A service with a health path is reported ready once the ingress address answers it for the public
+hostname, reached directly by address. The hostname does not need to resolve yet, so a ready service
+does not prove that your DNS record points at the ingress; create it before sending traffic.

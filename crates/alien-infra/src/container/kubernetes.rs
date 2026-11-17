@@ -5180,6 +5180,10 @@ mod tests {
         assert_eq!(pod_security.run_as_group, Some(65532));
         assert_eq!(pod_security.fs_group, Some(65532));
         assert_eq!(
+            pod_security.fs_group_change_policy.as_deref(),
+            Some("OnRootMismatch")
+        );
+        assert_eq!(
             pod_security
                 .seccomp_profile
                 .as_ref()

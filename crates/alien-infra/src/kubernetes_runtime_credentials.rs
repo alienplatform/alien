@@ -363,10 +363,13 @@ pub(crate) fn mount(pod: &mut PodSpec, container_name: &str, workload_name: &str
         }),
         ..Default::default()
     });
-    pod.security_context
-        .get_or_insert_with(Default::default)
-        .fs_group
-        .get_or_insert(65532);
+    let security_context = pod.security_context.get_or_insert_with(Default::default);
+    security_context.fs_group.get_or_insert(65532);
+    // The default policy re-applies group bits to the whole volume at every mount, which breaks
+    // images that check file modes on their data (a restarted database refuses its own files).
+    security_context
+        .fs_group_change_policy
+        .get_or_insert_with(|| "OnRootMismatch".into());
     Ok(())
 }
 
@@ -743,6 +746,26 @@ mod tests {
         assert_eq!(
             telemetry(live.lock().unwrap().as_ref().unwrap()).token,
             "ax_cap_v1_renewed"
+        );
+    }
+
+    /// Group bits are applied to the data volumes only when the volume root does not
+    /// match, so a restarted pod does not rewrite modes the image's own checks depend on.
+    #[test]
+    fn mount_sets_fs_group_with_on_root_mismatch_policy() {
+        let mut pod = PodSpec {
+            containers: vec![k8s_openapi::api::core::v1::Container {
+                name: "api".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        mount(&mut pod, "api", "api").unwrap();
+        let security = pod.security_context.unwrap();
+        assert_eq!(security.fs_group, Some(65532));
+        assert_eq!(
+            security.fs_group_change_policy.as_deref(),
+            Some("OnRootMismatch")
         );
     }
 }

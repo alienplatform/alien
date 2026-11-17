@@ -66,7 +66,8 @@ const SANDBOX_NAMESPACE_HELPER: &str = r#"{{- define "deployment.sandboxNamespac
 "#;
 
 /// The operator's rights in a separate sandbox namespace, and nowhere else: pods and Secrets for
-/// the sandboxes, and events to report why a pod is not ready. Renders nothing while
+/// the sandboxes, events to report why a pod is not ready, and the one NetworkPolicy per internet
+/// sandbox that admits the gateway Service address. Renders nothing while
 /// `sandbox.namespace` is unset, when the release Role already covers the release namespace.
 /// There is no ClusterRole: the administrator's namespace is the only place these rights apply.
 const SANDBOX_NAMESPACE_RBAC_TEMPLATE: &str = "sandbox-namespace-rbac.yaml";
@@ -86,6 +87,9 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
