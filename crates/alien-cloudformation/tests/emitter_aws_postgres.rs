@@ -1,4 +1,4 @@
-//! Render test for the platform-only AWS `Postgres` CloudFormation emitter.
+//! Render test for the AWS `Postgres` CloudFormation emitter.
 //!
 //! AWS is the only cloud with both a Terraform and a CloudFormation emitter, so this proves
 //! the CFN template renders + `cfn_lint`s and that it agrees with the Terraform emitter on the

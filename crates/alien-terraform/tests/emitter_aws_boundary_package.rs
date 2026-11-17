@@ -1,4 +1,4 @@
-//! Validate complete setup artifacts with both built-in and platform emitters.
+//! Validate complete setup artifacts with every built-in emitter.
 use alien_cloudformation::{
     generate_cloudformation_template, to_yaml, CfRegistry, CloudFormationOptions,
     CloudFormationTarget, RegistrationMode,

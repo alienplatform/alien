@@ -1,4 +1,4 @@
-//! Render tests for the platform-only AWS `Redis` CloudFormation emitter. Every template is
+//! Render tests for the AWS `Redis` CloudFormation emitter. Every template is
 //! linted with `cfn-lint`, which checks the ElastiCache properties against the CloudFormation
 //! resource schemas. The real-account proof (create, connect, update, delete) is recorded in
 //! the PR; to repeat it, render a template with this helper and deploy it with
