@@ -3214,6 +3214,14 @@ mod direct_setup_tests {
 
     /// An authorization API where nothing exists yet and every write succeeds and is recorded.
     fn recording_authorization(assigned: Assigned) -> MockAuthorizationApi {
+        recording_authorization_with_roles(assigned, Default::default())
+    }
+
+    /// The same, also recording `(role definition id, role name)` of every custom role written.
+    fn recording_authorization_with_roles(
+        assigned: Assigned,
+        roles: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    ) -> MockAuthorizationApi {
         use alien_azure_clients::models::authorization_role_assignments::RoleAssignment;
         use alien_azure_clients::models::authorization_role_definitions::RoleDefinition;
         let seen = assigned;
@@ -3240,7 +3248,15 @@ mod direct_setup_tests {
             });
         authorization
             .expect_create_or_update_role_definition()
-            .returning(|_, _, definition: &RoleDefinition| Ok(definition.clone()));
+            .returning(move |_, id, definition: &RoleDefinition| {
+                let name = definition
+                    .properties
+                    .as_ref()
+                    .and_then(|p| p.role_name.clone())
+                    .unwrap_or_default();
+                roles.lock().unwrap().push((id.to_string(), name));
+                Ok(definition.clone())
+            });
         authorization
             .expect_create_or_update_role_assignment_by_id()
             .returning(move |id, assignment: &RoleAssignment| {
@@ -3861,5 +3877,180 @@ mod direct_setup_tests {
             .await
             .expect("the delete finishes");
         assert_eq!(*deleted.lock().unwrap(), vec!["aaaa".to_string()]);
+    }
+    /// What the package renders for the same stack and what direct setup writes agree on who holds
+    /// which role on the group, and on nothing else. Roles are matched by the role's own name,
+    /// which both sides take from the same generated plan.
+    #[tokio::test]
+    async fn direct_setup_assigns_what_the_package_renders() {
+        use alien_core::import::EmitContext;
+        use alien_core::permissions::{ManagementPermissions, PermissionProfile};
+        use alien_core::{ServiceAccount, StackSettings};
+        use alien_terraform::emitters::azure::sandbox::AzureSandboxEmitter;
+        use alien_terraform::TfEmitter;
+        use hcl::structure::Structure;
+        use std::collections::BTreeSet;
+        use std::sync::Mutex;
+
+        // The package side.
+        let stack = alien_core::Stack::new("acme".to_string())
+            .add(sandbox(SandboxEgress::None), ResourceLifecycle::Frozen)
+            .add(
+                ServiceAccount::new("runtime-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .permission(
+                "runtime",
+                PermissionProfile::new().resource("box_one", ["sandbox/execute"]),
+            )
+            .management(ManagementPermissions::Extend(
+                PermissionProfile::new().resource("box_one", ["sandbox/images"]),
+            ))
+            .build();
+        let names: indexmap::IndexMap<String, String> =
+            [("box_one", "box_one"), ("runtime-sa", "runtime_sa")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        let settings = StackSettings::default();
+        let ctx = EmitContext {
+            stack: &stack,
+            resource: stack.resources.get("box_one").unwrap(),
+            resource_id: "box_one",
+            platform: Platform::Azure,
+            targets_kubernetes: false,
+            stack_settings: &settings,
+            names: &names,
+            pins: &alien_core::SetupPins::default(),
+        };
+        let fragment = AzureSandboxEmitter.emit(&ctx).expect("renders");
+        let attribute = |block: &hcl::structure::Block, key: &str| -> String {
+            block
+                .body
+                .iter()
+                .find_map(|s| match s {
+                    Structure::Attribute(a) if a.key.as_str() == key => Some(a.expr.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {key}"))
+        };
+        let package: Vec<(String, String)> = fragment
+            .resource_blocks
+            .iter()
+            .filter(|b| b.labels.first().map(|l| l.as_str()) == Some("azurerm_role_assignment"))
+            .map(|b| {
+                let principal = attribute(b, "principal_id");
+                let who = if principal.contains("azurerm_user_assigned_identity.runtime_sa") {
+                    "workload"
+                } else if principal.contains("azurerm_client_config") {
+                    "applier"
+                } else {
+                    panic!("an unknown principal in the package: {principal}")
+                };
+                (who.to_string(), attribute(b, "role_definition_id"))
+            })
+            .collect();
+
+        // The direct side.
+        let made = Arc::new(AtomicBool::new(false));
+        let made_by_create = made.clone();
+        let mut groups = MockSandboxGroupsApi::new();
+        groups
+            .expect_create_or_update_sandbox_group()
+            .returning(move |_, _, _| {
+                made_by_create.store(true, Ordering::SeqCst);
+                Ok(group("Succeeded"))
+            });
+        groups.expect_get_sandbox_group().returning(move |_, _| {
+            if made.load(Ordering::SeqCst) {
+                Ok(group("Succeeded"))
+            } else {
+                Err(not_found())
+            }
+        });
+        let assigned: Assigned = Arc::new(Mutex::new(Vec::new()));
+        let roles = Arc::new(Mutex::new(Vec::new()));
+        let mut executor = executor_with_authorization(
+            AzureSandboxController::default(),
+            groups,
+            true,
+            SandboxEgress::None,
+            recording_authorization_with_roles(assigned.clone(), roles.clone()),
+            true,
+            true,
+        )
+        .await;
+        drive(&mut executor).await;
+        let sanitized = |name: &str| -> String {
+            name.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '_'
+                    }
+                })
+                .collect()
+        };
+        let custom: Vec<(String, String)> = roles
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, name)| (id.clone(), sanitized(name)))
+            .collect();
+        let direct: Vec<(String, String)> = assigned
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, principal, role)| {
+                let who = match principal.as_str() {
+                    "principal-1" => "workload",
+                    "applier-oid" => "applier",
+                    other => panic!("direct setup assigned to an unknown principal {other}"),
+                };
+                // A custom role is its own name, a predefined one its definition id.
+                let key = custom
+                    .iter()
+                    .find(|(id, _)| role.ends_with(id.as_str()))
+                    .map(|(_, name)| format!("custom:{name}"))
+                    .unwrap_or_else(|| {
+                        format!("predefined:{}", role.rsplit('/').next().unwrap_or(role))
+                    });
+                (who.to_string(), key)
+            })
+            .collect();
+        let package: BTreeSet<(String, String)> = package
+            .into_iter()
+            .map(|(who, role)| {
+                let key = if role.contains("roleDefinitions/") {
+                    format!(
+                        "predefined:{}",
+                        role.trim_end_matches('"').rsplit('/').next().unwrap()
+                    )
+                } else {
+                    // The label spells the role's sanitized name between a prefix and an index; the
+                    // direct role's name carries the deployment prefix and a suffix around it.
+                    let label = role
+                        .trim_start_matches("azurerm_role_definition.setup_")
+                        .trim_end_matches(".role_definition_resource_id");
+                    let mut tokens: Vec<&str> = label.split('_').collect();
+                    tokens.pop(); // the index
+                    tokens.remove(0); // `management` or the profile name
+                    let core = tokens.join("_");
+                    custom
+                        .iter()
+                        .find(|(_, name)| name.contains(&core))
+                        .map(|(_, name)| format!("custom:{name}"))
+                        .unwrap_or(role)
+                };
+                (who, key)
+            })
+            .collect();
+        let direct: BTreeSet<(String, String)> = direct.into_iter().collect();
+        assert_eq!(package.len(), 2, "the comparison has content: {package:?}");
+        assert_eq!(
+            direct, package,
+            "direct setup and the package assign different roles on the group"
+        );
     }
 }
