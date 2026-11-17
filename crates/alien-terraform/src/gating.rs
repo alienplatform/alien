@@ -140,6 +140,28 @@ pub(crate) fn gate_fragment(
             }
         }
     }
+    // A lookup the fragment owns that reads a gated resource must run only while that resource
+    // exists: indexing the empty instance list fails the plan when the gate is off. A lookup
+    // that reads nothing gated stays as it is.
+    for block in &mut fragment.data_blocks {
+        let has_count = block
+            .body
+            .attributes()
+            .any(|attribute| attribute.key.as_str() == "count");
+        if has_count {
+            continue;
+        }
+        let mut rewritten = block.clone();
+        rewrite_block(&mut rewritten, gated);
+        if rewritten != *block {
+            enabled::gate(block, Some(input_id))?;
+            if let (Some(provider), Some(label)) = (block.labels.first(), block.labels.get(1)) {
+                gated
+                    .addresses
+                    .insert((format!("data.{}", provider.as_str()), label.as_str().to_string()));
+            }
+        }
+    }
     for (provider_type, label) in moves {
         fragment.moved_blocks.push(crate::block::block(
             "moved",
@@ -272,6 +294,18 @@ pub(crate) fn rewrite_expression(expression: &mut Expression, gated: &GatedAddre
                     traversal.operators.as_slice()
                 {
                     if gated.contains(&format!("ephemeral.{provider}"), label.as_str()) {
+                        traversal
+                            .operators
+                            .insert(2, TraversalOperator::Index(Expression::Number(0.into())));
+                    }
+                }
+                return;
+            }
+            if root.as_str() == "data" {
+                if let [TraversalOperator::GetAttr(provider), TraversalOperator::GetAttr(label), TraversalOperator::GetAttr(_), ..] =
+                    traversal.operators.as_slice()
+                {
+                    if gated.contains(&format!("data.{provider}"), label.as_str()) {
                         traversal
                             .operators
                             .insert(2, TraversalOperator::Index(Expression::Number(0.into())));

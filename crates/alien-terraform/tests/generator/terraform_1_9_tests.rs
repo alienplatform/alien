@@ -97,7 +97,10 @@ fn source_stack(gated_database: bool) -> Stack {
 /// The module a registered EKS install ships: registration, provider-rendered Helm install and
 /// the Remote Operator lifecycle locals.
 fn registered_eks_module(stack: &Stack) -> alien_terraform::ModuleFiles {
-    let registry = TfRegistry::built_in();
+    // The tests built on this module register every resource id the manager expects except the
+    // database, which they leave out, so the registry here has no database emitter.
+    let mut registry = TfRegistry::built_in();
+    registry.unregister("postgres", alien_core::Platform::Aws);
     generate_product_terraform_module(
         stack,
         TerraformTarget::Eks,
@@ -403,7 +406,7 @@ async fn a_gated_database_decides_the_registered_network_on_terraform_1_9() {
 
     let stack = prepare_for_target(source_stack(true), TerraformTarget::Eks).await;
     let module = registered_eks_module(&stack);
-    // The built-in registry has no database emitter, so the module registers every id the manager
+    // This registry has no database emitter, so the module registers every id the manager
     // expects except the database itself.
     let without_database =
         |ids: &[String]| -> Vec<String> { ids.iter().filter(|id| *id != "db").cloned().collect() };
