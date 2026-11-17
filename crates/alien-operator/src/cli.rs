@@ -594,6 +594,14 @@ async fn run_operator_cli(
             args.identity_aws_secret.as_deref(),
         ),
     )?;
+    refuse_encryption_key_with_identity_store(
+        args.encryption_key_file.as_deref(),
+        env_string("OPERATOR_ENCRYPTION_KEY").is_some(),
+        has_identity_store(
+            args.identity_secret.as_deref(),
+            args.identity_aws_secret.as_deref(),
+        ),
+    )?;
     let owned_values = load_owned_secret(
         args.owned_secret.as_deref(),
         &args.owned_secret_keys,
@@ -1937,6 +1945,22 @@ fn refuse_owned_secret_with_identity_store(
     Ok(())
 }
 
+/// With an identity store the database key lives in the store, so a key given
+/// by file or variable would be ignored without a word. Refuse the combination
+/// instead, like the owned Secret.
+fn refuse_encryption_key_with_identity_store(
+    encryption_key_file: Option<&std::path::Path>,
+    has_encryption_key_env: bool,
+    has_identity_store: bool,
+) -> Result<()> {
+    if has_identity_store && (encryption_key_file.is_some() || has_encryption_key_env) {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "An encryption key (OPERATOR_ENCRYPTION_KEY_FILE or OPERATOR_ENCRYPTION_KEY) and an identity store (OPERATOR_IDENTITY_SECRET or OPERATOR_IDENTITY_AWS_SECRET) are both set. Set only one: with an identity store the database key is kept in the store and the given key would be ignored.".to_string(),
+        }));
+    }
+    Ok(())
+}
+
 /// The values in the Secret the Operator owns, created first if they are missing. Empty when
 /// the chart names no such Secret (an Operator started with a key file or variable).
 async fn load_owned_secret(
@@ -2144,9 +2168,40 @@ const LOCAL_KEY_FILE_NAME: &str = "operator.key";
 
 /// Read the local key, or create it (64 hex characters, mode 0600, never
 /// replacing an existing file) on the first start.
+///
+/// The key is written to a temporary file, flushed to disk and then linked into
+/// place, so `operator.key` is either absent or complete: a crash cannot leave
+/// an empty file that blocks the next start. A file that is empty anyway (left
+/// by an earlier version that wrote in place) is treated as absent only when no
+/// database exists beside it: the database is created after the key is read,
+/// so with none, no data was ever encrypted with a key from this file. With a
+/// database present the file is the only copy of its key, so the start fails
+/// and names the file.
 async fn load_or_create_local_key(path: &std::path::Path) -> Result<String> {
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
-        return read_secret_file(path, "local encryption key").await;
+        let empty = tokio::fs::read_to_string(path)
+            .await
+            .map(|contents| contents.trim().is_empty())
+            .unwrap_or(false);
+        if !empty {
+            return read_secret_file(path, "local encryption key").await;
+        }
+        let has_database = path.parent().is_some_and(crate::owned_secret::has_state);
+        if has_database {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "The local encryption key file '{}' is empty but the database beside it exists, so its key is lost. Restore the file from a backup, or remove the data directory to start over (the Operator then enrolls again).",
+                    path.display()
+                ),
+            }));
+        }
+        warn!(path = %path.display(), "The local encryption key file is empty and no database exists beside it; creating a new key");
+        tokio::fs::remove_file(path)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Cannot replace the empty key file '{}'", path.display()),
+            })?;
     }
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).map_err(|_| {
@@ -2163,31 +2218,43 @@ async fn load_or_create_local_key(path: &std::path::Path) -> Result<String> {
                 message: format!("Cannot create '{}'", parent.display()),
             })?;
     }
-    use tokio::io::AsyncWriteExt;
-    let created = {
+    let write_error = |error: std::io::Error| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Cannot write '{}': {error}", path.display()),
+        })
+    };
+    let mut temporary_name = path.as_os_str().to_owned();
+    temporary_name.push(format!(".tmp-{}", std::process::id()));
+    let temporary = PathBuf::from(temporary_name);
+    // A temporary left by this process id's earlier crash is removed first.
+    let _ = tokio::fs::remove_file(&temporary).await;
+    {
+        use tokio::io::AsyncWriteExt;
         let mut options = tokio::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
         options.mode(0o600);
-        options.open(path).await
-    };
-    match created {
-        Ok(mut file) => {
-            file.write_all(key.as_bytes())
-                .await
-                .into_alien_error()
-                .context(ErrorData::ConfigurationError {
-                    message: format!("Cannot write '{}'", path.display()),
-                })?;
+        let mut file = options.open(&temporary).await.map_err(write_error)?;
+        file.write_all(key.as_bytes()).await.map_err(write_error)?;
+        file.sync_all().await.map_err(write_error)?;
+    }
+    // A hard link never replaces: another start that created the key first wins.
+    let linked = tokio::fs::hard_link(&temporary, path).await;
+    let _ = tokio::fs::remove_file(&temporary).await;
+    match linked {
+        Ok(()) => {
+            // Flush the directory entry, so the file is there after a crash.
+            if let Some(parent) = path.parent() {
+                if let Ok(directory) = tokio::fs::File::open(parent).await {
+                    let _ = directory.sync_all().await;
+                }
+            }
             Ok(key)
         }
-        // Another start created it first.
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             read_secret_file(path, "local encryption key").await
         }
-        Err(error) => Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Cannot create '{}': {error}", path.display()),
-        })),
+        Err(error) => Err(write_error(error)),
     }
 }
 
@@ -2376,6 +2443,54 @@ mod tests {
         assert!(refuse(Some("owned"), false).is_ok());
         assert!(refuse(None, true).is_ok());
         assert!(refuse(None, false).is_ok());
+    }
+
+    #[test]
+    fn an_encryption_key_with_an_identity_store_is_refused_not_silently_ignored() {
+        let refuse = super::refuse_encryption_key_with_identity_store;
+        let file = std::path::Path::new("/keys/operator.key");
+        assert!(refuse(Some(file), false, true).is_err());
+        assert!(refuse(None, true, true).is_err());
+        assert!(refuse(Some(file), true, false).is_ok());
+        assert!(refuse(None, false, true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_local_key_is_created_whole_and_an_empty_file_is_handled_by_what_it_protects() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("operator.key");
+        let key = super::load_or_create_local_key(&path).await.unwrap();
+        assert_eq!(key.len(), 64);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), key);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // No temporary is left beside it, and a second start reads the same key.
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert_eq!(super::load_or_create_local_key(&path).await.unwrap(), key);
+
+        // An empty file with no database beside it protects nothing: replaced.
+        let empty_dir = tempfile::tempdir().unwrap();
+        let empty = empty_dir.path().join("operator.key");
+        std::fs::write(&empty, "").unwrap();
+        std::fs::set_permissions(&empty, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let replaced = super::load_or_create_local_key(&empty).await.unwrap();
+        assert_eq!(replaced.len(), 64);
+
+        // With a database beside it the key is lost: fail, naming the file.
+        let lost_dir = tempfile::tempdir().unwrap();
+        let lost = lost_dir.path().join("operator.key");
+        std::fs::write(&lost, "").unwrap();
+        std::fs::set_permissions(&lost, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(lost_dir.path().join("operator.db"), "x").unwrap();
+        let error = super::load_or_create_local_key(&lost).await.unwrap_err();
+        assert!(error.to_string().contains("operator.key"), "{error}");
+        assert_eq!(std::fs::read_to_string(&lost).unwrap(), "");
     }
 
     use super::{

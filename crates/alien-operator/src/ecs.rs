@@ -356,7 +356,8 @@ pub(crate) struct ParsedPage {
     pub next_token: Option<String>,
     /// The page was cut at the batch byte limit; read the rest of it next.
     pub cut: bool,
-    /// Events of the page taken (stored or skipped): where the rest begins.
+    /// Events of the page taken (stored or skipped, counting those skipped
+    /// before): the index where the rest begins.
     pub taken: usize,
 }
 
@@ -388,15 +389,19 @@ pub(crate) fn parse_events_page_from(
             event.get("eventId").and_then(Value::as_str),
             event.get("message").and_then(Value::as_str),
         ) else {
+            taken += 1;
             continue;
         };
         if position.already_stored(timestamp, id) {
+            taken += 1;
             continue;
         }
         if bytes >= MAX_BATCH_BYTES {
+            // This event is not taken: the next read of the page begins here.
             cut = true;
             break;
         }
+        taken += 1;
         position.advance(timestamp, id);
         let mut body = message.trim_end_matches('\n').to_string();
         if body.len() > MAX_LINE_BYTES {
@@ -477,21 +482,38 @@ pub(crate) async fn list_log_groups(
         }
     }
     if names.len() > MAX_LOG_GROUPS {
-        warn!(
-            max = MAX_LOG_GROUPS,
-            "More log groups under the prefix than the limit; the rest are not collected"
-        );
+        // Said when the prefix goes over the limit, not on every poll.
+        if !OVER_GROUP_LIMIT_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            warn!(
+                max = MAX_LOG_GROUPS,
+                "More log groups under the prefix than the limit; the rest are not collected"
+            );
+        }
         names.truncate(MAX_LOG_GROUPS);
+    } else {
+        OVER_GROUP_LIMIT_WARNED.store(false, std::sync::atomic::Ordering::Relaxed);
     }
     Ok(names)
 }
+
+/// Whether the warning about more log groups than the limit was given and the
+/// count has not come back under it since.
+static OVER_GROUP_LIMIT_WARNED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Groups for which a read that used its whole page scan without finding a
+/// new event was already reported.
+static UNPRODUCTIVE_GROUPS_WARNED: std::sync::Mutex<Vec<String>> =
+    std::sync::Mutex::new(Vec::new());
 
 /// Pages scanned in one poll that held no new event are not counted against
 /// the page budget (a window of already-stored events must not use it up), but
 /// they are bounded so one poll cannot read for ever.
 const MAX_SCANNED_PAGES: usize = 100;
 
-/// One queued batch: the records and the position saved with them.
+/// One queued batch: the records and the position saved with them. A batch
+/// without records only moves the saved position (progress over pages that held
+/// nothing new).
 pub(crate) struct LogBatch {
     pub records: Vec<PodLogRecord>,
     pub position: LogPosition,
@@ -508,6 +530,8 @@ pub(crate) async fn read_group(
 ) -> Result<Vec<LogBatch>> {
     let mut batches = Vec::new();
     let mut productive_pages = 0;
+    let mut scanned = 0;
+    let start = position.clone();
     // A read goes on where the saved one stopped; otherwise it starts at the
     // window. A token the service no longer accepts is given up once, and the
     // read starts again from its first page: events stored before whose ids
@@ -519,6 +543,7 @@ pub(crate) async fn read_group(
     // Only the token this call started with can be stale; the ones it was just given are fresh.
     let mut saved_token = chain.token.is_some();
     for _ in 0..MAX_SCANNED_PAGES {
+        scanned += 1;
         position.chain = Some(chain.clone());
         let mut request = json!({
             "logGroupName": group,
@@ -589,6 +614,29 @@ pub(crate) async fn read_group(
             break;
         }
     }
+    // Progress over pages that held nothing new is saved too: otherwise the next
+    // poll would read the same pages again and a window of stored events would
+    // keep it from ever reaching what is new.
+    let last_saved = batches.last().map(|batch| batch.position.encode());
+    if last_saved.as_deref() != Some(position.encode().as_str()) && position != start {
+        batches.push(LogBatch {
+            records: Vec::new(),
+            position,
+        });
+    }
+    if scanned == MAX_SCANNED_PAGES && productive_pages == 0 {
+        let mut warned = UNPRODUCTIVE_GROUPS_WARNED
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if !warned.iter().any(|name| name == group) {
+            warned.push(group.to_string());
+            warn!(
+                group,
+                pages = MAX_SCANNED_PAGES,
+                "A poll read many pages of a log group without finding a new event; it continues from there at the next poll"
+            );
+        }
+    }
     Ok(batches)
 }
 
@@ -613,6 +661,17 @@ pub(crate) async fn poll_group(
     let mut total = 0;
     for batch in read_group(logs, group, position).await? {
         total += batch.records.len();
+        let offset = PodLogOffset {
+            timestamp: batch.position.encode(),
+            ordinal: 0,
+        };
+        if batch.records.is_empty() {
+            state
+                .db
+                .save_pod_log_offset(&key, "logs", 0, &offset)
+                .await?;
+            continue;
+        }
         let encoded = pod_log_records_to_otlp(batch.records, deployment_id)?;
         state
             .db
@@ -1194,6 +1253,113 @@ mod tests {
             }
             Ok(page)
         }
+    }
+
+    /// One page, no token, of events with lines big enough that the page
+    /// holds several batches: every poll is cut at the batch limit.
+    #[derive(Debug)]
+    struct BigLines {
+        total: usize,
+        line: String,
+    }
+
+    #[async_trait::async_trait]
+    impl EcsApi for BigLines {
+        async fn call(&self, _op: &str, request: Value) -> alien_client_core::Result<Value> {
+            let start = request["startTime"].as_i64().unwrap();
+            // Forty seconds apart: older than the late-event window of the
+            // newest event, so an event stored earlier is no longer in the
+            // position's list of stored ids and only the page index tells that
+            // it was taken.
+            let events: Vec<Value> = (0..self.total)
+                .map(|i| (i, 1000 + 40_000 * i as i64))
+                .filter(|(_, ts)| *ts >= start)
+                .map(|(i, ts)| json!({"timestamp": ts, "eventId": format!("e{i}"), "message": format!("{i}:{}", self.line), "logStreamName": "s"}))
+                .collect();
+            Ok(json!({ "events": events }))
+        }
+    }
+
+    /// A page cut at the batch limit resumes after what it stored, not at its
+    /// first event: with a page of large lines the same first events were
+    /// stored again on every poll and the group never advanced.
+    #[tokio::test]
+    async fn a_page_larger_than_the_batch_limit_is_stored_once_over_several_polls() {
+        // Two lines fill a batch; 12 events are 6 batches, two polls of 3 pages.
+        let group = BigLines {
+            total: 12,
+            line: "x".repeat(MAX_BATCH_BYTES / 2),
+        };
+        // A replaced task's lookback: the start is before every event.
+        let mut position = LogPosition {
+            timestamp_ms: 1000,
+            ..Default::default()
+        };
+        let mut delivered: Vec<String> = Vec::new();
+        let mut positions = Vec::new();
+        for _ in 0..6 {
+            let batches = read_group(&group, "g", position.clone()).await.unwrap();
+            for batch in &batches {
+                delivered.extend(
+                    batch
+                        .records
+                        .iter()
+                        .map(|r| r.body.split(':').next().unwrap().to_string()),
+                );
+            }
+            if let Some(last) = batches.last() {
+                // Saved and read back, as a restart does.
+                position = LogPosition::decode(&last.position.encode()).unwrap();
+            }
+            positions.push(position.encode());
+        }
+        let expected: Vec<String> = (0..12).map(|i| i.to_string()).collect();
+        assert_eq!(delivered, expected, "each event once, in order");
+        // The position moved on poll after poll until the page was done.
+        assert_ne!(positions[0], positions[1]);
+        assert!(position.chain.is_none(), "the read reached the end");
+    }
+
+    /// 150 pages of events older than the query start (already stored or too
+    /// old), joined by tokens that are page numbers.
+    #[derive(Debug)]
+    struct OldPages;
+
+    #[async_trait::async_trait]
+    impl EcsApi for OldPages {
+        async fn call(&self, _op: &str, request: Value) -> alien_client_core::Result<Value> {
+            let page: usize = request
+                .get("nextToken")
+                .and_then(Value::as_str)
+                .map_or(0, |token| token.parse().unwrap());
+            let mut body = json!({"events": [
+                {"timestamp": 1, "eventId": format!("old{page}"), "message": "m", "logStreamName": "s"}
+            ]});
+            if page + 1 < 150 {
+                body["nextToken"] = json!((page + 1).to_string());
+            }
+            Ok(body)
+        }
+    }
+
+    /// A poll that went through pages with nothing new saves how far it got, so
+    /// the next poll goes on from there instead of reading the same pages.
+    #[tokio::test]
+    async fn progress_over_pages_with_nothing_new_is_saved() {
+        let start = LogPosition {
+            timestamp_ms: 1_000_000,
+            ..Default::default()
+        };
+        let first = read_group(&OldPages, "g", start).await.unwrap();
+        assert_eq!(first.len(), 1);
+        assert!(first[0].records.is_empty());
+        let saved = LogPosition::decode(&first[0].position.encode()).unwrap();
+        assert_eq!(saved.chain.as_ref().unwrap().token.as_deref(), Some("100"));
+        let second = read_group(&OldPages, "g", saved).await.unwrap();
+        assert!(second.iter().all(|batch| batch.records.is_empty()));
+        assert!(second
+            .last()
+            .is_none_or(|batch| batch.position.chain.is_none()));
     }
 
     #[tokio::test]

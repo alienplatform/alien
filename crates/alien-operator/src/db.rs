@@ -1764,6 +1764,34 @@ impl OperatorDb {
         }))
     }
 
+    /// Save a cursor without queuing any records (a read that went through
+    /// pages with nothing new).
+    pub async fn save_pod_log_offset(
+        &self,
+        pod_uid: &str,
+        container: &str,
+        restart_count: i32,
+        offset: &PodLogOffset,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO pod_log_offsets (pod_uid, container, restart_count, timestamp, ordinal) VALUES (?, ?, ?, ?, ?) ON CONFLICT(pod_uid, container, restart_count) DO UPDATE SET timestamp = excluded.timestamp, ordinal = excluded.ordinal",
+            (
+                pod_uid.to_string(),
+                container.to_string(),
+                i64::from(restart_count),
+                offset.timestamp.clone(),
+                offset.ordinal,
+            ),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to save Pod log cursor".to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Forget one saved cursor (a journal cursor that the journal no longer accepts).
     pub async fn delete_pod_log_offset(
         &self,
