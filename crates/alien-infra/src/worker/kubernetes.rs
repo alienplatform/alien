@@ -397,8 +397,11 @@ impl KubernetesWorkerController {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
-            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+            KubernetesEndpointAction::Waiting {
+                suggested_delay,
+                max_polls,
+            } => Ok(HandlerAction::Stay {
+                max_times: Some(max_polls),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -547,9 +550,13 @@ impl KubernetesWorkerController {
                 &mut self.public_endpoint,
             )
             .await?;
-            if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
+            if let KubernetesEndpointAction::Waiting {
+                suggested_delay,
+                max_polls,
+            } = action
+            {
                 return Ok(HandlerAction::Stay {
-                    max_times: Some(60),
+                    max_times: Some(max_polls),
                     suggested_delay: Some(suggested_delay),
                 });
             }
@@ -906,8 +913,11 @@ impl KubernetesWorkerController {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
-            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+            KubernetesEndpointAction::Waiting {
+                suggested_delay,
+                max_polls,
+            } => Ok(HandlerAction::Stay {
+                max_times: Some(max_polls),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -1546,6 +1556,131 @@ mod tests {
                 KubernetesWorkerState::ReconcilePublicEndpointAfterUpdate
             ));
         }
+    }
+
+    /// Managed certificates issue asynchronously, so a first install waits past the 60 polls
+    /// other endpoint waits get, and fails only when issuance itself fails.
+    #[tokio::test]
+    async fn endpoint_waits_while_the_certificate_issues_and_fails_when_issuance_fails() {
+        use alien_core::{
+            CertificateStatus, DnsRecordStatus, DomainMetadata, KubernetesCertificateMode,
+            KubernetesExposureSettings, KubernetesIngressRouteProfile, KubernetesRouteProfile,
+            KubernetesSettings, ResourceDomainInfo,
+        };
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .public_endpoint(alien_core::WorkerPublicEndpoint {
+                name: "api".into(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let server = httpmock::MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST);
+            then.status(201).json_body(serde_json::json!({
+                "metadata": {"name": "worker", "namespace": "test-ns"},
+                "spec": {}
+            }));
+        });
+        // An empty cluster: every object lookup is "not found".
+        server.mock(|when, then| {
+            when.any_request();
+            then.status(404).json_body(serde_json::json!({
+                "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                "reason": "NotFound", "code": 404
+            }));
+        });
+        let mut harness =
+            KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let domain = |status| {
+            Some(DomainMetadata {
+                base_domain: "example.com".into(),
+                public_subdomain: "app".into(),
+                hosted_zone_id: "Z1".into(),
+                resources: std::collections::HashMap::from([(
+                    "worker".to_string(),
+                    ResourceDomainInfo {
+                        fqdn: "worker.example.com".into(),
+                        certificate_id: "cert-1".into(),
+                        certificate_status: status,
+                        dns_status: DnsRecordStatus::Pending,
+                        dns_error: None,
+                        certificate_chain: None,
+                        private_key: None,
+                        issued_at: None,
+                        endpoints: Default::default(),
+                        aliases: Vec::new(),
+                    },
+                )]),
+            })
+        };
+        let config = harness.deployment_config_mut();
+        config.stack_settings.kubernetes = Some(KubernetesSettings {
+            cluster: None,
+            exposure: Some(KubernetesExposureSettings::Generated {
+                route: KubernetesRouteProfile::Ingress(KubernetesIngressRouteProfile {
+                    ingress_class_name: "traefik".into(),
+                    ..Default::default()
+                }),
+                certificate: KubernetesCertificateMode::ManagedTlsSecret {
+                    secret_name_template: "{resource}-tls".into(),
+                },
+            }),
+        });
+        config.domain_metadata = domain(CertificateStatus::Pending);
+        let mut ctx = harness.ctx();
+        let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+            panic!("Kubernetes client")
+        };
+        let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut() else {
+            panic!("manual client")
+        };
+        *server_url = server.base_url();
+        let url = server.base_url();
+        fn ctx_for<'a>(
+            harness: &'a KubernetesManifestTestHarness,
+            url: &str,
+        ) -> ResourceControllerContext<'a> {
+            let mut ctx = harness.ctx();
+            let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+                panic!("Kubernetes client")
+            };
+            let alien_core::KubernetesClientConfig::Manual { server_url, .. } = client.as_mut()
+            else {
+                panic!("manual client")
+            };
+            *server_url = url.to_string();
+            ctx
+        }
+        let mut controller = KubernetesWorkerController {
+            state: KubernetesWorkerState::ReconcilePublicEndpoint,
+            deployment_name: Some("worker".into()),
+            namespace: Some("test-ns".into()),
+            ..Default::default()
+        };
+        for poll in 0..200 {
+            crate::core::ResourceController::step(&mut controller, &ctx_for(&harness, &url))
+                .await
+                .unwrap_or_else(|error| panic!("poll {poll} of a pending certificate: {error}"));
+            assert_eq!(
+                crate::core::ResourceController::get_status(&controller),
+                ResourceStatus::Provisioning
+            );
+        }
+
+        harness.deployment_config_mut().domain_metadata = domain(CertificateStatus::Failed);
+        let error =
+            crate::core::ResourceController::step(&mut controller, &ctx_for(&harness, &url))
+                .await
+                .expect_err("a failed certificate fails the endpoint");
+        assert!(
+            error.to_string().contains("Certificate issuance failed"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

@@ -39,7 +39,7 @@ pub use test::*;
 /// Re-export from alien-core (single source of truth).
 pub use alien_core::crontab_to_eventbridge;
 
-mod certificate_wait;
+pub(crate) mod certificate_wait;
 #[cfg(feature = "aws")]
 mod ecr_region;
 mod readiness_probe;

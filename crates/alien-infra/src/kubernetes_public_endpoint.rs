@@ -31,8 +31,10 @@ use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::split_certificate_chain;
 use crate::core::{kubernetes_cleanup_resource_labels, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
+use crate::worker::certificate_wait::{CERTIFICATE_WAIT_MAX_POLLS, CERTIFICATE_WAIT_POLL_SECS};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
+const ENDPOINT_WAIT_MAX_POLLS: u32 = 60;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KubernetesPublicEndpointState {
@@ -90,7 +92,29 @@ pub(crate) struct KubernetesPublicEndpointTarget<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KubernetesEndpointAction {
     Ready,
-    Waiting { suggested_delay: Duration },
+    Waiting {
+        suggested_delay: Duration,
+        max_polls: u32,
+    },
+}
+
+impl KubernetesEndpointAction {
+    /// Waiting for the cluster: load balancer, DNS, health check.
+    fn waiting_for_endpoint(suggested_delay: Duration) -> Self {
+        Self::Waiting {
+            suggested_delay,
+            max_polls: ENDPOINT_WAIT_MAX_POLLS,
+        }
+    }
+
+    /// Waiting for the managed certificate, which issues asynchronously and is not a failure.
+    /// It shares the bound the public workers on other clouds use.
+    fn waiting_for_certificate() -> Self {
+        Self::Waiting {
+            suggested_delay: Duration::from_secs(CERTIFICATE_WAIT_POLL_SECS),
+            max_polls: CERTIFICATE_WAIT_MAX_POLLS,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +130,7 @@ struct EndpointPlan {
 #[derive(Debug, Clone)]
 enum EndpointPlanResolution {
     Disabled,
-    Waiting,
+    WaitingForCertificate,
     Ready(EndpointPlan),
 }
 
@@ -164,10 +188,8 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             state.load_balancer_endpoint = None;
             return Ok(KubernetesEndpointAction::Ready);
         }
-        EndpointPlanResolution::Waiting => {
-            return Ok(KubernetesEndpointAction::Waiting {
-                suggested_delay: ENDPOINT_WAIT,
-            });
+        EndpointPlanResolution::WaitingForCertificate => {
+            return Ok(KubernetesEndpointAction::waiting_for_certificate());
         }
         EndpointPlanResolution::Ready(plan) => plan,
     };
@@ -186,9 +208,9 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 region.as_ref(),
             )?);
             state.managed_acm_import_token = Some(Uuid::new_v4().to_string());
-            return Ok(KubernetesEndpointAction::Waiting {
-                suggested_delay: Duration::from_secs(1),
-            });
+            return Ok(KubernetesEndpointAction::waiting_for_endpoint(
+                Duration::from_secs(1),
+            ));
         }
     }
     let previous_ingress_name = state.ingress_name.clone();
@@ -467,18 +489,18 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         state.public_url = None;
         state.named_public_endpoints.clear();
         state.load_balancer_endpoint = None;
-        return Ok(KubernetesEndpointAction::Waiting {
-            suggested_delay: ENDPOINT_WAIT,
-        });
+        return Ok(KubernetesEndpointAction::waiting_for_endpoint(
+            ENDPOINT_WAIT,
+        ));
     };
 
     if !load_balancer_endpoint_dns_resolves(&endpoint).await {
         state.public_url = None;
         state.named_public_endpoints.clear();
         state.load_balancer_endpoint = None;
-        return Ok(KubernetesEndpointAction::Waiting {
-            suggested_delay: ENDPOINT_WAIT,
-        });
+        return Ok(KubernetesEndpointAction::waiting_for_endpoint(
+            ENDPOINT_WAIT,
+        ));
     }
 
     let public_url = plan
@@ -491,9 +513,9 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             state.public_url = None;
             state.named_public_endpoints.clear();
             state.load_balancer_endpoint = None;
-            return Ok(KubernetesEndpointAction::Waiting {
-                suggested_delay: ENDPOINT_WAIT,
-            });
+            return Ok(KubernetesEndpointAction::waiting_for_endpoint(
+                ENDPOINT_WAIT,
+            ));
         }
     }
 
@@ -1508,6 +1530,20 @@ fn resolve_endpoint_plan(
                 }));
             };
 
+            if domain.certificate_status == CertificateStatus::Failed
+                && !matches!(
+                    certificate,
+                    KubernetesCertificateMode::None
+                        | KubernetesCertificateMode::AwsAcmArn { .. }
+                        | KubernetesCertificateMode::TlsSecretRef(_)
+                )
+            {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: target.resource_id.to_string(),
+                    message: format!("Certificate issuance failed for {}", domain.fqdn),
+                }));
+            }
+
             if domain.certificate_status != CertificateStatus::Issued
                 && !matches!(
                     certificate,
@@ -1516,7 +1552,7 @@ fn resolve_endpoint_plan(
                         | KubernetesCertificateMode::TlsSecretRef(_)
                 )
             {
-                return Ok(EndpointPlanResolution::Waiting);
+                return Ok(EndpointPlanResolution::WaitingForCertificate);
             }
 
             if domain.certificate_status != CertificateStatus::Issued

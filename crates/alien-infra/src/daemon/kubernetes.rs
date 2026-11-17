@@ -325,8 +325,11 @@ impl KubernetesDaemonController {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
-            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+            KubernetesEndpointAction::Waiting {
+                suggested_delay,
+                max_polls,
+            } => Ok(HandlerAction::Stay {
+                max_times: Some(max_polls),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -442,11 +445,13 @@ impl KubernetesDaemonController {
         // container controller: managed-TLS certificate rotations, LB/DNS
         // drift, and a deleted Service/route are otherwise never re-applied
         // until an unrelated config change triggers the Update flow.
-        if let KubernetesEndpointAction::Waiting { suggested_delay } =
-            self.reconcile_endpoint(ctx).await?
+        if let KubernetesEndpointAction::Waiting {
+            suggested_delay,
+            max_polls,
+        } = self.reconcile_endpoint(ctx).await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: Some(max_polls),
                 suggested_delay: Some(suggested_delay),
             });
         }
@@ -706,8 +711,11 @@ impl KubernetesDaemonController {
                 state: Ready,
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
-            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+            KubernetesEndpointAction::Waiting {
+                suggested_delay,
+                max_polls,
+            } => Ok(HandlerAction::Stay {
+                max_times: Some(max_polls),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -1532,8 +1540,7 @@ mod tests {
         let render = |security: Option<alien_core::ContainerSecurity>| async move {
             let mut config = manifest_test_daemon(&[]);
             config.security = security;
-            let harness =
-                KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+            let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
             manifest_test_controller()
                 .build_daemonset(
                     &config,
@@ -1571,7 +1578,11 @@ mod tests {
             Some(1000)
         );
         assert_eq!(
-            restricted.security_context.as_ref().unwrap().run_as_non_root,
+            restricted
+                .security_context
+                .as_ref()
+                .unwrap()
+                .run_as_non_root,
             Some(true)
         );
         let container_context = restricted.containers[0]
@@ -1586,7 +1597,10 @@ mod tests {
             .iter()
             .map(|mount| mount.mount_path.as_str())
             .collect();
-        assert!(mounts.contains(&"/tmp") && mounts.contains(&"/cache"), "{mounts:?}");
+        assert!(
+            mounts.contains(&"/tmp") && mounts.contains(&"/cache"),
+            "{mounts:?}"
+        );
     }
 
     #[tokio::test]
