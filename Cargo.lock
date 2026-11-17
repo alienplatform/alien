@@ -529,6 +529,7 @@ dependencies = [
  "alien-deployment",
  "alien-error",
  "alien-helm",
+ "alien-hooks-runtime",
  "alien-infra",
  "alien-local",
  "alien-manager",
