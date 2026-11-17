@@ -236,7 +236,11 @@ async fn await_pull(
             "the pull path did not finish: failed={failed:?} good_seen={}",
             good_seen.len()
         );
-        let seen = json_request(&client, client.post(format!("{url}/pull/consume?nack={}", u8::from(nack)))).await;
+        let seen = json_request(
+            &client,
+            client.post(format!("{url}/pull/consume?nack={}", u8::from(nack))),
+        )
+        .await;
         for entry in seen.as_array().unwrap() {
             let id = entry["id"].as_str().unwrap().to_string();
             let attempt = entry["attempt"].as_u64().unwrap();
@@ -273,7 +277,11 @@ async fn await_pull(
         );
     }
     sleep(Duration::from_secs(10)).await;
-    let left = json_request(&client, client.post(format!("{url}/pull/peek?nack={}", u8::from(nack)))).await;
+    let left = json_request(
+        &client,
+        client.post(format!("{url}/pull/peek?nack={}", u8::from(nack))),
+    )
+    .await;
     assert_eq!(left["visible"], 0, "pulled must end empty: {left}");
     info!(
         ?attempts,
