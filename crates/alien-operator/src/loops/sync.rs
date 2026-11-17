@@ -2538,6 +2538,116 @@ mod tests {
         }
     }
 
+    /// Whether the deployment loop was woken (consuming the wake).
+    async fn deployment_woken(db: &OperatorDb) -> bool {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            db.wait_for_deployment(),
+        )
+        .await
+        .is_ok()
+    }
+
+    #[tokio::test]
+    async fn an_accepted_target_wakes_the_deployment_loop() {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        assert!(!deployment_woken(&db).await);
+        super::accept_target(&state, &fixtures::target(release, vec![]), false)
+            .await
+            .unwrap();
+        assert!(deployment_woken(&db).await);
+    }
+
+    #[tokio::test]
+    async fn a_retry_request_from_the_manager_wakes_the_deployment_loop() {
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        db.set_deployment_id("dep_retry").await.unwrap();
+        let failed = DeploymentState {
+            platform: Platform::Local,
+            status: DeploymentStatus::ProvisioningFailed,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            runtime_metadata: None,
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&failed).await.unwrap();
+        let retry = DeploymentState {
+            retry_requested: true,
+            ..failed
+        };
+        let app = Router::new().route(
+            "/v1/sync",
+            post(move |Json(_): Json<Value>| {
+                let response = json!({"currentState": retry});
+                async move { Json(response) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let state = OperatorState {
+            config: OperatorConfig::builder()
+                .platform(Platform::Local)
+                .data_dir(data_dir.path().to_str().unwrap())
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            db: db.clone(),
+            service_provider: None,
+            operations_sync_handler: None,
+            pod_log_collection: false,
+            cancel: CancellationToken::new(),
+        };
+        assert!(!deployment_woken(&db).await);
+        sync_with_manager(
+            &state,
+            &create_authenticated_client("fake-token").unwrap(),
+            &url,
+            false,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            db.get_deployment_state()
+                .await
+                .unwrap()
+                .unwrap()
+                .retry_requested
+        );
+        assert!(deployment_woken(&db).await);
+        server.abort();
+    }
+
     struct SyncFixture {
         config: OperatorConfig,
         status: DeploymentStatus,

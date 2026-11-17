@@ -343,10 +343,12 @@ pub(crate) async fn run_deployment_continuously(
     let target_release = match &current.target_release {
         Some(r) => r,
         None => {
-            if crate::daily_identity::has_runtime_identity(&state.db).await? {
-                refresh_installed_deployment(state).await?;
-            }
-            return Ok((0, Duration::ZERO));
+            let delay = if crate::daily_identity::has_runtime_identity(&state.db).await? {
+                refresh_installed(state).await?
+            } else {
+                Duration::ZERO
+            };
+            return Ok((0, delay));
         }
     };
     // A pushed target always carries an Alien release id (observe deployments never
@@ -548,7 +550,7 @@ pub(crate) async fn run_deployment_continuously(
             Err(error) => return Err(error),
         };
         finish_maintenance_refresh(state, &current, answers_claim).await?;
-        return Ok((steps, Duration::ZERO));
+        return Ok((steps, running_check_delay(&transport)));
     }
 
     // The claim whose target this loop applies. Captured before stepping: the
@@ -663,8 +665,31 @@ pub(crate) async fn run_deployment_continuously(
 
 /// Refresh an installed deployment for health reporting and bounded credential renewal.
 pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Result<()> {
+    refresh_installed(state).await.map(|_| ())
+}
+
+/// How long the loop waits before the next Running check: the controllers' own
+/// delay (30 s for a ready cluster or container, 5 s while one needs a closer
+/// look), never under [`RUNNING_CHECK_FLOOR`] nor over [`RUNNING_CHECK_CAP`].
+fn running_check_delay(transport: &OperatorTransport) -> Duration {
+    clamp_running_check_delay(Duration::from_millis(
+        transport.suggested_delay_ms.load(Ordering::Relaxed),
+    ))
+}
+
+fn clamp_running_check_delay(requested: Duration) -> Duration {
+    requested.clamp(RUNNING_CHECK_FLOOR, RUNNING_CHECK_CAP)
+}
+
+/// No Running check starts sooner than this after the last one.
+const RUNNING_CHECK_FLOOR: Duration = Duration::from_secs(5);
+/// A Running check never waits longer than this, whatever a controller asks.
+const RUNNING_CHECK_CAP: Duration = Duration::from_secs(60);
+
+/// [`refresh_installed_deployment`], returning how long to wait before the next check.
+async fn refresh_installed(state: &OperatorState) -> Result<Duration> {
     let Some(mut current) = state.db.get_deployment_state().await? else {
-        return Ok(());
+        return Ok(Duration::ZERO);
     };
     if current.target_release.is_some()
         || !matches!(
@@ -672,10 +697,12 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
             DeploymentStatus::Running | DeploymentStatus::RefreshFailed
         )
     {
-        return renew_installed_credentials(state).await;
+        return renew_installed_credentials(state)
+            .await
+            .map(|()| Duration::ZERO);
     }
     let Some(release) = current.current_release.as_ref() else {
-        return Ok(());
+        return Ok(Duration::ZERO);
     };
     let Some(config) = state.db.get_deployment_config().await? else {
         if state.db.get_airgap_receipt().await?.is_none()
@@ -683,7 +710,7 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
         {
             // Completed older installations discarded config. Preserve their status
             // until a newer verified target provides enough context to refresh.
-            return Ok(());
+            return Ok(Duration::ZERO);
         }
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: "The installed deployment config is unavailable for health refresh"
@@ -724,7 +751,7 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
         operation: LoopOperation::Deploy,
         delay_strategy: alien_deployment::runner::DelayStrategy::Yield,
     };
-    match run_maintenance_refresh(
+    let result = run_maintenance_refresh(
         state,
         &mut current,
         &mut config,
@@ -733,10 +760,10 @@ pub(super) async fn refresh_installed_deployment(state: &OperatorState) -> Resul
         &policy,
         &transport,
     )
-    .await
-    {
-        Err(_) if transport.superseded.load(Ordering::Relaxed) => Ok(()),
-        result => result.map(|_| ()),
+    .await;
+    match result {
+        Err(_) if transport.superseded.load(Ordering::Relaxed) => Ok(Duration::ZERO),
+        result => result.map(|_| running_check_delay(&transport)),
     }
 }
 
@@ -2620,6 +2647,89 @@ mod tests {
         let installed = state.db.get_deployment_state().await.unwrap().unwrap();
         assert_eq!(installed.status, DeploymentStatus::Running);
         (state, directory)
+    }
+
+    #[test]
+    fn the_running_check_follows_the_controller_delay_within_the_floor_and_cap() {
+        let delay = |ms: u64| clamp_running_check_delay(Duration::from_millis(ms));
+        assert_eq!(delay(0), Duration::from_secs(5));
+        assert_eq!(delay(2_000), Duration::from_secs(5));
+        assert_eq!(delay(30_000), Duration::from_secs(30));
+        assert_eq!(delay(300_000), Duration::from_secs(60));
+    }
+
+    /// A healthy installed deployment: the loop checks it at the controllers'
+    /// pace, not every interval (a 1 s interval ran a check every second).
+    #[tokio::test(start_paused = true)]
+    async fn a_healthy_running_deployment_is_checked_at_most_every_five_seconds() {
+        let (state, _directory) = installed_refresh_fixture().await;
+        state
+            .db
+            .write_daily_identity(&crate::daily_identity::DailyIdentityState {
+                manager_url: "https://manager.example".into(),
+                audience: "https://manager.example".into(),
+                deployment_id: "dep_site".into(),
+                current: "ax_day_v1_fixture".into(),
+                pending: None,
+                pending_started_at: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(24),
+                enrolled_code_hash: None,
+                pending_enrollment: None,
+                previous: None,
+            })
+            .await
+            .unwrap();
+        let state = Arc::new(state);
+        let waits = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+        let observed = Arc::clone(&waits);
+        let task = tokio::spawn(run_deployment_loop_observed(
+            Arc::clone(&state),
+            move |delay| observed.lock().unwrap().push(delay),
+        ));
+        tokio::time::sleep(Duration::from_secs(602)).await;
+        let waits_now = waits.lock().unwrap().clone();
+        assert!(
+            waits_now.len() <= 600 / 5 + 2,
+            "{} checks in ten simulated minutes",
+            waits_now.len()
+        );
+        assert!(waits_now.iter().all(|wait| *wait >= RUNNING_CHECK_FLOOR));
+
+        // A wake (a new target) is handled at once, mid-wait.
+        let before = waits_now.len();
+        state.db.request_deployment();
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert_eq!(waits.lock().unwrap().len(), before + 1);
+        state.cancel.cancel();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_approval_decision_wakes_the_deployment_loop() {
+        let (_directory, state) = held_operator(DeploymentStatus::Running).await;
+        let approval = crate::db::Approval {
+            id: "apr_1".into(),
+            release_info: None,
+            deployment_config: test_deployment_config(),
+            status: crate::db::ApprovalStatus::Pending,
+            reason: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            decided_at: None,
+            decided_by: None,
+        };
+        state.db.create_approval(&approval).await.unwrap();
+        let woken = |db: Arc<OperatorDb>| async move {
+            tokio::time::timeout(Duration::from_millis(50), db.wait_for_deployment())
+                .await
+                .is_ok()
+        };
+        assert!(!woken(Arc::clone(&state.db)).await);
+        state
+            .db
+            .decide_approval("apr_1", crate::db::ApprovalStatus::Approved, None, None)
+            .await
+            .unwrap();
+        assert!(woken(Arc::clone(&state.db)).await);
     }
 
     #[tokio::test]
