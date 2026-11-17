@@ -986,7 +986,7 @@ def split_connect():
 def plain_post():
     # plain http:// through the proxy, a non-streamed POST with a 64 KiB Content-Length body to an
     # echo service: 200 only when the service reports the whole body (not any HTTP status).
-    r = requests.post("http://httpbin.org/post", data=b"y" * 65536, headers={"Content-Type": "text/plain"}, timeout=30)
+    r = requests.post("http://httpbingo.org/post", data=b"y" * 65536, headers={"Content-Type": "text/plain"}, timeout=30)
     if r.status_code != 200:
         return "ERR status " + str(r.status_code)
     got = len(r.json().get("data", ""))
@@ -1066,7 +1066,7 @@ async fn live_gateway_replace() {
         Some(allow(&[
             "example.com",
             "speed.cloudflare.com",
-            "httpbin.org",
+            "httpbingo.org",
         ]))
     };
 
