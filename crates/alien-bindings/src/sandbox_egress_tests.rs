@@ -21,6 +21,8 @@ struct AdminState {
         StdMutex<std::collections::BTreeMap<String, ((u64, String), Option<EgressPolicy>, String)>>,
     writes: StdMutex<Vec<String>>,
     refuse: AtomicBool,
+    /// When non-zero, writes answer this HTTP status instead of acknowledging.
+    refuse_status: std::sync::atomic::AtomicU16,
     store_full: AtomicBool,
     transient_failures: AtomicUsize,
     records: StdMutex<Vec<String>>,
@@ -125,6 +127,10 @@ async fn policy_request(
     if state.refuse.load(Ordering::SeqCst) {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    let status = state.refuse_status.load(Ordering::SeqCst);
+    if status != 0 {
+        return StatusCode::from_u16(status).unwrap().into_response();
+    }
     let key = claims["sub"].as_str().unwrap().to_string();
     state.writes.lock().unwrap().push(method.to_string());
     let mut policies = state.policies.lock().unwrap();
@@ -212,6 +218,7 @@ impl Harness {
             policies: StdMutex::new(Default::default()),
             writes: StdMutex::new(Vec::new()),
             refuse: AtomicBool::new(false),
+            refuse_status: std::sync::atomic::AtomicU16::new(0),
             store_full: AtomicBool::new(false),
             transient_failures: AtomicUsize::new(0),
             records: StdMutex::new(Vec::new()),
@@ -733,6 +740,7 @@ async fn replicated_writes_reach_every_ready_replica_or_fail() {
         policies: StdMutex::new(Default::default()),
         writes: StdMutex::new(Vec::new()),
         refuse: AtomicBool::new(false),
+        refuse_status: std::sync::atomic::AtomicU16::new(0),
         store_full: AtomicBool::new(false),
         transient_failures: AtomicUsize::new(0),
         records: StdMutex::new(Vec::new()),
@@ -879,6 +887,7 @@ async fn two_replicas(
         policies: StdMutex::new(Default::default()),
         writes: StdMutex::new(Vec::new()),
         refuse: AtomicBool::new(false),
+        refuse_status: std::sync::atomic::AtomicU16::new(0),
         store_full: AtomicBool::new(false),
         transient_failures: AtomicUsize::new(0),
         records: StdMutex::new(Vec::new()),
@@ -969,6 +978,30 @@ async fn a_revocation_reaches_a_replica_that_returns_during_the_retries() {
     assert!(!holds_grant(&h.state));
     assert!(!holds_grant(&second));
     back.abort();
+}
+
+/// A replica's permanent refusal (an authentication or request error) is not a condition that
+/// passes: the revocation fails at once and is not marked retryable. A 503 stays retryable.
+#[tokio::test]
+async fn a_revocation_refused_permanently_is_not_retryable() {
+    for status in [401u16, 400] {
+        let h = Harness::new().await;
+        h.state
+            .refuse_status
+            .store(status, std::sync::atomic::Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        let error = h
+            .manager
+            .delete("box-1")
+            .await
+            .expect_err("the replica refuses");
+        assert!(!error.retryable, "{status}: {error}");
+        assert!(
+            error.message.contains(&status.to_string()),
+            "{status}: {error}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
 }
 
 fn clear_grant(state: &AdminState) {

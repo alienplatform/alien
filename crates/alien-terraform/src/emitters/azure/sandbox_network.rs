@@ -493,7 +493,18 @@ fn emit_gateway_subnet_nsg(
             attr("tags", tags(ctx, "sandbox-gateway-network")),
         ],
     ));
-    let mut proxy_index = 0;
+    let internet_ids: Vec<&str> = ctx
+        .stack
+        .resources()
+        .filter(|(_, entry)| {
+            entry
+                .config
+                .downcast_ref::<Sandbox>()
+                .is_some_and(|sandbox| sandbox.egress == SandboxEgress::Internet)
+        })
+        .map(|(id, _)| id.as_str())
+        .collect();
+    let slots = subnet_slots(internet_ids)?;
     for (id, entry) in ctx.stack.resources() {
         let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() else {
             continue;
@@ -515,12 +526,11 @@ fn emit_gateway_subnet_nsg(
             fragment,
             &label,
             &format!("proxy_from_{sandbox_label}"),
-            proxy_priority(proxy_index)?,
+            proxy_priority(slots[id.as_str()])?,
             "Allow",
             source,
             "3128",
         );
-        proxy_index += 1;
     }
     for (index, suffix) in ["public", "private", "container_apps"]
         .into_iter()
@@ -583,12 +593,21 @@ const ADMIN_PRIORITY_BASE: i64 = 300;
 const PEER_PRIORITY_BASE: i64 = 400;
 /// The dedicated subnet slots (`subnet_slots`) bound the number of sandboxes.
 const MAX_SANDBOXES: i64 = 120;
+/// The first dedicated subnet slot (`subnet_slots` returns 8..128).
+const SUBNET_SLOT_BASE: i64 = 8;
 
-fn proxy_priority(index: i64) -> Result<i64> {
-    if index >= MAX_SANDBOXES {
+/// The priority follows the sandbox's dedicated subnet slot (`subnet_slots`, 8..128), which does
+/// not change when another sandbox is added or removed. A position-based priority would shift
+/// every later rule when one sandbox is removed, and Azure refuses two rules with the same
+/// priority during the parallel in-place updates.
+fn proxy_priority(slot: usize) -> Result<i64> {
+    let index = slot as i64 - SUBNET_SLOT_BASE;
+    if !(0..MAX_SANDBOXES).contains(&index) {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "Azure sandbox network setup".into(),
-            reason: format!("at most {MAX_SANDBOXES} sandboxes can use `egress: internet`"),
+            reason: format!(
+                "subnet slot {slot} is outside the range of `egress: internet` sandboxes"
+            ),
         }));
     }
     Ok(PROXY_PRIORITY_BASE + index)
@@ -785,14 +804,29 @@ mod proxy_rule_tests {
 mod gateway_inbound_tests {
     use super::*;
 
+    /// Removing a sandbox must not change another sandbox's proxy priority.
+    #[test]
+    fn proxy_priority_follows_the_subnet_slot_not_the_position() {
+        let ids = ["alpha", "beta", "gamma", "delta"];
+        let all = subnet_slots(ids).unwrap();
+        let without_middle = subnet_slots(["alpha", "gamma", "delta"]).unwrap();
+        for (id, slot) in &without_middle {
+            assert_eq!(
+                proxy_priority(*slot).unwrap(),
+                proxy_priority(all[id]).unwrap(),
+                "{id}"
+            );
+        }
+    }
+
     /// 120 sandboxes' proxy rules, the admin rules and the peer rules never share a priority.
     #[test]
     fn proxy_admin_and_peer_priorities_stay_apart_at_120_sandboxes() {
         let mut seen = std::collections::BTreeSet::new();
-        for index in 0..MAX_SANDBOXES {
-            assert!(seen.insert(proxy_priority(index).unwrap()));
+        for slot in 8..128usize {
+            assert!(seen.insert(proxy_priority(slot).unwrap()));
         }
-        assert!(proxy_priority(MAX_SANDBOXES).is_err());
+        assert!(proxy_priority(128).is_err() && proxy_priority(7).is_err());
         assert_eq!(seen.len(), 120);
         for index in 0..3 {
             assert!(seen.insert(ADMIN_PRIORITY_BASE + index), "admin {index}");

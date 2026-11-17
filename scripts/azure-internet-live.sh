@@ -288,5 +288,8 @@ secret=$(curl -fsS -H "Authorization: Bearer $(token https://vault.azure.net/.de
   "https://$vault.vault.azure.net/secrets/azure-internet-proof-log?api-version=7.4" | jq -r .value)
 echo "$secret" | tee "$WORK/proof.log"
 verdict=$(head -1 <<<"$secret")
+# The job's own status counts too: a failed test (an assertion after the log was published) is a failed proof.
+[ "$st" = Succeeded ] || { echo "proof failed: the driver job ended with status '${st:-none}'"; exit 1; }
 { [ "$verdict" = PASS ] || [ "$verdict" = DONE ]; } || { echo "proof failed"; exit 1; }
+grep -q '^FAIL' <<<"$secret" && { echo "proof failed: the log has FAIL lines"; exit 1; }
 echo "proof passed; evidence in $WORK"

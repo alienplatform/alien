@@ -888,11 +888,67 @@ async fn live_leak_probes() {
         Ok::<String, String>(log.join("\n"))
     }
     .await;
-    let body = match body {
-        Ok(log) => format!("DONE\n{log}"),
-        Err(error) => format!("ERROR\n{error}"),
+    let (body, problems) = match body {
+        Ok(log) => {
+            let problems = leak_probe_problems(&log);
+            let heading = if problems.is_empty() { "DONE" } else { "FAIL" };
+            let notes: String = problems.iter().map(|p| format!("\nFAIL: {p}")).collect();
+            (format!("{heading}\n{log}{notes}"), problems)
+        }
+        Err(error) => (format!("ERROR\n{error}"), vec![error]),
     };
     publish(&provider, &body).await;
+    assert!(problems.is_empty(), "leak probes failed: {problems:#?}");
+}
+
+/// What the test itself can judge from the probe output (whether anything reached the listener
+/// is read from the listener's own log): every round ran and printed every probe, no probe was
+/// answered by anything but the gateway's refusal, and the wireserver connect never succeeded.
+fn leak_probe_problems(log: &str) -> Vec<String> {
+    const LABELS: [&str; 12] = [
+        "1-tls-nosni-443",
+        "2a-raw-443",
+        "2b-raw-80",
+        "3-http10-nohost-80",
+        "4-h2c-prior-80",
+        "5-ssh-banner-443",
+        "6a-udp-443",
+        "6b-udp-80",
+        "7-tls-sni-allowed-443",
+        "8-http-host-allowed-80",
+        "wire-80-versions",
+        "wire-32526-vmSettings",
+    ];
+    let mut problems = Vec::new();
+    if log.contains("RUN-ERROR") {
+        problems.push("a probe command failed to run (RUN-ERROR)".to_string());
+    }
+    let rounds = log.matches("round 1: nonce=").count() + log.matches("round 2: nonce=").count();
+    if rounds != 2 {
+        problems.push(format!("{rounds} of 2 rounds started"));
+    }
+    for label in LABELS {
+        let lines: Vec<&str> = log
+            .lines()
+            .filter(|line| line.starts_with(&format!("PROBE {label} ")))
+            .collect();
+        if lines.len() != 2 {
+            problems.push(format!("probe {label}: {} of 2 results", lines.len()));
+        }
+        for line in lines {
+            if label.starts_with("wire-") && line.contains(" CONNECT-OK") {
+                problems.push(format!("the wireserver connected: {line}"));
+            }
+            // A reply that names an HTTP status must be the gateway's refusal.
+            for (at, _) in line.match_indices("HTTP/1.") {
+                let status = line[at..].split(' ').nth(1).unwrap_or("");
+                if !["400", "403", "421"].contains(&status) {
+                    problems.push(format!("an answer that is not a gateway refusal: {line}"));
+                }
+            }
+        }
+    }
+    problems
 }
 
 /// A long transfer through the proxy: CONNECT to the host, TLS, GET `/__down?bytes=N`, read
@@ -1244,6 +1300,15 @@ async fn live_gateway_replace() {
                 Err(error) => return fail(format!("clients: RUN-ERROR {error}")),
             };
             let mut pending = String::new();
+            let check = |line: &str| {
+                note(format!("clients: {}", line.trim_end()));
+                if line.contains(" FAIL ") {
+                    fail(format!("clients: {}", line.trim_end()));
+                }
+            };
+            // After the operator's `done` the output is read for a short drain period before the
+            // loop stops, so a FAIL line printed just before it is not lost.
+            let mut drain_until: Option<tokio::time::Instant> = None;
             loop {
                 tokio::select! {
                     frame = stream.next() => match frame {
@@ -1251,19 +1316,32 @@ async fn live_gateway_replace() {
                             pending.push_str(&String::from_utf8_lossy(&data));
                             while let Some(at) = pending.find('\n') {
                                 let line: String = pending.drain(..=at).collect();
-                                note(format!("clients: {}", line.trim_end()));
-                                if line.contains(" FAIL ") {
-                                    fail(format!("clients: {}", line.trim_end()));
-                                }
+                                check(&line);
                             }
                         }
                         Some(Ok(_)) => {}
                         Some(Err(error)) => return fail(format!("clients: stream error {error}")),
-                        None => return fail("clients: command ended before `done`".to_string()),
+                        None => {
+                            if !pending.is_empty() {
+                                check(&std::mem::take(&mut pending));
+                            }
+                            if finished.get() {
+                                return note("clients: command ended after `done`".to_string());
+                            }
+                            return fail("clients: command ended before `done`".to_string());
+                        }
                     },
                     _ = tokio::time::sleep(Duration::from_secs(2)) => {
                         if finished.get() {
-                            return note("clients: stopped by the operator's `done`".to_string());
+                            let until = *drain_until.get_or_insert_with(|| {
+                                tokio::time::Instant::now() + Duration::from_secs(10)
+                            });
+                            if tokio::time::Instant::now() >= until {
+                                if !pending.is_empty() {
+                                    check(&std::mem::take(&mut pending));
+                                }
+                                return note("clients: stopped by the operator's `done`".to_string());
+                            }
                         }
                     }
                 }
@@ -1372,4 +1450,40 @@ async fn live_gateway_replace() {
     )
     .await;
     assert!(failed.is_empty(), "failed: {failed:#?}");
+}
+
+#[test]
+fn the_leak_probe_verdict_fails_on_a_missing_probe_a_wireserver_connect_or_a_foreign_answer() {
+    let round = |wire: &str, extra: &str| {
+        let mut log = String::new();
+        for n in 1..=2 {
+            log.push_str(&format!("round {n}: nonce=ab start_utc_epoch=1\n"));
+            for label in [
+                "1-tls-nosni-443",
+                "2a-raw-443",
+                "2b-raw-80",
+                "3-http10-nohost-80",
+                "4-h2c-prior-80",
+                "5-ssh-banner-443",
+                "6a-udp-443",
+                "6b-udp-80",
+                "7-tls-sni-allowed-443",
+            ] {
+                log.push_str(&format!("PROBE {label} CONNECTED no-reply TimeoutError\n"));
+            }
+            log.push_str(&format!(
+                "PROBE 8-http-host-allowed-80 CONNECTED reply=b'HTTP/1.1 {extra} Forbidden'\n"
+            ));
+            for label in ["wire-80-versions", "wire-32526-vmSettings"] {
+                log.push_str(&format!("PROBE {label} {wire}\n"));
+            }
+        }
+        log
+    };
+    let good = round("CONNECT-FAILED TimeoutError timed out after 5.0s", "403");
+    assert!(leak_probe_problems(&good).is_empty(), "{good}");
+    assert!(!leak_probe_problems(&round("CONNECT-OK READ-OK b'x'", "403")).is_empty());
+    assert!(!leak_probe_problems(&round("CONNECT-FAILED x", "200")).is_empty());
+    assert!(!leak_probe_problems(&good.replace("PROBE 2b-raw-80", "PROBE gone")).is_empty());
+    assert!(!leak_probe_problems(&format!("{good}RUN-ERROR x")).is_empty());
 }

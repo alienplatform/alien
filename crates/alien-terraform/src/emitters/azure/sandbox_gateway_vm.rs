@@ -39,6 +39,24 @@ pub(super) const UBUNTU_IMAGE_VERSION: &str = "24.04.202610250";
 /// restricted on some, and vCPU quota is per family, so customers can pick another family.
 pub(super) const DEFAULT_VM_SIZE: &str = "Standard_D2s_v5";
 
+/// Run commands run only when created or when their script changes, so a setup re-run with an
+/// unchanged plan repairs nothing. Bumping this number changes the repair script and so re-runs it.
+fn repair_generation_variable(label: &str) -> hcl::Block {
+    hcl::Block::builder("variable")
+        .add_label(format!("{label}_repair_generation"))
+        .add_attribute(("type", expr::raw("number")))
+        .add_attribute(("default", Expression::Number(0.into())))
+        .add_attribute((
+            "description",
+            Expression::String(
+                "Increase this number and apply to run the gateway repair step again on both VMs: a gateway that is installed but not \
+                 serving is restarted, a serving gateway is never touched. Without a change here, an apply with no other changes repairs nothing."
+                    .into(),
+            ),
+        ))
+        .build()
+}
+
 fn vm_size_variable(label: &str) -> hcl::Block {
     hcl::Block::builder("variable")
         .add_label(format!("{label}_vm_size"))
@@ -75,6 +93,9 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
     let label = format!("{network}_sandbox_gateway");
     let subnet = expr::traversal(["azurerm_subnet", &label, "id"]);
     fragment.variable_blocks.push(vm_size_variable(&label));
+    fragment
+        .variable_blocks
+        .push(repair_generation_variable(&label));
 
     fragment.resource_blocks.push(resource_block(
         "azurerm_user_assigned_identity",
@@ -290,9 +311,11 @@ pub(super) fn emit(ctx: &EmitContext<'_>, network: &str, fragment: &mut TfFragme
     // Two run commands per VM, both with the same script body (`install_script`).
     //
     // `repair` acts only on a VM that has the gateway installed and is not serving, which is safe
-    // to restart whatever else is going on; it runs before every update, one VM at a time, so a
-    // setup re-run repairs an unhealthy VM while the other is serving and never touches a serving
-    // one. `install` installs the image, the environment file and the unit, restarts the gateway
+    // to restart whatever else is going on; it runs before every update, one VM at a time, so an
+    // update repairs an unhealthy VM while the other is serving and never touches a serving one.
+    // A run command runs only on create or a script change: the operator bumps
+    // `repair_generation` (part of the repair script) to repair with no other change.
+    // `install` installs the image, the environment file and the unit, restarts the gateway
     // and, on a VM that was serving, waits until the new container is ready and has caught up from
     // its peer. The install commands wait for both repairs, and the second VM's install waits for
     // the first VM's, so a setup re-run never has both gateways down.
@@ -502,15 +525,24 @@ fn install_script(
         "for i in $(seq 1 60); do health 127.0.0.1 && exit 0; sleep 5; done",
         "echo 'the new gateway did not become ready' >&2",
         "exit 1",
+        // The repair script carries the operator's repair generation, so bumping it re-runs it.
+        match mode {
+            ScriptMode::Repair => "# repair generation: %s",
+            ScriptMode::Install => "",
+        },
         "",
     ];
-    // `format` reads `%`: the script has no literal percent sign besides its five placeholders.
+    // `format` reads `%`: the script has no literal percent sign besides its placeholders.
     let body = hcl_string(&lines.join("\n"));
     let peer = format!(
         "cidrhost(azurerm_subnet.{network}_sandbox_gateway.address_prefixes[0], {peer_host})"
     );
+    let generation = match mode {
+        ScriptMode::Repair => format!(", var.{label}_repair_generation"),
+        ScriptMode::Install => String::new(),
+    };
     expr::raw(format!(
-        "format(\"{body}\", {peer}, azurerm_user_assigned_identity.{label}.client_id, var.azure_subscription_id, data.azurerm_client_config.{vault}_current.tenant_id, jsonencode({{service = \"key-vault\", vaultName = azurerm_key_vault.{vault}.name}}))"
+        "format(\"{body}\", {peer}, azurerm_user_assigned_identity.{label}.client_id, var.azure_subscription_id, data.azurerm_client_config.{vault}_current.tenant_id, jsonencode({{service = \"key-vault\", vaultName = azurerm_key_vault.{vault}.name}}){generation})"
     ))
 }
 
@@ -683,7 +715,17 @@ mod tests {
         );
         // The repaired VM is awaited only when a serving peer is there to catch up from.
         assert!(text.contains(r#"[ \"$peer\" = yes ] || exit 0"#), "{text}");
-        assert_eq!(text.matches("%s").count(), 5, "{text}");
+        // The repair script alone carries the operator's repair generation (a trigger to re-run
+        // it); the install script must not, or bumping it would restart serving gateways.
+        assert_eq!(text.matches("%s").count(), 6, "{text}");
+        assert!(text.contains("# repair generation: %s"), "{text}");
+        assert!(
+            text.contains("var.net_sandbox_gateway_repair_generation"),
+            "{text}"
+        );
+        let install = script_in(1, ScriptMode::Install);
+        assert_eq!(install.matches("%s").count(), 5, "{install}");
+        assert!(!install.contains("repair_generation"), "{install}");
     }
 
     #[test]

@@ -590,10 +590,16 @@ impl SandboxEgressManager {
                     Ok(response) if response.status() == reqwest::StatusCode::NO_CONTENT => {
                         done.insert(target.clone());
                     }
-                    Ok(response) => {
+                    // 503: the replica is away or catching up, a condition that passes.
+                    Ok(response)
+                        if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE =>
+                    {
                         failure = gateway_error(response).await;
                         pending = true;
                     }
+                    // Any other answer (401, 400, ...) is a refusal that retrying cannot fix.
+                    Ok(response) => return Err(gateway_error(response).await),
+                    // A connection failure or timeout passes too.
                     Err(_) => pending = true,
                 }
             }
