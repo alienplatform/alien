@@ -2334,6 +2334,16 @@
     "Queue": {
       "additionalProperties": false,
       "properties": {
+        "deadLetter": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/components/schemas/QueueDeadLetter"
+            }
+          ]
+        },
         "id": {
           "type": "string"
         }
@@ -2356,6 +2366,21 @@
       "required": [
         "maxMessages",
         "maxWindowSeconds"
+      ],
+      "type": "object"
+    },
+    "QueueDeadLetter": {
+      "additionalProperties": false,
+      "properties": {
+        "maxAttempts": {
+          "type": "integer"
+        },
+        "queue": {
+          "$ref": "#/components/schemas/ResourceRef"
+        }
+      },
+      "required": [
+        "queue"
       ],
       "type": "object"
     },

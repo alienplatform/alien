@@ -1,0 +1,9 @@
+name = "acme-dead-letter"
+platforms = ["aws", "gcp", "azure"]
+
+[queue.failed]
+lifecycle = "frozen"
+
+[queue.tasks]
+lifecycle = "frozen"
+dead-letter = { queue = "failed", max-attempts = 7 }

@@ -1,0 +1,33 @@
+{
+  "id": "acme-dead-letter",
+  "resources": {
+    "failed": {
+      "config": {
+        "id": "failed",
+        "type": "queue"
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    },
+    "tasks": {
+      "config": {
+        "id": "tasks",
+        "type": "queue",
+        "deadLetter": {
+          "maxAttempts": 7,
+          "queue": {
+            "id": "failed",
+            "type": "queue"
+          }
+        }
+      },
+      "dependencies": [],
+      "lifecycle": "frozen"
+    }
+  },
+  "supportedPlatforms": [
+    "aws",
+    "gcp",
+    "azure"
+  ]
+}
