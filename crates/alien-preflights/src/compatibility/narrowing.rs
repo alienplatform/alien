@@ -1,9 +1,11 @@
 //! Whether a permission change only removes grants.
 //!
-//! Management permissions may narrow without setup: the installed management
-//! identity stays broader than the new stack needs, and the update must run with
-//! it to delete the resources the removed grants covered. The next setup trims it.
-//! Workload profiles and service accounts never narrow without setup.
+//! Permissions may narrow without setup: the installed identity stays broader than
+//! the new stack needs, and the update runs with it. For management this is also what
+//! lets the update delete the resources the removed grants covered. The next setup
+//! trims the leftover. This holds for management permissions, workload profiles and
+//! the frozen service accounts derived from them. Anything gained, or a permission
+//! set whose definition changed under the same id, still needs setup.
 
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{Resource, ServiceAccount, Stack};

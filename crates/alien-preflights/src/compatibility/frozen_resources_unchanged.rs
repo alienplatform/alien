@@ -496,6 +496,7 @@ impl FrozenResourcesUnchangedCheck {
         config: Option<&DeploymentConfig>,
     ) -> Result<CheckResult> {
         let mut errors = Vec::new();
+        let mut warnings = Vec::new();
 
         // Collect frozen resources from old stack
         let old_frozen: HashMap<_, _> = old_stack
@@ -607,8 +608,23 @@ impl FrozenResourcesUnchangedCheck {
                             *old_config == *on_platform(self.platform, &resolved)
                         })
                 });
+                // A service account that only lost permission sets keeps its installed role
+                // until the next setup, which is broader than this release needs. Anything it
+                // gains, or a set whose definition changed under the same id, is not narrowing.
+                let only_narrowed = old_config != new_config
+                    && crate::compatibility::narrowing::service_account_narrowed(
+                        new_stack,
+                        &old_config,
+                        &new_config,
+                    );
+                if only_narrowed {
+                    warnings.push(format!(
+                        "Service account '{id}' grants less than the installed setup. The installed grants stay until the next setup update removes them."
+                    ));
+                }
                 if old_config != new_config
                     && !no_value_reference
+                    && !only_narrowed
                     && !runtime_managed_frozen_change(self.platform, &old_config, &new_config)
                     && !runtime_managed_sandbox_image(self.platform, &old_config, &new_config)
                     && !unchanged_legacy_service_account_grants(
@@ -661,9 +677,13 @@ impl FrozenResourcesUnchangedCheck {
         }
 
         if errors.is_empty() {
-            Ok(CheckResult::success())
+            if warnings.is_empty() {
+                Ok(CheckResult::success())
+            } else {
+                Ok(CheckResult::with_warnings(warnings))
+            }
         } else {
-            Ok(CheckResult::failed(errors))
+            Ok(CheckResult::failed_with_warnings(errors, warnings))
         }
     }
 }
@@ -758,10 +778,10 @@ mod tests {
         );
     }
 
-    /// Dropping an account's last resource-scoped grant changes its installed role, so it needs
-    /// setup, as does dropping only the capture of grants its profile still holds.
+    /// Dropping an account's last resource-scoped grant only narrows it. Dropping only the
+    /// capture of grants its profile still holds hides what the account grants, so it needs setup.
     #[tokio::test]
-    async fn losing_the_last_resource_grant_needs_setup() {
+    async fn losing_the_last_resource_grant_narrows_but_losing_only_the_capture_needs_setup() {
         let with_grant = PermissionProfile::new().resource("objects", ["storage/data-read"]);
         let check = FrozenResourcesUnchangedCheck {
             platform: Platform::Aws,
@@ -773,12 +793,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!removed.success);
-        assert!(
-            removed.errors[0].contains("'reader-sa' was modified"),
-            "{:?}",
-            removed.errors
-        );
+        assert!(removed.success, "{:?}", removed.errors);
         let uncaptured = check
             .check(
                 &account_stack(with_grant.clone(), true),
@@ -1304,10 +1319,10 @@ mod tests {
         assert!(!result.errors.is_empty());
     }
 
-    /// Setup owns a frozen service account's role: losing permission sets needs setup just as
-    /// gaining them does.
+    /// Setup owns a frozen service account's role. Gaining permission sets needs setup; losing
+    /// them does not, the installed role simply stays broader until the next setup.
     #[tokio::test]
-    async fn a_service_account_change_in_either_direction_needs_setup() {
+    async fn a_service_account_that_only_loses_permission_sets_needs_no_setup() {
         let account = |sets: &[&str]| {
             let profile = alien_core::PermissionProfile::new().global(sets.iter().copied());
             alien_core::ServiceAccount::from_permission_profile(
@@ -1333,7 +1348,8 @@ mod tests {
             )
             .await
             .expect("check should run");
-        assert!(!narrowed.success);
+        assert!(narrowed.success, "{:?}", narrowed.errors);
+        assert_eq!(narrowed.warnings.len(), 1);
 
         let widened = check
             .check(

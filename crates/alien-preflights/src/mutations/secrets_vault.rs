@@ -2985,6 +2985,79 @@ mod tests {
         }
     }
 
+    /// A release that drops a deployer secret input mapped to a workload changes nothing the
+    /// developer declared on that workload's identity except the read grant the input implied.
+    /// Records what preparation produces for the installed stack and for the release without
+    /// the input.
+    async fn prepared_with_and_without_the_input(
+        platform: Platform,
+    ) -> (Stack, Stack, DeploymentConfig) {
+        let stack = deployer_secret_stack(&[("api", "api")], &["api"]);
+        let mut state = StackState::new(platform);
+        let config = deployer_secret_config();
+        let prepare = |stack: Stack, state: StackState| {
+            let config = config.clone();
+            async move {
+                let stack = DeployerSecretsVaultMutation
+                    .mutate(stack, &state, &config)
+                    .await
+                    .unwrap();
+                ServiceAccountMutation
+                    .mutate(stack, &state, &config)
+                    .await
+                    .unwrap()
+            }
+        };
+        let installed = prepare(stack.clone(), state.clone()).await;
+        for (id, entry) in &installed.resources {
+            if entry.lifecycle == ResourceLifecycle::Frozen {
+                let mut resource = StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(entry.lifecycle),
+                    entry.dependencies.clone(),
+                );
+                resource.status = alien_core::ResourceStatus::Running;
+                state.resources.insert(id.clone(), resource);
+            }
+        }
+        let mut release = stack;
+        release.inputs.clear();
+        let updated = prepare(release, state).await;
+        (installed, updated, config)
+    }
+
+    #[tokio::test]
+    async fn dropping_a_deployer_secret_input_is_not_a_setup_change() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let (installed, updated, config) = prepared_with_and_without_the_input(platform).await;
+            let fz = FrozenResourcesUnchangedCheck { platform }
+                .check_with_config(&installed, &updated, &config, platform)
+                .await
+                .unwrap();
+            eprintln!("RESULT {platform:?} frozen errors: {:?}", fz.errors);
+            eprintln!("RESULT {platform:?} api-sa installed: {:?}", installed.resources["api-sa"].config.downcast_ref::<alien_core::ServiceAccount>().map(|a| (a.stack_permission_sets.iter().map(|s| s.id.clone()).collect::<Vec<_>>(), a.resource_permission_sets.iter().map(|(k,v)| (k.clone(), v.iter().map(|s| s.id.clone()).collect::<Vec<_>>())).collect::<Vec<_>>())));
+            eprintln!("RESULT {platform:?} api-sa updated: {:?}", updated.resources["api-sa"].config.downcast_ref::<alien_core::ServiceAccount>().map(|a| (a.stack_permission_sets.iter().map(|s| s.id.clone()).collect::<Vec<_>>(), a.resource_permission_sets.iter().map(|(k,v)| (k.clone(), v.iter().map(|s| s.id.clone()).collect::<Vec<_>>())).collect::<Vec<_>>())));
+            eprintln!("RESULT {platform:?} vault in updated: {}", updated.resources.contains_key(DEPLOYER_SECRETS_VAULT_ID));
+            for result in [
+                PermissionProfilesUnchangedCheck
+                    .check_with_config(&installed, &updated, &config, platform)
+                    .await
+                    .unwrap(),
+                FrozenResourcesUnchangedCheck { platform }
+                    .check_with_config(&installed, &updated, &config, platform)
+                    .await
+                    .unwrap(),
+            ] {
+                assert!(
+                    result.errors.is_empty(),
+                    "{platform:?}: {:?}",
+                    result.errors
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn installed_vault_does_not_turn_stored_only_mappings_into_slots() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
