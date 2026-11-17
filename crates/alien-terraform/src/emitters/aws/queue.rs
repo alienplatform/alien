@@ -45,6 +45,12 @@ impl TfEmitter for AwsQueueEmitter {
                 Expression::Number(hcl::Number::from(i64::from(retention))),
             ),
         ];
+        attrs.push(attr("tags", tags(ctx, "queue")));
+        let q = resource_block("aws_sqs_queue", label, attrs);
+
+        let mut fragment = TfFragment::default().with_resource(q);
+        // A separate resource, not an inline `redrive_policy`: the provider keeps an inline
+        // policy when the attribute is removed, while destroying this resource clears it.
         if let Some(dead_letter) = &queue.dead_letter {
             let target_label = ctx.name_for(&dead_letter.queue.id).ok_or_else(|| {
                 AlienError::new(ErrorData::GenericError {
@@ -55,24 +61,29 @@ impl TfEmitter for AwsQueueEmitter {
                     ),
                 })
             })?;
-            attrs.push(attr(
-                "redrive_policy",
-                crate::expr::jsonencode(expr::object([
-                    (
-                        "deadLetterTargetArn",
-                        expr::traversal(["aws_sqs_queue", target_label, "arn"]),
+            fragment = fragment.with_resource(resource_block(
+                "aws_sqs_queue_redrive_policy",
+                &format!("{label}_redrive"),
+                vec![
+                    attr("queue_url", expr::traversal(["aws_sqs_queue", label, "id"])),
+                    attr(
+                        "redrive_policy",
+                        crate::expr::jsonencode(expr::object([
+                            (
+                                "deadLetterTargetArn",
+                                expr::traversal(["aws_sqs_queue", target_label, "arn"]),
+                            ),
+                            (
+                                "maxReceiveCount",
+                                Expression::Number(hcl::Number::from(i64::from(
+                                    dead_letter.max_attempts,
+                                ))),
+                            ),
+                        ])),
                     ),
-                    (
-                        "maxReceiveCount",
-                        Expression::Number(hcl::Number::from(i64::from(dead_letter.max_attempts))),
-                    ),
-                ])),
+                ],
             ));
         }
-        attrs.push(attr("tags", tags(ctx, "queue")));
-        let q = resource_block("aws_sqs_queue", label, attrs);
-
-        let mut fragment = TfFragment::default().with_resource(q);
         if alien_core::storage_notifications::queue_receives_storage_notifications(
             ctx.stack,
             ctx.resource_id,

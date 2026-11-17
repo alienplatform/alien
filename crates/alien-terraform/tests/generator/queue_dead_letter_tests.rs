@@ -28,7 +28,12 @@ fn aws_redrive_policy_points_at_the_target_and_the_target_keeps_messages_longer(
         StackSettings::default(),
     );
     let text = normalized(&module);
-    assert!(text.contains("redrive_policy"), "{text}");
+    // A separate resource: an inline `redrive_policy` is kept by the provider when removed,
+    // so removing the setting would leave it on the queue.
+    assert!(
+        text.contains("resource \"aws_sqs_queue_redrive_policy\""),
+        "{text}"
+    );
     assert!(text.contains("maxReceiveCount"), "{text}");
     assert!(text.contains("deadLetterTargetArn"), "{text}");
     assert_eq!(
