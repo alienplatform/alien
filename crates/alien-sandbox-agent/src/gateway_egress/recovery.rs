@@ -505,7 +505,10 @@ mod tests {
     #[tokio::test]
     async fn a_monitor_failure_keeps_the_gateway_status_as_the_cause() {
         // A refusal and a 5xx that outlasts the grace both leave the current gateway status.
-        for (status, grace) in [(409, Duration::from_secs(60)), (503, Duration::from_millis(100))] {
+        for (status, grace) in [
+            (409, Duration::from_secs(60)),
+            (503, Duration::from_millis(100)),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let agent = Arc::new(agent(listener.local_addr().unwrap()));
             agent.ready.store(true, Ordering::Release);

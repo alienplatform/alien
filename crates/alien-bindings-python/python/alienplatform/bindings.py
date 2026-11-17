@@ -656,6 +656,13 @@ class Sandbox:
         timeout_ms: int | None = None,
         egress: EgressPolicy | None = None,
     ) -> tuple[SandboxInfo, bool]:
+        """Return the sandbox for ``sandbox_id``, creating it when none exists.
+
+        The second value says whether this call created it.
+
+        A key made only of digits is read as a sandbox id and is not deduplicated; use a key with
+        a letter, such as ``engine-<uuid>``.
+        """
         value = await (await self._handle.get()).get_or_create(
             sandbox_id,
             tenant_key,

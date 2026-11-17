@@ -38,14 +38,21 @@ pub(super) async fn supervisor_udp(privileged: bool) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
+pub(super) async fn command(identity: crate::exec::ExecIdentity, privileged: bool) -> Result<()> {
     let executable = std::env::current_exe()
         .into_alien_error()
         .context(failed("locate path check executable"))?;
     let mut command = tokio::process::Command::new(executable);
     command
         .arg("--egress-path-check")
+        .args(privileged.then_some("--privileged"))
+        .args(super::network_enforced_externally()?.then_some("--external-network"))
+        .stdout(std::process::Stdio::piped())
         .env_clear()
+        .envs(token_sources(
+            image_environment(),
+            std::env::vars().filter(|(name, _)| TOKEN_SOURCES.contains(&name.as_str())),
+        ))
         .kill_on_drop(true);
     // SAFETY: only the existing async-signal-safe identity drop runs between fork and exec.
     unsafe {
@@ -54,6 +61,7 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
     let (mut child, _registration) = crate::children::spawn(&mut command)
         .into_alien_error()
         .context(failed("spawn command path check"))?;
+    let mut output = child.stdout.take();
     let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
         .await
         .into_alien_error()
@@ -61,13 +69,60 @@ pub(super) async fn command(identity: crate::exec::ExecIdentity) -> Result<()> {
         .into_alien_error()
         .context(failed("run command path check"))?;
     if !status.success() {
-        let reason = status.code().map_or("the check was killed by a signal", path_check_reason);
+        // The child names what it found (for the metadata check: the cloud and path).
+        let mut cause = String::new();
+        if let Some(output) = output.as_mut() {
+            use tokio::io::AsyncReadExt;
+            let _ = output.take(1024).read_to_string(&mut cause).await;
+        }
+        let cause = cause.trim();
+        let reason = status
+            .code()
+            .map_or("the check was killed by a signal", path_check_reason);
+        let detail = if cause.is_empty() {
+            String::new()
+        } else {
+            format!(": {cause}")
+        };
         return Err(AlienError::new(ErrorData::egress_unverified(
             "command-identity",
-            format!("the command-identity path check did not confirm the path is closed: {reason} ({status})"),
+            format!("the command-identity path check did not confirm the path is closed: {reason} ({status}){detail}"),
         )));
     }
     Ok(())
+}
+
+/// The only variables the check child is given: where the workload's own credential token for the
+/// node's agent comes from. Nothing else of the agent's environment reaches the child.
+const TOKEN_SOURCES: [&str; 2] = [
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+];
+
+/// The image's own environment, as the workload gets it. Unreadable or absent: empty.
+fn image_environment() -> std::collections::BTreeMap<String, String> {
+    std::fs::read(alien_core::sandbox_image::IMAGE_COMMAND_PATH)
+        .ok()
+        .and_then(|bytes| {
+            serde_json::from_slice::<alien_core::sandbox_image::SandboxImageCommand>(&bytes).ok()
+        })
+        .map(|image| image.env)
+        .unwrap_or_default()
+}
+
+/// The token variables the workload will have: the image's, replaced by the supplied environment
+/// (which wins for the workload too). Only the names in [`TOKEN_SOURCES`] are kept.
+fn token_sources(
+    image: impl IntoIterator<Item = (String, String)>,
+    supplied: impl IntoIterator<Item = (String, String)>,
+) -> Vec<(String, String)> {
+    let mut found = std::collections::BTreeMap::new();
+    for (name, value) in image.into_iter().chain(supplied) {
+        if TOKEN_SOURCES.contains(&name.as_str()) {
+            found.insert(name, value);
+        }
+    }
+    found.into_iter().collect()
 }
 
 /// Why the command-identity check failed, as the child's exit code. The parent reads the code
@@ -93,18 +148,51 @@ fn path_check_reason(code: i32) -> &'static str {
 }
 
 /// Internal child mode. It receives no token or credentials and has the command's exact identity.
+///
 /// Returns [`PATH_CHECK_CLOSED`] when the path is closed, else the code naming the failed check.
-pub fn command_path_check() -> i32 {
-    for (address, code) in [
-        (
-            SocketAddr::from(([169, 254, 169, 254], 80)),
-            PATH_CHECK_METADATA_ANSWERED,
-        ),
-        (
-            SocketAddr::from(([1, 1, 1, 1], 443)),
-            PATH_CHECK_INTERNET_ANSWERED,
-        ),
-    ] {
+/// How the command path is checked against the node's metadata service.
+#[derive(Debug, PartialEq, Eq)]
+enum MetadataCheck {
+    /// Nothing may answer on the address (the guest's redirect, or a local run).
+    NothingMayAnswer,
+    /// A NetworkPolicy may leave it reachable; no credentials or identity may come back.
+    NoCredentials,
+}
+
+/// The check follows who enforces the network, not which user the agent runs as: an agent that
+/// nothing external polices (a local run) keeps the strict check.
+fn metadata_check(external_network: bool) -> MetadataCheck {
+    if external_network {
+        MetadataCheck::NoCredentials
+    } else {
+        MetadataCheck::NothingMayAnswer
+    }
+}
+
+/// Where something other than the agent (a Kubernetes NetworkPolicy) enforces the network
+/// (`external_network`), that policy may leave the metadata address reachable, so the check is
+/// that no credentials or identity can be obtained from it. Everywhere else (a redirect in the
+/// guest, or a local run) nothing may answer on the metadata address at all, whichever user the
+/// agent runs as. What it found is printed for the parent to
+/// report.
+pub fn command_path_check(_privileged: bool, external_network: bool) -> i32 {
+    let mut addresses = vec![(
+        SocketAddr::from(([1, 1, 1, 1], 443)),
+        PATH_CHECK_INTERNET_ANSWERED,
+    )];
+    if metadata_check(external_network) == MetadataCheck::NothingMayAnswer {
+        addresses.insert(
+            0,
+            (
+                SocketAddr::from(([169, 254, 169, 254], 80)),
+                PATH_CHECK_METADATA_ANSWERED,
+            ),
+        );
+    } else if let Err(found) = crate::metadata::credentials_obtainable() {
+        println!("{found}");
+        return PATH_CHECK_METADATA_ANSWERED;
+    }
+    for (address, code) in addresses {
         if let Ok(mut stream) = TcpStream::connect_timeout(&address, PROBE_TIMEOUT) {
             if stream.set_read_timeout(Some(PROBE_TIMEOUT)).is_err()
                 || stream.set_write_timeout(Some(PROBE_TIMEOUT)).is_err()
@@ -144,8 +232,10 @@ pub fn command_path_check() -> i32 {
 }
 
 /// Whether the command identity's path is closed.
-pub fn command_path_is_closed() -> bool {
-    command_path_check() == PATH_CHECK_CLOSED
+pub fn command_path_is_closed(privileged: bool) -> bool {
+    // An environment that does not parse is not external enforcement: the strict check applies.
+    let external = super::network_enforced_externally().unwrap_or(false);
+    command_path_check(privileged, external) == PATH_CHECK_CLOSED
 }
 
 #[cfg(test)]
@@ -165,5 +255,54 @@ mod path_check_tests {
             codes.iter().map(|code| path_check_reason(*code)).collect();
         assert_eq!(reasons.len(), codes.len());
         assert_eq!(path_check_reason(1), "the check ended abnormally");
+    }
+
+    fn pairs(items: &[(&str, &str)]) -> Vec<(String, String)> {
+        items
+            .iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn the_check_gets_the_token_sources_of_the_image_and_the_supplied_environment() {
+        let found = token_sources(
+            pairs(&[
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN", "from-image"),
+                ("PATH", "/bin"),
+            ]),
+            pairs(&[
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "/custom/token"),
+                ("AWS_SECRET_ACCESS_KEY", "other"),
+            ]),
+        );
+        assert_eq!(
+            found,
+            pairs(&[
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN", "from-image"),
+                ("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", "/custom/token"),
+            ])
+        );
+    }
+
+    #[test]
+    fn the_supplied_token_replaces_the_image_one() {
+        let found = token_sources(
+            pairs(&[("AWS_CONTAINER_AUTHORIZATION_TOKEN", "image")]),
+            pairs(&[("AWS_CONTAINER_AUTHORIZATION_TOKEN", "supplied")]),
+        );
+        assert_eq!(
+            found,
+            pairs(&[("AWS_CONTAINER_AUTHORIZATION_TOKEN", "supplied")])
+        );
+    }
+
+    /// Only external enforcement (the Kubernetes NetworkPolicy) relaxes the metadata check to
+    /// "no credentials"; an agent without it, as Local or the AWS guest run it, keeps the strict
+    /// check whichever user it runs as.
+    #[test]
+    fn only_external_enforcement_relaxes_the_metadata_check() {
+        assert_eq!(metadata_check(false), MetadataCheck::NothingMayAnswer);
+        assert_eq!(metadata_check(true), MetadataCheck::NoCredentials);
     }
 }

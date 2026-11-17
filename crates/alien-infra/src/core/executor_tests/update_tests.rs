@@ -733,6 +733,97 @@ async fn imported_kubernetes_compute_retries_namespace_verification() -> Result<
     Ok(())
 }
 
+/// A direct-setup install runs the Frozen pass itself. On a Kubernetes target (any base cloud)
+/// the compute pool is owned by the Operator, so the pass must reach `Running` through the
+/// Kubernetes controller, which only checks the namespace, and create no cloud fleet.
+#[cfg(feature = "kubernetes")]
+#[tokio::test]
+async fn direct_setup_frozen_pass_verifies_kubernetes_compute_without_creating_a_fleet(
+) -> Result<()> {
+    let mut deployments = MockDeploymentApi::new();
+    deployments
+        .expect_list_deployments()
+        .withf(|namespace, _, fields| {
+            namespace == "application"
+                && fields.as_deref() == Some("metadata.name=alien-compute-access-check")
+        })
+        .times(1..)
+        .returning(|_, _, _| Ok(Default::default()));
+    let deployments = Arc::new(deployments);
+    // Any other client request (a cloud compute or network client) is an unexpected call on the
+    // mock provider and fails the test.
+    let mut provider = MockPlatformServiceProvider::new();
+    provider
+        .expect_get_kubernetes_deployment_client()
+        .returning(move |_| Ok(deployments.clone()));
+    let stack = Stack::new("direct-pools".to_string())
+        .add(
+            ComputeCluster::new("compute".to_string())
+                .capacity_group(alien_core::CapacityGroup {
+                    group_id: "general".to_string(),
+                    instance_type: None,
+                    profile: None,
+                    min_size: 1,
+                    max_size: 1,
+                    scale_policy: None,
+                    nested_virtualization: None,
+                    data_disk_gib_range: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "registry.example.com/agent:latest".to_string(),
+                    bundled_from: None,
+                })
+                .egress(alien_core::SandboxEgress::None)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let mut config = default_deployment_config();
+    config.allow_frozen_changes = true;
+    let executor = StackExecutor::builder(
+        &stack,
+        ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::InCluster {
+            namespace: Some("application".to_string()),
+            additional_headers: None,
+        })),
+    )
+    .deployment_config(&config)
+    .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+    .service_provider(Arc::new(provider))
+    .build()?;
+    let mut state = StackState::new(Platform::Kubernetes);
+    for _ in 0..24 {
+        state = executor.step(state).await?.next_state;
+        if state.resources["compute"].status == ResourceStatus::Running {
+            break;
+        }
+    }
+    assert_eq!(state.resources["compute"].status, ResourceStatus::Running);
+    assert_eq!(
+        state.resources["compute"].controller_platform,
+        Some(Platform::Kubernetes)
+    );
+    assert!(state.resources["compute"].outputs.is_none());
+    // The Frozen pass leaves the Live sandbox to the runtime: setup neither expects nor creates it.
+    assert!(
+        state
+            .resources
+            .get("agents")
+            .is_none_or(|resource| resource.status == ResourceStatus::Pending),
+        "the Frozen pass must not provision the sandbox"
+    );
+    Ok(())
+}
+
 /// Exercise derived workload profiles through compatibility and the executor's real planner.
 #[cfg(feature = "kubernetes")]
 #[tokio::test]

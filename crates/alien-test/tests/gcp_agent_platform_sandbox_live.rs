@@ -716,6 +716,280 @@ async fn egress_deny_blocks_the_network_including_dns() {
         .expect("terminate confirms gone");
 }
 
+// ---- Reach matrix for both egress switches ---------------------------------------------------
+
+/// One probe run inside the sandbox with python3 (the agent image has no curl or wget). Every
+/// line is `name=ok` or `name=fail:<reason>`, so a missing interpreter reads as a failure of the
+/// run and never as a closed network.
+const REACH_PROBE: &str = r#"
+import socket, ssl, urllib.request
+socket.setdefaulttimeout(5)
+def dns(name):
+    try:
+        socket.getaddrinfo(name, 443); return "ok"
+    except Exception as e:
+        return "fail:" + type(e).__name__
+def tcp(host, port):
+    try:
+        socket.create_connection((host, port), timeout=5).close(); return "ok"
+    except Exception as e:
+        return "fail:" + type(e).__name__
+def http(url):
+    try:
+        return "ok:%d" % urllib.request.urlopen(url, timeout=8).status
+    except urllib.error.HTTPError as e:
+        return "ok:%d" % e.code
+    except Exception as e:
+        return "fail:" + type(e).__name__
+import os
+from concurrent.futures import ThreadPoolExecutor
+checks = [
+    ("dns_example_com", lambda: dns("example.com")),
+    ("dns_storage_googleapis_com", lambda: dns("storage.googleapis.com")),
+    ("dns_metadata_google_internal", lambda: dns("metadata.google.internal")),
+    ("https_example_com", lambda: http("https://example.com")),
+    ("http_example_com", lambda: http("http://example.com")),
+    ("tcp_1_1_1_1_443", lambda: tcp("1.1.1.1", 443)),
+    ("tcp_8_8_8_8_53", lambda: tcp("8.8.8.8", 53)),
+    ("tcp_metadata_ip_80", lambda: tcp("169.254.169.254", 80)),
+    ("https_storage_googleapis_com", lambda: http("https://storage.googleapis.com")),
+]
+listener = os.environ.get("ALIEN_PROBE_LISTENER")
+if listener:
+    host, port = listener.rsplit(":", 1)
+    checks.append(("tcp_listener_in_customer_vpc", lambda: tcp(host, int(port))))
+# A closed network answers each lookup only after about 20 s, so the rows run side by side.
+with ThreadPoolExecutor(len(checks)) as pool:
+    results = list(pool.map(lambda c: c[1](), checks))
+for (name, _), value in zip(checks, results):
+    print(name + "=" + value)
+"#;
+
+/// Runs [`REACH_PROBE`] in a fresh sandbox cut from a template with `internet_access`, and
+/// returns the rows.
+async fn reach_rows(
+    client: &Arc<AgentPlatformClient>,
+    engine: &str,
+    internet_access: bool,
+) -> BTreeMap<String, String> {
+    let template = provision_template(client, engine, &agent_image(), internet_access).await;
+    let provider = provider(client, engine, &template);
+    let session = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds");
+    let sid = session.sandbox_id.clone();
+    let mut env = BTreeMap::new();
+    if let Ok(listener) = std::env::var("ALIEN_TEST_GCP_PROBE_LISTENER") {
+        env.insert("ALIEN_PROBE_LISTENER".to_string(), listener);
+    }
+    let result = run(
+        &provider,
+        &sid,
+        &["python3", "-c", REACH_PROBE],
+        env,
+        Duration::from_secs(120),
+    )
+    .await;
+    let stdout = String::from_utf8_lossy(&result.stdout).to_string();
+    assert_eq!(
+        result.exit_code,
+        0,
+        "the probe must run to the end: {stdout}\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let rows = stdout
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect::<BTreeMap<_, _>>();
+    provider
+        .terminate(&sid)
+        .await
+        .expect("terminate confirms gone");
+    println!("internetAccess={internet_access}");
+    for (name, value) in &rows {
+        println!("  {name:<32} {value}");
+    }
+    rows
+}
+
+/// What a Google Cloud sandbox reaches under each switch. `internetAccess: true` is what the
+/// `internet` egress declaration maps to: any host, any port, DNS included, through Google's
+/// shared addresses; the sandbox is outside the customer's VPC, so a listener there sees nothing.
+/// `false` is `none`: even DNS fails. Set `ALIEN_TEST_GCP_PROBE_LISTENER=host:port` to a listener
+/// in the project's VPC to add the row that proves it is not reachable in either mode.
+#[tokio::test]
+#[ignore = "requires a real GCP project on default placement; see module docs"]
+async fn reach_matrix_for_both_egress_switches() {
+    let config = LiveConfig::from_env();
+    let client = config.client();
+    let engine = provision_engine(&client).await;
+    record_engine(&engine);
+    let _guard = EngineGuard {
+        client: client.clone(),
+        engine: engine.clone(),
+    };
+
+    let open = reach_rows(&client, &engine, true).await;
+    for row in [
+        "dns_example_com",
+        "dns_storage_googleapis_com",
+        "https_example_com",
+        "http_example_com",
+        "tcp_1_1_1_1_443",
+        "tcp_8_8_8_8_53",
+        "https_storage_googleapis_com",
+    ] {
+        assert!(
+            open[row].starts_with("ok"),
+            "internetAccess=true must reach {row}: {open:?}"
+        );
+    }
+    for row in ["dns_metadata_google_internal", "tcp_metadata_ip_80"] {
+        assert!(
+            open[row].starts_with("fail"),
+            "the metadata server stays unreachable ({row}): {open:?}"
+        );
+    }
+
+    let closed = reach_rows(&client, &engine, false).await;
+    for (row, value) in &closed {
+        assert!(
+            value.starts_with("fail"),
+            "internetAccess=false must reach nothing, but {row}={value}: {closed:?}"
+        );
+    }
+    if std::env::var("ALIEN_TEST_GCP_PROBE_LISTENER").is_ok() {
+        assert!(open["tcp_listener_in_customer_vpc"].starts_with("fail"));
+    }
+}
+
+/// The real path: the deployment is one a local manager deployed (`alien deploy`), and the binding
+/// is built from the controller state the manager recorded for the sandbox, exactly as the
+/// controller publishes it. It is then loaded with `load_sandbox` the way a workload does, so the
+/// provider-level checks run, and a sandbox is created and probed through it. Set
+/// `ALIEN_TEST_MANAGER_URL`, `ALIEN_TEST_MANAGER_TOKEN`, `ALIEN_TEST_DEPLOYMENT_ID` and
+/// `ALIEN_TEST_SANDBOX_RESOURCE` plus the `GOOGLE_TARGET_*` variables.
+#[tokio::test]
+#[ignore = "requires a deployment made by a local manager in a real GCP project"]
+async fn reach_through_a_manager_deployed_binding() {
+    use alien_bindings::traits::BindingsProviderApi;
+    use alien_core::bindings::{BindingValue, SandboxBinding};
+
+    let config = LiveConfig::from_env();
+    let resource = require_env("ALIEN_TEST_SANDBOX_RESOURCE");
+    let url = format!(
+        "{}/v1/deployments/{}",
+        require_env("ALIEN_TEST_MANAGER_URL").trim_end_matches('/'),
+        require_env("ALIEN_TEST_DEPLOYMENT_ID")
+    );
+    let deployment: serde_json::Value = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(require_env("ALIEN_TEST_MANAGER_TOKEN"))
+        .send()
+        .await
+        .expect("the manager answers")
+        .error_for_status()
+        .expect("the manager knows the deployment")
+        .json()
+        .await
+        .expect("the deployment is JSON");
+    let state = &deployment["stackState"]["resources"][resource.as_str()];
+    assert_eq!(state["status"], "running", "the sandbox is running: {state}");
+    let internal = &state["_internal"];
+    let text = |key: &str| {
+        internal[key]
+            .as_str()
+            .unwrap_or_else(|| panic!("controller state has {key}: {internal}"))
+            .to_string()
+    };
+    let (project, region) = (text("projectId"), text("region"));
+    let engine = format!(
+        "projects/{project}/locations/{region}/reasoningEngines/{}",
+        text("engine")
+    );
+    let template = format!("{engine}/sandboxEnvironmentTemplates/{}", text("templateId"));
+    assert_eq!(internal["egress"], "internet", "declared internet: {internal}");
+    let mut binding = SandboxBinding::gcp_agent_platform(
+        BindingValue::value(engine),
+        BindingValue::value(template),
+        BindingValue::value(region),
+        internal["maxLifetimeSeconds"].as_u64().map(|v| v as u32),
+        internal["allowEgress"].as_bool().unwrap_or(false),
+    );
+    if let SandboxBinding::GcpAgentPlatform(value) = &mut binding {
+        value.egress = Some(alien_core::SandboxEgress::Internet.into());
+    }
+
+    let env = HashMap::from([
+        ("ALIEN_DEPLOYMENT_TYPE".to_string(), "gcp".to_string()),
+        ("GCP_PROJECT_ID".to_string(), config.project_id.clone()),
+        ("GCP_REGION".to_string(), config.region.clone()),
+        (
+            "GOOGLE_SERVICE_ACCOUNT_KEY".to_string(),
+            config.credentials_json.clone(),
+        ),
+        (
+            "ALIEN_BOX_BINDING".to_string(),
+            serde_json::to_string(&binding).unwrap(),
+        ),
+    ]);
+    let bindings = alien_bindings::BindingsProvider::from_env(env)
+        .await
+        .expect("the provider builds from the environment");
+    let sandbox = bindings
+        .load_sandbox("box")
+        .await
+        .expect("load_sandbox accepts a Google Cloud internet binding");
+    assert_eq!(
+        sandbox.egress_declaration(),
+        Some(&alien_core::SandboxEgress::Internet)
+    );
+    let created = sandbox
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds on the loaded binding");
+    let sid = created.sandbox_id.clone();
+    let (command, args) = ("python3", vec!["-c".to_string(), REACH_PROBE.to_string()]);
+    let mut stream = sandbox
+        .run_command(
+            &sid,
+            RunCommandRequest {
+                command: command.to_string(),
+                args,
+                cwd: None,
+                env: BTreeMap::new(),
+                timeout: Duration::from_secs(120),
+            },
+        )
+        .await
+        .expect("the probe starts");
+    let mut stdout = Vec::new();
+    let mut exit = None;
+    while let Some(frame) = stream.next().await {
+        match frame.expect("a frame decodes") {
+            CommandOutput::Stdout { data, .. } => stdout.extend_from_slice(&data),
+            CommandOutput::Exit { code, .. } => exit = Some(code),
+            _ => {}
+        }
+    }
+    let text = String::from_utf8_lossy(&stdout).to_string();
+    println!("{text}");
+    sandbox.terminate(&sid).await.expect("terminate confirms gone");
+    assert_eq!(exit, Some(0), "the probe ran to the end: {text}");
+    let rows: BTreeMap<_, _> = text
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect();
+    for row in ["dns_example_com", "https_example_com", "tcp_1_1_1_1_443"] {
+        assert!(rows[row].starts_with("ok"), "{row} reachable: {rows:?}");
+    }
+    for row in ["dns_metadata_google_internal", "tcp_metadata_ip_80"] {
+        assert!(rows[row].starts_with("fail"), "{row} blocked: {rows:?}");
+    }
+}
+
 // ---- Orphan sweep -----------------------------------------------------------------------------
 
 fn sweep_log() -> PathBuf {
@@ -816,4 +1090,152 @@ async fn sweep_orphaned_engines() {
             "deletion accepted but not yet done, rerun the sweep to confirm: {still_listed:?}"
         );
     }
+}
+
+// ---- Output past the reply limit --------------------------------------------------------------
+
+/// 5 MiB of 64-byte numbered lines on stdout, so a kept prefix can be checked byte for byte.
+const FIVE_MIB_OF_LINES: &str = "awk 'BEGIN{for(i=0;i<81920;i++)printf \"%063d\\n\",i}'";
+
+/// Output far past the proxy's reply limit: a synchronous command (short deadline) returns the
+/// first bytes that fit `GCP_STREAM_REPLY_BUDGET`, intact, with `truncated` set; a job (deadline
+/// past the synchronous window) returns the agent's whole 4 MiB across polls, also with
+/// `truncated` set because 5 MiB is past the agent's own cap. Needs an image whose agent honours
+/// `replyBudget`.
+#[tokio::test]
+#[ignore = "requires a real GCP project; see module docs"]
+async fn output_past_the_reply_limit_is_capped_and_truncated() {
+    use alien_bindings::providers::sandbox::gcp_agent_platform::GCP_STREAM_REPLY_BUDGET;
+
+    let config = LiveConfig::from_env();
+    let client = config.client();
+    let engine = provision_engine(&client).await;
+    record_engine(&engine);
+    let _guard = EngineGuard {
+        client: client.clone(),
+        engine: engine.clone(),
+    };
+    let template = provision_template(&client, &engine, &agent_image(), true).await;
+    let provider = provider(&client, &engine, &template);
+    let session = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds");
+    let sid = session.sandbox_id.clone();
+
+    // 20s stays on the synchronous `:execute`; 90s forces a detached job.
+    for (path, timeout) in [("synchronous", 20), ("job", 90)] {
+        let mut stream = provider
+            .run_command(
+                &sid,
+                RunCommandRequest {
+                    command: "/bin/sh".to_string(),
+                    args: vec!["-lc".to_string(), FIVE_MIB_OF_LINES.to_string()],
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    timeout: Duration::from_secs(timeout),
+                },
+            )
+            .await
+            .expect("the command starts");
+        let mut stdout = Vec::new();
+        let mut exit = None;
+        while let Some(frame) = stream.next().await {
+            match frame.unwrap_or_else(|error| panic!("{path}: a frame decodes: {error}")) {
+                CommandOutput::Stdout { data, .. } => stdout.extend_from_slice(&data),
+                CommandOutput::Stderr { .. } => {}
+                CommandOutput::Exit { code, truncated } => exit = Some((code, truncated)),
+            }
+        }
+        let (code, truncated) = exit.expect("exactly one terminal exit frame arrives");
+        println!(
+            "{path}: kept {} bytes of 5 MiB, reply budget {GCP_STREAM_REPLY_BUDGET}, exit {code}, truncated {truncated}",
+            stdout.len()
+        );
+        assert_eq!(code, 0, "{path}");
+        assert!(truncated, "{path}: the result says it was cut");
+        if path == "job" {
+            // A job returns what the agent kept, the 4 MiB per-stream cap, across many polls.
+            assert_eq!(stdout.len(), 4 << 20, "{path}: the agent's whole 4 MiB");
+        } else {
+            assert!(
+                stdout.len() > 200_000 && stdout.len() < GCP_STREAM_REPLY_BUDGET,
+                "{path}: kept {} bytes, expected the first ~300 KB",
+                stdout.len()
+            );
+        }
+        let expected: Vec<u8> = (0..stdout.len() / 64)
+            .flat_map(|i| format!("{i:063}\n").into_bytes())
+            .collect();
+        assert_eq!(
+            stdout[..expected.len()],
+            expected[..],
+            "{path}: the kept bytes are the start of the output, intact"
+        );
+    }
+
+    provider
+        .terminate(&sid)
+        .await
+        .expect("terminate confirms gone");
+}
+
+/// A file far past the reply limit reads back whole: the client pages it by offset and length and
+/// joins the pages. Needs an image whose agent honours `offset` and `length`.
+#[tokio::test]
+#[ignore = "requires a real GCP project; see module docs"]
+async fn a_file_past_the_reply_limit_reads_back_in_pages() {
+    let config = LiveConfig::from_env();
+    let client = config.client();
+    let engine = provision_engine(&client).await;
+    record_engine(&engine);
+    let _guard = EngineGuard {
+        client: client.clone(),
+        engine: engine.clone(),
+    };
+    let template = provision_template(&client, &engine, &agent_image(), true).await;
+    let provider = provider(&client, &engine, &template);
+    let session = provider
+        .create(CreateSandboxRequest::default())
+        .await
+        .expect("create succeeds");
+    let sid = session.sandbox_id.clone();
+
+    // 5 MiB of numbered 64-byte lines, written inside the sandbox and read back through the API.
+    let mut stream = provider
+        .run_command(
+            &sid,
+            RunCommandRequest {
+                command: "/bin/sh".to_string(),
+                args: vec![
+                    "-lc".to_string(),
+                    "awk 'BEGIN{for(i=0;i<81920;i++)printf \"%063d\\n\",i}' > /sandbox/big.txt"
+                        .to_string(),
+                ],
+                cwd: None,
+                env: BTreeMap::new(),
+                timeout: Duration::from_secs(20),
+            },
+        )
+        .await
+        .expect("the command starts");
+    while let Some(frame) = stream.next().await {
+        frame.expect("a frame decodes");
+    }
+
+    let read = provider
+        .read_file(&sid, "/big.txt")
+        .await
+        .expect("a 5 MiB file reads back");
+    let expected: Vec<u8> = (0..81920)
+        .flat_map(|i| format!("{i:063}\n").into_bytes())
+        .collect();
+    println!("read {} bytes of 5 MiB", read.len());
+    assert_eq!(read.len(), expected.len());
+    assert!(read == expected, "the pages join into the original bytes");
+
+    provider
+        .terminate(&sid)
+        .await
+        .expect("terminate confirms gone");
 }

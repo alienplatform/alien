@@ -344,6 +344,9 @@ pub struct SandboxEnvironment {
     /// Runtime state, e.g. `STATE_RUNNING`
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    /// When the sandbox was created (RFC 3339); orders sandboxes that share a request key
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_time: Option<String>,
     /// Template the sandbox was cut from
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_environment_template: Option<String>,
@@ -576,6 +579,14 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     async fn get_sandbox(&self, engine: &str, sandbox: &str) -> Result<SandboxEnvironment>;
     /// List sandboxes under an engine, following pagination. Retries.
     async fn list_sandboxes(&self, engine: &str) -> Result<Vec<SandboxEnvironment>>;
+    /// List the sandboxes under an engine whose display name is exactly `display_name`, following
+    /// pagination. Retries. The match is made by the service (`display_name="…"`, AIP-160), so an
+    /// engine holding many sandboxes is not read in full to find one caller's.
+    async fn list_sandboxes_by_display_name(
+        &self,
+        engine: &str,
+        display_name: &str,
+    ) -> Result<Vec<SandboxEnvironment>>;
     /// Delete a sandbox. Retries; a not-found is success.
     async fn delete_sandbox(&self, engine: &str, sandbox: &str) -> Result<()>;
 
@@ -728,6 +739,47 @@ impl AgentPlatformClient {
                 },
             )),
         }
+    }
+
+    async fn list_sandboxes_filtered(
+        &self,
+        engine: &str,
+        filter: Option<String>,
+    ) -> Result<Vec<SandboxEnvironment>> {
+        let path = self.sandboxes_path(engine);
+        let mut sandboxes = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        loop {
+            let mut query = Vec::new();
+            if let Some(filter) = &filter {
+                query.push(("filter", filter.clone()));
+            }
+            if let Some(token) = &page_token {
+                query.push(("pageToken", token.clone()));
+            }
+            let page: ListSandboxesResponse = self
+                .base
+                .execute_request(
+                    Method::GET,
+                    &path,
+                    (!query.is_empty()).then_some(query),
+                    Option::<()>::None,
+                    engine,
+                )
+                .await
+                .context(AgentPlatformErrorData::RequestFailed {
+                    operation: "list sandboxes".to_string(),
+                    message: format!("engine '{engine}'"),
+                })?;
+
+            sandboxes.extend(page.sandbox_environments);
+            match page.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
+        }
+        Ok(sandboxes)
     }
 
     fn describe_operation(op: &Operation) -> String {
@@ -943,30 +995,19 @@ impl AgentPlatformApi for AgentPlatformClient {
     }
 
     async fn list_sandboxes(&self, engine: &str) -> Result<Vec<SandboxEnvironment>> {
-        let path = self.sandboxes_path(engine);
-        let mut sandboxes = Vec::new();
-        let mut page_token: Option<String> = None;
+        self.list_sandboxes_filtered(engine, None).await
+    }
 
-        loop {
-            let query = page_token
-                .as_ref()
-                .map(|token| vec![("pageToken", token.clone())]);
-            let page: ListSandboxesResponse = self
-                .base
-                .execute_request(Method::GET, &path, query, Option::<()>::None, engine)
-                .await
-                .context(AgentPlatformErrorData::RequestFailed {
-                    operation: "list sandboxes".to_string(),
-                    message: format!("engine '{engine}'"),
-                })?;
-
-            sandboxes.extend(page.sandbox_environments);
-            match page.next_page_token {
-                Some(token) if !token.is_empty() => page_token = Some(token),
-                _ => break,
-            }
-        }
-        Ok(sandboxes)
+    async fn list_sandboxes_by_display_name(
+        &self,
+        engine: &str,
+        display_name: &str,
+    ) -> Result<Vec<SandboxEnvironment>> {
+        // A string literal in the filter grammar: `\` and `"` are the only characters that can
+        // end it early, so they are escaped and nothing a caller supplies can add a clause.
+        let literal = display_name.replace('\\', "\\\\").replace('"', "\\\"");
+        self.list_sandboxes_filtered(engine, Some(format!("display_name=\"{literal}\"")))
+            .await
     }
 
     async fn delete_sandbox(&self, engine: &str, sandbox: &str) -> Result<()> {
@@ -1502,6 +1543,70 @@ mod tests {
             templates[1].name.as_deref(),
             Some("eng1/sandboxEnvironmentTemplates/t2")
         );
+    }
+
+    /// A key's sandboxes are asked for by display name, the service does the matching, and a
+    /// result that spans pages is read to its end: a first page alone would hide an older sandbox.
+    #[tokio::test]
+    async fn list_sandboxes_by_display_name_filters_and_follows_pagination() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(SANDBOXES_PATH)
+                    .query_param("filter", "display_name=\"alienRequestKey-abc\"")
+                    .matches(|req| {
+                        req.query_params
+                            .as_ref()
+                            .is_none_or(|q| q.iter().all(|(k, _)| k != "pageToken"))
+                    });
+                then.status(200).json_body_obj(&serde_json::json!({
+                    "sandboxEnvironments": [{ "name": "eng1/sandboxEnvironments/1", "state": "STATE_RUNNING" }],
+                    "nextPageToken": "page2"
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(SANDBOXES_PATH)
+                    .query_param("filter", "display_name=\"alienRequestKey-abc\"")
+                    .query_param("pageToken", "page2");
+                then.status(200).json_body_obj(&serde_json::json!({
+                    "sandboxEnvironments": [{ "name": "eng1/sandboxEnvironments/2", "state": "STATE_RUNNING" }]
+                }));
+            })
+            .await;
+
+        let sandboxes = client(&server)
+            .list_sandboxes_by_display_name(ENGINE, "alienRequestKey-abc")
+            .await
+            .expect("both pages should list");
+        let names: Vec<_> = sandboxes.iter().filter_map(|s| s.name.as_deref()).collect();
+        assert_eq!(
+            names,
+            ["eng1/sandboxEnvironments/1", "eng1/sandboxEnvironments/2"]
+        );
+    }
+
+    /// The display name is a string literal in the filter: a quote or backslash in it cannot end
+    /// the literal and add a clause.
+    #[tokio::test]
+    async fn a_display_name_cannot_break_out_of_the_filter_literal() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(SANDBOXES_PATH)
+                    .query_param("filter", "display_name=\"a\\\" OR display_name:* \\\\\"");
+                then.status(200).json_body_obj(&serde_json::json!({}));
+            })
+            .await;
+        client(&server)
+            .list_sandboxes_by_display_name(ENGINE, "a\" OR display_name:* \\")
+            .await
+            .expect("an escaped literal is a valid filter");
+        mock.assert_async().await;
     }
 
     const ENGINES_PATH: &str = "/projects/test-project/locations/us-central1/reasoningEngines";

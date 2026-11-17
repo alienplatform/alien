@@ -117,6 +117,7 @@ runtime:
       runAsUser: 10001
       runAsGroup: 10001
       fsGroup: 10001
+      fsGroupChangePolicy: OnRootMismatch
       seccompProfile:
         type: RuntimeDefault
     containerSecurityContext:
@@ -3666,6 +3667,19 @@ spec:
               fi
               {{- end }}
               done
+              {{- $sandboxNamespace := dig "namespace" "" (default dict .Values.sandbox) }}
+              {{- if and $sandboxIds $sandboxNamespace (ne $sandboxNamespace .Release.Namespace) }}
+
+              # Sandbox pods run in their own namespace, where the Operator also wrote
+              # one NetworkPolicy per internet sandbox. Remove the ones this deployment owns.
+              sandbox_namespace={{ $sandboxNamespace | quote }}
+              for cleanup_selector in $selectors; do
+                if ! kubectl -n "$sandbox_namespace" delete networkpolicies.networking.k8s.io -l "$cleanup_selector" --ignore-not-found=true --wait=false; then
+                  echo "Refusing cleanup: cannot delete NetworkPolicies in sandbox namespace $sandbox_namespace." >&2
+                  exit 1
+                fi
+              done
+              {{- end }}
 
               sort -u "$scratch/env-secrets" -o "$scratch/env-secrets"
               while IFS="$(printf '\t')" read -r secret_name resource_id; do
@@ -4355,6 +4369,7 @@ spec:
         runAsUser: 999
         runAsGroup: 999
         fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       {{- with $.Values.runtime.imagePullSecrets }}

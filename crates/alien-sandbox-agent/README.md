@@ -362,6 +362,38 @@ at plan time ("schedule sandboxes on amd64 nodes"); arm64 sandboxes on Kubernete
 supported yet. There is no pause: an idle session keeps its pod's CPU and memory on the node until
 it is terminated or reaches its deadline.
 
+## Kubernetes node consolidation
+
+A claimed sandbox pod carries `karpenter.sh/do-not-disrupt: "true"` and
+`cluster-autoscaler.kubernetes.io/safe-to-evict: "false"`, so node consolidation and scale-down do
+not evict a live session; idle pool pods carry neither and stay evictable. With no
+`maxLifetimeSeconds` declared and no `timeoutMs` on the create, a session has no deadline, so the
+annotations keep its node until the session is terminated. What that means for node replacement
+depends on the platform:
+
+- **EKS Auto Mode:** NodeClaims get a 24 h termination grace period by default, so AMI drift and
+  the 336 h node expiry still end a session within about 24 h.
+- **Self-managed Karpenter:** with no `terminationGracePeriod` on the NodePool, a node that is
+  being replaced stays half-drained for as long as the session runs.
+- **GKE Autopilot:** honours the annotation for at most 7 days, and not on Spot nodes.
+- **GKE Standard:** the annotation stops autoscaler scale-down only; cluster upgrades ignore it.
+- **AKS:** the cluster autoscaler honours `safe-to-evict`; node image and Kubernetes upgrades
+  drain nodes without reading it (not checked on a live cluster).
+
+To bound how long a session can hold a node, set a node termination grace period on the NodePool
+rather than a default session lifetime. Do not add a PodDisruptionBudget for sandbox pods: a budget
+blocks the drain with no deadline.
+
+## Kubernetes Operator restarts and capacity
+
+The sandbox broker runs inside the Operator pod. While the Operator restarts (for example on every
+release), sandboxes keep running, but calls to the broker fail with a retryable
+`REMOTE_SERVICE_UNAVAILABLE` error for up to about a minute. The bindings do not retry for you;
+retry the call. A create whose connection failed after the request was sent is not retryable
+(`SANDBOX_OUTCOME_UNKNOWN`): the broker may already have claimed a pod, so list sessions before
+creating again. Size nodes for the warm pool plus live sessions: one 4-vCPU Kata node held about
+three default sandbox pods (2Gi each plus about 600Mi runtime overhead).
+
 ## Bootstrap file protection
 
 Before any image code starts, the agent creates a private mount namespace and
@@ -514,10 +546,8 @@ to preview and `sandbox/management` to create sandboxes.
 
 Limits the plan refuses with a message, rather than discovering them at the first session:
 - a disk above the platform's ephemeral-storage cap (8 GiB disk, 10 GiB ephemeral storage);
-- `internet` egress: there is no enforcement point outside the guest without PSC-I or VPC Service
-  Controls, so a `host:port` policy could not be enforced. Declare `none`. It can be lifted when
-  Google ships an egress allowlist for Agent Platform, or when a deployment accepts VPC Service
-  Controls;
+- a per-sandbox outbound policy: `defaultPolicy`, a runtime policy at create and `update_egress`
+  are refused with "Google Cloud sandboxes have no outbound allowlist" (see "Egress on GCP");
 - a preview port equal to the agent's own (8971);
 - an idle pause policy. `pause_resume` is off: on the default network placement every
   `:pause`/`:resume` cycle measured returned a fresh container (new boot id, process gone, uptime
@@ -526,6 +556,35 @@ Limits the plan refuses with a message, rather than discovering them at the firs
 Images must be linux/amd64 and their container must keep running in the foreground: a template
 whose container exits stays PROVISIONING for a long time and then reports FAILED with no reason.
 Alien stops the create at the FAILED state and names this as the likely cause.
+
+## Egress on GCP
+
+The template carries one switch, `internetAccess`, and nothing of Alien's sits on Google's
+outbound path. The declarations map onto it directly:
+
+| Declaration | `internetAccess` | What the sandbox reaches |
+|---|---|---|
+| `internet` (and the deprecated `allow`) | `true` | Any host and port, DNS included, through Google's shared addresses |
+| `none` | `false` | Nothing: TCP to public addresses, the metadata server and DNS all fail |
+
+What `internet` does **not** give on Google Cloud, unlike AWS and Kubernetes:
+- **No allowlist.** A `defaultPolicy`, a runtime policy at create and `update_egress` are refused
+  with "Google Cloud sandboxes have no outbound allowlist". Use another cloud for per-sandbox
+  host rules.
+- **No fixed egress IP.** Outbound traffic leaves through Google-owned addresses shared with other
+  projects, so a customer who allowlists callers by IP cannot allowlist these sandboxes. The mail
+  ports are not blocked either.
+- **No path through the customer's VPC.** The sandbox runs in Google's tenant, so VPC firewalls
+  and flow logs never see its traffic, and a host in the VPC is unreachable from it.
+
+Measured on a default-placement project (`internetAccess: true`): DNS resolves, https and http to
+a public host return 200, TCP to 1.1.1.1:443 and 8.8.8.8:53 connects, the metadata server and a
+host in the project's VPC time out. With `false` every one of these fails, DNS after about 20
+seconds. `reach_matrix_for_both_egress_switches` in `alien-test` repeats it.
+
+Placement: the project's first sandbox pins its network placement. `internet` and `none` need the
+default placement; a project whose placement already uses a private network attachment is outside
+what this backend supports.
 
 ## Preview on GCP
 
@@ -553,3 +612,85 @@ Egress `none` (`internetAccess: false`) blocks TCP to public addresses, the meta
 resolution, measured on the default network placement. The platform has no client token on create,
 so a retried create can leave an extra sandbox; `get_or_create` reuses a running sandbox with the
 same id.
+
+## Reply limits on GCP
+
+Google Cloud returns at most 2,000,000 bytes for one sandbox call, so on GCP the caller sends a
+`replyBudget` and the agent keeps each reply under it:
+
+- A synchronous command (`run_command` with a deadline of 30 seconds or less) returns about 450 KB
+  of stdout and 450 KB of stderr; less when the output is many short lines, because each line is
+  its own frame. Output past that is dropped, the kept output is a prefix of each stream, and the
+  result is marked `truncated`. Use a job for more.
+- A job keeps the usual 4 MiB per stream; each poll returns what fits in one reply and the rest on
+  the next poll, so the outcome arrives after the last of the output.
+- `readFile` accepts `offset` and `length` and returns the file's `totalBytes`. The GCP client
+  reads a file in 900 KB pages and joins them, so files keep the agent's 32 MiB limit. An image
+  built before paging reads files only up to about 1.1 MB on GCP; rebuild it.
+
+Other clouds send no budget and see no difference.
+
+## Kubernetes: metadata credentials
+
+On Kubernetes the agent runs without capabilities and installs no packet redirect, so a
+NetworkPolicy is what shapes a command's network path. Whether the node's metadata address
+`169.254.169.254` is reachable depends on the cluster, so the agent does not require it to be
+silent. Instead, as the identity that runs commands, it checks that no cloud credentials or
+instance identity can be obtained.
+
+The check fails when anything other than a refusal comes back. These count as "nothing
+obtainable": no connection (refused, or a dropped connection, which is how a NetworkPolicy
+blocks traffic), and an HTTP 401, 403 or 404. Data, a redirect, a 429 or 5xx, an unparseable or
+cut-off reply, and a read timeout after the connection opened (the token request included) fail
+the check, and the agent log names the cloud and path.
+
+What is asked for:
+
+- `169.254.169.254`, AWS: an IMDSv2 token, then with and without it `iam/security-credentials/`,
+  `instance-id`, `user-data`, `iam/info`, the instance's own credentials under
+  `identity-credentials/ec2/`, and the signed identity document, `pkcs7` and `signature`.
+  A token with no data behind it is fine. The top-level `meta-data/` listing is read as a list:
+  only `placement/` and `services/` (what the EKS Auto Mode service serves to a pod) may appear;
+  any other entry fails the check.
+- `169.254.169.254`, GCP and Azure: the default service account token, the Azure instance
+  document and the Azure managed identity token. An Azure 400 "Identity not found" means the
+  node has no identity and passes; a 400 asking for a `client_id` means several identities exist
+  and fails the check. The GCP instance id is not asked for: GKE Workload Identity serves it to
+  every pod and it is not a credential.
+- Other addresses that hand out credentials, probed in parallel with the same rule: EKS Pod
+  Identity `169.254.170.23:80`, the ECS task credential endpoint `169.254.170.2:80`, the IPv6
+  EC2 metadata service `[fd00:ec2::254]:80`, the GKE metadata server `169.254.169.252:988` and
+  Azure's wire server `168.63.129.16:80`. Pod Identity answers a request without a token with a
+  400; that passes only while the command identity has no token to present. When
+  `AWS_CONTAINER_AUTHORIZATION_TOKEN`, the file named by
+  `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE`, the default Pod Identity token file, or a mounted
+  service account token is readable, the check presents it, and credentials coming back fail the
+  check.
+
+The AWS-shaped requests also reach the metadata services of other clouds. A 400 or 405 reply
+that carries `Metadata-Flavor: Google`, or an Azure 400 "Required metadata header not specified",
+is read as "this is not an AWS service" for those requests only. It never excuses data: a 2xx
+with a body, a redirect or a server error fails whatever the headers say, and every probe is
+judged on its own reply. A request that could not be made for a local reason (out of file
+descriptors, an unsupported address family) fails the check; only a refused connection, a
+timeout and a missing route count as nothing answering. A reply has to start with `HTTP/` and has
+to be complete: exactly `Content-Length` bytes of body, a chunked body with its terminating chunk,
+or a clean end of stream. A read error, a stall or a short body after the headers fails the check,
+for every probe.
+
+This check has been exercised on EKS. GKE and AKS with gateway egress have not been run on a
+real cluster yet; their handling is covered by tests that use reply shapes from the providers'
+documentation.
+
+The sandbox NetworkPolicy allows and denies by IPv4 range and carries no IPv6 rule, so IPv6
+egress is denied by omission; the chart's tests pin that.
+
+The cluster has to keep pod access to node credentials closed: for AWS, IMDSv2 required and hop
+limit 1, with no instance profile credentials exposed to pods; for GKE, Workload Identity with no
+binding for the sandbox ServiceAccount; for AKS, no node-assigned identity the sandbox must not
+use.
+
+`alien-sandbox-agent check-metadata` runs the same check and exits non-zero naming what it found;
+run it under the command uid to verify a cluster. The check runs wherever the network is enforced
+outside the agent (`ALIEN_SANDBOX_NETWORK_ENFORCER=networkpolicy`); everywhere else (Local, the
+AWS guest) nothing may answer on `169.254.169.254` at all, whichever user the agent runs as.

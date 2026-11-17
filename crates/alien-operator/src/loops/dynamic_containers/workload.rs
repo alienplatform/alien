@@ -184,6 +184,7 @@ fn desired_deployment(
                     }),
                     security_context: Some(PodSecurityContext {
                         fs_group: Some(65532),
+                        fs_group_change_policy: Some("OnRootMismatch".to_string()),
                         ..Default::default()
                     }),
                     host_network: Some(false),
