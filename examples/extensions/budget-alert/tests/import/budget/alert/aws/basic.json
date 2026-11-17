@@ -1,0 +1,4 @@
+{
+  "resource": { "id": "costs", "monthlyLimitUsd": 500, "email": "cloud-costs@acme.dev" },
+  "importData": { "budgetName": "my-app-costs" }
+}
