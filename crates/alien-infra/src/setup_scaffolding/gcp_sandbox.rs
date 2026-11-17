@@ -55,6 +55,15 @@ pub(crate) fn image_repository_body(sandbox_id: &str, owner: Option<&str>) -> Re
         description: Some(format!("Image of sandbox '{sandbox_id}'")),
         labels: owner.map(|owner| HashMap::from([(OWNER_LABEL.to_string(), owner.to_string())])),
         cleanup_policies: Some(HashMap::from([("delete-untagged".to_string(), policy)])),
+        // A tag is made from the digest it names and never moves, so no tag update is needed and
+        // none is allowed: moving one would leave a live digest untagged.
+        repository_config: Some(
+            alien_gcp_clients::artifactregistry::RepositoryConfig::DockerConfig(
+                alien_gcp_clients::artifactregistry::DockerRepositoryConfig {
+                    immutable_tags: Some(true),
+                },
+            ),
+        ),
         ..Default::default()
     }
 }
@@ -486,6 +495,16 @@ mod tests {
                     && location == "us-central1"
                     && id == "acme-agents-img"
                     && body.format == Some(RepositoryFormat::Docker)
+                    && matches!(
+                        body.repository_config,
+                        Some(
+                            alien_gcp_clients::artifactregistry::RepositoryConfig::DockerConfig(
+                                alien_gcp_clients::artifactregistry::DockerRepositoryConfig {
+                                    immutable_tags: Some(true)
+                                }
+                            )
+                        )
+                    )
                     && body.labels.as_ref().is_some_and(|labels| {
                         labels.get(OWNER_LABEL).map(String::as_str) == Some(PREFIX)
                     })

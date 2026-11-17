@@ -43,15 +43,14 @@ pub fn sandbox_image_repository(prefix: &str, sandbox_id: &str) -> Option<String
 }
 
 /// What the manager's identity may do in a sandbox's image repository: read it, upload and tag. No
-/// delete of any kind, so a compromised manager cannot remove a version a live template uses;
+/// tag update and no delete of any kind (tags are immutable and made from the digest), so a compromised manager cannot remove a version a live template uses;
 /// untagged versions are cleaned by the repository's own policy. One list for the Terraform
 /// emitter and direct setup, so the two grant the same thing.
-pub const SANDBOX_IMAGE_WRITE_PERMISSIONS: [&str; 8] = [
+pub const SANDBOX_IMAGE_WRITE_PERMISSIONS: [&str; 7] = [
     "artifactregistry.repositories.get",
     "artifactregistry.repositories.downloadArtifacts",
     "artifactregistry.repositories.uploadArtifacts",
     "artifactregistry.tags.create",
-    "artifactregistry.tags.update",
     "artifactregistry.tags.get",
     "artifactregistry.tags.list",
     "artifactregistry.versions.get",

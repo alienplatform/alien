@@ -343,14 +343,7 @@ async fn copy_image_into_own_project(
     let digest =
         crate::sandbox::gcp_image_copy::resolve_digest(&http, &source, &reference, sandbox_id)
             .await?;
-    let keep_tag = format!(
-        "d-{}",
-        digest
-            .trim_start_matches("sha256:")
-            .chars()
-            .take(12)
-            .collect::<String>()
-    );
+    let keep_tag = crate::sandbox::gcp_image_copy::keep_tag_for(&digest);
     copy_image(
         &http,
         &source,

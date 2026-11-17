@@ -313,6 +313,11 @@ fn emit_image_repository(
                 expr::template(format!("Image of sandbox '{}'", ctx.resource_id)),
             ),
             attr("labels", labels(ctx, "sandbox")),
+            // Tags are made from the digest they name and never move.
+            nested(block(
+                "docker_config",
+                [attr("immutable_tags", Expression::Bool(true))],
+            )),
             nested(block(
                 "cleanup_policies",
                 [

@@ -310,6 +310,19 @@ async fn push_manifest(
     Ok(())
 }
 
+/// The tag that keeps `digest` through a repository's cleanup of untagged versions: made from the
+/// digest, so the same digest always gets the same tag and a tag is never moved.
+pub(crate) fn keep_tag_for(digest: &str) -> String {
+    format!(
+        "d-{}",
+        digest
+            .trim_start_matches("sha256:")
+            .chars()
+            .take(12)
+            .collect::<String>()
+    )
+}
+
 /// Copy the image at `reference` and everything it names to `destination`, then give it `keep_tag`
 /// so a cleanup of untagged versions never takes it. Returns the manifest digest, which is the
 /// reference the template must use. Every step is idempotent by digest.
@@ -337,8 +350,19 @@ pub(crate) fn copy_image<'a>(
         );
         // A manifest only exists in a repository once every blob it names does.
         if !head_ok(http, &manifest_url, destination.access_token, resource_id).await? {
+            // Each platform manifest of an index is tagged too: untagged, a cleanup of untagged
+            // versions could take it while the index that names it is live.
             for child in &body.manifests {
-                copy_image(http, source, destination, &child.digest, None, resource_id).await?;
+                let child_tag = keep_tag_for(&child.digest);
+                copy_image(
+                    http,
+                    source,
+                    destination,
+                    &child.digest,
+                    Some(&child_tag),
+                    resource_id,
+                )
+                .await?;
             }
             let blobs = body.config.iter().chain(body.layers.iter());
             for blob in blobs {
@@ -347,7 +371,16 @@ pub(crate) fn copy_image<'a>(
             push_manifest(http, destination, &digest, &media_type, &bytes, resource_id).await?;
         }
         if let Some(tag) = keep_tag {
-            push_manifest(http, destination, tag, &media_type, &bytes, resource_id).await?;
+            // The tag names the digest it is made from, so one that exists already points here.
+            // Leaving it alone keeps the repository's tags unmoved and needs no tag update.
+            let tag_url = format!(
+                "{}/v2/{}/manifests/{tag}",
+                destination.base_url.trim_end_matches('/'),
+                destination.repository
+            );
+            if !head_ok(http, &tag_url, destination.access_token, resource_id).await? {
+                push_manifest(http, destination, tag, &media_type, &bytes, resource_id).await?;
+            }
         }
         Ok(digest)
     })
@@ -448,6 +481,125 @@ mod tests {
         assert_eq!(got, digest);
         by_digest.assert();
         by_tag.assert();
+    }
+
+    fn copy_with_tag(
+        source: &MockServer,
+        dest: &MockServer,
+        reference: &str,
+        tag: &str,
+    ) -> impl Future<Output = Result<String>> {
+        let (source_url, dest_url) = (source.base_url(), dest.base_url());
+        let (reference, tag) = (reference.to_string(), tag.to_string());
+        async move {
+            copy_image(
+                &Client::new(),
+                &CopySource {
+                    base_url: &source_url,
+                    repository: "repo/img",
+                    token: "t",
+                },
+                &CopyDestination {
+                    base_url: &dest_url,
+                    repository: "p/r/img",
+                    access_token: "g",
+                },
+                &reference,
+                Some(&tag),
+                "sbx",
+            )
+            .await
+        }
+    }
+
+    /// A tag is made from its digest, so one that exists already points at the image: the copy
+    /// leaves it alone (an immutable-tag repository refuses a second push of it).
+    #[tokio::test]
+    async fn an_existing_tag_is_not_pushed_again() {
+        let (body, digest) = manifest();
+        let (source, dest) = (MockServer::start(), MockServer::start());
+        source.mock(|w, t| {
+            w.method(GET)
+                .path(format!("/v2/repo/img/manifests/{digest}"));
+            t.status(200).body(&body);
+        });
+        dest.mock(|w, t| {
+            w.method(httpmock::Method::HEAD)
+                .path_contains("/manifests/");
+            t.status(200);
+        });
+        let puts = dest.mock(|w, t| {
+            w.method(PUT);
+            t.status(201);
+        });
+        copy_with_tag(&source, &dest, &digest, "d-keep")
+            .await
+            .expect("copy");
+        assert_eq!(puts.hits(), 0);
+    }
+
+    /// The platform manifests of an index are tagged too: untagged, a cleanup of untagged
+    /// versions could take them while the index that names them is live.
+    #[tokio::test]
+    async fn the_platform_manifests_of_an_index_are_tagged() {
+        let (child, child_digest) = manifest();
+        let index = serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [{"digest": child_digest}],
+        })
+        .to_string();
+        let index_digest = sha256_digest(index.as_bytes());
+        let (source, dest) = (MockServer::start(), MockServer::start());
+        source.mock(|w, t| {
+            w.method(GET)
+                .path(format!("/v2/repo/img/manifests/{index_digest}"));
+            t.status(200).body(&index);
+        });
+        source.mock(|w, t| {
+            w.method(GET)
+                .path(format!("/v2/repo/img/manifests/{child_digest}"));
+            t.status(200).body(&child);
+        });
+        for blob in [CONFIG, LAYER] {
+            let d = sha256_digest(blob);
+            source.mock(|w, t| {
+                w.method(GET).path(format!("/v2/repo/img/blobs/{d}"));
+                t.status(200).body(blob);
+            });
+        }
+        dest.mock(|w, t| {
+            w.method(httpmock::Method::HEAD).path_contains("/");
+            t.status(404);
+        });
+        dest.mock(|w, t| {
+            w.method(POST).path("/v2/p/r/img/blobs/uploads/");
+            t.status(202).header("location", "/upload");
+        });
+        dest.mock(|w, t| {
+            w.method(PUT).path("/upload");
+            t.status(201);
+        });
+        let child_tag = keep_tag_for(&child_digest);
+        let child_tagged = dest.mock(|w, t| {
+            w.method(PUT)
+                .path(format!("/v2/p/r/img/manifests/{child_tag}"));
+            t.status(201);
+        });
+        let index_tagged = dest.mock(|w, t| {
+            w.method(PUT).path("/v2/p/r/img/manifests/d-keep");
+            t.status(201);
+        });
+        dest.mock(|w, t| {
+            w.method(PUT).path_contains("/manifests/sha256:");
+            t.status(201);
+        });
+        copy_with_tag(&source, &dest, &index_digest, "d-keep")
+            .await
+            .expect("copy");
+        child_tagged.assert();
+        index_tagged.assert();
+        assert!(child_tag.starts_with("d-") && child_tag.len() == 14);
     }
 
     #[tokio::test]
