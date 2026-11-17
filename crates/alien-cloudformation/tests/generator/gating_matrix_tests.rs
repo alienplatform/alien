@@ -12,7 +12,7 @@ use super::helpers::{
 use alien_cloudformation::{CfRegistry, CloudFormationTarget};
 use alien_core::{
     ownership_policy_for_resource_type, Ai, AwsOpenSearch, Email, EmailInbound, Key, Kv, Network,
-    NetworkSettings, PermissionProfile, Platform, Queue, ResourceLifecycle, ResourceRef, Sandbox,
+    NetworkSettings, PermissionProfile, Platform, Postgres, Queue, Redis, ResourceLifecycle, ResourceRef, Sandbox,
     SandboxCode, SandboxEgress, SandboxLifecyclePolicy, SandboxLimits, ServiceAccount, Stack,
     StackSettings, Storage, Vault, Worker, WorkerCode,
 };
@@ -97,10 +97,32 @@ fn gated_fixture(resource_type: &str) -> Option<(Stack, StackSettings)> {
             ResourceLifecycle::Frozen,
             "fixtureEnabled",
         ),
+        // A database and a cache are placed in the stack's network.
+        "postgres" | "redis" => {
+            let builder = base().add(
+                Network::new("default-network".to_string())
+                    .settings(sandbox_network())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            );
+            if resource_type == "postgres" {
+                builder.add_enabled_when(
+                    Postgres::new("fixture".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                    "fixtureEnabled",
+                )
+            } else {
+                builder.add_enabled_when(
+                    Redis::new("fixture".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                    "fixtureEnabled",
+                )
+            }
+        }
         _ => return None,
     };
     let settings = StackSettings {
-        network: (resource_type == "sandbox").then(sandbox_network),
+        network: matches!(resource_type, "sandbox" | "postgres" | "redis").then(sandbox_network),
         ..StackSettings::default()
     };
     Some((stack.build(), settings))

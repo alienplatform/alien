@@ -632,26 +632,21 @@ pub fn generate_cloudformation_template_with_profile(
 
         if let Some(condition) = declared_condition {
             for emitted in &mut emitted_resources {
-                // A resource carries at most one Condition, so an emitter that
-                // already set its own leaves nowhere to put the deployer's gate.
-                // Expressing both would need an `Fn::And` over the two, which
-                // nothing needs yet — until it does, refuse rather than pick one
-                // and create the resource the deployer declined.
-                //
-                // No shipped emitter reaches this: the ones that set conditions
-                // (aws/network.rs, aws/kubernetes_cluster.rs) belong to types
-                // the gateability policy refuses, so they fail the check above
-                // first.
-                if let Some(existing) = &emitted.condition {
-                    return Err(AlienError::new(ErrorData::OperationNotSupported {
-                        operation: format!("enabled() on resource type '{resource_type}'"),
-                        reason: format!(
-                            "the CloudFormation emitter for '{resource_type}' already puts \
-                             condition '{existing}' on '{}', and a resource can carry only one \
-                             condition",
-                            emitted.logical_id
-                        ),
-                    }));
+                // A resource carries at most one Condition. An emitter that already set its
+                // own (the database and cache emitters, for the network mode) gets one
+                // condition that is true only when both hold.
+                if let Some(existing) = emitted.condition.clone() {
+                    if existing != condition {
+                        let combined = format!("{existing}And{condition}");
+                        template.conditions.entry(combined.clone()).or_insert_with(|| {
+                            CfExpression::and([
+                                CfExpression::object([("Condition", CfExpression::from(existing.as_str()))]),
+                                CfExpression::object([("Condition", CfExpression::from(condition.as_str()))]),
+                            ])
+                        });
+                        emitted.condition = Some(combined);
+                        continue;
+                    }
                 }
                 emitted.condition = Some(condition.clone());
             }
