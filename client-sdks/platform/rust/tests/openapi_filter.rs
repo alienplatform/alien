@@ -852,6 +852,36 @@ fn both_modes_normalize_only_proven_disjoint_required_tags() {
 }
 
 #[test]
+fn one_pattern_tag_is_disjoint_only_from_tags_it_rejects() {
+    let branch = |tag: Value| {
+        json!({"type": "object", "required": ["resourceType", "data"], "properties": {
+            "resourceType": tag, "data": {"type": "object"}
+        }})
+    };
+    let custom =
+        branch(json!({"type": "string", "pattern": "^(?!(?:alien|experimental)/)[^/]+/.+$"}));
+    let builtin = |name: &str| branch(json!({"type": "string", "enum": [name]}));
+    let cases = json!({
+        "disjoint": {"anyOf": [builtin("storage"), builtin("worker"), custom]},
+        // The pattern also accepts `acme/dns-zone`, so two branches match it.
+        "matchesSibling": {"anyOf": [builtin("storage"), builtin("acme/dns-zone"), custom]},
+        "twoPatterns": {"anyOf": [builtin("storage"), custom, branch(json!({"type": "string", "pattern": "^acme/"}))]},
+        "invalidPattern": {"anyOf": [builtin("storage"), branch(json!({"type": "string", "pattern": "("}))]}
+    });
+    let document = json!({"components": {"schemas": {
+        "Union": {"type": "object", "properties": cases}
+    }}});
+    let normalized = openapi_filter::normalize_openapi(&document).unwrap();
+    let properties = &normalized["components"]["schemas"]["Union"]["properties"];
+    let mut expected = cases["disjoint"].clone();
+    expected["oneOf"] = expected.as_object_mut().unwrap().remove("anyOf").unwrap();
+    assert_eq!(properties["disjoint"], expected);
+    for name in ["matchesSibling", "twoPatterns", "invalidPattern"] {
+        assert_eq!(properties[name], cases[name], "{name}");
+    }
+}
+
+#[test]
 fn externally_tagged_unions_become_one_of_only_when_branches_cannot_overlap() {
     let unit = |tag: &str| json!({"type": "string", "enum": [tag]});
     let data = |tag: &str, closed: bool| {
