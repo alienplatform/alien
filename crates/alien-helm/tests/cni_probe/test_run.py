@@ -22,7 +22,8 @@ def http_error(code, text=""):
 
 class FakeCluster:
     def __init__(self, egress=True, ingress=True, route_up_at=0, node_up_at=0, start_delay=35,
-                 role_pending=None, policy_lands_late=False, first_start_fails=(), fail_with=None):
+                 role_pending=None, policy_lands_late=False, first_start_fails=(), fail_with=None,
+                 unpinned_nodes=None, ignore_pin=False):
         self.egress, self.ingress = egress, ingress
         self.route_up_at, self.node_up_at = START + route_up_at, (None if node_up_at is None else START + node_up_at)
         self.start_delay = start_delay
@@ -30,6 +31,10 @@ class FakeCluster:
         self.policy_lands_late = policy_lands_late
         self.first_start_fails = set(first_start_fails)
         self.fail_with = fail_with or {}
+        # Where the scheduler puts a pod with no pin (default: the listener's node, kata-1). A pod
+        # on any other node cannot route to the listener; with ignore_pin the pin is not honored.
+        self.unpinned_nodes = unpinned_nodes or {}
+        self.ignore_pin = ignore_pin
         self.clock = START
         self.pods = {}       # name -> {"spec", "created", "attempt"}
         self.attempts = {}
@@ -83,7 +88,8 @@ class FakeCluster:
     def finish(self, pod, started):
         """(finish time, exit code, message) of a client that started at `started`."""
         role = pod["role"]
-        route_up = lambda t: t >= self.route_up_at
+        on_listener_node = self.node_of(pod) == "kata-1"
+        route_up = lambda t: t >= self.route_up_at and on_listener_node
         if role in ("control", "control-after"):
             return started + 3, 0 if route_up(started) else 1, "reached" if route_up(started) else "FAILED: URLError"
         if role == "ingress-control-after":
@@ -103,6 +109,12 @@ class FakeCluster:
             return started + 3, 0, "refused on all 3 attempts"
         return started + 1, 1, MARKER_FAILED
 
+    def node_of(self, pod):
+        pin = pod["spec"]["spec"].get("nodeSelector", {}).get("kubernetes.io/hostname")
+        if pin and not self.ignore_pin:
+            return pin
+        return self.unpinned_nodes.get(pod["role"], "kata-1")
+
     def finish_time(self, pod):
         scheduled = self.scheduled_at(pod)
         if scheduled is None:
@@ -117,7 +129,7 @@ class FakeCluster:
                 {"type": "PodScheduled", "status": "False", "reason": "Unschedulable",
                  "message": "0/3 nodes are available: 3 Insufficient memory."}]}}
         started = scheduled + self.start_delay
-        spec = {"nodeName": "kata-1"}
+        spec = {"nodeName": self.node_of(pod)}
         if t < started:
             return {"spec": spec, "status": {"phase": "Pending", "containerStatuses": [
                 {"name": "probe", "state": {"waiting": {"reason": "ContainerCreating"}}}]}}
@@ -185,7 +197,7 @@ class Passing(unittest.TestCase):
         self.assertIn("listener", roles)
         for pod in created:
             self.assertEqual(pod["spec"]["runtimeClassName"], "kata-vm")
-            self.assertEqual(pod["spec"]["nodeSelector"], {"pool": "kata"})
+            self.assertEqual(pod["spec"]["nodeSelector"].get("pool"), "kata")
 
     def test_a_pool_that_scales_from_zero_passes(self):
         # The listener is the first pod on the sandbox nodes and waits for the node.
@@ -212,6 +224,37 @@ class Passing(unittest.TestCase):
                 FakeCluster(policy_lands_late=True).run()
         finally:
             probe.STAGES = original
+
+
+class SameNode(unittest.TestCase):
+    def test_every_pod_after_the_first_control_is_pinned_to_its_node(self):
+        cluster = FakeCluster(unpinned_nodes={"denied": "kata-2", "ingress-denied": "kata-2"})
+        created = []
+        original = cluster.request
+        cluster.request = lambda m, p, b=None: (created.append(b) if m == "POST" and b and "spec" in b
+                                                and "labels" in b["metadata"] and "?" not in p else None) or original(m, p, b)
+        cluster.run()
+        self.assertIn("NetworkPolicy enforced", cluster.output[-1])
+        pins = {pod["metadata"]["labels"]["alien.dev/cni-role"]:
+                pod["spec"]["nodeSelector"].get("kubernetes.io/hostname") for pod in created}
+        self.assertIsNone(pins["control"])
+        for role in ("denied", "ingress-denied", "control-after", "ingress-control-after"):
+            self.assertEqual(pins[role], "kata-1", role)
+
+    def test_a_denied_pod_on_another_node_than_the_control_fails(self):
+        # The pin is not honored and the denied pod lands on a node that cannot route to the
+        # listener: every attempt would time out and the old check passed.
+        cluster = FakeCluster(unpinned_nodes={"denied": "kata-2"}, ignore_pin=True)
+        with self.assertRaisesRegex(RuntimeError, "denied pod ran on node kata-2, not on kata-1") as raised:
+            cluster.run()
+        self.assertNotIn(probe.FIX_HINT, str(raised.exception))
+
+    def test_a_control_with_no_node_fails(self):
+        cluster = FakeCluster()
+        original = cluster.status
+        cluster.status = lambda pod: {**original(pod), "spec": {}} if pod["role"] == "control" else original(pod)
+        with self.assertRaisesRegex(RuntimeError, "reports no node"):
+            cluster.run()
 
 
 class Failing(unittest.TestCase):

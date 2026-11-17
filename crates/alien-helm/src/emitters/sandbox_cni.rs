@@ -1,8 +1,9 @@
 //! Setup-owned, short-lived NetworkPolicy enforcement gate.
 //!
 //! This samples pod-to-pod traffic on the nodes sessions run on (`sandbox.nodeSelector`,
-//! `sandbox.tolerations`), with every probe pod, the listener included, in the sandbox runtime class. It does not certify every node, address
-//! family, or CNI exception for traffic to the host.
+//! `sandbox.tolerations`), with every probe pod, the listener included, in the sandbox runtime
+//! class. After the first control ran, every later pod is pinned to that control's node. It does
+//! not certify every node, address family, or CNI exception for traffic to the host.
 //!
 //! The probe must create pods and NetworkPolicies, which Kubernetes RBAC cannot restrict
 //! by content. Two ValidatingAdmissionPolicies, created before the probe's account and
@@ -62,7 +63,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-12"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -107,7 +108,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-12"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 spec:
   policyName: {{{{ $cluster }}}}
   validationActions: [Deny]
@@ -126,7 +127,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-12"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 spec:
   failurePolicy: Fail
   matchConstraints:
@@ -153,7 +154,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-12"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 spec:
   policyName: {{{{ $cluster }}}}-policies
   validationActions: [Deny]
@@ -170,7 +171,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-10"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -180,7 +181,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-10"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 rules:
   # Creation cannot be scoped by name; the admission policy above confines it.
   - apiGroups: [""]
@@ -210,7 +211,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-9"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 subjects:
   - kind: ServiceAccount
     name: {{{{ $name }}}}
@@ -317,7 +318,7 @@ metadata:
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "-8"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded,hook-failed
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: {job_deadline}
@@ -395,4 +396,23 @@ fn job_deadline_seconds() -> u32 {
         .find_map(|line| line.strip_prefix("JOB_DEADLINE_SECONDS = "))
         .and_then(|value| value.trim().parse().ok())
         .expect("the probe script states JOB_DEADLINE_SECONDS as a number")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_hook_object_of_the_setup_check_is_deleted_when_the_check_fails() {
+        let template = super::template(true);
+        let policies: Vec<_> = template
+            .lines()
+            .filter(|line| line.contains("helm.sh/hook-delete-policy"))
+            .collect();
+        let objects = template.matches("helm.sh/hook:").count();
+        assert!(objects >= 11, "{objects} hook objects");
+        assert_eq!(policies.len(), objects, "every hook object names a delete policy");
+        for line in policies {
+            assert!(line.contains("hook-failed"), "{line}");
+            assert!(line.contains("before-hook-creation"), "{line}");
+        }
+    }
 }

@@ -330,6 +330,9 @@ def run_probe(request, env, now=time.monotonic, sleep=time.sleep, out=print):
     node_selector = json.loads(env.get("PROBE_NODE_SELECTOR") or "{}")
     tolerations = json.loads(env.get("PROBE_TOLERATIONS") or "[]")
     created = []
+    # The node of the first control, once it ran. A refusal only counts on a node where a control
+    # reached the listener, so every later client is pinned to it.
+    pinned_node = []
     deadline = now() + SCRIPT_BUDGET_SECONDS
     marker = uuid.uuid4().hex
     server = (
@@ -360,8 +363,9 @@ def run_probe(request, env, now=time.monotonic, sleep=time.sleep, out=print):
         # ingress into a sandbox pod, and the clients share its node.
         if runtime_class:
             spec["spec"]["runtimeClassName"] = runtime_class
-        if node_selector:
-            spec["spec"]["nodeSelector"] = node_selector
+        if node_selector or pinned_node:
+            spec["spec"]["nodeSelector"] = {**node_selector, **({"kubernetes.io/hostname": pinned_node[0]}
+                                                                 if pinned_node else {})}
         if tolerations:
             spec["spec"]["tolerations"] = tolerations
         return spec
@@ -458,7 +462,16 @@ def run_probe(request, env, now=time.monotonic, sleep=time.sleep, out=print):
             for role, denied, recover in stage:
                 start(role, pod(role, f"DENIED={denied!r}\nRECOVER={recover!r}\n" + code))
             for role, _, _ in stage:
-                wait(role, succeeded)
+                finished = wait(role, succeeded)
+                node = finished.get("spec", {}).get("nodeName")
+                if not pinned_node:
+                    if not node:
+                        raise RuntimeError(f"the {role} pod reports no node, so the later pods cannot be "
+                                           "placed on a node where a control reached the listener")
+                    pinned_node.append(node)
+                elif node != pinned_node[0]:
+                    raise RuntimeError(f"the {role} pod ran on node {node}, not on {pinned_node[0]} where the "
+                                       "control reached the listener; NetworkPolicy enforcement is unproven")
         out("NetworkPolicy enforced: ingress and egress denied requests; all controls passed")
     finally:
         failures = []

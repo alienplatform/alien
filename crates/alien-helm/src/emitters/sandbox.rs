@@ -191,10 +191,11 @@ impl HelmEmitter for SandboxEmitter {
         );
         // Every egress mode needs the proof, because the session NetworkPolicy is what bounds a
         // session's reach in each of them. Under `internet` it confines a session to the gateway.
-        // Under `allow` there is no gateway, and its address exclusions are what keep a session
-        // off node metadata, node credentials and private ranges. Under `none` it is the only
-        // thing keeping a session off the network: `Egress` is listed with no rules. The gateway
-        // and metadata checks the Operator runs cover one path each, not this policy.
+        // Under `allow` there is no gateway and the policy bounds the session's egress. Under
+        // `none` it is the only thing keeping a session off the network: `Egress` is listed with
+        // no rules. The check only tests pod-to-pod traffic on the sandbox nodes; node metadata
+        // is out of its scope. The gateway and metadata checks the Operator runs cover one path
+        // each, not this policy.
         //
         // The proof is the `sandbox-cni-probe.yaml` pre-install and pre-upgrade hook: when it
         // fails, Helm stops before applying any other manifest, so no Operator runs and no
