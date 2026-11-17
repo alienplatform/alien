@@ -5,6 +5,7 @@
 //! values + schema for both bootstrap paths (`registered setup` when
 //! `management.deploymentId` is set; external-bindings initialize otherwise).
 
+use crate::emitters::workload_restart;
 use crate::{
     emitter::{HelmFragment, InfrastructureValue},
     registry::HelmRegistry,
@@ -25,7 +26,6 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
 use alien_permissions::operations::kubernetes::OperatorFeature;
-use crate::emitters::workload_restart;
 use indexmap::IndexMap;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -2660,7 +2660,12 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(&operator_rules(crd_names, permission, custom_operations, format));
+    yaml.push_str(&operator_rules(
+        crd_names,
+        permission,
+        custom_operations,
+        format,
+    ));
     yaml
 }
 
@@ -3229,7 +3234,12 @@ fn operator_clusterrole_doc(
     format: OperatorOutputFormat,
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(&operator_rules(crd_names, permission, custom_operations, format));
+    yaml.push_str(&operator_rules(
+        crd_names,
+        permission,
+        custom_operations,
+        format,
+    ));
     yaml
 }
 
@@ -10548,7 +10558,14 @@ mod tests {
         let repository = "registry.example.com/deployment/operator";
         // The package embeds v3.3.66: whatever tag a carried values file holds (an older
         // default from --reuse-values, a newer or custom tag, a digest) gives way to it.
-        for carried in ["v3.3.65", "3.3.65", "v3.3.66", "v3.4.0", "latest", "my-build-7"] {
+        for carried in [
+            "v3.3.65",
+            "3.3.65",
+            "v3.3.66",
+            "v3.4.0",
+            "latest",
+            "my-build-7",
+        ] {
             assert_eq!(
                 operator_image(carried, ""),
                 format!("{repository}:v3.3.66"),
@@ -10625,7 +10642,11 @@ mod tests {
             "app",
         );
         rendered.assert_ok("dev build");
-        assert!(rendered.stdout.contains("/operator:v3.3.65"), "{}", rendered.stdout);
+        assert!(
+            rendered.stdout.contains("/operator:v3.3.65"),
+            "{}",
+            rendered.stdout
+        );
     }
 
     #[test]
@@ -12177,11 +12198,18 @@ infrastructureExistingSecret: customer-bindings
         let stack = Stack::new("input-stack".to_string())
             .inputs(vec![
                 secret("licenseKey", "License key", false),
-                secret("githubApp", "Existing GitHub App credentials (optional)", false),
+                secret(
+                    "githubApp",
+                    "Existing GitHub App credentials (optional)",
+                    false,
+                ),
             ])
             .build();
         let notes = deployer_secret_notes_tpl(&stack).expect("notes");
-        assert!(notes.contains("  - License key (optional): deployer-secrets"), "{notes}");
+        assert!(
+            notes.contains("  - License key (optional): deployer-secrets"),
+            "{notes}"
+        );
         assert!(
             notes.contains("  - Existing GitHub App credentials (optional): deployer-secrets"),
             "{notes}"
@@ -12210,7 +12238,11 @@ infrastructureExistingSecret: customer-bindings
             .inputs(vec![
                 secret("databasePassword", "Database password", true),
                 secret("licenseKey", "License key", false),
-                secret("githubApp", "Existing GitHub App credentials (optional)", false),
+                secret(
+                    "githubApp",
+                    "Existing GitHub App credentials (optional)",
+                    false,
+                ),
             ])
             .build();
         let registry = HelmRegistry::built_in();
@@ -12243,7 +12275,8 @@ infrastructureExistingSecret: customer-bindings
             "{notes}"
         );
         assert!(
-            notes.contains("Existing GitHub App credentials (optional): deployer-secrets vault key"),
+            notes
+                .contains("Existing GitHub App credentials (optional): deployer-secrets vault key"),
             "{notes}"
         );
         assert!(!notes.contains("(optional) (optional)"), "{notes}");
@@ -12305,10 +12338,17 @@ infrastructureExistingSecret: customer-bindings
         let mut files = sample_chart_files();
         let enrolled = "management:\n  enrollmentCode: test-code\n  audience: test-audience\n  deploymentId: dp_test\n  url: https://manager.example.test\n";
         let token = "management:\n  token: test-credential\n  url: https://manager.example.test\n";
-        let restricted = format!("{token}runtime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n");
+        let restricted =
+            format!("{token}runtime:\n  networkPolicy:\n    enabled: true\n    mode: restricted\n");
         for (name, defaults) in [
-            ("v3.3.31", include_str!("../tests/fixtures/values-v3.3.31.yaml")),
-            ("v3.3.65", include_str!("../tests/fixtures/values-v3.3.65.yaml")),
+            (
+                "v3.3.31",
+                include_str!("../tests/fixtures/values-v3.3.31.yaml"),
+            ),
+            (
+                "v3.3.65",
+                include_str!("../tests/fixtures/values-v3.3.65.yaml"),
+            ),
         ] {
             files.insert("values.yaml".to_string(), defaults.to_string());
             for (mode, values) in [
@@ -12321,7 +12361,12 @@ infrastructureExistingSecret: customer-bindings
                 if mode == "restricted network policy" {
                     // DNS keeps working when the carried defaults have no dns block.
                     assert!(rendered.stdout.contains("k8s-app: kube-dns"), "{name}");
-                    assert!(rendered.stdout.contains("kubernetes.io/metadata.name: kube-system"), "{name}");
+                    assert!(
+                        rendered
+                            .stdout
+                            .contains("kubernetes.io/metadata.name: kube-system"),
+                        "{name}"
+                    );
                 }
             }
         }
@@ -12424,7 +12469,8 @@ infrastructureExistingSecret: customer-bindings
             }
             seen += 1;
             assert_eq!(
-                pod["fsGroupChangePolicy"], "OnRootMismatch",
+                pod["fsGroupChangePolicy"],
+                "OnRootMismatch",
                 "{} {}",
                 doc["kind"].as_str().unwrap_or_default(),
                 doc["metadata"]["name"].as_str().unwrap_or_default()

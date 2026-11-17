@@ -15,11 +15,11 @@ pub mod queue;
 pub mod sandbox;
 pub(crate) mod sandbox_cni;
 pub(crate) mod sandbox_root_boot_check;
-pub(crate) mod workload_restart;
 pub mod service_account;
 pub mod storage;
 pub mod vault;
 pub mod worker;
+pub(crate) mod workload_restart;
 
 use crate::registry::HelmRegistry;
 use alien_core::{

@@ -65,11 +65,23 @@ pub(crate) const VARIABLES: [(&str, &str); 8] = [
     ("newSpec", "dyn(object.spec)"),
     ("oldSpec", "dyn(oldObject.spec)"),
     ("newTemplateMetadata", "dyn(object.spec.template.metadata)"),
-    ("oldTemplateMetadata", "dyn(oldObject.spec.template.metadata)"),
-    ("newTemplateAnnotations", "object.spec.template.metadata.?annotations.orValue({})"),
-    ("oldTemplateAnnotations", "oldObject.spec.template.metadata.?annotations.orValue({})"),
+    (
+        "oldTemplateMetadata",
+        "dyn(oldObject.spec.template.metadata)",
+    ),
+    (
+        "newTemplateAnnotations",
+        "object.spec.template.metadata.?annotations.orValue({})",
+    ),
+    (
+        "oldTemplateAnnotations",
+        "oldObject.spec.template.metadata.?annotations.orValue({})",
+    ),
     ("newAnnotations", "object.metadata.?annotations.orValue({})"),
-    ("oldAnnotations", "oldObject.metadata.?annotations.orValue({})"),
+    (
+        "oldAnnotations",
+        "oldObject.metadata.?annotations.orValue({})",
+    ),
 ];
 
 /// `new` and `old` (CEL variables holding maps) have the same keys and the
