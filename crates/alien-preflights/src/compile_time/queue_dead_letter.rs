@@ -96,6 +96,10 @@ impl CompileTimeCheck for QueueDeadLetterCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        compatibility::frozen_resources_unchanged::FrozenResourcesUnchangedCheck,
+        StackCompatibilityCheck,
+    };
     use alien_core::{QueueDeadLetter, ResourceLifecycle, ResourceRef};
 
     fn dead_letter(target: &str, max_attempts: u32) -> QueueDeadLetter {
@@ -224,6 +228,46 @@ mod tests {
             assert!(
                 errors[0].contains("external queue"),
                 "{platform}: {errors:?}"
+            );
+        }
+    }
+
+    /// Adding, changing or removing the setting on a Frozen queue is refused until setup is
+    /// rerun; on a Live queue it is an ordinary update. A stack without the setting has the same
+    /// setup digest as before the field existed.
+    #[tokio::test]
+    async fn frozen_dead_letter_changes_require_setup_but_live_ones_do_not() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let check = FrozenResourcesUnchangedCheck { platform };
+            let frozen = ResourceLifecycle::Frozen;
+            let without = simple(None, frozen);
+            let with = simple(Some(dead_letter("failed", 5)), frozen);
+            let changed = simple(Some(dead_letter("failed", 9)), frozen);
+            for (old, new) in [(&without, &with), (&with, &changed), (&with, &without)] {
+                let result = check.check(old, new).await.unwrap();
+                assert!(
+                    !result.success,
+                    "{platform:?}: a Frozen change requires setup"
+                );
+                assert!(result.errors[0].contains("tasks"), "{:?}", result.errors);
+                assert_ne!(old.setup_owned_digest(), new.setup_owned_digest());
+            }
+            assert!(check.check(&with, &with).await.unwrap().success);
+            let live_without = simple(None, ResourceLifecycle::Live);
+            let live_with = simple(Some(dead_letter("failed", 5)), ResourceLifecycle::Live);
+            assert!(
+                check
+                    .check(&live_without, &live_with)
+                    .await
+                    .unwrap()
+                    .success
+            );
+            assert!(
+                check
+                    .check(&live_with, &live_without)
+                    .await
+                    .unwrap()
+                    .success
             );
         }
     }
