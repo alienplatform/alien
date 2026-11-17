@@ -290,10 +290,7 @@ mod tests {
             .iter()
             .map(|mount| mount.mount_path.as_str())
             .collect();
-        assert!(
-            mounts.contains(&"/tmp") && mounts.contains(&"/cache"),
-            "{mounts:?}"
-        );
+        assert!(mounts.contains(&"/tmp") && mounts.contains(&"/cache"), "{mounts:?}");
 
         let opted_out = render(Some(alien_core::ContainerSecurity {
             profile: alien_core::ContainerSecurityProfile::Unrestricted,
