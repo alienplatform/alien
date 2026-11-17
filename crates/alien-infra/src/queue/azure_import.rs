@@ -26,6 +26,7 @@ impl ResourceImporter for AzureQueueImporter {
             state: AzureQueueState::Ready,
             namespace_name: Some(data.namespace_name),
             queue_name: Some(data.queue_name),
+            dead_letter: None,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
