@@ -18,6 +18,7 @@ const NODE_COLLECTOR_SOURCE: &str = "node-fluentbit";
 const POD_API_SOURCE: &str = "kubernetes-api";
 
 /// One timestamped line read from a selected Pod's log subresource.
+#[derive(Debug, PartialEq, Eq)]
 pub struct PodLogRecord {
     pub namespace: String,
     pub pod: String,

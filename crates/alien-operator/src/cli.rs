@@ -67,7 +67,9 @@ The Operator:
                   argv is visible in `ps` / `/proc/<pid>/cmdline`."
 )]
 pub struct Args {
-    #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
+    /// Where this operator runs. Unset means `local`: a machine or a Docker
+    /// host enrolled with only a token.
+    #[arg(long, env = "PLATFORM", value_parser = parse_platform, default_value = "local")]
     pub platform: Platform,
 
     #[arg(long, env = "OPERATOR_BASE_PLATFORM", value_parser = parse_platform)]
@@ -87,6 +89,12 @@ pub struct Args {
     /// the manager URL and a one-use code. The audience is the manager URL.
     #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN_FILE")]
     pub enrollment_token_file: Option<PathBuf>,
+
+    /// The same enrollment token given directly, for targets that cannot mount
+    /// a file (`docker run -e`, container service secrets). The file wins when
+    /// both are set. The value is never logged.
+    #[arg(long, env = "OPERATOR_ENROLLMENT_TOKEN", hide_env_values = true)]
+    pub enrollment_token: Option<String>,
 
     /// Name of a Kubernetes Secret, in the operator's namespace, that holds the
     /// enrolled identity and the local database key. The data directory is then
@@ -566,14 +574,11 @@ async fn run_operator_cli(
 
     // The token is only needed until the operator is enrolled. A release
     // upgraded without it has no token file, and the saved identity is enough.
-    let join_token = match args.enrollment_token_file.as_deref() {
-        Some(path) if tokio::fs::try_exists(path).await.unwrap_or(false) => {
-            Some(crate::enrollment_token::EnrollmentToken::parse(
-                &read_secret_file(path, "enrollment token").await?,
-            )?)
-        }
-        _ => None,
-    };
+    let join_token = resolve_join_token(
+        args.enrollment_token_file.as_deref(),
+        args.enrollment_token.as_deref(),
+    )
+    .await?;
     refuse_owned_secret_with_identity_store(
         args.owned_secret.as_deref(),
         args.identity_secret.as_deref(),
@@ -598,6 +603,7 @@ async fn run_operator_cli(
                 args.namespace.clone(),
                 args.encryption_key_file.as_deref(),
                 args.data_persistent,
+                join_token.is_some(),
             )
             .await?
         }
@@ -687,7 +693,7 @@ async fn run_operator_cli(
         .await?;
     }
     let stored_identity = db.read_daily_identity().await?;
-    if args.enrollment_token_file.is_some()
+    if (args.enrollment_token_file.is_some() || args.enrollment_token.is_some())
         && join_token.is_none()
         && !stored_identity
             .as_ref()
@@ -764,9 +770,11 @@ async fn run_operator_cli(
         // A start from an empty cache has no deployment state yet; an
         // observe-only environment starts as running, as it does when it
         // registers itself.
-        if args.identity_secret.is_some()
-            && args.initial_desired_release == InitialDesiredReleaseArg::None
-            && db.get_deployment_state().await?.is_none()
+        if starts_observe_only(
+            args.identity_secret.is_some(),
+            join_token.is_some(),
+            args.initial_desired_release,
+        ) && db.get_deployment_state().await?.is_none()
         {
             db.set_deployment_state(&observe_only_initial_state(
                 args.platform,
@@ -1081,11 +1089,15 @@ async fn run_operator_cli(
         &operator_config.data_dir,
         operator_config.operations.as_ref(),
     );
+    let enrolled_by_token = join_token.is_some();
+    let host_logs = crate::host_logs::config_from_env(enrolled_by_token)?;
     let runtime_options = OperatorRuntimeOptions {
         readiness_server_port: crate::readiness_server_port_from_env()?,
         identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
         runtime_deployment_scope: crate::runtime_deployment_scope_from_env()?,
         pod_log_collection: crate::pod_logs::config_from_env()?,
+        host_logs,
+        host_inventory: crate::host_logs::inventory_config(host_logs, enrolled_by_token),
     };
     run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
@@ -1951,9 +1963,13 @@ async fn open_operator_db(
     namespace: Option<String>,
     encryption_key_file: Option<&std::path::Path>,
     data_persistent: Option<bool>,
+    has_join_token: bool,
 ) -> Result<(crate::db::OperatorDb, String)> {
     let Some(secret_name) = identity_secret else {
-        let key = load_encryption_key(encryption_key_file).await?;
+        let key = match local_key_file_to_generate(data_dir, encryption_key_file, has_join_token) {
+            Some(path) => load_or_create_local_key(&path).await?,
+            None => load_encryption_key(encryption_key_file).await?,
+        };
         return Ok((crate::db::OperatorDb::new(data_dir, &key).await?, key));
     };
     let namespace = match namespace {
@@ -2059,6 +2075,72 @@ fn join_token_for_saved_identity(
 }
 
 const IN_CLUSTER_NAMESPACE_FILE: &str = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
+
+/// Where an operator installed with only an enrollment token keeps its local
+/// database key: `operator.key` beside the database. Used when no key was
+/// given, and either a token was or the key file is already there.
+fn local_key_file_to_generate(
+    data_dir: &str,
+    encryption_key_file: Option<&std::path::Path>,
+    has_join_token: bool,
+) -> Option<PathBuf> {
+    if encryption_key_file.is_some() || env_string("OPERATOR_ENCRYPTION_KEY").is_some() {
+        return None;
+    }
+    let path = PathBuf::from(data_dir).join(LOCAL_KEY_FILE_NAME);
+    (has_join_token || path.exists()).then_some(path)
+}
+
+const LOCAL_KEY_FILE_NAME: &str = "operator.key";
+
+/// Read the local key, or create it (64 hex characters, mode 0600, never
+/// replacing an existing file) on the first start.
+async fn load_or_create_local_key(path: &std::path::Path) -> Result<String> {
+    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+        return read_secret_file(path, "local encryption key").await;
+    }
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).map_err(|_| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "Cannot generate the local encryption key".into(),
+        })
+    })?;
+    let key: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Cannot create '{}'", parent.display()),
+            })?;
+    }
+    use tokio::io::AsyncWriteExt;
+    let created = {
+        let mut options = tokio::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        options.open(path).await
+    };
+    match created {
+        Ok(mut file) => {
+            file.write_all(key.as_bytes())
+                .await
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: format!("Cannot write '{}'", path.display()),
+                })?;
+            Ok(key)
+        }
+        // Another start created it first.
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            read_secret_file(path, "local encryption key").await
+        }
+        Err(error) => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Cannot create '{}': {error}", path.display()),
+        })),
+    }
+}
 
 pub(crate) async fn load_encryption_key(file: Option<&std::path::Path>) -> Result<String> {
     if let Some(path) = file {
@@ -2171,6 +2253,41 @@ fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<Operat
             })
         })
         .map(|()| Some(report))
+}
+
+/// Whether a start with no deployment state writes the observe-only one: with the
+/// Secret identity store when no release is wanted (as before), and for every install
+/// enrolled by a join token, which has no Secret on a machine or a Docker host. The initial
+/// desired release only matters when the Operator registers a new deployment, and an
+/// enrolled install is registered before it starts, so it does not decide this: a Docker
+/// command that does not set it would otherwise leave the deployment `pending` for good.
+fn starts_observe_only(
+    identity_secret: bool,
+    join_token: bool,
+    initial_desired_release: InitialDesiredReleaseArg,
+) -> bool {
+    join_token || (identity_secret && initial_desired_release == InitialDesiredReleaseArg::None)
+}
+
+/// The enrollment token from its file when that exists, else from the
+/// environment value. A blank value counts as no token.
+async fn resolve_join_token(
+    file: Option<&std::path::Path>,
+    inline: Option<&str>,
+) -> Result<Option<crate::enrollment_token::EnrollmentToken>> {
+    if let Some(path) = file {
+        if tokio::fs::try_exists(path).await.unwrap_or(false) {
+            return Ok(Some(crate::enrollment_token::EnrollmentToken::parse(
+                &read_secret_file(path, "enrollment token").await?,
+            )?));
+        }
+    }
+    match inline.map(str::trim) {
+        Some(value) if !value.is_empty() => Ok(Some(
+            crate::enrollment_token::EnrollmentToken::parse(value)?,
+        )),
+        _ => Ok(None),
+    }
 }
 
 async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String>> {
@@ -2390,6 +2507,100 @@ mod tests {
                 "{persistent:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_observe_only_start_state_is_kept_for_the_secret_store_and_added_for_join_tokens() {
+        use super::InitialDesiredReleaseArg::{Active, None as NoRelease};
+        // A Kubernetes install with the identity Secret that wants no release, as before.
+        assert!(super::starts_observe_only(true, false, NoRelease));
+        assert!(super::starts_observe_only(true, true, NoRelease));
+        // A Secret install that asks for the active release registers and runs it itself.
+        assert!(!super::starts_observe_only(true, false, Active));
+        // A machine or Docker host enrolled by a join token, whatever the release setting:
+        // the default is `active`, and a command that leaves it out must still reach `running`.
+        assert!(super::starts_observe_only(false, true, NoRelease));
+        assert!(super::starts_observe_only(false, true, Active));
+        assert!(super::starts_observe_only(true, true, Active));
+        // A local install with neither starts with no state, as before.
+        assert!(!super::starts_observe_only(false, false, NoRelease));
+        assert!(!super::starts_observe_only(false, false, Active));
+    }
+
+    #[tokio::test]
+    async fn a_generated_local_key_is_private_stable_and_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data").join("operator.key");
+        let first = super::load_or_create_local_key(&path).await.unwrap();
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|b| b.is_ascii_hexdigit()));
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // Same key on the next start.
+        assert_eq!(super::load_or_create_local_key(&path).await.unwrap(), first);
+        // A key file that was given wins; nothing is generated beside it.
+        assert!(
+            super::local_key_file_to_generate(dir.path().to_str().unwrap(), Some(&path), true)
+                .is_none()
+        );
+        // A token given as a flag (not only as an environment variable) starts
+        // a fresh install: the key file is chosen for it.
+        let fresh = tempfile::tempdir().unwrap();
+        assert_eq!(
+            super::local_key_file_to_generate(fresh.path().to_str().unwrap(), None, true),
+            Some(fresh.path().join("operator.key"))
+        );
+        assert!(
+            super::local_key_file_to_generate(fresh.path().to_str().unwrap(), None, false)
+                .is_none()
+        );
+        // A key file that is too open is refused, not read.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(super::load_or_create_local_key(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_join_token_comes_from_the_file_or_the_environment_value() {
+        use base64::Engine as _;
+        let token = |code: &str| {
+            format!(
+                "ax_join_v1_{}",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(
+                    r#"{{"u":"https://manager.example.com","c":"{code}"}}"#
+                ))
+            )
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("token");
+        std::fs::write(&file, token("from-file")).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        let from_env = super::resolve_join_token(None, Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(from_env.code, "from-env");
+        // The file wins, and a missing file falls through to the value.
+        let both = super::resolve_join_token(Some(&file), Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(both.code, "from-file");
+        let missing = dir.path().join("absent");
+        let fallback = super::resolve_join_token(Some(&missing), Some(&token("from-env")))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fallback.code, "from-env");
+        assert!(super::resolve_join_token(None, Some("  "))
+            .await
+            .unwrap()
+            .is_none());
+        let error = super::resolve_join_token(None, Some("ax_join_v1_secretsecret"))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("secretsecret"), "{error}");
     }
 
     #[test]

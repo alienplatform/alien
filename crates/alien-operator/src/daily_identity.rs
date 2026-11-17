@@ -1855,6 +1855,8 @@ mod persistence_tests {
                 identity_initialized_config_map: None,
                 runtime_deployment_scope: None,
                 pod_log_collection: None,
+                host_logs: None,
+                host_inventory: None,
             },
             Some(db),
         ));
