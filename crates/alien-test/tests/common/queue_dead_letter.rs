@@ -17,6 +17,19 @@ const GOOD: usize = 20;
 const POISON: usize = 3;
 const MAX_ATTEMPTS: u64 = 5;
 
+/// Waits until the Worker answers, so the first real request does not pay for a cold start.
+async fn warm_up(client: &Client, url: &str) {
+    for _ in 0..30 {
+        if let Ok(response) = client.get(format!("{url}/health")).send().await {
+            if response.status().is_success() {
+                return;
+            }
+        }
+        sleep(Duration::from_secs(5)).await;
+    }
+    panic!("the Worker never answered /health");
+}
+
 async fn json_request(client: &Client, request: reqwest::RequestBuilder) -> Value {
     let _ = client;
     let response = request.send().await.unwrap();
@@ -41,6 +54,7 @@ pub async fn check_without_dead_letter(
         .timeout(Duration::from_secs(120))
         .build()
         .unwrap();
+    warm_up(&client, url).await;
     let sent = json_request(
         &client,
         client
@@ -97,6 +111,7 @@ pub async fn check_dead_letter(
         .timeout(Duration::from_secs(120))
         .build()
         .unwrap();
+    warm_up(&client, url).await;
     let sent = json_request(
         &client,
         client

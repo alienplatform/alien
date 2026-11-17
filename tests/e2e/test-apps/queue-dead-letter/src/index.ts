@@ -46,9 +46,11 @@ app.post("/send", async c => {
     })),
   ]
   const tasksQueue = queue("tasks")
+  const batches: Task[][] = []
   for (let start = 0; start < tasks.length; start += 10) {
-    await tasksQueue.sendBatch(tasks.slice(start, start + 10))
+    batches.push(tasks.slice(start, start + 10))
   }
+  await Promise.all(batches.map(batch => tasksQueue.sendBatch(batch)))
   return c.json({ sent: tasks.length })
 })
 
