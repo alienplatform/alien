@@ -735,4 +735,21 @@ mod tests {
         );
         assert_eq!(serde_json::to_value(&record).unwrap(), persisted);
     }
+
+    /// State stored before the cleanup notice existed has no such field, and an empty notice is
+    /// not written back.
+    #[test]
+    fn old_runtime_metadata_reads_without_a_cleanup_notice() {
+        let metadata: RuntimeMetadata = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(metadata.setup_cleanup_recommended.is_empty());
+        assert!(serde_json::to_value(&metadata)
+            .unwrap()
+            .get("setupCleanupRecommended")
+            .is_none());
+        let metadata: RuntimeMetadata = serde_json::from_value(
+            serde_json::json!({ "setupCleanupRecommended": ["service account 'api-sa'"] }),
+        )
+        .unwrap();
+        assert_eq!(metadata.setup_cleanup_recommended.len(), 1);
+    }
 }

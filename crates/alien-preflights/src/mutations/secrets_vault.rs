@@ -2993,6 +2993,18 @@ mod tests {
         platform: Platform,
     ) -> (Stack, Stack, DeploymentConfig) {
         let stack = deployer_secret_stack(&[("api", "api")], &["api"]);
+        let mut release = stack.clone();
+        release.inputs.clear();
+        prepared_pair(platform, stack, release).await
+    }
+
+    /// Prepares `installed` as setup would, records its frozen resources as installed state,
+    /// then prepares `release` against that state as an update does.
+    async fn prepared_pair(
+        platform: Platform,
+        stack: Stack,
+        release: Stack,
+    ) -> (Stack, Stack, DeploymentConfig) {
         let mut state = StackState::new(platform);
         let config = deployer_secret_config();
         let prepare = |stack: Stack, state: StackState| {
@@ -3008,7 +3020,7 @@ mod tests {
                     .unwrap()
             }
         };
-        let installed = prepare(stack.clone(), state.clone()).await;
+        let installed = prepare(stack, state.clone()).await;
         for (id, entry) in &installed.resources {
             if entry.lifecycle == ResourceLifecycle::Frozen {
                 let mut resource = StackResourceState::new_pending(
@@ -3021,10 +3033,98 @@ mod tests {
                 state.resources.insert(id.clone(), resource);
             }
         }
-        let mut release = stack;
-        release.inputs.clear();
         let updated = prepare(release, state).await;
         (installed, updated, config)
+    }
+
+    /// `stack` with `count` secret inputs `key0..` mapped to the `api` container.
+    fn stack_with_secrets(count: usize) -> Stack {
+        let mut stack = deployer_secret_stack(&[("api", "api")], &["api"]);
+        let template = stack.inputs[0].clone();
+        stack.inputs = (0..count)
+            .map(|index| {
+                let mut input = template.clone();
+                input.id = format!("key{index}");
+                input.env[0].name = format!("KEY_{index}");
+                input
+            })
+            .collect();
+        stack
+    }
+
+    async fn setup_check_errors(
+        platform: Platform,
+        installed: &Stack,
+        updated: &Stack,
+        config: &DeploymentConfig,
+    ) -> Vec<String> {
+        let mut errors = PermissionProfilesUnchangedCheck
+            .check_with_config(installed, updated, config, platform)
+            .await
+            .unwrap()
+            .errors;
+        errors.extend(
+            FrozenResourcesUnchangedCheck { platform }
+                .check_with_config(installed, updated, config, platform)
+                .await
+                .unwrap()
+                .errors,
+        );
+        errors
+    }
+
+    /// The shape that blocked a real deployment: a workload that keeps several other secrets
+    /// when one is removed. The read grant keeps its id and its body shrinks.
+    #[tokio::test]
+    async fn removing_one_of_eight_secrets_is_not_a_setup_change_but_swapping_one_is() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let mut removed = stack_with_secrets(8);
+            removed.inputs.remove(3);
+            let (installed, updated, config) =
+                prepared_pair(platform, stack_with_secrets(8), removed).await;
+            let errors = setup_check_errors(platform, &installed, &updated, &config).await;
+            assert!(errors.is_empty(), "{platform:?}: {errors:?}");
+
+            // One removed and a new one added: the grant gains a resource.
+            let mut swapped = stack_with_secrets(8);
+            swapped.inputs.remove(3);
+            let mut added = swapped.inputs[0].clone();
+            added.id = "newKey".to_string();
+            added.env[0].name = "NEW_KEY".to_string();
+            swapped.inputs.push(added);
+            let (installed, updated, config) =
+                prepared_pair(platform, stack_with_secrets(8), swapped).await;
+            let errors = setup_check_errors(platform, &installed, &updated, &config).await;
+            assert!(!errors.is_empty(), "{platform:?}");
+        }
+    }
+
+    /// Another profile with a stack-wide vault grant is denied the slots it does not map.
+    /// Removing a slot shrinks that deny, which is a widening: it needs setup.
+    #[tokio::test]
+    async fn a_shrinking_deny_of_another_profile_still_needs_setup() {
+        let platform = Platform::Aws;
+        let with_other = |count: usize| {
+            let mut stack = stack_with_secrets(count);
+            let (id, resource) = (
+                "other".to_string(),
+                deployer_secret_container("other", "other"),
+            );
+            stack.resources.insert(id, resource);
+            stack.permissions.profiles.insert(
+                "other".to_string(),
+                PermissionProfile::new().global(["vault/data-read"]),
+            );
+            stack
+        };
+        let mut removed = with_other(3);
+        removed.inputs.remove(1);
+        let (installed, updated, config) = prepared_pair(platform, with_other(3), removed).await;
+        let errors = setup_check_errors(platform, &installed, &updated, &config).await;
+        assert!(
+            errors.iter().any(|error| error.contains("'other'")),
+            "{errors:?}"
+        );
     }
 
     #[tokio::test]

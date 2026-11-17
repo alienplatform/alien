@@ -1355,6 +1355,180 @@ mod tests {
         assert_eq!(current.stack_state.unwrap().resource_prefix, "persistent");
     }
 
+    /// A workload that keeps several secrets while one is removed, prepared by the real
+    /// mutations for both releases (the installed one as setup prepared it, with no state;
+    /// the update against the recorded state). The release runs without setup, a release that
+    /// also adds a secret waits for it.
+    mod secret_removal_end_to_end {
+        use super::super::*;
+        use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
+        use alien_core::{
+            AwsServiceOverrides, ClientConfig, DeploymentState, EnvironmentVariablesSnapshot,
+            ExternalBindings, PermissionProfile, ReleaseInfo, ResourceSpec, RuntimeMetadata,
+            StackInputDefinition, StackInputEnvironmentMapping, StackInputKind, StackInputProvider,
+            StackResourceState, StackSettings, Worker, WorkerCode,
+        };
+
+        fn stack(secrets: &[&str]) -> Stack {
+            let mut stack = Stack::new("acme".to_string())
+                .add(
+                    Worker::new("api".to_string())
+                        .code(WorkerCode::Image {
+                            image: "test:latest".to_string(),
+                        })
+                        .permissions("api".to_string())
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build();
+            stack
+                .permissions
+                .profiles
+                .insert("api".to_string(), PermissionProfile::new());
+            stack.inputs = secrets
+                .iter()
+                .map(|id| StackInputDefinition {
+                    id: id.to_string(),
+                    kind: StackInputKind::Secret,
+                    when: None,
+                    provided_by: vec![StackInputProvider::Deployer],
+                    required: true,
+                    label: id.to_string(),
+                    description: "A secret".to_string(),
+                    placeholder: None,
+                    default: None,
+                    platforms: None,
+                    validation: None,
+                    generate: None,
+                    env: vec![StackInputEnvironmentMapping {
+                        name: id.to_uppercase(),
+                        target_resources: Some(vec!["api".to_string()]),
+                        var_type: None,
+                    }],
+                })
+                .collect();
+            stack
+        }
+
+        fn config() -> DeploymentConfig {
+            DeploymentConfig::builder()
+                .stack_settings(StackSettings::default())
+                .environment_variables(EnvironmentVariablesSnapshot {
+                    variables: vec![],
+                    hash: String::new(),
+                    created_at: String::new(),
+                })
+                .external_bindings(ExternalBindings::default())
+                .allow_frozen_changes(false)
+                .build()
+        }
+
+        async fn client() -> (ClientConfig, httpmock::MockServer) {
+            let server = httpmock::MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method(httpmock::Method::POST);
+                    then.status(200).body("{}");
+                })
+                .await;
+            let client = ClientConfig::Aws(Box::new(AwsClientConfig {
+                service_overrides: Some(AwsServiceOverrides {
+                    endpoints: [("servicequotas".into(), server.base_url())].into(),
+                }),
+                ..AwsClientConfig::mock()
+            }));
+            (client, server)
+        }
+
+        async fn update(installed: Stack, target: Stack) -> Result<DeploymentStepResult> {
+            let (client, _server) = client().await;
+            let state = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+            let prepared = alien_preflights::runner::PreflightRunner::new()
+                .run_deployment_time_preflights(
+                    installed.clone(),
+                    &state,
+                    &config(),
+                    &client,
+                    None,
+                    None,
+                    Some(InitialSetupAuthority::DirectSetup),
+                )
+                .await
+                .expect("the installed stack passes preflights")
+                .0;
+            // Setup created the frozen resources: record them as installed.
+            let mut recorded = state;
+            for (id, entry) in prepared.resources() {
+                if entry.lifecycle == ResourceLifecycle::Frozen {
+                    let mut resource = StackResourceState::new_pending(
+                        entry.config.resource_type().to_string(),
+                        entry.config.clone(),
+                        Some(ResourceLifecycle::Frozen),
+                        entry.dependencies.clone(),
+                    );
+                    resource.status = ResourceStatus::Running;
+                    // Created by setup: Alien holds controller state for it.
+                    resource.internal_state = Some(serde_json::json!({ "state": "ready" }));
+                    recorded.resources.insert(id.clone(), resource);
+                }
+            }
+            let release = |stack: Stack, id: &str| ReleaseInfo {
+                release_id: Some(id.to_string()),
+                version: None,
+                description: None,
+                stack,
+                signed: None,
+                signer_lists: Vec::new(),
+            };
+            handle_update_pending(
+                DeploymentState {
+                    status: DeploymentStatus::UpdatePending,
+                    platform: Platform::Aws,
+                    current_release: Some(release(installed, "rel_installed")),
+                    target_release: Some(release(target.clone(), "rel_target")),
+                    stack_state: Some(recorded),
+                    error: None,
+                    environment_info: None,
+                    runtime_metadata: Some(RuntimeMetadata {
+                        initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
+                        prepared_stack: Some(prepared),
+                        ..Default::default()
+                    }),
+                    retry_requested: false,
+                    protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                },
+                target,
+                config(),
+                client,
+                std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
+            )
+            .await
+        }
+
+        #[tokio::test]
+        async fn removing_one_of_eight_secrets_runs_and_swapping_one_waits_for_setup() {
+            let eight = ["a", "b", "c", "d", "e", "f", "g", "h"];
+            let seven = ["a", "b", "c", "e", "f", "g", "h"];
+            let result = update(stack(&eight), stack(&seven))
+                .await
+                .expect("removing one secret needs no setup");
+            assert_eq!(result.state.status, DeploymentStatus::Updating);
+            let recommended = result
+                .state
+                .runtime_metadata
+                .unwrap()
+                .setup_cleanup_recommended;
+            assert!(!recommended.is_empty(), "{recommended:?}");
+
+            let swapped = ["a", "b", "c", "e", "f", "g", "h", "new"];
+            let error = update(stack(&eight), stack(&swapped))
+                .await
+                .expect_err("a new secret needs setup");
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+        }
+    }
+
     mod setup_scaffolding_drift {
         use super::super::*;
         use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
