@@ -5,32 +5,20 @@ use alien_permissions::{
 };
 use common::create_test_context;
 
-/// The worker's subscriber grant is limited to subscriptions named for the stack (or the
-/// worker), never to every subscription of the project.
+/// The worker's subscriber grant is project scoped and unconditioned: a real project refused a
+/// subscription-name condition on getIamPolicy, and queue/provision already holds the same
+/// permissions at project scope. It carries only the two IAM permissions.
 #[test]
-fn worker_dead_letter_grant_is_limited_to_the_workers_own_push_subscriptions() {
+fn worker_dead_letter_grant_is_project_scoped_with_only_the_two_iam_permissions() {
     let generator = GcpRuntimePermissionsGenerator::new();
     let set = get_permission_set("worker/dead-letter").expect("permission set exists");
     let context = create_test_context().with_resource_name("my-stack-consumer");
-    for (target, prefix) in [
-        (BindingTarget::Stack, "my-stack-"),
-        (BindingTarget::Resource, "my-stack-consumer-"),
-    ] {
+    for target in [BindingTarget::Stack, BindingTarget::Resource] {
         let result = generator
             .generate_bindings(set, target, &context)
             .expect("bindings generate");
         assert_eq!(result.bindings.len(), 1);
-        let condition = result.bindings[0]
-            .condition
-            .as_ref()
-            .expect("the grant is conditioned on the subscription name");
-        assert!(
-            condition.expression.contains(&format!(
-                "resource.name.startsWith(\"projects/my-project/subscriptions/{prefix}\")"
-            )),
-            "{}",
-            condition.expression
-        );
+        assert!(result.bindings[0].condition.is_none());
     }
     let plan = generator
         .generate_grant_plan(set, BindingTarget::Stack, &context)

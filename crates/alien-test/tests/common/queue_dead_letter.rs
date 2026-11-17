@@ -32,13 +32,18 @@ async fn warm_up(client: &Client, url: &str) {
 
 async fn json_request(client: &Client, request: reqwest::RequestBuilder) -> Value {
     let _ = client;
-    let response = request.send().await.unwrap();
+    let request = request.build().unwrap();
+    let what = format!("{} {}", request.method(), request.url().path());
+    let started = Instant::now();
+    let response = client.execute(request).await.unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
     assert!(
-        response.status().is_success(),
-        "{}",
-        response.text().await.unwrap()
+        status.is_success(),
+        "{what} answered {status} after {:?}: {body}",
+        started.elapsed()
     );
-    response.json().await.unwrap()
+    serde_json::from_str(&body).unwrap_or_else(|error| panic!("{what}: {error}: {body}"))
 }
 
 /// Without a dead-letter setting (`DLQ_E2E_NO_DEAD_LETTER=1`) a message that always fails keeps
