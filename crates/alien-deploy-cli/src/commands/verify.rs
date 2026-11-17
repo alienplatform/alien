@@ -38,6 +38,17 @@ const CLOUDFORMATION: &str = "cloudformation";
 
 #[derive(Args, Debug, Clone)]
 #[command(about = "Check that this install runs only what the vendor signed")]
+#[command(long_about = "Check that this install runs only what the vendor signed.\n\n\
+Trust this check only when it runs from the released alien-deploy binary of the version the \
+template records, after you checked its attestation (`gh attestation verify <file> --repo \
+alienplatform/alien`). Do not use a binary built from source or one served by the vendor: the \
+pins that decide which Operator, machine agent and verifier image are accepted are compiled \
+into the release build, and only the attested release binary is known to carry the right ones. \
+The hosting inputs shown (who may manage the stack, the registration endpoint, whether an \
+external id is required) are chosen by the vendor's service when it renders the template, so \
+read them and decide whether you accept them. The minimum renderer version comes from the \
+releases the control plane returns, so a control plane that holds back newer releases can have \
+an older released renderer accepted: check the renderer version `verify` prints.")]
 #[command(group(clap::ArgGroup::new("install").required(true).args(["stack", "terraform", "helm", "offline"])))]
 pub struct VerifyArgs {
     /// The CloudFormation stack of the install.
@@ -185,6 +196,9 @@ pub enum Mark {
     Fail,
     /// Shown, not checked.
     Info,
+    /// Shown, not checked, and the customer has to look at it: the vendor's service chose a
+    /// setting that leaves something open.
+    Warn,
 }
 
 /// One line of the screen.
@@ -795,6 +809,7 @@ pub fn render(lines: &[Line]) -> String {
             Mark::Pass => "  ✓",
             Mark::Fail => "  ✗",
             Mark::Info => "",
+            Mark::Warn => "  ⚠",
         };
         out.push_str(&format!("{:<21}{}{mark}\n", line.label, line.text));
     }

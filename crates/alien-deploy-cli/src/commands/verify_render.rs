@@ -23,7 +23,7 @@ use semver::Version;
 use super::verify::{line, running_release, Content, Installed, Line, Mark, Signed};
 
 /// The emitter registries `verify` renders with: the public ones. This is the one place that
-/// says which resource types `verify` can render; a build with more emitters adds them here.
+/// says which resource types `verify` can render.
 fn public_registries() -> (
     alien_cloudformation::CfRegistry,
     alien_terraform::TfRegistry,
@@ -390,8 +390,9 @@ fn first_file_difference(
         .map(|path| format!("{path} is missing"))
 }
 
-/// What the hosting inputs say, one fact per line: a hacked control plane picks them, and the
-/// customer has to be able to see who may manage the install.
+/// What the hosting inputs say, one fact per line. The vendor's service chooses them when it renders
+/// the template, so they are not signed by the vendor's release: the customer reads them here
+/// and decides whether they are acceptable.
 fn hosting_lines(template: &str, record: &SetupRecord) -> Vec<Line> {
     let hosting: &SetupHostingOptions = &record.hosting;
     let mut lines = Vec::new();
@@ -406,24 +407,31 @@ fn hosting_lines(template: &str, record: &SetupRecord) -> Vec<Line> {
             ));
         }
         let principals = &hosting.management_trust.allowed_managing_role_arns;
-        lines.push(line(
-            "Managing principals",
-            if principals.is_empty() {
-                "any role the stack is given (none recorded)".to_string()
-            } else {
-                principals.join(", ")
-            },
-            Mark::Info,
-        ));
-        lines.push(line(
-            "External id",
-            if hosting.management_trust.require_external_id {
-                "required"
-            } else {
-                "not required"
-            },
-            Mark::Info,
-        ));
+        if principals.is_empty() {
+            lines.push(line(
+                "Managing principals",
+                "not restricted by the template: the ManagingRoleArn parameter accepts any IAM role, \
+                 so the role in the launch link is the only thing that says who manages this install; \
+                 check it is yours to trust",
+                Mark::Warn,
+            ));
+        } else {
+            lines.push(line(
+                "Managing principals",
+                format!("only {}", principals.join(", ")),
+                Mark::Info,
+            ));
+        }
+        if hosting.management_trust.require_external_id {
+            lines.push(line("External id", "required", Mark::Info));
+        } else {
+            lines.push(line(
+                "External id",
+                "not required: the management roles can be assumed without one, so any holder of \
+                 the managing role can act on this install",
+                Mark::Warn,
+            ));
+        }
     } else if !hosting.supported_aws_regions.is_empty() {
         lines.push(line(
             "Regions",
@@ -434,12 +442,101 @@ fn hosting_lines(template: &str, record: &SetupRecord) -> Vec<Line> {
     lines
 }
 
+/// How the stack tells the control plane it exists, with the Lambda function or endpoint that
+/// receives it: whoever runs it learns the stack's identifiers and credentials-free outputs.
 fn registration_text(registration: &alien_cloudformation::RegistrationMode) -> String {
     use alien_cloudformation::RegistrationMode::*;
-    match registration {
-        CustomResource { .. } | RegionalCustomResource { .. } => "custom resource",
-        OutputsFallback => "stack outputs",
-        Both { .. } | RegionalBoth { .. } => "custom resource and stack outputs",
+    fn regional<'a>(arns: impl IntoIterator<Item = (&'a String, &'a String)>) -> String {
+        arns.into_iter()
+            .map(|(region, arn)| format!("{region}: {arn}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
-    .to_string()
+    let callback = |url: &Option<String>| {
+        url.as_ref()
+            .map(|url| format!(", callback {url}"))
+            .unwrap_or_default()
+    };
+    match registration {
+        CustomResource { lambda_arn, callback_url } => {
+            format!("custom resource, Lambda {lambda_arn}{}", callback(callback_url))
+        }
+        RegionalCustomResource { lambda_arns_by_region, callback_url } => format!(
+            "custom resource, Lambda {}{}",
+            regional(lambda_arns_by_region.iter()),
+            callback(callback_url)
+        ),
+        OutputsFallback => "stack outputs only".to_string(),
+        Both { lambda_arn, callback_url } => format!(
+            "custom resource and stack outputs, Lambda {lambda_arn}{}",
+            callback(callback_url)
+        ),
+        RegionalBoth { lambda_arns_by_region, callback_url } => format!(
+            "custom resource and stack outputs, Lambda {}{}",
+            regional(lambda_arns_by_region.iter()),
+            callback(callback_url)
+        ),
+    }
+}
+
+#[cfg(test)]
+mod hosting_tests {
+    use super::*;
+    use alien_cloudformation::{ManagementTrustOptions, RegistrationMode};
+
+    fn record(registration: RegistrationMode, trust: ManagementTrustOptions) -> SetupRecord {
+        SetupRecord {
+            renderer: RENDERER_VERSION.to_string(),
+            hosting: SetupHostingOptions {
+                registration: Some(registration),
+                description: None,
+                management_trust: trust,
+                supported_aws_regions: vec![],
+            },
+        }
+    }
+
+    fn find<'a>(lines: &'a [Line], label: &str) -> &'a Line {
+        lines.iter().find(|l| l.label == label).expect(label)
+    }
+
+    #[test]
+    fn open_hosting_inputs_are_warnings_and_the_registration_endpoint_is_shown() {
+        let lines = hosting_lines(
+            "cloudformation",
+            &record(
+                RegistrationMode::CustomResource {
+                    lambda_arn: "arn:aws:lambda:us-east-1:111122223333:function:register".into(),
+                    callback_url: Some("https://callback.example/register".into()),
+                },
+                ManagementTrustOptions::default(),
+            ),
+        );
+        let registration = find(&lines, "Registration");
+        assert!(registration.text.contains("function:register"));
+        assert!(registration.text.contains("https://callback.example/register"));
+        assert_eq!(find(&lines, "External id").mark, Mark::Warn);
+        let principals = find(&lines, "Managing principals");
+        assert_eq!(principals.mark, Mark::Warn);
+        assert!(principals.text.contains("accepts any IAM role"));
+    }
+
+    #[test]
+    fn restricted_hosting_inputs_are_plain_facts() {
+        let lines = hosting_lines(
+            "cloudformation",
+            &record(
+                RegistrationMode::OutputsFallback,
+                ManagementTrustOptions {
+                    require_external_id: true,
+                    allowed_managing_role_arns: vec!["arn:aws:iam::999988887777:role/m".into()],
+                },
+            ),
+        );
+        assert!(lines.iter().all(|l| l.mark == Mark::Info));
+        assert_eq!(
+            find(&lines, "Managing principals").text,
+            "only arn:aws:iam::999988887777:role/m"
+        );
+    }
 }

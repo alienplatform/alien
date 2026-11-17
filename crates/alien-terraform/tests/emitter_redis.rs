@@ -1,4 +1,4 @@
-//! Render tests for the platform-only AWS `Redis` Terraform emitter. Each module goes through
+//! Render tests for the AWS `Redis` Terraform emitter. Each module goes through
 //! the real `generate_terraform_module` path and is checked with `terraform fmt -check` and
 //! `terraform validate`, which verifies every ElastiCache attribute against the AWS provider
 //! schema.

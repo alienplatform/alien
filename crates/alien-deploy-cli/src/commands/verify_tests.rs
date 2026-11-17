@@ -419,8 +419,8 @@ async fn a_protected_stack_that_matches_its_signed_release_passes_on_one_screen(
             "Install              aws:111122223333:us-east-1:acme-prod\n\
              Signing fingerprint  {display}   (set by setup, 2026-11-04)\n\
              Renderer             alien {RENDERER_VERSION} (this build)  ✓\n\
-             Registration         stack outputs\n\
-             Managing principals  arn:aws:iam::999988887777:role/vendor-manager\n\
+             Registration         stack outputs only\n\
+             Managing principals  only arn:aws:iam::999988887777:role/vendor-manager\n\
              External id          required\n\
              Template             rendered again from release 2026-11-04.3 · production · {template}  ✓\n\
              Parameters           fingerprint pinned · 2 customer choices allowed  ✓\n\

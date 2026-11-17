@@ -350,7 +350,7 @@ fn render_compute_cluster_template_with(
     pins: alien_core::SetupPins,
 ) -> CfTemplate {
     // ComputeCluster + Network exercises the full IAM stack the
-    // platform controller installs at runtime: managed policies +
+    // controller installs at runtime: managed policies +
     // machine runtime inline + compute-cluster/execute permission set.
     let network = settings.network.clone().expect("network");
     let protected = settings.signing.is_some();

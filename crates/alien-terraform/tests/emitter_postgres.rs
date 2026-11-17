@@ -1,4 +1,4 @@
-//! Render tests for the platform-only `Postgres` Terraform emitters (AWS + GCP + Azure).
+//! Render tests for the `Postgres` Terraform emitters (AWS + GCP + Azure).
 //!
 //! Mirrors `compute_cluster.rs`: render through the real `generate_terraform_module`
 //! path with the built-in registry, then prove the high-value invariants
