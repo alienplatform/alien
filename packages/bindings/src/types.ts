@@ -512,6 +512,9 @@ export interface CreateSandboxOptions {
    * Providers are not required to honor a requested creation id. Always read and persist the
    * `SandboxInstance.sandboxId` returned by `create` or `getOrCreate`; do not assume this value is
    * the id of the resulting sandbox.
+   *
+   * A key made only of digits is read as a sandbox id and is not deduplicated; use a key with a
+   * letter, such as `engine-<uuid>`.
    */
   sandboxId?: string
   /**

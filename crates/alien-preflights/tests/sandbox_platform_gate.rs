@@ -149,7 +149,7 @@ async fn source_reaches_azure_and_gcp_frozen_through_the_runner() {
 
 #[tokio::test]
 async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() {
-    for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+    for platform in [Platform::Azure, Platform::Local] {
         let mut declared = sandbox(None);
         declared.egress = SandboxEgress::Internet;
         let result = PreflightRunner::new()
@@ -178,4 +178,30 @@ async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() 
             "released Allow stays available on {platform}: {result:?}"
         );
     }
+}
+
+/// Google Cloud's `internet` is native open outbound: it plans with no gateway, and an
+/// allowlist default policy is refused by name.
+#[tokio::test]
+async fn gcp_plans_internet_without_a_gateway_and_refuses_an_allowlist_default() {
+    let mut declared = sandbox(None);
+    declared.egress = SandboxEgress::Internet;
+    let result = PreflightRunner::new()
+        .run_compile_time_checks(&stack_with(declared.clone()), Platform::Gcp)
+        .await
+        .expect("preflight runs");
+    assert!(result.success, "{result:?}");
+
+    declared.default_policy = Some(alien_core::EgressPolicy::Allow {
+        allow: vec!["api.example.com".into()],
+    });
+    let result = PreflightRunner::new()
+        .run_compile_time_checks(&stack_with(declared), Platform::Gcp)
+        .await
+        .expect("preflight runs");
+    assert!(!result.success);
+    assert!(
+        format!("{result:?}").contains("Google Cloud sandboxes have no outbound allowlist"),
+        "{result:?}"
+    );
 }

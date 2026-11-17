@@ -126,6 +126,8 @@ fs2 = { workspace = true }
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [dev-dependencies]
+alien-terraform = { workspace = true }
+hcl-rs = { workspace = true }
 serde_yaml = { workspace = true }
 alien-bindings = { workspace = true, features = ["kubernetes"] }
 alien-manager-api = { workspace = true }

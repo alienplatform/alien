@@ -172,6 +172,7 @@ spec:
         runAsUser: 999
         runAsGroup: 999
         fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       {{- with $.Values.runtime.imagePullSecrets }}
