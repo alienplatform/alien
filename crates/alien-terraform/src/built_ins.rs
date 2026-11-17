@@ -5,7 +5,7 @@
 
 use crate::registry::TfRegistry;
 use alien_core::{
-    Ai, ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
+    ComputeCluster, Postgres, Redis, Ai, ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
     AzureServiceBusNamespace, AzureStorageAccount, Build, GcpAgentPlatformEngine, Key,
     KubernetesCluster, Kv, Network, Platform, Queue, RemoteBindings, RemoteStackManagement,
     Sandbox, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
@@ -21,6 +21,9 @@ fn register_aws(registry: &mut TfRegistry) {
     use crate::emitters::aws;
     let p = Platform::Aws;
     registry.register(Ai::RESOURCE_TYPE, p, aws::AwsAiEmitter);
+    registry.register(ComputeCluster::RESOURCE_TYPE, p, aws::AwsComputeClusterEmitter);
+    registry.register(Postgres::RESOURCE_TYPE, p, aws::AwsPostgresEmitter);
+    registry.register(Redis::RESOURCE_TYPE, p, aws::AwsRedisEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, aws::AwsStorageEmitter);
     registry.register(Key::RESOURCE_TYPE, p, aws::AwsKeyEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, aws::AwsKvEmitter);
@@ -66,6 +69,9 @@ fn register_gcp(registry: &mut TfRegistry) {
     use crate::emitters::gcp;
     let p = Platform::Gcp;
     registry.register(Ai::RESOURCE_TYPE, p, gcp::GcpAiEmitter);
+    registry.register(ComputeCluster::RESOURCE_TYPE, p, gcp::GcpComputeClusterEmitter);
+    registry.register(Postgres::RESOURCE_TYPE, p, gcp::GcpPostgresEmitter);
+    registry.register(Redis::RESOURCE_TYPE, p, gcp::GcpRedisEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, gcp::GcpStorageEmitter);
     registry.register(Key::RESOURCE_TYPE, p, gcp::GcpKeyEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, gcp::GcpKvEmitter);
@@ -127,6 +133,9 @@ fn register_azure(registry: &mut TfRegistry) {
 
     // Main resources — one emitter per Alien resource type.
     registry.register(Ai::RESOURCE_TYPE, p, azure::AzureAiEmitter);
+    registry.register(ComputeCluster::RESOURCE_TYPE, p, azure::AzureComputeClusterEmitter);
+    registry.register(Postgres::RESOURCE_TYPE, p, azure::AzurePostgresEmitter);
+    registry.register(Redis::RESOURCE_TYPE, p, azure::AzureRedisEmitter);
     registry.register(Storage::RESOURCE_TYPE, p, azure::AzureStorageEmitter);
     registry.register(Key::RESOURCE_TYPE, p, azure::AzureKeyEmitter);
     registry.register(Kv::RESOURCE_TYPE, p, azure::AzureKvEmitter);

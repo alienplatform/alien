@@ -146,7 +146,6 @@ async fn make_fixture_with_group_inputs(
                         git_commit_ref: None,
                         git_commit_message: None,
                         signed_stacks: Default::default(),
-                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -2310,7 +2309,6 @@ async fn a_gate_introduced_by_a_later_release_records_its_first_answer_on_reimpo
                 git_commit_ref: None,
                 git_commit_message: None,
                 signed_stacks: Default::default(),
-                setup_templates: Default::default(),
             },
         )
         .await
@@ -4013,7 +4011,6 @@ async fn automatic_registration_requires_approval_and_defers_application_resourc
                         git_commit_ref: None,
                         git_commit_message: None,
                         signed_stacks: Default::default(),
-                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -4474,7 +4471,6 @@ async fn older_template_reregistration_allows_new_required_inputs_but_validates_
                 git_commit_ref: None,
                 git_commit_message: None,
                 signed_stacks: Default::default(),
-                setup_templates: Default::default(),
             },
         )
         .await
@@ -4616,7 +4612,6 @@ async fn seed_release(fixture: &Fixture, stack: &Stack, channel: Option<&str>) -
                 git_commit_ref: None,
                 git_commit_message: None,
                 signed_stacks,
-                setup_templates: Default::default(),
             },
         )
         .await

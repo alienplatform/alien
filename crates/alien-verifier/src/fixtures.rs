@@ -156,6 +156,7 @@ pub fn release_body(workloads: Vec<Workload>) -> ReleaseBody {
         },
         components: BTreeMap::new(),
         setup: BTreeMap::new(),
+        setup_renderer: None,
         stack: None,
     }
 }

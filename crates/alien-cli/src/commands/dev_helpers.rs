@@ -706,7 +706,6 @@ pub async fn build_and_post_release_simple(
             project_id: "default".to_string(),
             channel: None,
             signed_stacks: Default::default(),
-            setup_templates: Default::default(),
         })
         .send()
         .await

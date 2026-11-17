@@ -14,20 +14,18 @@ use std::io::Write as _;
 use std::path::Path;
 
 use alien_cli_common::setup_templates::{
-    protected_stack_settings, render_setup_template, RenderedSetupTemplate, SetupHostingOptions,
-    SetupRenderOptions,
+    protected_stack_settings, render_setup_template, SetupHostingOptions, SetupRenderOptions,
 };
 use alien_cloudformation::RegistrationMode;
 use alien_core::release_statement::{
     check_deployer_env_mappings, release_body, signed_stack, ReleaseOptions,
 };
-use alien_core::{Platform, SetupPins, Stack, StackSigning};
+use alien_core::{Platform, Stack, StackSigning};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_signing::{
     display_fingerprint, fingerprint, Envelope, Kind, RecoveryCode, ReleaseBody, Role,
     SetupTemplate, SignedStatement, Signer, SignerChain, SignerKind, SignerListBody,
 };
-use base64::Engine as _;
 use chrono::Utc;
 
 use super::api::{ListPublished, SigningApi};
@@ -467,19 +465,47 @@ fn platform_templates(platform: Platform) -> &'static [&'static str] {
     }
 }
 
-/// The setup templates a protected install of `platform` uses, with the
-/// parameters a customer may choose. They are rendered with the function
-/// and hosting options the control plane renders with (`hosting` comes from
-/// it, `pins` are this build's own); the release signs their digests and
-/// uploads these bytes, which are the ones protected installs are given.
-/// This is the one place the release renders setup.
-pub async fn setup_templates(
+/// Hosting inputs that give a template the most parameters it can have: a registration custom
+/// resource with a callback, and a required external id. The release signs which parameters a
+/// customer may choose, and the service that hosts the setup picks the hosting inputs later, so
+/// the list is taken from the template with the most parameters; a template with fewer simply
+/// doesn't have the others.
+fn allow_list_hosting() -> SetupHostingOptions {
+    SetupHostingOptions {
+        registration: Some(RegistrationMode::Both {
+            lambda_arn: "arn:aws:lambda:us-east-1:000000000000:function:registration".to_string(),
+            callback_url: Some("https://registration.invalid/callback".to_string()),
+        }),
+        description: None,
+        management_trust: alien_cloudformation::ManagementTrustOptions {
+            require_external_id: true,
+            allowed_managing_role_arns: Vec::new(),
+        },
+        supported_aws_regions: Vec::new(),
+    }
+}
+
+/// Pins for rendering the templates only to list their parameters. The pins decide bytes, not
+/// parameters, so any valid values do, and a release can be signed from any build of this CLI.
+fn allow_list_pins() -> alien_core::SetupPins {
+    let digest = format!("sha256:{}", "0".repeat(64));
+    alien_core::SetupPins {
+        aws_publisher: Some("000000000000".to_string()),
+        aws_verifier_image: Some(format!("verifier@{digest}")),
+        gcp_verifier_image: Some(format!("registry.invalid/verifier@{digest}")),
+        azure_verifier_image: Some(format!("registry.invalid/verifier@{digest}")),
+        operator_digest: Some(digest),
+    }
+}
+
+/// What a customer may choose in each setup template a protected install of `platform` uses,
+/// by template name. The release signs only these lists: the service that hosts the setup
+/// renders the templates, and `verify` renders them again to check them.
+pub async fn setup_allow_lists(
     stack: &Stack,
     platform: Platform,
     signing: &StackSigning,
-    hosting: &SetupHostingOptions,
-    pins: SetupPins,
-) -> Result<BTreeMap<String, RenderedSetupTemplate>> {
+) -> Result<BTreeMap<String, SetupTemplate>> {
     let cloudformation = crate::commands::render::cloudformation_registry();
     let terraform = crate::commands::render::terraform_registry();
     let helm = alien_helm::HelmRegistry::built_in();
@@ -488,8 +514,8 @@ pub async fn setup_templates(
         .cloudformation_registry(&cloudformation)
         .terraform_registry(&terraform)
         .helm_registry(&helm)
-        .hosting(hosting.clone())
-        .pins(pins)
+        .hosting(allow_list_hosting())
+        .pins(allow_list_pins())
         .build();
     let mut templates = BTreeMap::new();
     for &name in platform_templates(platform) {
@@ -502,70 +528,14 @@ pub async fn setup_templates(
             .context(ErrorData::SigningFailed {
                 message: format!("Could not render the {name} setup template"),
             })?;
-        templates.insert(name.to_string(), rendered);
+        templates.insert(
+            name.to_string(),
+            SetupTemplate {
+                allowed: rendered.allowed,
+            },
+        );
     }
     Ok(templates)
-}
-
-/// The digest and allow-list the release signs for each rendered template.
-pub fn signed_setup(
-    rendered: &BTreeMap<String, RenderedSetupTemplate>,
-) -> BTreeMap<String, SetupTemplate> {
-    rendered
-        .iter()
-        .map(|(name, template)| (name.clone(), template.setup_template()))
-        .collect()
-}
-
-/// The rendered bytes of each template, base64-encoded as the release
-/// uploads them beside its signed statements.
-pub fn setup_upload(
-    rendered: &BTreeMap<String, RenderedSetupTemplate>,
-) -> std::collections::HashMap<String, String> {
-    rendered
-        .iter()
-        .map(|(name, template)| {
-            (
-                name.clone(),
-                base64::engine::general_purpose::STANDARD.encode(&template.bytes),
-            )
-        })
-        .collect()
-}
-
-/// One line saying what setup is rendered with, for the signing summary.
-pub fn hosting_summary(hosting: &SetupHostingOptions) -> String {
-    let registration = match &hosting.registration {
-        Some(
-            RegistrationMode::CustomResource { .. }
-            | RegistrationMode::RegionalCustomResource { .. },
-        ) => "custom resource",
-        Some(RegistrationMode::OutputsFallback) => "stack outputs",
-        Some(RegistrationMode::Both { .. } | RegistrationMode::RegionalBoth { .. }) => {
-            "custom resource and stack outputs"
-        }
-        None => "`register --import terraform` (no CloudFormation setup)",
-    };
-    let management = if hosting
-        .management_trust
-        .allowed_managing_role_arns
-        .is_empty()
-    {
-        "any managing role".to_string()
-    } else {
-        hosting
-            .management_trust
-            .allowed_managing_role_arns
-            .join(", ")
-    };
-    format!(
-        "Setup as the control plane hosts it · registers through {registration} · managed by {management}{}",
-        if hosting.management_trust.require_external_id {
-            " with an external id"
-        } else {
-            ""
-        }
-    )
 }
 
 /// The `release/v2` body for one platform's pushed stack.
@@ -576,6 +546,11 @@ pub fn body(
     components: &BTreeMap<String, String>,
     setup: BTreeMap<String, SetupTemplate>,
 ) -> Result<ReleaseBody> {
+    // A release that has setup templates signs the oldest renderer allowed to render them:
+    // this build's own.
+    let setup_renderer = (!setup.is_empty()).then(|| alien_signing::SetupRenderer {
+        min: alien_cli_common::setup_templates::RENDERER_VERSION.to_string(),
+    });
     check_deployer_env_mappings(stack, platform).context(ErrorData::SigningFailed {
         message: format!("Can't sign the {} stack", platform.as_str()),
     })?;
@@ -588,6 +563,7 @@ pub fn body(
             configurable_inputs: Vec::new(),
             components: components.clone(),
             setup,
+            setup_renderer,
         },
     )
     .context(ErrorData::SigningFailed {
@@ -681,7 +657,7 @@ fn short(digest: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha2::Digest as _;
+    use alien_core::SetupPins;
 
     const A: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -726,11 +702,10 @@ mod tests {
         .unwrap()
     }
 
-    /// What a release signs for each platform is the digest of the bytes the
-    /// shared renderer gives the control plane for the same stack, signing
-    /// settings and hosting.
+    /// The allow-list a release signs covers every parameter a template can have with the
+    /// hosting inputs the service chooses later, and the template's own bytes are not signed.
     #[tokio::test]
-    async fn release_digests_are_of_the_templates_the_control_plane_renders() {
+    async fn the_signed_allow_list_covers_what_any_hosting_renders() {
         let stack = storage_stack();
         let signing = StackSigning {
             fingerprint: format!("SHA256:{}", "9f".repeat(32)),
@@ -739,19 +714,6 @@ mod tests {
         let cloudformation = crate::commands::render::cloudformation_registry();
         let terraform = crate::commands::render::terraform_registry();
         let helm = alien_helm::HelmRegistry::built_in();
-        let all = alien_cli_common::setup_templates::render_setup_templates(
-            &stack,
-            SetupRenderOptions::builder()
-                .signing(&signing)
-                .cloudformation_registry(&cloudformation)
-                .terraform_registry(&terraform)
-                .helm_registry(&helm)
-                .hosting(hosting(true))
-                .pins(pins())
-                .build(),
-        )
-        .await
-        .unwrap();
         let mut signed = BTreeMap::new();
         for platform in [
             Platform::Aws,
@@ -759,38 +721,66 @@ mod tests {
             Platform::Azure,
             Platform::Kubernetes,
         ] {
-            signed.extend(
-                setup_templates(&stack, platform, &signing, &hosting(true), pins())
-                    .await
-                    .unwrap(),
-            );
+            signed.extend(setup_allow_lists(&stack, platform, &signing).await.unwrap());
         }
-        assert_eq!(signed, all);
         let mut names: Vec<&str> = alien_signing::release::SETUP_TEMPLATES.to_vec();
         names.sort();
         assert_eq!(signed.keys().map(String::as_str).collect::<Vec<_>>(), names);
 
-        // Hosting reaches the bytes: other management trust is another template.
-        let other = setup_templates(&stack, Platform::Aws, &signing, &hosting(false), pins())
+        for hosting in [hosting(true), hosting(false)] {
+            let all = alien_cli_common::setup_templates::render_setup_templates(
+                &stack,
+                SetupRenderOptions::builder()
+                    .signing(&signing)
+                    .cloudformation_registry(&cloudformation)
+                    .terraform_registry(&terraform)
+                    .helm_registry(&helm)
+                    .hosting(hosting)
+                    .pins(pins())
+                    .build(),
+            )
             .await
             .unwrap();
-        assert_ne!(
-            other["cloudformation"].bytes,
-            signed["cloudformation"].bytes
-        );
-
-        // What is uploaded decodes to the bytes whose digests are signed.
-        let upload = setup_upload(&signed);
-        for (name, template) in signed_setup(&signed) {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(&upload[&name])
-                .unwrap();
-            assert_eq!(
-                format!("sha256:{}", hex::encode(sha2::Sha256::digest(&bytes))),
-                template.sha256,
-                "{name}"
-            );
+            for (name, template) in all {
+                for parameter in &template.allowed {
+                    assert!(
+                        signed[&name].allowed.contains(parameter),
+                        "{name}: {parameter} is chosen by the customer but not allowed"
+                    );
+                }
+            }
         }
+    }
+
+    #[test]
+    fn a_body_with_setup_signs_this_build_as_the_minimum_renderer() {
+        let setup = BTreeMap::from([(
+            "cloudformation".to_string(),
+            SetupTemplate {
+                allowed: Vec::new(),
+            },
+        )]);
+        let signed = body(
+            Platform::Aws,
+            &storage_stack(),
+            "production",
+            &BTreeMap::new(),
+            setup,
+        )
+        .unwrap();
+        assert_eq!(
+            signed.setup_renderer.unwrap().min,
+            alien_cli_common::setup_templates::RENDERER_VERSION
+        );
+        let none = body(
+            Platform::Aws,
+            &storage_stack(),
+            "production",
+            &BTreeMap::new(),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(none.setup_renderer.is_none());
     }
 
     const B: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";

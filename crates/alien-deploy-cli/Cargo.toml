@@ -26,6 +26,9 @@ alien-preflights = { workspace = true }
 alien-cli-common = { workspace = true }
 alien-error = { workspace = true }
 alien-signing = { workspace = true }
+alien-cloudformation = { workspace = true }
+alien-terraform = { workspace = true }
+semver = { workspace = true }
 alien-deployment = { workspace = true }
 alien-helm = { workspace = true }
 alien-k8s-clients = { workspace = true }
@@ -87,6 +90,4 @@ libc = "0.2"
 
 [dev-dependencies]
 httpmock = { workspace = true }
-alien-cloudformation = { workspace = true }
-alien-terraform = { workspace = true }
 hcl-rs = { workspace = true }

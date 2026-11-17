@@ -25,7 +25,7 @@ pub mod test_utils;
 
 pub use emitter::CfEmitter;
 pub use generator::{
-    generate_cloudformation_stack_policy, generate_cloudformation_template,
+    add_setup_revision, generate_cloudformation_stack_policy, generate_cloudformation_template,
     generate_cloudformation_template_with_profile, to_yaml, CloudFormationOptions,
     CloudFormationTarget, ManagementTrustOptions, RegistrationMode, REGISTRATION_RESOURCE,
     SETUP_REVISION, SIGNING_FINGERPRINT_PARAMETER,

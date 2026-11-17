@@ -83,6 +83,7 @@ fn release(image: &str, marker: &str, channel: &str, secret: &str) -> ReleaseBod
         },
         components: BTreeMap::new(),
         setup: BTreeMap::new(),
+        setup_renderer: None,
         stack: None,
     }
 }

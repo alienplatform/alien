@@ -24,8 +24,10 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use super::up::resolve_optional_token;
+use super::verify_render::check_template;
 use super::verify_terraform::{directory_files, ModuleCloud, ModuleInstall};
 use crate::error::{ErrorData, Result};
+use alien_cli_common::setup_templates::SetupRecord;
 
 /// The template parameter that pins the fingerprint.
 const FINGERPRINT_PARAMETER: &str = "SigningFingerprint";
@@ -36,7 +38,18 @@ const CLOUDFORMATION: &str = "cloudformation";
 
 #[derive(Args, Debug, Clone)]
 #[command(about = "Check that this install runs only what the vendor signed")]
-#[command(group(clap::ArgGroup::new("install").required(true).args(["stack", "terraform", "helm"])))]
+#[command(long_about = "Check that this install runs only what the vendor signed.\n\n\
+Trust this check only when it runs from the released alien-deploy binary of the version the \
+template records, after you checked its attestation (`gh attestation verify <file> --repo \
+alienplatform/alien`). Do not use a binary built from source or one served by the vendor: the \
+pins that decide which Operator, machine agent and verifier image are accepted are compiled \
+into the release build, and only the attested release binary is known to carry the right ones. \
+The hosting inputs shown (who may manage the stack, the registration endpoint, whether an \
+external id is required) are chosen by the vendor's service when it renders the template, so \
+read them and decide whether you accept them. The minimum renderer version comes from the \
+releases the control plane returns, so a control plane that holds back newer releases can have \
+an older released renderer accepted: check the renderer version `verify` prints.")]
+#[command(group(clap::ArgGroup::new("install").required(true).args(["stack", "terraform", "helm", "offline"])))]
 pub struct VerifyArgs {
     /// The CloudFormation stack of the install.
     #[arg(long)]
@@ -100,6 +113,41 @@ pub struct VerifyArgs {
     #[arg(long, value_name = "DIR", requires = "helm")]
     pub chart: Option<std::path::PathBuf>,
 
+    /// Check local files against signed files, with no cloud or network reads: review a
+    /// template before you apply it. Pass `--setup` and `--template` (a CloudFormation file, or
+    /// the directory of a Terraform module or Helm chart, exactly as downloaded), `--fingerprint`
+    /// and `--channel` of the project, and the signed statements as files: `--signer-list` for
+    /// each signer list version and `--release` for each release (the `signedStacks` entry for
+    /// the template's platform, as the control plane serves it). Prints what was checked,
+    /// including the renderer version and who may manage the install; the customer's own
+    /// parameters aren't checked, since nothing is installed.
+    #[arg(long, requires_all = ["setup", "template", "fingerprint", "channel"])]
+    pub offline: bool,
+
+    /// Offline: which setup the template is.
+    #[arg(long, value_enum, requires = "offline")]
+    pub setup: Option<super::verify_offline::OfflineSetup>,
+
+    /// Offline: the template file or directory.
+    #[arg(long, value_name = "PATH", requires = "offline")]
+    pub template: Option<std::path::PathBuf>,
+
+    /// Offline: the project's signing fingerprint (`SHA256:...`), as the vendor published it.
+    #[arg(long, requires = "offline")]
+    pub fingerprint: Option<String>,
+
+    /// Offline: the release channel the install follows.
+    #[arg(long, requires = "offline")]
+    pub channel: Option<String>,
+
+    /// Offline: a signed signer list statement (a file); repeat for each version.
+    #[arg(long, value_name = "FILE", requires = "offline")]
+    pub signer_list: Vec<std::path::PathBuf>,
+
+    /// Offline: a signed release statement (a file); repeat for each release.
+    #[arg(long, value_name = "FILE", requires = "offline")]
+    pub release: Vec<std::path::PathBuf>,
+
     /// Where to fetch the vendor's signed releases. Defaults to the one this
     /// CLI was built for. What it returns is checked, not trusted.
     #[arg(long, env = "ALIEN_MANAGER_URL")]
@@ -148,6 +196,9 @@ pub enum Mark {
     Fail,
     /// Shown, not checked.
     Info,
+    /// Shown, not checked, and the customer has to look at it: the vendor's service chose a
+    /// setting that leaves something open.
+    Warn,
 }
 
 /// One line of the screen.
@@ -185,7 +236,7 @@ fn install_of(stack_id: &str, prefix: &str) -> Result<InstallId> {
     })
 }
 
-fn failed(message: impl Into<String>) -> AlienError<ErrorData> {
+pub(crate) fn failed(message: impl Into<String>) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::VerifyFailed {
         message: message.into(),
     })
@@ -221,10 +272,41 @@ pub struct Signed {
 pub struct Installed {
     /// The setup template it must be (`cloudformation`, `terraform-gcp`, `helm`, ...).
     pub template: &'static str,
-    /// `sha256:<hex>` of the installed template bytes.
-    pub digest: String,
+    /// The installed template.
+    pub content: Content,
     /// What the customer chose.
     pub choices: Choices,
+}
+
+/// The installed template as `verify` reads it.
+#[derive(Debug, Clone)]
+pub enum Content {
+    /// A CloudFormation template, as the stack holds it.
+    Yaml(String),
+    /// The files of a Terraform module or Helm chart.
+    Files(BTreeMap<String, String>),
+}
+
+impl Content {
+    /// `sha256:<hex>` of the bytes setup hands out: the template, or the file map of
+    /// [`file_map_bytes`](alien_cli_common::setup_templates::file_map_bytes).
+    pub fn digest(&self) -> String {
+        match self {
+            Content::Yaml(text) => sha256_digest(text.as_bytes()),
+            Content::Files(files) => {
+                sha256_digest(&alien_cli_common::setup_templates::file_map_bytes(files))
+            }
+        }
+    }
+
+    /// What the template says about how it was rendered.
+    pub fn record(&self, template: &str) -> std::result::Result<SetupRecord, String> {
+        match self {
+            Content::Yaml(text) => SetupRecord::from_cloudformation(text),
+            Content::Files(files) => SetupRecord::from_files(template, files),
+        }
+        .map_err(|error| error.to_string())
+    }
 }
 
 /// What the customer chose when installing, checked against the signed allow-list.
@@ -251,7 +333,7 @@ pub enum Choices {
 }
 
 /// Check what was read from a CloudFormation stack.
-pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
+pub async fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
     let prefix = observed.stack_name.as_str();
     let signed = Signed {
         install: install_of(&observed.stack_id, prefix)?,
@@ -266,7 +348,7 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
     };
     let installed = Installed {
         template: CLOUDFORMATION,
-        digest: sha256_digest(observed.template.as_bytes()),
+        content: Content::Yaml(observed.template.clone()),
         choices: Choices::Parameters(observed.parameters.clone()),
     };
     // Who manages the install is the customer's choice; whoever it is, the
@@ -301,7 +383,7 @@ pub fn check(observed: &Observed, now: DateTime<Utc>) -> Result<Vec<Line>> {
         Mark::Info,
     );
     extra.insert(0, managed_by);
-    check_signed(&signed, &installed, extra, now)
+    check_signed(&signed, &installed, extra, now).await
 }
 
 /// Signing settings and a ledger to check.
@@ -425,7 +507,7 @@ pub fn sha256_digest(bytes: &[u8]) -> String {
 /// Check an install against the releases signed for it. Errors are reasons
 /// nothing could be checked; a mismatch is a failed line. `extra` lines go
 /// after the customer's choices.
-pub fn check_signed(
+pub async fn check_signed(
     signed: &Signed,
     installed: &Installed,
     extra: Vec<Line>,
@@ -479,73 +561,12 @@ pub fn check_signed(
         ),
     })?;
 
-    // Only statements that verify here count; the rest are the control
-    // plane's word.
-    let verified: Vec<(&str, alien_signing::Verified<ReleaseBody>)> = signed
-        .releases
-        .iter()
-        .filter_map(|(id, statement)| {
-            trust
-                .verify_release(statement, now)
-                .ok()
-                .filter(|verified| verified.body.platform == signed.platform)
-                .map(|verified| (id.as_str(), verified))
-        })
-        .collect();
-
-    let digest = &installed.digest;
-    let matching = verified
-        .iter()
-        .filter(|(_, verified)| {
-            verified
-                .body
-                .setup
-                .get(installed.template)
-                .is_some_and(|template| template.sha256 == *digest)
-        })
-        .max_by_key(|(_, verified)| verified.sequence);
+    let (template_lines, matching) =
+        check_template(&trust, &settings, signed, installed, now).await;
+    lines.extend(template_lines);
     // What the customer may choose, from the release the template belongs to; none when it
     // belongs to no signed release.
-    let allowed: Option<Vec<String>> = match matching {
-        Some((id, verified)) => {
-            lines.push(line(
-                "Template",
-                format!(
-                    "matches release {id} · {} · {digest}",
-                    verified.body.channel
-                ),
-                Mark::Pass,
-            ));
-            Some(verified.body.setup[installed.template].allowed.clone())
-        }
-        // A release whose signer has since left the list still verifies against
-        // the list it names and keeps running until the next release (only the
-        // deny-list stops it), and so does the template it came with.
-        None => match from_removed_signer(&trust, &settings, &signed, installed, now) {
-            Some((id, signed_by, body)) => {
-                lines.push(line(
-                    "Template",
-                    format!(
-                        "matches release {id} · {} · {digest} · signed by {signed_by}, no longer on the list",
-                        body.channel
-                    ),
-                    Mark::Info,
-                ));
-                Some(body.setup[installed.template].allowed.clone())
-            }
-            None => {
-                lines.push(line(
-                    "Template",
-                    format!(
-                        "{digest} is not the {} template of any release signed for {}",
-                        installed.template, settings.channel
-                    ),
-                    Mark::Fail,
-                ));
-                None
-            }
-        },
-    };
+    let allowed: Option<Vec<String>> = matching.map(|matched| matched.allowed);
     lines.push(choices_line(
         &installed.choices,
         allowed.as_deref(),
@@ -715,36 +736,7 @@ fn schema_violations(
 /// for this install's channel, signed with the release role by the list
 /// version it names. Returns its id (the control plane's name for it), its
 /// signers and whether they all still hold the release role now.
-/// The newest release whose `installed` template this is and whose signer has
-/// left the list since, checked the way [`running_release`] checks one: against
-/// the list version it names, not deny-listed, for this channel and platform.
-fn from_removed_signer<'a>(
-    trust: &Trust,
-    settings: &SigningSettings,
-    signed: &'a Signed,
-    installed: &Installed,
-    now: DateTime<Utc>,
-) -> Option<(&'a str, String, ReleaseBody)> {
-    signed
-        .releases
-        .iter()
-        .filter_map(|(_, statement)| {
-            let opened = statement.open().ok()?;
-            let body: ReleaseBody = opened.body().ok()?;
-            let template = body.setup.get(installed.template)?;
-            (body.platform == signed.platform && template.sha256 == installed.digest)
-                .then_some((opened, body))
-        })
-        .filter_map(|(opened, body)| {
-            let (id, signers, _) =
-                running_release(trust, settings, &signed.releases, &opened.digest, now).ok()?;
-            Some((opened.sequence, id, signers.join(", "), body))
-        })
-        .max_by_key(|(sequence, ..)| *sequence)
-        .map(|(_, id, signed_by, body)| (id, signed_by, body))
-}
-
-fn running_release<'a>(
+pub(crate) fn running_release<'a>(
     trust: &Trust,
     settings: &SigningSettings,
     releases: &'a [(String, SignedStatement)],
@@ -817,6 +809,7 @@ pub fn render(lines: &[Line]) -> String {
             Mark::Pass => "  ✓",
             Mark::Fail => "  ✗",
             Mark::Info => "",
+            Mark::Warn => "  ⚠",
         };
         out.push_str(&format!("{:<21}{}{mark}\n", line.label, line.text));
     }
@@ -827,6 +820,27 @@ pub async fn verify_command(
     args: VerifyArgs,
     embedded_config: Option<&DeployCliConfig>,
 ) -> Result<()> {
+    if args.offline {
+        let (Some(setup), Some(template), Some(fingerprint), Some(channel)) = (
+            args.setup,
+            args.template.clone(),
+            args.fingerprint.clone(),
+            args.channel.clone(),
+        ) else {
+            return Err(failed(
+                "--offline needs --setup, --template, --fingerprint and --channel",
+            ));
+        };
+        return super::verify_offline::verify_offline(&super::verify_offline::OfflineInputs {
+            setup,
+            template,
+            fingerprint,
+            channel,
+            signer_lists: args.signer_list.clone(),
+            releases: args.release.clone(),
+        })
+        .await;
+    }
     let token = resolve_optional_token(
         args.token.clone(),
         args.token_file.as_ref(),
@@ -858,7 +872,7 @@ pub async fn verify_command(
             token,
         )
         .await?;
-        show(&check(&observed, Utc::now())?)?;
+        show(&check(&observed, Utc::now()).await?)?;
         if let (true, Some(change_set)) = (args.execute, args.change_set.as_deref()) {
             return execute(&cloudformation, stack, change_set, args.lock).await;
         }
@@ -880,7 +894,7 @@ pub async fn verify_command(
         .await?;
         (signed.signer_lists, signed.releases) =
             signed_releases(&url, token, cloud.platform()).await?;
-        return show(&check_signed(&signed, &installed, Vec::new(), Utc::now())?);
+        return show(&check_signed(&signed, &installed, Vec::new(), Utc::now()).await?);
     }
     if let (Some(release), Some(chart)) = (&args.helm, &args.chart) {
         let files = directory_files(chart)?;
@@ -888,12 +902,7 @@ pub async fn verify_command(
         let (mut signed, installed, chart_line) =
             super::verify_helm::helm_install(&observed, &files)?;
         (signed.signer_lists, signed.releases) = signed_releases(&url, token, "kubernetes").await?;
-        return show(&check_signed(
-            &signed,
-            &installed,
-            vec![chart_line],
-            Utc::now(),
-        )?);
+        return show(&check_signed(&signed, &installed, vec![chart_line], Utc::now()).await?);
     }
     Err(failed(
         "pass --stack, --terraform with --platform and --prefix, or --helm with --chart",

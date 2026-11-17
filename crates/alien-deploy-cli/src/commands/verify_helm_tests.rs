@@ -15,7 +15,7 @@ use crate::commands::verify::{
 use alien_cli_common::setup_templates::{
     render_setup_template, RenderedSetupTemplate, SetupHostingOptions, SetupRenderOptions,
 };
-use alien_core::{SetupPins, Stack, StackSettings, StackSigning};
+use alien_core::{Stack, StackSettings, StackSigning};
 use alien_signing::{Kind, ReleaseBody, SignedStatement};
 use chrono::Utc;
 use std::path::Path;
@@ -46,13 +46,7 @@ async fn chart() -> RenderedSetupTemplate {
         .terraform_registry(&terraform)
         .helm_registry(&helm)
         .hosting(hosting)
-        .pins(SetupPins {
-            aws_publisher: None,
-            aws_verifier_image: None,
-            gcp_verifier_image: None,
-            azure_verifier_image: None,
-            operator_digest: Some(format!("sha256:{}", "ef".repeat(32))),
-        })
+        .pins(super::super::verify_render::test_pins())
         .build();
     render_setup_template(
         HELM,
@@ -121,8 +115,16 @@ fn release_statement(chart: &RenderedSetupTemplate) -> SignedStatement {
             workloads: Vec::new(),
             configurable: Default::default(),
             components: Default::default(),
-            setup: BTreeMap::from([(HELM.to_string(), chart.setup_template())]),
-            stack: None,
+            setup: BTreeMap::from([(
+                HELM.to_string(),
+                alien_signing::SetupTemplate {
+                    allowed: chart.allowed.clone(),
+                },
+            )]),
+            setup_renderer: Some(alien_signing::SetupRenderer {
+                min: alien_cli_common::setup_templates::RENDERER_VERSION.to_string(),
+            }),
+            stack: Some(serde_json::to_value(Stack::new("shop".to_string()).build()).unwrap()),
         },
         &[("github-acme-app", 2)],
     )
@@ -133,7 +135,9 @@ async fn screen(files: &BTreeMap<String, String>, url: &str) -> Vec<Line> {
     let (mut signed, installed, chart_line) = helm_install(&observed, files).unwrap();
     (signed.signer_lists, signed.releases) =
         signed_releases(url, None, "kubernetes").await.unwrap();
-    let lines = check_signed(&signed, &installed, vec![chart_line], Utc::now()).unwrap();
+    let lines = check_signed(&signed, &installed, vec![chart_line], Utc::now())
+        .await
+        .unwrap();
     println!("{}", render(&lines));
     lines
 }
@@ -186,7 +190,7 @@ async fn values_line(set: &[(&str, Value)]) -> Line {
             defaults,
             schema,
         },
-        Some(&rendered.setup_template().allowed),
+        Some(&rendered.allowed),
         &settings,
     )
 }
@@ -270,8 +274,8 @@ async fn a_protected_helm_release_verifies_and_changes_to_it_fail() {
     assert_eq!(
         find(&lines, "Template").text,
         format!(
-            "matches release rel_40 · production · {}",
-            rendered.setup_template().sha256
+            "rendered again from release rel_40 · production · sha256:{}",
+            hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&rendered.bytes))
         )
     );
     assert_eq!(find(&lines, "Values").text, "1 customer choice allowed");
@@ -299,6 +303,13 @@ async fn a_protected_helm_release_verifies_and_changes_to_it_fail() {
             manager_url: Some(url.clone()),
             token: None,
             token_file: None,
+            offline: false,
+            setup: None,
+            template: None,
+            fingerprint: None,
+            channel: None,
+            signer_list: Vec::new(),
+            release: Vec::new(),
         },
         None,
     )
@@ -414,4 +425,77 @@ async fn a_protected_helm_release_verifies_and_changes_to_it_fail() {
         "kubectl",
         &["delete", "namespace", NAMESPACE, "--wait=true"],
     );
+}
+
+/// The chart a setup installs pins the Operator from the renderer's build, and `verify` renders
+/// it again with that build, so the Operator digest in the chart is checked by the bytes. The
+/// signed release's `components.operator` is the runtime pin the Operator updates itself to; it
+/// need not be the digest the chart started with, and `verify` doesn't require it to be.
+#[tokio::test]
+async fn a_chart_with_the_renderer_s_operator_digest_passes_whatever_the_release_pins() {
+    let rendered = chart().await;
+    let files = rendered.files.clone().unwrap();
+    let chart_digest = format!("sha256:{}", "ef".repeat(32));
+    let release_digest = format!("sha256:{}", "b2".repeat(32));
+    assert_ne!(chart_digest, release_digest);
+    assert!(
+        files.values().any(|text| text.contains(&"ef".repeat(32))),
+        "the chart runs the renderer's Operator build"
+    );
+
+    let mut body: ReleaseBody = release_statement(&rendered).open().unwrap().body().unwrap();
+    body.components
+        .insert("operator".to_string(), release_digest.clone());
+    let statement = signed(Kind::Release, 40, 1, None, body, &[("github-acme-app", 2)]);
+    let install = "k8s:0b1e7c2a-3d4f-4a5b-8c6d-7e8f9a0b1c2d:verify-helm/shop";
+    let ledger = serde_json::json!({
+        "prefix": RELEASE,
+        "created": true,
+        "fingerprint": fingerprint(),
+        "install": install,
+        "signerList": { "sequence": 1, "digest": genesis().open().unwrap().digest },
+    })
+    .to_string();
+    let signed_install = Signed {
+        install: alien_signing::InstallId::parse(install).unwrap(),
+        prefix: RELEASE.to_string(),
+        settings_name: "settings".to_string(),
+        settings: Some((
+            format!(
+                r#"{{"fingerprint":"{}","prefix":"{RELEASE}","channel":"production"}}"#,
+                fingerprint()
+            )
+            .into_bytes(),
+            None,
+        )),
+        ledger_name: "ledger".to_string(),
+        ledger: Some(ledger.into_bytes()),
+        signer_lists: vec![genesis()],
+        releases: vec![("rel_40".to_string(), statement)],
+        platform: "kubernetes",
+    };
+    let installed = Installed {
+        template: HELM,
+        content: crate::commands::verify::Content::Files(files.clone()),
+        choices: Choices::NotRead("not read in this test"),
+    };
+    let lines = check_signed(&signed_install, &installed, Vec::new(), crate::commands::verify::tests::now())
+        .await
+        .unwrap();
+    let template = find(&lines, "Template");
+    assert_eq!(template.mark, Mark::Pass, "{}", render(&lines));
+
+    // Another Operator digest in the chart is another chart.
+    let mut other = files;
+    for text in other.values_mut() {
+        *text = text.replace(&"ef".repeat(32), &"ab".repeat(32));
+    }
+    let installed = Installed {
+        content: crate::commands::verify::Content::Files(other),
+        ..installed
+    };
+    let lines = check_signed(&signed_install, &installed, Vec::new(), crate::commands::verify::tests::now())
+        .await
+        .unwrap();
+    assert_eq!(find(&lines, "Template").mark, Mark::Fail, "{}", render(&lines));
 }

@@ -977,7 +977,6 @@ pub async fn create_release(
             project_id: "default".to_string(),
             channel: None,
             signed_stacks: Default::default(),
-            setup_templates: Default::default(),
         })
         .send()
         .await
@@ -1185,7 +1184,6 @@ pub async fn developer_setup(
             project_id: "default".to_string(),
             channel: None,
             signed_stacks: Default::default(),
-            setup_templates: Default::default(),
         })
         .send()
         .await

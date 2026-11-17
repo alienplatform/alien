@@ -4,7 +4,7 @@
 //! Its body names every workload exactly, for enforcers that build workloads
 //! one by one, and carries the whole stack, for enforcers that deploy from it.
 //! It also names its channel, the enforcer builds it runs with, and the
-//! digests of the setup templates rendered for it.
+//! what customers may choose in its setup templates, and the oldest renderer allowed.
 //! [`release_body`] builds that body from a pushed stack; [`signed_stack`]
 //! reads the stack back out of a verified body and checks it agrees with the
 //! workloads beside it.
@@ -15,7 +15,7 @@ use alien_error::AlienError;
 use alien_signing::release::{
     Bounds, Configurable, FunctionSettings, Mount, Runtime, Security, WorkloadKind,
 };
-use alien_signing::{ConfigBody, ReleaseBody, SetupTemplate, Workload};
+use alien_signing::{ConfigBody, ReleaseBody, SetupRenderer, SetupTemplate, Workload};
 
 use crate::error::{ErrorData, Result};
 use crate::runtime_environment::*;
@@ -99,8 +99,10 @@ pub struct ReleaseOptions {
     pub configurable_inputs: Vec<String>,
     /// Digest of each enforcer build, by component name.
     pub components: BTreeMap<String, String>,
-    /// Digests of the rendered setup templates, by template name.
+    /// What customers may choose in each setup template, by template name.
     pub setup: BTreeMap<String, SetupTemplate>,
+    /// The oldest setup renderer allowed; required with `setup`.
+    pub setup_renderer: Option<SetupRenderer>,
 }
 
 /// The `release/v2` body for `stack` on `platform`. Every image must be
@@ -153,6 +155,7 @@ pub fn release_body(
         },
         components: options.components.clone(),
         setup: options.setup.clone(),
+        setup_renderer: options.setup_renderer.clone(),
         stack: Some(serde_json::to_value(stack).map_err(|error| {
             statement_invalid(format!("the stack could not be serialized: {error}"))
         })?),
@@ -223,6 +226,7 @@ pub fn signed_stack(body: &ReleaseBody, platform: Platform) -> Result<Stack> {
             configurable_inputs: body.configurable.inputs.clone(),
             components: body.components.clone(),
             setup: body.setup.clone(),
+            setup_renderer: body.setup_renderer.clone(),
         },
     )?;
     if expected.workloads != body.workloads {

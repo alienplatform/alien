@@ -1382,7 +1382,6 @@ pub(in crate::routes) mod tests {
                     git_commit_ref: None,
                     git_commit_message: None,
                     signed_stacks: Default::default(),
-                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -1708,7 +1707,6 @@ pub(in crate::routes) mod tests {
                     } else {
                         Default::default()
                     },
-                    setup_templates: Default::default(),
                 },
             )
             .await
@@ -1735,7 +1733,6 @@ pub(in crate::routes) mod tests {
                         git_commit_ref: None,
                         git_commit_message: None,
                         signed_stacks: Default::default(),
-                        setup_templates: Default::default(),
                     },
                 )
                 .await
@@ -2773,7 +2770,6 @@ pub(in crate::routes) mod tests {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
-                        setup_templates: Default::default(),
                         signed_stacks: Default::default(),
                     },
                 )
@@ -2807,7 +2803,6 @@ pub(in crate::routes) mod tests {
                         git_commit_sha: None,
                         git_commit_ref: None,
                         git_commit_message: None,
-                        setup_templates: Default::default(),
                         signed_stacks: Default::default(),
                     },
                 )
@@ -3555,7 +3550,6 @@ pub(in crate::routes) mod tests {
                     git_commit_sha: None,
                     git_commit_ref: None,
                     git_commit_message: None,
-                    setup_templates: Default::default(),
                     signed_stacks: Default::default(),
                 },
             )

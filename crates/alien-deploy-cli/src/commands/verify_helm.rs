@@ -19,7 +19,7 @@ use alien_signing::{settings::names, InstallId};
 use base64::Engine as _;
 use serde_json::{Map, Value};
 
-use super::verify::{line, sha256_digest, Choices, Installed, Line, Mark, Signed};
+use super::verify::{line, Choices, Content, Installed, Line, Mark, Signed};
 use crate::error::{ErrorData, Result};
 
 /// The setup template a Helm release is.
@@ -103,7 +103,7 @@ pub fn helm_install(
     };
     let installed = Installed {
         template: HELM,
-        digest: sha256_digest(&alien_cli_common::setup_templates::file_map_bytes(files)),
+        content: Content::Files(files.clone()),
         choices: Choices::Values {
             effective,
             defaults,

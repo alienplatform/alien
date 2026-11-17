@@ -851,11 +851,41 @@ fn releases_that_break_the_rules_are_refused() {
     unknown_setup.setup.insert(
         "pulumi".into(),
         alien_signing::SetupTemplate {
-            sha256: format!("sha256:{}", "a".repeat(64)),
             allowed: Vec::new(),
         },
     );
+    unknown_setup.setup_renderer = Some(alien_signing::SetupRenderer {
+        min: "1.2.3".into(),
+    });
     assert_eq!(code(unknown_setup.validate()), "SIGNING_BODY_REFUSED");
+
+    // Setup without a minimum renderer, a minimum that isn't a version, and a minimum
+    // without setup are refused.
+    let setup = || {
+        let mut body = release_body();
+        body.setup.insert(
+            "cloudformation".into(),
+            alien_signing::SetupTemplate {
+                allowed: Vec::new(),
+            },
+        );
+        body.setup_renderer = Some(alien_signing::SetupRenderer {
+            min: "1.2.3".into(),
+        });
+        body
+    };
+    setup().validate().unwrap();
+    let mut no_minimum = setup();
+    no_minimum.setup_renderer = None;
+    assert_eq!(code(no_minimum.validate()), "SIGNING_BODY_REFUSED");
+    let mut not_semver = setup();
+    not_semver.setup_renderer = Some(alien_signing::SetupRenderer { min: "new".into() });
+    assert_eq!(code(not_semver.validate()), "SIGNING_BODY_REFUSED");
+    let mut no_setup = release_body();
+    no_setup.setup_renderer = Some(alien_signing::SetupRenderer {
+        min: "1.2.3".into(),
+    });
+    assert_eq!(code(no_setup.validate()), "SIGNING_BODY_REFUSED");
 
     let mut configurable_loader = release_body();
     configurable_loader

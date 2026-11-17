@@ -42,6 +42,38 @@ terraform -chdir="$work" init -backend=false -input=false >/dev/null
 mkdir -p "$mirror"
 cp -R "$work/.terraform/providers/." "$mirror/"
 
+# Tests that check the oldest provider versions the generated modules still accept pin them
+# exactly (crates/alien-terraform/tests/emitter_postgres.rs and its credential-model fixture),
+# so those versions are mirrored next to the newest ones. Without them the init finds no match,
+# because a mirrored provider is never fetched from the registry.
+minimum="$work/minimum"
+mkdir -p "$minimum"
+cat > "$minimum/main.tf" <<'TF'
+terraform {
+  required_providers {
+    aws     = { source="hashicorp/aws", version="= 6.70.0" }
+    google  = { source="hashicorp/google", version="= 7.37.0" }
+    azurerm = { source="hashicorp/azurerm", version="= 4.75.0" }
+    random  = { source="hashicorp/random", version="= 3.7.2" }
+  }
+}
+TF
+terraform -chdir="$minimum" init -backend=false -input=false >/dev/null
+cp -R "$minimum/.terraform/providers/." "$mirror/"
+
+# The Azure Postgres cloud-free validation test pins azurerm 4.81.0 exactly.
+azure_pin="$work/azure-pin"
+mkdir -p "$azure_pin"
+cat > "$azure_pin/main.tf" <<'TF'
+terraform {
+  required_providers {
+    azurerm = { source="hashicorp/azurerm", version="= 4.81.0" }
+  }
+}
+TF
+terraform -chdir="$azure_pin" init -backend=false -input=false >/dev/null
+cp -R "$azure_pin/.terraform/providers/." "$mirror/"
+
 # Route exactly the mirrored providers (host/namespace/type) to the mirror.
 providers="$(cd "$mirror" && find . -mindepth 3 -maxdepth 3 -type d | sed 's|^\./||' | sort)"
 list="$(printf '%s\n' "$providers" | awk 'NF { printf "%s\"%s\"", (n++ ? ", " : ""), $0 }')"

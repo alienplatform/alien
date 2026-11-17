@@ -8,6 +8,8 @@ pub mod status;
 pub mod up;
 pub mod verify;
 pub mod verify_helm;
+pub mod verify_offline;
+pub mod verify_render;
 pub mod verify_terraform;
 
 pub use down::{down_command, DownArgs};

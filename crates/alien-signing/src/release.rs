@@ -111,7 +111,7 @@ pub const COMPONENTS: &[&str] = &[
     "operator",
 ];
 
-/// Setup templates a release can carry digests of.
+/// Setup templates a release can carry an allow-list for.
 pub const SETUP_TEMPLATES: &[&str] = &[
     "cloudformation",
     "terraform-aws",
@@ -138,22 +138,35 @@ pub struct ReleaseBody {
     /// [`COMPONENTS`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub components: BTreeMap<String, String>,
-    /// Digests of the setup templates this release renders, by name from
-    /// [`SETUP_TEMPLATES`], so a customer can check what they install.
+    /// What customers may choose in each setup template this release has, by name from
+    /// [`SETUP_TEMPLATES`]. The bytes are not signed: a customer re-renders the template
+    /// with the renderer version it records and compares ([`SetupRenderer`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub setup: BTreeMap<String, SetupTemplate>,
+    /// The oldest setup renderer that may render this release's templates. Required when
+    /// `setup` is not empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_renderer: Option<SetupRenderer>,
     /// The full stack, for enforcers that deploy from it. It is signed with
     /// the rest of the body, so it is as trusted as the workloads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack: Option<serde_json::Value>,
 }
 
-/// One setup template as the release rendered it.
+/// The setup renderer a release accepts: the version of the signing CLI that built it. A
+/// template recorded as rendered by an older version is refused, so a setup can't be
+/// rendered again by a build that predates the release's fixes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SetupRenderer {
+    /// Semver of the oldest renderer allowed.
+    pub min: String,
+}
+
+/// One setup template of the release.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SetupTemplate {
-    /// `sha256:<hex>` of the rendered template bytes.
-    pub sha256: String,
     /// Parameters (or Helm values) the customer may choose. Every other
     /// parameter must keep the template's pinned value.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -404,16 +417,31 @@ impl ReleaseBody {
                 )));
             }
         }
-        for (name, template) in &self.setup {
+        for name in self.setup.keys() {
             if !SETUP_TEMPLATES.contains(&name.as_str()) {
                 return Err(body_refused(format!("'{name}' is not a setup template")));
             }
-            if !is_sha256_digest(&template.sha256) {
-                return Err(body_refused(format!(
-                    "setup '{name}' digest '{}' is not sha256:<hex>",
-                    template.sha256
-                )));
+        }
+        match (&self.setup_renderer, self.setup.is_empty()) {
+            (Some(renderer), false) => {
+                semver::Version::parse(&renderer.min).map_err(|error| {
+                    body_refused(format!(
+                        "setupRenderer.min '{}' is not a semver: {error}",
+                        renderer.min
+                    ))
+                })?;
             }
+            (None, false) => {
+                return Err(body_refused(
+                    "the release has setup templates but no setupRenderer.min".to_string(),
+                ))
+            }
+            (Some(_), true) => {
+                return Err(body_refused(
+                    "the release names a setupRenderer.min but has no setup templates".to_string(),
+                ))
+            }
+            (None, true) => {}
         }
         Ok(())
     }

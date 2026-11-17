@@ -6603,6 +6603,7 @@ mod tests {
                         format!("sha256:{}", hex::encode(Sha256::digest(agent))),
                     )]),
                     setup: BTreeMap::new(),
+                    setup_renderer: None,
                     stack: None,
                 },
             )

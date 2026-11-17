@@ -41,8 +41,7 @@ pub use release_channel_store::{
     DeploymentRouting, ReleaseChannelRecord, ReleaseChannelStore, DEFAULT_CHANNEL,
 };
 pub use release_store::{
-    CreateReleaseParams, ProtectedSetupQuery, ReleaseRecord, ReleaseStore, SetupTemplateBytes,
-    StoredChart,
+    CreateReleaseParams, ProtectedSetupQuery, ReleaseRecord, ReleaseStore, StoredChart,
 };
 pub use server_bindings::ServerBindings;
 pub use signing_store::{

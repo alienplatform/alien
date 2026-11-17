@@ -1,0 +1,79 @@
+---
+source: crates/alien-cloudformation/tests/emitter_aws_postgres.rs
+expression: policies
+---
+ExecutionSaRolePostgresPermission00:
+  Type: "AWS::IAM::Policy"
+  Properties:
+    PolicyName:
+      "Fn::Sub": "${AWS::StackName}-db-postgres-0-0"
+    PolicyDocument:
+      Version: 2012-10-17
+      Statement:
+        - Action:
+            - "secretsmanager:GetSecretValue"
+          Condition:
+            StringEquals:
+              "aws:ResourceTag/deployment":
+                "Fn::Sub": "${AWS::StackName}"
+              "aws:ResourceTag/resource": db
+          Effect: Allow
+          Resource:
+            - "Fn::Sub": "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${AWS::StackName}-db-*"
+          Sid: ReadConnectionSecret
+    Roles:
+      - Ref: ExecutionSaRole
+  DependsOn:
+    - DbSecret
+    - ExecutionSaRole
+ManagementRolePostgresPermission10:
+  Type: "AWS::IAM::Policy"
+  Properties:
+    PolicyName:
+      "Fn::Sub": "${AWS::StackName}-db-postgres-1-0"
+    PolicyDocument:
+      Version: 2012-10-17
+      Statement:
+        - Action:
+            - "rds:DescribeDBClusters"
+            - "rds:DescribeDBSubnetGroups"
+            - "rds:ListTagsForResource"
+          Effect: Allow
+          Resource:
+            - "Fn::Sub": "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AWS::StackName}-db"
+            - "Fn::Sub": "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:${AWS::StackName}-db-*"
+          Sid: ReadAurora
+        - Action:
+            - "rds:ModifyDBCluster"
+            - "rds:StartDBCluster"
+          Condition:
+            StringEquals:
+              "aws:ResourceTag/deployment":
+                "Fn::Sub": "${AWS::StackName}"
+              "aws:ResourceTag/resource": db
+          Effect: Allow
+          Resource:
+            - "Fn::Sub": "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:cluster:${AWS::StackName}-db"
+          Sid: ModifyAuroraCluster
+        - Action:
+            - "rds:ModifyDBInstance"
+          Condition:
+            StringEqualsIfExists:
+              "aws:ResourceTag/deployment":
+                "Fn::Sub": "${AWS::StackName}"
+              "aws:ResourceTag/resource": db
+          Effect: Allow
+          Resource:
+            - "Fn::Sub": "arn:${AWS::Partition}:rds:${AWS::Region}:${AWS::AccountId}:db:${AWS::StackName}-db-*"
+          Sid: ModifyAuroraInstances
+        - Action:
+            - "rds:DescribeDBInstances"
+          Effect: Allow
+          Resource:
+            - "*"
+          Sid: DescribeDatabaseInstances
+    Roles:
+      - Ref: ManagementRole
+  DependsOn:
+    - DbSecret
+    - ManagementRole
