@@ -1798,6 +1798,7 @@ fn resolve_endpoint_plan(
                 certificate,
                 EndpointCertificate::ManagedTlsSecret { .. }
                     | EndpointCertificate::ManagedAcmImport { .. }
+                    | EndpointCertificate::KeepPublished { .. }
             ) {
                 validate_managed_alias_certificates(target.resource_id, domain)?;
             }
@@ -5101,6 +5102,35 @@ mod tests {
                     "{status:?}: {plan:?}"
                 );
             }
+        }
+
+        /// A renewal with nothing new must not serve an alias that has its own certificate with
+        /// only the published primary certificate: the alias check runs for it too.
+        #[test]
+        fn renewal_rejects_an_alias_with_a_separate_certificate() {
+            let mut harness = harness(CertificateStatus::Renewing, false);
+            let alias = serde_json::from_value(json!({
+                "fqdn": "*.api.example.com", "certificateId": "another-cert",
+                "certificateStatus": "issued", "dnsStatus": "active"
+            }))
+            .expect("alias");
+            harness
+                .deployment_config_mut()
+                .domain_metadata
+                .as_mut()
+                .expect("metadata")
+                .resources
+                .get_mut("api")
+                .expect("api")
+                .aliases
+                .push(alias);
+            let published = KubernetesPublicEndpointState {
+                managed_tls_secret_name: Some("api-tls".to_string()),
+                ..Default::default()
+            };
+            let error = resolve_endpoint_plan(&harness.ctx(), &endpoint_target(), &published)
+                .expect_err("separate alias certificate");
+            assert!(error.message.contains("requires a separate certificate"));
         }
 
         /// When the metadata still carries the certificate material during a renewal, it is used.
