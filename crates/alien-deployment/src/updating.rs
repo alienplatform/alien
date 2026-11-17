@@ -1441,6 +1441,15 @@ mod tests {
         }
 
         async fn update(installed: Stack, target: Stack) -> Result<DeploymentStepResult> {
+            update_after(installed, target, Vec::new()).await
+        }
+
+        /// `earlier_cleanup`: what the previous release's preparation recommended removing.
+        async fn update_after(
+            installed: Stack,
+            target: Stack,
+            earlier_cleanup: Vec<String>,
+        ) -> Result<DeploymentStepResult> {
             let (client, _server) = client().await;
             let state = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
             let prepared = alien_preflights::runner::PreflightRunner::new()
@@ -1492,6 +1501,7 @@ mod tests {
                     runtime_metadata: Some(RuntimeMetadata {
                         initial_setup_authority: InitialSetupAuthority::ImportedHandoff,
                         prepared_stack: Some(prepared),
+                        setup_cleanup_recommended: earlier_cleanup,
                         ..Default::default()
                     }),
                     retry_requested: false,
@@ -1503,6 +1513,33 @@ mod tests {
                 std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
             )
             .await
+        }
+
+        // The notice is replaced on every preparation: once the installed stack holds only what
+        // the release asks for (setup applied the narrowing), nothing is recommended any more.
+        #[tokio::test]
+        async fn the_cleanup_notice_clears_once_nothing_is_left_over() {
+            let eight = ["a", "b", "c", "d", "e", "f", "g", "h"];
+            let seven = ["a", "b", "c", "e", "f", "g", "h"];
+            let result = update_after(stack(&seven), stack(&seven), vec!["secret 'd'".into()])
+                .await
+                .expect("an unchanged release proceeds");
+            assert!(result
+                .state
+                .runtime_metadata
+                .unwrap()
+                .setup_cleanup_recommended
+                .is_empty());
+            // Still left over: still recommended.
+            let result = update_after(stack(&eight), stack(&seven), Vec::new())
+                .await
+                .unwrap();
+            assert!(!result
+                .state
+                .runtime_metadata
+                .unwrap()
+                .setup_cleanup_recommended
+                .is_empty());
         }
 
         #[tokio::test]
