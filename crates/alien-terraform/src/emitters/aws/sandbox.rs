@@ -447,7 +447,7 @@ impl TfEmitter for AwsSandboxEmitter {
         if provisioned_at_runtime(ctx) {
             return runtime_import_ref(ctx, sandbox, label);
         }
-        Ok(expr::object([
+        let mut fields = vec![
             ("previewPorts", preview_ports(sandbox)),
             (
                 "egressConnectorArns",
@@ -469,7 +469,13 @@ impl TfEmitter for AwsSandboxEmitter {
                 "imageVersion",
                 image_property(label, "LatestActiveImageVersion"),
             ),
-        ]))
+        ];
+        // The controller publishes the binding the deployment's own workloads read and learns the
+        // store only from this; only a declaring sandbox has one.
+        if let Some(storage) = persistent_storage_binding(sandbox, label) {
+            fields.push(("persistentStorage", storage));
+        }
+        Ok(expr::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
@@ -739,6 +745,9 @@ fn runtime_import_ref(ctx: &EmitContext<'_>, sandbox: &Sandbox, label: &str) -> 
     ];
     if !aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
         fields.push(("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)));
+    }
+    if let Some(storage) = persistent_storage_binding(sandbox, label) {
+        fields.push(("persistentStorage", storage));
     }
     Ok(expr::object(fields))
 }

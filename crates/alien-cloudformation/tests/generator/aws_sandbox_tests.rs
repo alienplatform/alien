@@ -2524,3 +2524,54 @@ fn persistent_storage_reaches_the_agent_environment() {
         "{image}"
     );
 }
+
+/// The runtime controller publishes the binding the deployment's own workloads read and learns the
+/// store only from what setup registers: a declaring sandbox's import data carries the binding's
+/// `persistentStorage`, which the importer accepts; an undeclared sandbox's import data has none.
+#[test]
+fn the_registration_hands_the_controller_the_persistent_store() {
+    let (stack, settings) = persistent_storage_stack();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox persistent storage registration",
+    );
+    let emitted = emitted_import_data(&template, "agents");
+    assert_eq!(
+        emitted["persistentStorage"],
+        serde_json::json!({
+            "path": "/workspace",
+            "store": {"type": "aws", "bucket": {"Ref": "AgentsPersistentStore"}},
+            "exclude": ["tmp/"],
+            "maxSizeBytes": 8u64 << 30,
+        }),
+        "{emitted:#}"
+    );
+    let parsed: AwsSandboxImportData =
+        serde_json::from_value(registration_import_data(&template, "agents"))
+            .expect("the importer accepts what the emitter renders");
+    assert!(parsed.persistent_storage.is_some());
+
+    let (mut stack, settings) = persistent_storage_stack();
+    let entry = stack.resources.get_mut("agents").expect("sandbox");
+    let mut sandbox = entry
+        .config
+        .downcast_ref::<Sandbox>()
+        .expect("sandbox")
+        .clone();
+    sandbox.persistent_storage = None;
+    entry.config = alien_core::Resource::new(sandbox);
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox without persistent storage",
+    );
+    let emitted = emitted_import_data(&template, "agents");
+    assert!(emitted.get("persistentStorage").is_none(), "{emitted:#}");
+}

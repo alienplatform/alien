@@ -2312,3 +2312,67 @@ fn persistent_storage_gets_a_private_bucket_only_the_session_role_reaches() {
         }
     }
 }
+
+/// The `importData` the module registers for one resource id, as HCL.
+fn registered_import_data(module: &alien_terraform::ModuleFiles, id: &str) -> Option<String> {
+    let locals: hcl::Body =
+        hcl::parse(module.get("locals.tf").expect("locals.tf renders")).expect("locals.tf parses");
+    let registered = locals
+        .blocks()
+        .flat_map(|block| block.body().attributes())
+        .find(|attribute| attribute.key() == "deployment_resources")
+        .expect("the registration list renders");
+    let hcl::Expression::Array(entries) = registered.expr() else {
+        panic!("the registration list is a list");
+    };
+    entries.iter().find_map(|entry| {
+        let hcl::Expression::Object(object) = entry else {
+            return None;
+        };
+        let field = |name: &str| {
+            object.iter().find_map(|(key, value)| {
+                matches!(key, hcl::ObjectKey::Identifier(key) if key.as_str() == name)
+                    .then_some(value)
+            })
+        };
+        (field("id") == Some(&hcl::Expression::String(id.to_string())))
+            .then(|| field("importData").expect("importData").to_string())
+    })
+}
+
+/// As in CloudFormation: the runtime controller publishes the binding the deployment's own
+/// workloads read and learns the store only from the registration, so a declaring sandbox's
+/// import data carries `persistentStorage` with the module's bucket; an undeclared one has none.
+#[test]
+fn the_registration_hands_the_controller_the_persistent_store() {
+    let declared = registered_import_data(&persistent_storage_module(), "agents")
+        .expect("the sandbox registers");
+    assert!(declared.contains("persistentStorage"), "{declared}");
+    assert!(
+        declared.contains("aws_s3_bucket.agents_persistent_store.bucket"),
+        "{declared}"
+    );
+
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-sandbox-plain".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            sandbox_fixture(SandboxEgress::None),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let plain = registered_import_data(&render(&stack, TerraformTarget::Aws, settings), "agents")
+        .expect("the sandbox registers");
+    assert!(!plain.contains("persistentStorage"), "{plain}");
+}

@@ -1343,6 +1343,7 @@ fn aws_sandbox_frozen_shape_imports_running_with_a_binding() {
         ],
         allow_egress: false,
         preview_ports: vec![8080],
+        persistent_storage: None,
     })
     .unwrap();
 
@@ -1408,6 +1409,7 @@ fn aws_sandbox_reimport_preserves_the_built_image_and_takes_the_new_connector() 
                 ],
                 allow_egress: false,
                 preview_ports: vec![8080],
+                persistent_storage: None,
             })
             .unwrap(),
             &ctx,
@@ -1445,6 +1447,7 @@ fn aws_sandbox_reimport_preserves_the_built_image_and_takes_the_new_connector() 
                 ],
                 allow_egress: false,
                 preview_ports: vec![8080],
+                persistent_storage: None,
             })
             .unwrap(),
             &ctx,
@@ -1525,6 +1528,7 @@ fn aws_sandbox_frozen_reimport_replaces() {
             ],
             allow_egress: false,
             preview_ports: vec![8080],
+            persistent_storage: None,
         })
         .unwrap()
     };
@@ -1572,6 +1576,7 @@ fn aws_sandbox_frozen_reimport_replaces() {
                 egress_connector_arns: Vec::new(),
                 allow_egress: true,
                 preview_ports: Vec::new(),
+                persistent_storage: None,
             })
             .unwrap(),
             &ctx,
@@ -1633,6 +1638,7 @@ fn aws_sandbox_reimport_carries_the_declared_lifecycle_through_a_merge() {
                 egress_connector_arns: Vec::new(),
                 allow_egress: true,
                 preview_ports: Vec::new(),
+                persistent_storage: None,
             })
             .unwrap(),
             &frozen_ctx,
@@ -1660,6 +1666,7 @@ fn aws_sandbox_reimport_carries_the_declared_lifecycle_through_a_merge() {
                 egress_connector_arns: Vec::new(),
                 allow_egress: true,
                 preview_ports: Vec::new(),
+                persistent_storage: None,
             })
             .unwrap(),
             &live_ctx,
@@ -1699,6 +1706,7 @@ fn aws_sandbox_runtime_shape_imports_provisioning_with_the_build_inputs() {
         ],
         allow_egress: false,
         preview_ports: vec![8080],
+        persistent_storage: None,
     })
     .unwrap();
 
@@ -1866,4 +1874,105 @@ fn key_reimport_rejects_identity_changes_but_allows_version_rotation() {
             .unwrap_err();
         assert_eq!(error.code, "INVALID_RESOURCE_UPDATE");
     }
+}
+
+/// Setup creates a declaring sandbox's store, and the controller publishes the binding the
+/// deployment's own workloads read, so the import carries the store onto it. A re-import takes
+/// setup's current store (a store added or removed in an update) and keeps the built image.
+#[test]
+fn aws_sandbox_import_carries_the_persistent_store_to_the_binding() {
+    use alien_core::bindings::{
+        BindingValue, PersistentStoreLocator, SandboxPersistentStorageBinding,
+    };
+    let entry = sandbox_entry(ResourceLifecycle::Frozen, true);
+    let settings = settings();
+    let management = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "agents",
+        platform: Platform::Aws,
+        region: "us-east-2",
+        stack_settings: &settings,
+        management_config: Some(&management),
+        resource: &entry,
+    };
+    let registry = ImporterRegistry::built_in();
+    let store = |bucket: &str| SandboxPersistentStorageBinding {
+        path: "/workspace".to_string(),
+        store: PersistentStoreLocator::Aws {
+            bucket: BindingValue::value(bucket.to_string()),
+            prefix: String::new(),
+        },
+        exclude: vec!["node_modules/".to_string()],
+        max_size_bytes: Some(1 << 30),
+    };
+    let data = |storage: Option<SandboxPersistentStorageBinding>| {
+        serde_json::to_value(AwsSandboxImportData {
+            image_identifier: Some(
+                "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+            ),
+            image_arn: Some(
+                "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+            ),
+            image_version: Some("1.0".to_string()),
+            build_role_arn: None,
+            bundle_uri: None,
+            egress_connector_arns: vec![
+                "arn:aws:lambda:us-east-2:123456789012:network-connector:nc-1".to_string(),
+            ],
+            allow_egress: false,
+            preview_ports: vec![8080],
+            persistent_storage: storage,
+        })
+        .unwrap()
+    };
+    let import = |storage| {
+        registry
+            .run(&Sandbox::RESOURCE_TYPE, Platform::Aws, data(storage), &ctx)
+            .expect("import")
+    };
+
+    // Undeclared: the registration has no field and the binding no store.
+    assert!(data(None).get("persistentStorage").is_none());
+    assert!(controller_binding_params(&import(None))
+        .get("persistentStorage")
+        .is_none());
+
+    let existing = import(Some(store("stack-agents-ps")));
+    assert_eq!(
+        controller_binding_params(&existing)["persistentStorage"],
+        json!({
+            "path": "/workspace",
+            "store": {"type": "aws", "bucket": "stack-agents-ps"},
+            "exclude": ["node_modules/"],
+            "maxSizeBytes": 1u64 << 30,
+        })
+    );
+
+    let moved = registry
+        .merge_reimport(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            existing.clone(),
+            import(Some(store("stack-agents-ps2"))),
+            &ctx,
+        )
+        .expect("merge");
+    assert_eq!(
+        controller_binding_params(&moved)["persistentStorage"]["store"]["bucket"],
+        "stack-agents-ps2"
+    );
+    assert_eq!(controller_binding_params(&moved)["imageVersion"], "1.0");
+
+    let removed = registry
+        .merge_reimport(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            existing,
+            import(None),
+            &ctx,
+        )
+        .expect("merge");
+    assert!(controller_binding_params(&removed)
+        .get("persistentStorage")
+        .is_none());
 }

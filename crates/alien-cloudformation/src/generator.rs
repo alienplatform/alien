@@ -557,7 +557,10 @@ pub fn generate_cloudformation_template_with_profile(
                     alien_core::SetupTarget::from_cloud(Platform::Aws, true),
                 ) && options
                     .registry
-                    .emitter(&entry.config.resource_type(), options.target.cloud_platform())
+                    .emitter(
+                        &entry.config.resource_type(),
+                        options.target.cloud_platform(),
+                    )
                     .is_some()
             },
         )?;

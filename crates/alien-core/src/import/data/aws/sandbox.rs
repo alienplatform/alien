@@ -57,6 +57,12 @@ pub struct AwsSandboxImportData {
         deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string"
     )]
     pub allow_egress: bool,
+    /// The store setup created for a sandbox that declares persistent storage, as the binding
+    /// carries it. Absent for every other sandbox, so their import data is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(value_type = Option<Object>))]
+    #[cfg_attr(feature = "jsonschema", schemars(with = "Option<serde_json::Value>"))]
+    pub persistent_storage: Option<crate::bindings::SandboxPersistentStorageBinding>,
 }
 
 impl AwsSandboxImportData {
@@ -99,6 +105,15 @@ impl AwsSandboxImportData {
             Vec::new()
         };
 
+        // Direct setup does not create a persistent store yet; registering without one would
+        // publish a binding that refuses every storageKey.
+        if sandbox.persistent_storage.is_some() {
+            return Err(refuse(
+                "direct setup does not create a persistent storage store yet; set this \
+                 deployment up with CloudFormation or Terraform"
+                    .to_string(),
+            ));
+        }
         Ok(Self {
             image_identifier: None,
             image_arn: None,
@@ -108,6 +123,7 @@ impl AwsSandboxImportData {
             egress_connector_arns,
             preview_ports: sandbox.preview_ports.clone(),
             allow_egress: !isolated,
+            persistent_storage: None,
         })
     }
 }

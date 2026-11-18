@@ -288,7 +288,7 @@ impl CfEmitter for AwsSandboxEmitter {
         if provisioned_at_runtime(ctx) {
             return runtime_import_ref(ctx, sandbox, image_id);
         }
-        Ok(CfExpression::object([
+        let mut fields = vec![
             ("previewPorts", preview_ports(sandbox)),
             (
                 "egressConnectorArns",
@@ -313,7 +313,9 @@ impl CfEmitter for AwsSandboxEmitter {
                 "imageVersion",
                 CfExpression::get_att(image_id, "LatestActiveImageVersion"),
             ),
-        ]))
+        ];
+        fields.extend(persistent_storage_import(sandbox, image_id));
+        Ok(CfExpression::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
@@ -789,6 +791,16 @@ fn persistent_store_resources(
     Ok(resources)
 }
 
+/// The store setup created, as the import data carries it: the runtime controller publishes the
+/// binding a deployment's own workloads read and learns the store only from this. Only a declaring
+/// sandbox has one, so every other sandbox's import data is unchanged.
+fn persistent_storage_import(
+    sandbox: &Sandbox,
+    image_id: &str,
+) -> Option<(&'static str, CfExpression)> {
+    persistent_storage_binding(sandbox, image_id).map(|storage| ("persistentStorage", storage))
+}
+
 /// The persistent storage half of the binding: where the agent's directory goes, and the store.
 fn persistent_storage_binding(sandbox: &Sandbox, image_id: &str) -> Option<CfExpression> {
     let storage = sandbox.persistent_storage.as_ref()?;
@@ -855,6 +867,7 @@ fn runtime_import_ref(
     if !aws_sandbox_renders_bundle(ctx.stack, sandbox.id()) {
         fields.push(("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)));
     }
+    fields.extend(persistent_storage_import(sandbox, image_id));
     Ok(CfExpression::object(fields))
 }
 
