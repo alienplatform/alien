@@ -1,7 +1,7 @@
 use crate::kubernetes_runtime_credentials::delete_environment_secret;
 use std::collections::BTreeMap;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
@@ -84,6 +84,11 @@ pub struct KubernetesDaemonController {
     /// Kubernetes' explanation for a DaemonSet that cannot create pods.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) workload_failure: Option<String>,
+    /// True from the moment `create_start` records its namespace and name, before its first
+    /// write, until the create call has succeeded. A create that stops in between must not
+    /// publish outputs for a DaemonSet that may not exist.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) create_unfinished: bool,
 }
 
 #[controller]
@@ -168,6 +173,14 @@ impl KubernetesDaemonController {
                 }));
             }
         };
+
+        // Record where this Daemon writes before the first write (the runtime-credential,
+        // registry and env Secrets come before the DaemonSet), so a create that fails part-way
+        // can still be deleted. After the ownership check above: a DaemonSet that is not ours
+        // is refused before anything is written, so nothing is recorded for it.
+        self.namespace = Some(namespace.clone());
+        self.daemon_set_name = Some(daemon_set_name.clone());
+        self.create_unfinished = true;
 
         crate::kubernetes_runtime_credentials::reconcile(
             ctx,
@@ -290,8 +303,7 @@ impl KubernetesDaemonController {
             }
         }
 
-        self.daemon_set_name = Some(daemon_set_name.clone());
-        self.namespace = Some(namespace.clone());
+        self.create_unfinished = false;
 
         info!(daemon_set_name=%daemon_set_name, namespace=%namespace, "DaemonSet creation initiated");
 
@@ -744,6 +756,24 @@ impl KubernetesDaemonController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
+
+        // Nothing recorded: this controller wrote nothing (a create refused before its first
+        // write), or an earlier create failed part-way and its record was dropped (a restart of
+        // the create from a fresh state) or never kept (an older controller), so objects may
+        // remain. Do not look for them: say what could remain and finish.
+        if self.namespace.is_none() && self.daemon_set_name.is_none() {
+            let name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
+            warn!(
+                resource_id=%config.id,
+                daemon_set_name=%name,
+                namespace=?self.get_kubernetes_namespace(ctx).ok(),
+                "No DaemonSet is recorded, so nothing was deleted; an earlier create that failed part-way may have left the DaemonSet and its -runtime, -env and -registry Secrets"
+            );
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
         let namespace = self.namespace.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
                 resource_id: config.id.clone(),
@@ -1035,6 +1065,9 @@ impl KubernetesDaemonController {
     }
 
     fn build_outputs(&self) -> Option<ResourceOutputs> {
+        if self.create_unfinished {
+            return None;
+        }
         self.daemon_set_name.as_ref().map(|daemon_set_name| {
             ResourceOutputs::new(DaemonOutputs {
                 daemon_name: daemon_set_name.clone(),
@@ -1555,6 +1588,469 @@ mod tests {
                 .insert(name.to_string(), value.to_string());
         }
         config
+    }
+
+    /// A cluster that keeps Secrets and refuses the DaemonSet at admission, the way a
+    /// `restricted` namespace refuses a pod that runs as root.
+    struct RefusingCluster {
+        secrets:
+            std::sync::Arc<std::sync::Mutex<BTreeMap<String, k8s_openapi::api::core::v1::Secret>>>,
+        harness: KubernetesManifestTestHarness,
+        /// A DaemonSet already on the cluster under this Daemon's name, if any.
+        existing_daemonset:
+            std::sync::Arc<std::sync::Mutex<Option<k8s_openapi::api::apps::v1::DaemonSet>>>,
+        daemonset_deletes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        /// Whether the DaemonSet create call succeeds (it stores what it was given).
+        create_succeeds: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        /// Whether the DaemonSet create call answers that the DaemonSet already exists.
+        create_conflicts: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    async fn refusing_cluster() -> RefusingCluster {
+        use alien_core::{EnvironmentVariable, EnvironmentVariableType, ENV_ALIEN_DEPLOYMENT_ID};
+        use alien_k8s_clients::deployments::{DeploymentApi, MockDeploymentApi};
+        use alien_k8s_clients::secrets::{MockSecretsApi, SecretsApi};
+        use alien_k8s_clients::services::{MockServiceApi, ServiceApi};
+        use std::sync::{Arc, Mutex};
+
+        let not_found = |name: &str| {
+            AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                resource_type: "Object".to_string(),
+                resource_name: name.to_string(),
+            })
+        };
+        let secrets_state: Arc<Mutex<BTreeMap<String, k8s_openapi::api::core::v1::Secret>>> =
+            Arc::default();
+        let existing_daemonset: Arc<Mutex<Option<k8s_openapi::api::apps::v1::DaemonSet>>> =
+            Arc::default();
+        let daemonset_deletes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let create_succeeds = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let create_conflicts = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut secrets = MockSecretsApi::new();
+        let created = secrets_state.clone();
+        secrets.expect_create_secret().returning(move |_, secret| {
+            let name = secret.metadata.name.clone().unwrap_or_default();
+            created.lock().unwrap().insert(name, secret.clone());
+            Ok(secret.clone())
+        });
+        let read = secrets_state.clone();
+        secrets.expect_get_secret().returning(move |_, name| {
+            read.lock().unwrap().get(name).cloned().ok_or_else(|| {
+                AlienError::new(CloudClientErrorData::RemoteResourceNotFound {
+                    resource_type: "Secret".to_string(),
+                    resource_name: name.to_string(),
+                })
+            })
+        });
+        let updated = secrets_state.clone();
+        secrets
+            .expect_update_secret()
+            .returning(move |_, name, secret| {
+                updated
+                    .lock()
+                    .unwrap()
+                    .insert(name.to_string(), secret.clone());
+                Ok(secret.clone())
+            });
+        let deleted = secrets_state.clone();
+        secrets.expect_delete_secret().returning(move |_, name| {
+            deleted.lock().unwrap().remove(name);
+            Ok(())
+        });
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+
+        let mut daemonsets = MockDeploymentApi::new();
+        let existing = existing_daemonset.clone();
+        daemonsets.expect_get_daemonset().returning(move |_, name| {
+            existing
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| not_found(name))
+        });
+        let counted = daemonset_deletes.clone();
+        daemonsets.expect_delete_daemonset().returning(move |_, _| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Default::default())
+        });
+        let existing = existing_daemonset.clone();
+        let succeeds = create_succeeds.clone();
+        let conflicts = create_conflicts.clone();
+        daemonsets
+            .expect_create_daemonset()
+            .returning(move |_, daemonset| {
+                if conflicts.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(AlienError::new(
+                        CloudClientErrorData::RemoteResourceConflict {
+                            resource_type: "DaemonSet".to_string(),
+                            resource_name: "agent".to_string(),
+                            message: "already exists".to_string(),
+                        },
+                    ));
+                }
+                if succeeds.load(std::sync::atomic::Ordering::SeqCst) {
+                    *existing.lock().unwrap() = Some(daemonset.clone());
+                    return Ok(daemonset.clone());
+                }
+                Err(AlienError::new(CloudClientErrorData::GenericError {
+                    message: "admission webhook denied the request".to_string(),
+                }))
+            });
+        let daemonsets: Arc<dyn DeploymentApi> = Arc::new(daemonsets);
+        let services: Arc<dyn ServiceApi> = Arc::new(MockServiceApi::new());
+
+        use crate::core::PlatformServiceProvider as _;
+        let routes = crate::core::DefaultPlatformServiceProvider::default()
+            .get_kubernetes_route_client(&alien_core::KubernetesClientConfig::Manual {
+                server_url: "https://kubernetes.test".to_string(),
+                certificate_authority_data: None,
+                insecure_skip_tls_verify: Some(true),
+                client_certificate_data: None,
+                client_key_data: None,
+                token: None,
+                username: None,
+                password: None,
+                namespace: Some("test-ns".to_string()),
+                additional_headers: Default::default(),
+            })
+            .await
+            .expect("route client");
+        let mut provider = crate::core::MockPlatformServiceProvider::new();
+        provider.expect_runtime_credential().returning(|_, _| {
+            Ok(alien_client_core::runtime_credentials::RuntimeCapability {
+                token: "ax_cap_v1_test".to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(60),
+            })
+        });
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .returning(move |_| Ok(secrets.clone()));
+        provider
+            .expect_get_kubernetes_deployment_client()
+            .returning(move |_| Ok(daemonsets.clone()));
+        provider
+            .expect_get_kubernetes_service_client()
+            .returning(move |_| Ok(services.clone()));
+        // Nothing here has a route; the client is fetched and never called.
+        provider
+            .expect_get_kubernetes_route_client()
+            .returning(move |_| Ok(routes.clone()));
+
+        let mut variables = vec![secret_env_var("APP_SECRET", "s3cret", None)];
+        variables.push(EnvironmentVariable {
+            name: ENV_ALIEN_DEPLOYMENT_ID.to_string(),
+            value: "dep-1".to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: None,
+        });
+        let mut harness =
+            KubernetesManifestTestHarness::new(Resource::new(manifest_test_daemon(&[])), variables)
+                .with_service_provider(Arc::new(provider));
+        harness.deployment_config_mut().runtime_identity_audience =
+            Some("https://manager.example".to_string());
+        RefusingCluster {
+            secrets: secrets_state,
+            harness,
+            existing_daemonset,
+            daemonset_deletes,
+            create_succeeds,
+            create_conflicts,
+        }
+    }
+
+    fn deleted(action: &KubernetesDaemonHandlerAction) -> bool {
+        matches!(
+            action,
+            KubernetesDaemonHandlerAction::Continue {
+                state: KubernetesDaemonState::Deleted,
+                ..
+            }
+        )
+    }
+
+    /// A DaemonSet refused at admission leaves the runtime-credential and env Secrets written
+    /// before it. The state saved after the failed create names them, so delete removes them.
+    #[tokio::test]
+    async fn a_daemon_whose_create_fails_after_its_secrets_were_written_is_deleted_with_them() {
+        let cluster = refusing_cluster().await;
+        let ctx = cluster.harness.ctx();
+        let mut controller = KubernetesDaemonController::default();
+        controller
+            .create_start(&ctx)
+            .await
+            .expect_err("the cluster refuses the DaemonSet");
+        let written: Vec<String> = cluster.secrets.lock().unwrap().keys().cloned().collect();
+        assert_eq!(written, ["agent-env", "agent-runtime"]);
+        assert_eq!(controller.namespace.as_deref(), Some("test-ns"));
+        assert_eq!(controller.daemon_set_name.as_deref(), Some("agent"));
+        assert!(controller.build_outputs().is_none());
+        let action = controller.delete_start(&ctx).await.expect("delete");
+        assert!(deleted(&action), "{action:?}");
+        assert!(cluster.secrets.lock().unwrap().is_empty());
+    }
+
+    /// A create refused because an unlabelled DaemonSet of that name exists records nothing; the
+    /// delete that follows completes and leaves that object untouched.
+    #[tokio::test]
+    async fn a_delete_after_a_create_refused_for_a_foreign_daemonset_completes_and_leaves_it() {
+        let cluster = refusing_cluster().await;
+        *cluster.existing_daemonset.lock().unwrap() =
+            Some(k8s_openapi::api::apps::v1::DaemonSet::default());
+        let ctx = cluster.harness.ctx();
+        let mut controller = KubernetesDaemonController::default();
+        controller.create_start(&ctx).await.expect_err("not ours");
+        assert!(controller.namespace.is_none() && controller.daemon_set_name.is_none());
+        assert!(
+            cluster.secrets.lock().unwrap().is_empty(),
+            "nothing was written for a DaemonSet that is not ours"
+        );
+        let action = controller
+            .delete_start(&ctx)
+            .await
+            .expect("delete completes");
+        assert!(deleted(&action), "{action:?}");
+        assert_eq!(
+            cluster
+                .daemonset_deletes
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the foreign DaemonSet is untouched"
+        );
+    }
+
+    /// A DaemonSet that carries this deployment's labels is the one a recorded delete removes.
+    fn owned_daemonset(
+        controller: &KubernetesDaemonController,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> k8s_openapi::api::apps::v1::DaemonSet {
+        let mut labels = controller.workload_labels(ctx, "agent", controller.build_labels("agent"));
+        labels.insert("managed-by".to_string(), "runtime".to_string());
+        k8s_openapi::api::apps::v1::DaemonSet {
+            metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+                labels: Some(labels),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    /// (Guard; passes the same on the code before this change.) A DaemonSet that carries this
+    /// deployment's labels and a recorded name is deleted.
+    #[tokio::test]
+    async fn a_recorded_daemon_with_its_own_daemonset_is_deleted_as_before() {
+        let cluster = refusing_cluster().await;
+        let ctx = cluster.harness.ctx();
+        let controller = KubernetesDaemonController::default();
+        *cluster.existing_daemonset.lock().unwrap() = Some(owned_daemonset(&controller, &ctx));
+        let mut saved = KubernetesDaemonController {
+            namespace: Some("test-ns".to_string()),
+            daemon_set_name: Some("agent".to_string()),
+            ..Default::default()
+        };
+        saved.delete_start(&ctx).await.expect("delete");
+        assert_eq!(
+            cluster
+                .daemonset_deletes
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    /// (Guard; passes the same on the code before this change.) A Daemon created normally, then
+    /// deleted: its DaemonSet and Secrets go, and its outputs are published after the create.
+    #[tokio::test]
+    async fn a_daemon_created_normally_is_deleted_with_its_daemonset_and_secrets() {
+        let cluster = refusing_cluster().await;
+        cluster
+            .create_succeeds
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let ctx = cluster.harness.ctx();
+        let mut controller = KubernetesDaemonController::default();
+        controller.create_start(&ctx).await.expect("create");
+        let outputs = controller.build_outputs().expect("outputs after a create");
+        assert_eq!(
+            outputs
+                .downcast_ref::<DaemonOutputs>()
+                .expect("daemon outputs")
+                .daemon_name,
+            "agent"
+        );
+        assert!(!cluster.secrets.lock().unwrap().is_empty());
+        controller.delete_start(&ctx).await.expect("delete");
+        assert_eq!(
+            cluster
+                .daemonset_deletes
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(cluster.secrets.lock().unwrap().is_empty());
+    }
+
+    /// A create that failed publishes no outputs, as before the create recorded its name early.
+    #[tokio::test]
+    async fn a_failed_create_publishes_no_outputs() {
+        let cluster = refusing_cluster().await;
+        let ctx = cluster.harness.ctx();
+        let mut controller = KubernetesDaemonController::default();
+        controller.create_start(&ctx).await.expect_err("refused");
+        assert!(
+            controller.daemon_set_name.is_some(),
+            "the name is recorded for delete"
+        );
+        assert!(controller.build_outputs().is_none());
+    }
+
+    /// After a failed create, a retry that succeeds publishes the outputs.
+    #[tokio::test]
+    async fn a_successful_retry_after_a_failed_create_publishes_outputs() {
+        let cluster = refusing_cluster().await;
+        let ctx = cluster.harness.ctx();
+        let mut controller = KubernetesDaemonController::default();
+        controller.create_start(&ctx).await.expect_err("refused");
+        assert!(controller.build_outputs().is_none());
+        cluster
+            .create_succeeds
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        controller
+            .create_start(&ctx)
+            .await
+            .expect("the retry succeeds");
+        assert!(controller.build_outputs().is_some());
+    }
+
+    /// A create answered "already exists" by our own DaemonSet (a retry after a lost answer) is
+    /// adopted, and that counts as a finished create.
+    #[tokio::test]
+    async fn adopting_our_own_daemonset_after_a_conflict_finishes_the_create() {
+        let cluster = refusing_cluster().await;
+        cluster
+            .create_conflicts
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let ctx = cluster.harness.ctx();
+        let mut controller = KubernetesDaemonController::default();
+        *cluster.existing_daemonset.lock().unwrap() = Some(owned_daemonset(&controller, &ctx));
+        controller.create_start(&ctx).await.expect("adopted");
+        assert!(!controller.create_unfinished);
+        assert!(controller.build_outputs().is_some());
+    }
+
+    /// The flag is left out of saved state when false, and state saved without it loads.
+    #[test]
+    fn the_unfinished_flag_is_omitted_when_false_and_absent_state_loads() {
+        let mut controller = manifest_test_controller();
+        let state = serde_json::to_value(&controller).unwrap();
+        assert!(state.get("createUnfinished").is_none(), "{state}");
+        let loaded: KubernetesDaemonController = serde_json::from_value(state).unwrap();
+        assert!(!loaded.create_unfinished);
+        controller.create_unfinished = true;
+        let state = serde_json::to_value(&controller).unwrap();
+        assert_eq!(
+            state.get("createUnfinished"),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    /// Through the executor: a Daemon create the cluster refuses after its Secrets were written
+    /// ends the step with an error, and the executor then saves the controller. That saved
+    /// record (namespace, name, unfinished flag) is what the following delete reads: it removes
+    /// the Secrets and the resource ends Deleted.
+    #[tokio::test]
+    async fn a_failed_create_leaves_a_record_through_the_executor_that_the_delete_uses() {
+        use crate::core::state_utils::StackResourceStateExt as _;
+        let cluster = refusing_cluster().await;
+        let (provider, client_config, deployment_config) = {
+            let ctx = cluster.harness.ctx();
+            (
+                ctx.service_provider.clone(),
+                ctx.client_config.clone(),
+                ctx.deployment_config.clone(),
+            )
+        };
+        let stack = alien_core::Stack::new("daemon-failed-create".to_string())
+            .add(
+                manifest_test_daemon(&[]),
+                alien_core::ResourceLifecycle::Live,
+            )
+            .build();
+        let executor = crate::core::StackExecutor::builder(&stack, client_config.clone())
+            .deployment_config(&deployment_config)
+            .initial_setup_authority(alien_core::InitialSetupAuthority::DirectSetup)
+            .service_provider(provider.clone())
+            .build()
+            .expect("executor");
+        let mut state = alien_core::StackState::new(alien_core::Platform::Kubernetes);
+        for _ in 0..60 {
+            state = executor.step(state).await.expect("step").next_state;
+            if state
+                .resources
+                .get("agent")
+                .is_some_and(|r| r.status == alien_core::ResourceStatus::ProvisionFailed)
+            {
+                break;
+            }
+        }
+        let failed = state
+            .resources
+            .get("agent")
+            .expect("the daemon is in the state");
+        assert_eq!(failed.status, alien_core::ResourceStatus::ProvisionFailed);
+        let saved = failed
+            .get_internal_controller_typed::<KubernetesDaemonController>()
+            .expect("the saved controller");
+        assert_eq!(saved.namespace.as_deref(), Some("test-ns"));
+        assert!(saved.daemon_set_name.is_some());
+        assert!(saved.create_unfinished);
+        assert!(saved.build_outputs().is_none());
+        assert_eq!(
+            cluster.secrets.lock().unwrap().len(),
+            2,
+            "written before the refusal"
+        );
+
+        let deletion = crate::core::StackExecutor::for_deletion_with_service_provider(
+            client_config,
+            &deployment_config,
+            provider,
+            None,
+        )
+        .expect("deletion executor");
+        for _ in 0..60 {
+            if state
+                .resources
+                .get("agent")
+                .is_none_or(|r| r.status == alien_core::ResourceStatus::Deleted)
+            {
+                break;
+            }
+            state = deletion.step(state).await.expect("step").next_state;
+        }
+        assert!(
+            state
+                .resources
+                .get("agent")
+                .is_none_or(|r| r.status == alien_core::ResourceStatus::Deleted),
+            "{:?}",
+            state.resources.get("agent").map(|r| r.status)
+        );
+        assert!(cluster.secrets.lock().unwrap().is_empty());
+    }
+
+    /// Nothing recorded means this controller wrote nothing: the delete completes, twice over,
+    /// without one call to the cluster (a provider with no client expectations panics on any).
+    #[tokio::test]
+    async fn a_delete_with_nothing_recorded_completes_without_a_cluster_call() {
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(manifest_test_daemon(&[])), vec![])
+                .with_service_provider(std::sync::Arc::new(
+                    crate::core::MockPlatformServiceProvider::new(),
+                ));
+        let ctx = harness.ctx();
+        let mut controller = KubernetesDaemonController::default();
+        for _ in 0..2 {
+            let action = controller.delete_start(&ctx).await.expect("delete");
+            assert!(deleted(&action), "{action:?}");
+            assert!(controller.namespace.is_none() && controller.daemon_set_name.is_none());
+        }
     }
 
     fn manifest_test_controller() -> KubernetesDaemonController {

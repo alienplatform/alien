@@ -991,12 +991,15 @@ impl KubernetesWorkerController {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Worker>()?;
 
-        let namespace = self.namespace.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceControllerConfigError {
-                resource_id: config.id.clone(),
-                message: "Namespace not set in state".to_string(),
-            })
-        })?;
+        // The controller records the namespace before it writes, so a state without one is one
+        // whose create was refused first. Nothing is recorded to delete; do not look for more.
+        let Some(namespace) = self.namespace.as_ref() else {
+            warn!(resource_id=%config.id, "No namespace is recorded, so nothing was deleted; an earlier create that failed part-way may have left objects");
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        };
 
         info!(namespace=%namespace, "Initiating Kubernetes Worker deletion");
 
@@ -1433,6 +1436,36 @@ impl KubernetesWorkerController {
 mod tests {
     use super::*;
     use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+
+    /// A worker refused before its controller recorded a namespace has nothing recorded: deleting it
+    /// completes instead of failing with "Namespace not set in state".
+    #[tokio::test]
+    async fn a_worker_that_never_got_as_far_as_a_namespace_deletes_cleanly() {
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .build();
+        let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![]);
+        let ctx = harness.ctx();
+        let mut controller = KubernetesWorkerController::default();
+        assert!(controller.namespace.is_none() && controller.deployment_name.is_none());
+        let action = controller
+            .delete_start(&ctx)
+            .await
+            .expect("nothing is recorded, so there is nothing to fail on");
+        assert!(
+            matches!(
+                action,
+                KubernetesWorkerHandlerAction::Continue {
+                    state: KubernetesWorkerState::Deleted,
+                    ..
+                }
+            ),
+            "{action:?}"
+        );
+    }
 
     #[test]
     fn controller_state_written_before_rollout_tracking_still_loads() {
