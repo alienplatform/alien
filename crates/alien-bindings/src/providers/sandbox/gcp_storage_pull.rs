@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use alien_core::bindings::SandboxPersistentStorageBinding;
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, ContextError as _};
 use alien_gcp_clients::gcp::agent_platform::AgentPlatformApi;
 use alien_sandbox_storage::{
     AckOutcome, ErrorData as StorageError, ObjectName, Pending, PullChannel, PullOutcome, Puller,
@@ -103,13 +103,19 @@ impl AgentPlatformStorageChannel {
         object: &str,
         envelope: serde_json::Value,
     ) -> StorageResult<Vec<u8>> {
-        self.execute(op, envelope)
-            .await
-            .context(StorageError::StoreFailed {
-                operation: op.to_string(),
-                object: object.to_string(),
-                reason: "the agent could not be reached through :execute".to_string(),
-            })
+        // The cause's message goes into the reason: a caller that sees only the top message (the
+        // Node addon flattens the chain) must still tell an agent's refusal from a lost call.
+        match self.execute(op, envelope).await {
+            Ok(body) => Ok(body),
+            Err(error) => {
+                let reason = format!("the :execute call failed: {}", error.message);
+                Err(error.context(StorageError::StoreFailed {
+                    operation: op.to_string(),
+                    object: object.to_string(),
+                    reason,
+                }))
+            }
+        }
     }
 
     /// An op that answers `{}`; anything else is the agent's refusal.
@@ -1275,5 +1281,43 @@ mod tests {
             alien_sandbox_agent::server::STORAGE_PAGE_BYTES,
             "the binding asks for what the agent serves"
         );
+    }
+
+    /// The proxy relays an agent's refusal as an API error. Its text must reach the top message,
+    /// because the Node addon shows only that; every failure used to read "the agent could not be
+    /// reached through :execute", the agent's answer included.
+    #[tokio::test]
+    async fn an_agent_refusal_is_named_in_the_storage_error_message() {
+        let mut client = MockAgentPlatformApi::new();
+        client.expect_execute().returning(|_, _, _| {
+            let body = serde_json::json!({ "error": { "code": 400, "message":
+                "Execution Failed. Error Details: REQUEST_INVALID: 'packs/x' is not a pack or manifest name"
+            }})
+            .to_string();
+            Err(AlienError::new(alien_client_core::ErrorData::HttpResponseError {
+                message: "Request failed with HTTP 400".to_string(),
+                url: "https://example.invalid/:execute".to_string(),
+                http_status: 400,
+                http_request_text: None,
+                http_response_text: Some(body),
+            })
+            .context(alien_gcp_clients::gcp::agent_platform::AgentPlatformErrorData::ExecuteFailed {
+                sandbox: "s1".to_string(),
+                message: "the API rejected or cut short the request".to_string(),
+            }))
+        });
+        let provider = GcpAgentPlatformSandbox::new(
+            Arc::new(client),
+            "projects/p/locations/us-central1/reasoningEngines/e".to_string(),
+            "projects/p/locations/us-central1/sandboxTemplates/t".to_string(),
+            Some(3600),
+        );
+        let channel = provider.storage_channel("s1").unwrap();
+        let error = PullChannel::read(&channel, "packs/x", 0, 10)
+            .await
+            .expect_err("the agent refused");
+        let shown = storage_failed("sandbox.sync", error).message;
+        assert!(shown.contains("is not a pack or manifest name"), "{shown}");
+        assert!(!shown.contains("could not be reached"), "{shown}");
     }
 }
