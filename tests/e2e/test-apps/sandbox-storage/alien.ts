@@ -1,9 +1,10 @@
 import * as alien from "@alienplatform/core"
 
-// A sandbox built from source whose /workspace is persistent storage, published to the
-// deployment's remote caller, which drives it itself: create with a storage key, write, sync,
-// terminate, restore into a new sandbox, read without a sandbox and erase the key. Frozen because
-// Azure creates its sandbox group and the storage store at setup.
+// A sandbox built from source whose /workspace is persistent storage. It is not published
+// remotely (a persistent storage sandbox never is): the test drives the binding the deployment's
+// controller publishes, as the deployment's own code would: create with a storage key, write,
+// sync, terminate, restore into a new sandbox, read without a sandbox and erase the key. Frozen
+// because Azure creates its sandbox group and the store at setup.
 const agents = new alien.Sandbox("agents")
   .code({
     type: "source",
@@ -21,5 +22,5 @@ const uploads = new alien.Storage("uploads").build()
 
 export default new alien.Stack("sandbox-storage")
   .add(uploads, "frozen")
-  .add(agents, "frozen", { remoteAccess: true })
+  .add(agents, "frozen")
   .build()

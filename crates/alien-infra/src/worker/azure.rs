@@ -8204,6 +8204,7 @@ mod tests {
                 group_absent: false,
                 group_role_definitions: Vec::new(),
                 default_policy: None,
+                persistent_storage: None,
                 _internal_stay_count: None,
             }
         }

@@ -1,7 +1,9 @@
-//! Checks for the `sandbox-storage` app: a remote sandbox whose `/workspace` is persistent
-//! storage. The test drives the deployment's own binding, as a customer's code would: it writes a
-//! tree, syncs, terminates, restores the key into a new sandbox, reads a file without a sandbox,
-//! has a stale writer refused and erases the key.
+//! Checks for the `sandbox-storage` app: a sandbox whose `/workspace` is persistent storage. The
+//! test drives the binding the deployment's controller published, as the deployment's own code
+//! would (a persistent storage sandbox is never published remotely): it writes a tree, syncs,
+//! terminates, restores the key into a new sandbox, reads a file without a sandbox, has a stale
+//! writer refused and erases the key. It calls with the test's target credentials rather than a
+//! workload identity, so setup's store grants are proven elsewhere.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -171,23 +173,76 @@ async fn wait_for_state(
     }
 }
 
-/// The whole persistent storage path through the deployment's remote binding.
+/// The binding the controller of sandbox `agents` publishes, from the deployment's stack state.
+async fn published_binding(
+    deployment: &alien_test::TestDeployment,
+) -> anyhow::Result<serde_json::Value> {
+    use alien_infra::ResourceController as _;
+    let response = deployment
+        .manager()
+        .client()
+        .get_deployment()
+        .id(&deployment.id)
+        .send()
+        .await
+        .map_err(|error| anyhow::anyhow!("get_deployment failed: {error}"))?;
+    let state: alien_core::StackState = serde_json::from_value(
+        response
+            .into_inner()
+            .stack_state
+            .context("deployment is missing stack_state")?,
+    )
+    .context("failed to parse stack_state")?;
+    let internal = state
+        .resources
+        .get("agents")
+        .and_then(|resource| resource.internal_state.clone())
+        .context("sandbox 'agents' has no controller state")?;
+    let controller = alien_infra::deserialize_controller(internal).context("controller state")?;
+    controller
+        .get_binding_params()
+        .map_err(|error| anyhow::anyhow!("binding params: {error}"))?
+        .context("the controller publishes no binding yet")
+}
+
+/// The whole persistent storage path through the deployment's own binding.
 pub async fn check_persistent_storage(
     deployment: &alien_test::TestDeployment,
     platform: Platform,
 ) -> anyhow::Result<()> {
-    let discovery = super::remote_bindings::DiscoveryServer::start(deployment, platform).await?;
-    let bindings = alien_bindings::RemoteBindings::for_deployment(
-        &deployment.id,
-        &deployment.token,
-        Some(&discovery.url),
+    use alien_bindings::BindingsProviderApi as _;
+    ensure!(
+        platform == Platform::Azure,
+        "only the Azure path is wired here"
+    );
+    let binding = published_binding(deployment).await?;
+    eprintln!("published binding: {binding}");
+    ensure!(
+        binding.get("persistentStorage").is_some(),
+        "the published binding carries no persistentStorage: {binding}"
+    );
+    let target = alien_test::TestConfig::from_env()
+        .azure_target
+        .context("Azure target credentials")?;
+    let client_config = alien_core::ClientConfig::Azure(Box::new(alien_core::AzureClientConfig {
+        subscription_id: target.subscription_id,
+        tenant_id: target.tenant_id,
+        region: Some(target.region),
+        credentials: alien_core::AzureCredentials::ServicePrincipal {
+            client_id: target.client_id,
+            client_secret: target.client_secret,
+        },
+        service_overrides: None,
+    }));
+    let provider = alien_bindings::BindingsProvider::new(
+        client_config,
+        std::collections::HashMap::from([("agents".to_string(), binding)]),
     )
-    .await
-    .context("discover assigned manager for remote bindings")?;
-    let sandbox: Arc<dyn Sandbox> = bindings
-        .sandbox("agents")
+    .map_err(|error| anyhow::anyhow!("bindings provider: {error}"))?;
+    let sandbox: Arc<dyn Sandbox> = provider
+        .load_sandbox("agents")
         .await
-        .context("resolve the remote sandbox")?;
+        .map_err(|error| anyhow::anyhow!("load the sandbox binding: {error}"))?;
     let capabilities = sandbox.capabilities();
     ensure!(
         capabilities.persistent_storage,

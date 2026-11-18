@@ -175,13 +175,19 @@ impl TfEmitter for AzureSandboxEmitter {
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
-        let _ = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
-        let _ = required_label(ctx)?;
-        Ok(expr::object([
+        let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let mut fields = vec![
             ("sandboxGroup", sandbox_group(ctx)),
             ("region", expr::raw("var.azure_location")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
-        ]))
+        ];
+        // The controller publishes the binding a deployment's own workloads read, so it needs the
+        // store setup created; only a declaring sandbox has one.
+        if let Some(storage) = &sandbox.persistent_storage {
+            fields.push(("persistentStorage", sandbox_store::binding(label, storage)?));
+        }
+        Ok(expr::object(fields))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {

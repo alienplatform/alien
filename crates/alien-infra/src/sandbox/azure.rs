@@ -161,6 +161,10 @@ pub struct AzureSandboxController {
     /// Ceilings every sandbox is created with, from the declaration.
     #[serde(default)]
     pub(crate) limits: Option<SandboxLimits>,
+    /// The store setup created for a sandbox that declares persistent storage, from the import.
+    /// Published on the binding as is; absent for every other sandbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
 }
 
 impl super::egress::RecordsEgressKey for AzureSandboxController {
@@ -767,6 +771,7 @@ impl AzureSandboxController {
         azure.preview_ports = self.preview_ports.clone();
         azure.max_lifetime_seconds = self.max_lifetime_seconds;
         azure.egress = egress.clone();
+        azure.persistent_storage = self.persistent_storage.clone();
         azure.default_policy = self
             .default_policy
             .clone()
@@ -1709,6 +1714,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
 
@@ -1772,6 +1778,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
 
@@ -1965,6 +1972,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
         let config = Sandbox::new("sbx".to_string())
@@ -2024,6 +2032,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
         let config = Sandbox::new("sbx".to_string())
@@ -2091,6 +2100,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
 
@@ -2135,6 +2145,7 @@ mod tests {
             group_absent: false,
             group_role_definitions: Vec::new(),
             default_policy: None,
+            persistent_storage: None,
             _internal_stay_count: None,
         };
 
@@ -2253,6 +2264,7 @@ mod tests {
                 group_absent: false,
                 group_role_definitions: Vec::new(),
                 default_policy: None,
+                persistent_storage: None,
                 _internal_stay_count: None,
             }
         }

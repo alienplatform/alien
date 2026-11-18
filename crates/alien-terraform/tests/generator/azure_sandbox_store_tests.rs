@@ -438,3 +438,61 @@ async fn an_internet_sandbox_with_storage_reaches_regional_storage_on_443_only()
         .iter()
         .all(|rule| rule[0] != "\"storage\""));
 }
+
+/// The runtime controller publishes the binding the deployment's own workloads read, and it learns
+/// the store only from what setup registers: the sandbox's import data carries the binding's
+/// `persistentStorage`, and an undeclared sandbox's import data is unchanged.
+#[test]
+fn the_registration_hands_the_controller_the_store() {
+    let module = render(
+        &stack(execute_on_agents(), Some(declared())),
+        TerraformTarget::Azure,
+        StackSettings::default(),
+    );
+    let rendered = module
+        .files
+        .iter()
+        .filter(|(name, _)| name.ends_with(".tf"))
+        .map(|(_, contents)| contents.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let import_of = |id: &str| -> String {
+        // The formatter aligns `=` across an object, so the gap before it varies.
+        let quoted = format!("\"{id}\"");
+        let at = rendered
+            .match_indices(&quoted)
+            .map(|(at, _)| at)
+            .find(|&at| {
+                let before = rendered[..at].trim_end();
+                before.ends_with('=')
+                    && before[..before.len() - 1].trim_end().ends_with("id")
+                    && !before[..before.len() - 1].trim_end().ends_with("_id")
+            })
+            .unwrap_or_else(|| panic!("no registration for {id}"));
+        let rest = &rendered[at..];
+        let start = rest.find("importData = {").expect("importData");
+        let mut depth = 0;
+        for (offset, ch) in rest[start..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return rest[start..=start + offset].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced importData for {id}")
+    };
+    let agents = import_of("agents");
+    assert!(agents.contains("persistentStorage"), "{agents}");
+    assert!(
+        agents.contains("azurerm_storage_account.agents_store.name"),
+        "{agents}"
+    );
+    assert!(agents.contains("\"keys\""), "{agents}");
+    let other = import_of("other");
+    assert!(!other.contains("persistentStorage"), "{other}");
+}
