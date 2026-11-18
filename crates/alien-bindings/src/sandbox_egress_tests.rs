@@ -1004,6 +1004,205 @@ async fn a_revocation_refused_permanently_is_not_retryable() {
     }
 }
 
+/// A mixed round: one replica refuses (401) while another has not answered yet. The refusal
+/// decides only once every replica has answered, so the pending one is still retried.
+/// Order 1: the refusing replica comes first and the other returns during the retries.
+#[tokio::test]
+async fn a_refusal_waits_for_a_replica_that_returns_during_the_retries() {
+    let h = Harness::new().await;
+    let (manager, second, back) =
+        two_replicas(&h, Some(std::time::Duration::from_millis(1500))).await;
+    h.state
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("one replica refuses");
+    assert!(!error.retryable, "{error}");
+    assert!(error.message.contains("401"), "{error}");
+    assert!(
+        !holds_grant(&second),
+        "the replica that was away got the revocation before the refusal decided"
+    );
+    back.abort();
+}
+
+/// Order 1, the other replica never comes back: the round stays retryable.
+#[tokio::test]
+async fn a_refusal_beside_a_replica_that_never_answers_is_retryable() {
+    let h = Harness::new().await;
+    let (manager, _second, away) = two_replicas(&h, None).await;
+    h.state
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("one replica refuses, one is away");
+    assert!(error.retryable, "{error}");
+    away.abort();
+}
+
+/// Order 2: the first replica answers 503 and the second refuses. The 503 replica is retried; it
+/// recovers during the retries, then the refusal is final and not retryable.
+#[tokio::test]
+async fn a_refusal_after_a_replica_that_answers_503_waits_for_it() {
+    let h = Harness::new().await;
+    let (manager, [second, third], servers) = three_replicas(&h).await;
+    // Replica 2 refuses; replica 3 acknowledges at once.
+    second
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+    h.state.refuse.store(true, Ordering::SeqCst);
+    let state = h.state.clone();
+    let recover = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        state.refuse.store(false, Ordering::SeqCst);
+    });
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("one replica refuses");
+    assert!(!error.retryable, "{error}");
+    assert!(error.message.contains("401"), "{error}");
+    assert!(
+        !holds_grant(&h.state),
+        "the 503 replica was retried and revoked"
+    );
+    assert!(!holds_grant(&third), "the third replica holds no grant");
+    recover.abort();
+    servers.iter().for_each(|server| server.abort());
+}
+
+/// Order 2, the 503 replica never recovers: the round ends retryable, not on the refusal.
+#[tokio::test]
+async fn a_refusal_after_a_replica_that_keeps_answering_503_is_retryable() {
+    let h = Harness::new().await;
+    let (manager, [second, third], servers) = three_replicas(&h).await;
+    second
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+    h.state.refuse.store(true, Ordering::SeqCst);
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("never acknowledged");
+    assert!(error.retryable, "{error}");
+    assert!(!holds_grant(&third), "the third replica holds no grant");
+    servers.iter().for_each(|server| server.abort());
+}
+
+/// Three replicas on 127.0.0.1-3, all holding the grant for `box-1`; the first is the manager's
+/// own harness replica. Returns the manager, the other two states and their servers.
+async fn three_replicas(
+    h: &Harness,
+) -> (
+    SandboxEgressManager,
+    [Arc<AdminState>; 2],
+    Vec<tokio::task::JoinHandle<()>>,
+) {
+    let port = h.manager.admin_url.port().unwrap();
+    let policy: EgressPolicy =
+        serde_json::from_value(serde_json::json!({"allow":["example.com"]})).unwrap();
+    let mut states = Vec::new();
+    let mut servers = Vec::new();
+    for host in ["127.0.0.2", "127.0.0.3"] {
+        let state = Arc::new(AdminState {
+            public: h.state.public,
+            policies: StdMutex::new(Default::default()),
+            writes: StdMutex::new(Vec::new()),
+            refuse: AtomicBool::new(false),
+            refuse_status: std::sync::atomic::AtomicU16::new(0),
+            store_full: AtomicBool::new(false),
+            transient_failures: AtomicUsize::new(0),
+            records: StdMutex::new(Vec::new()),
+            record_response: StdMutex::new(None),
+        });
+        let listener = tokio::net::TcpListener::bind((host, port)).await.unwrap();
+        let router = Router::new()
+            .route("/v1/policies", put(policy_request).delete(policy_request))
+            .route(
+                "/v1/protocol",
+                axum::routing::get(|| async { axum::Json(serde_json::json!({"protocol": 1})) }),
+            )
+            .with_state(state.clone());
+        servers.push(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        states.push(state);
+    }
+    for state in std::iter::once(&h.state).chain(states.iter()) {
+        state.policies.lock().unwrap().insert(
+            "box-1".into(),
+            ((0, String::new()), Some(policy.clone()), String::new()),
+        );
+    }
+    let mut config = h.config.clone();
+    config.replicas = Some(alien_core::bindings::SandboxEgressReplicas {
+        dns: String::new(),
+        addresses: vec!["127.0.0.1".into(), "127.0.0.2".into(), "127.0.0.3".into()],
+        port,
+        count: 3,
+        min_protocol: 1,
+    });
+    let manager = SandboxEgressManager::with_endpoints(
+        config,
+        h.vault.clone(),
+        h.manager.gateway.clone(),
+        h.manager.admin_url.to_string(),
+    )
+    .unwrap();
+    let [a, b]: [Arc<AdminState>; 2] = states.try_into().ok().unwrap();
+    (manager, [a, b], servers)
+}
+
+/// The first of three replicas answers 503 on every attempt: the other two still get the
+/// revocation, and the caller gets a retryable error.
+#[tokio::test]
+async fn a_revocation_failing_on_the_first_replica_still_reaches_the_other_two() {
+    let h = Harness::new().await;
+    let (manager, [second, third], servers) = three_replicas(&h).await;
+    h.state.refuse.store(true, Ordering::SeqCst);
+
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("the first replica never acknowledges");
+    assert!(error.retryable, "{error}");
+    assert!(!holds_grant(&second), "the second replica holds no grant");
+    assert!(!holds_grant(&third), "the third replica holds no grant");
+    assert!(holds_grant(&h.state), "the refusing replica kept its grant");
+    servers.iter().for_each(|server| server.abort());
+}
+
+/// The first of three replicas refuses permanently (401): the other two still get the
+/// revocation in that round, and the refusal is returned, not retryable, without more attempts.
+#[tokio::test]
+async fn a_revocation_refused_by_the_first_replica_still_reaches_the_other_two() {
+    let h = Harness::new().await;
+    let (manager, [second, third], servers) = three_replicas(&h).await;
+    h.state
+        .refuse_status
+        .store(401, std::sync::atomic::Ordering::SeqCst);
+
+    let started = std::time::Instant::now();
+    let error = manager
+        .delete("box-1")
+        .await
+        .expect_err("the first replica refuses");
+    assert!(!error.retryable, "{error}");
+    assert!(error.message.contains("401"), "{error}");
+    assert!(!holds_grant(&second), "the second replica holds no grant");
+    assert!(!holds_grant(&third), "the third replica holds no grant");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    servers.iter().for_each(|server| server.abort());
+}
+
 fn clear_grant(state: &AdminState) {
     state.policies.lock().unwrap().remove("box-1");
 }

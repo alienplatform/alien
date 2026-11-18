@@ -2016,6 +2016,7 @@ impl RunnerConfigSources<'_> {
                 allow_frozen_changes: false,
                 setup_run: false,
                 setup_run_id: None,
+                deployment_id: None,
                 compute_backend: None,
                 base_platform: deployment.base_platform,
                 label_domain: None,

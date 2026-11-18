@@ -477,6 +477,10 @@ pub trait PlatformServiceProvider: Send + Sync {
     /// Controllers use this to self-assign data-plane roles.
     async fn get_azure_caller_principal_id(&self, config: &AzureClientConfig) -> Result<String>;
 
+    /// Whether the caller's credentials are a signed-in user (not a service principal or
+    /// managed identity). A role assignment to the caller must declare the real principal type.
+    async fn get_azure_caller_is_user(&self, config: &AzureClientConfig) -> Result<bool>;
+
     // Kubernetes clients
     #[cfg(feature = "kubernetes")]
     async fn get_kubernetes_deployment_client<'a>(
@@ -1677,6 +1681,24 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         alien_azure_clients::extract_oid_from_token(&token).context(
             crate::error::ErrorData::CloudPlatformError {
                 message: "Failed to extract principal ID from Azure token".to_string(),
+                resource_id: None,
+            },
+        )
+    }
+
+    async fn get_azure_caller_is_user(&self, config: &AzureClientConfig) -> Result<bool> {
+        let token_cache = AzureTokenCache::new(config.clone());
+        let token = token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to get Azure management token for principal type resolution"
+                    .to_string(),
+                resource_id: None,
+            })?;
+        alien_azure_clients::token_is_user_principal(&token).context(
+            crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to read the principal type from the Azure token".to_string(),
                 resource_id: None,
             },
         )

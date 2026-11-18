@@ -2738,8 +2738,8 @@ mod tests {
             stack: Stack::new("app".into())
                 .add(worker(image), alien_core::ResourceLifecycle::Live)
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
         let mut internal = serde_json::to_value(
@@ -2922,8 +2922,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3062,8 +3062,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3160,8 +3160,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut keyless = config.clone();
         keyless.runtime_identity_audience = None;
@@ -3260,8 +3260,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -5153,8 +5153,8 @@ mod tests {
                         alien_core::ResourceLifecycle::Live,
                     )
                     .build(),
-                    signed: None,
-                    signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
             };
             let applying = status == DeploymentStatus::UpdatePending;
             DeploymentState {

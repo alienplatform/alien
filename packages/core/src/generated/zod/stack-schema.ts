@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ArchitectureSchema } from "./architecture-schema.js";
 import { OperationsConfigSchema } from "./operations-config-schema.js";
 import { PermissionsConfigSchema } from "./permissions-config-schema.js";
 import { PlatformSchema } from "./platform-schema.js";
@@ -14,7 +15,10 @@ import { StackInputDefinitionSchema } from "./stack-input-definition-schema.js";
  * @description A bag of resources, unaware of any cloud.
  */
 export const StackSchema = z.object({
-    "dynamicContainerImageResources": z.optional(z.array(z.string()).describe("Released Container resources whose image repositories are approved for\ncontainers created after installation.")),
+    "builtArchitectures": z.optional(z.object({
+    
+    }).catchall(z.array(z.lazy(() => ArchitectureSchema).describe("CPU architecture."))).describe("Set by `alien build` for a Kubernetes stack: the CPU architectures of the image\nbuilt for each Container, Daemon and Worker, by resource id (more than one means a\nmulti-architecture image). Pods of a single-architecture image are placed on\nmatching nodes. A resource with no entry was not recorded (a prebuilt image or an\nolder release), so no architecture is selected. Build output replaces any value\nwritten in the stack definition.\n\nKept on the stack, not on the resources: older managers and Operators read every\nresource strictly and refuse a field they do not know, but ignore an unknown\nstack-level field.")),
+"dynamicContainerImageResources": z.optional(z.array(z.string()).describe("Released Container resources whose image repositories are approved for\ncontainers created after installation.")),
 "dynamicContainerRepositories": z.optional(z.array(z.string()).describe("Exact image repositories approved for containers created after installation.\nThe runtime API also requires an immutable SHA-256 digest.")),
 "id": z.string().describe("Unique identifier for the stack"),
 get "inputs"(){

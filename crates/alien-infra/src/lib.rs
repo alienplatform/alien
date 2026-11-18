@@ -1,4 +1,5 @@
 mod core;
+mod setup_owner;
 mod registry_digest;
 pub use core::*;
 

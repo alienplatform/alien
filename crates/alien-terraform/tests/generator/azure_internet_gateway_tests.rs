@@ -1,7 +1,7 @@
 //! The Azure `internet` sandbox's gateway VMs, checked on the rendered module (parsed HCL, not the
 //! emitter's source): the order a setup re-run updates them in, and the VM image pin.
 
-use super::helpers::{prepare_for_target, render};
+use super::helpers::{prepare_for_target_unchecked, render};
 use alien_core::{
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
     StackSettings,
@@ -24,7 +24,7 @@ async fn gateway_body() -> Body {
     let stack = Stack::new("azint".to_string())
         .add(sandbox, ResourceLifecycle::Frozen)
         .build();
-    let prepared = prepare_for_target(stack, TerraformTarget::Azure).await;
+    let prepared = prepare_for_target_unchecked(stack, TerraformTarget::Azure).await;
     let module = render(&prepared, TerraformTarget::Azure, StackSettings::default());
     let mut merged = Body::builder();
     for (path, contents) in module.iter() {

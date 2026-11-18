@@ -180,8 +180,9 @@ async fn unsupported_internet_sandboxes_fail_planning_without_optional_limits() 
     }
 }
 
-/// Azure hosts the egress gateway in the deployment's VNet, so `internet` plans there with an
-/// image that carries the agent, and a catalog image (no agent) is refused with the same code.
+/// Azure hosts the egress gateway in the deployment's VNet, so a catalog image (no agent) is
+/// refused for `internet`. An image that carries the agent passes that check, and while the
+/// pinned gateway image predates its admin protocol it is refused only for that reason.
 #[tokio::test]
 async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
     let mut catalog = sandbox(None);
@@ -204,11 +205,17 @@ async fn azure_internet_needs_an_agent_image_not_a_catalog_entry() {
         bundled_from: None,
     };
     registry.egress = SandboxEgress::Internet;
-    let planned = PreflightRunner::new()
+    let agent_image = PreflightRunner::new()
         .run_compile_time_checks(&stack_with(registry), Platform::Azure)
         .await
         .expect("preflight runs");
-    assert!(planned.success, "{planned:?}");
+    assert_eq!(agent_image.failed_checks, 1, "{agent_image:?}");
+    let rendered = format!("{agent_image:?}");
+    assert!(
+        rendered.contains(alien_core::sandbox_egress::AZURE_INTERNET_SANDBOX_UNAVAILABLE),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("Alien sandbox agent"), "{rendered}");
 }
 
 /// Google Cloud's `internet` is native open outbound: it plans with no gateway, and an

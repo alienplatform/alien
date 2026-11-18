@@ -619,6 +619,27 @@ mod tests {
         }
     }
 
+    /// The record of built architectures lives on the stack, which older Operators
+    /// read without refusing unknown fields, so no release is stripped or refused for it.
+    #[test]
+    fn built_architectures_reach_every_operator_unchanged() {
+        let mut stack = stack_with(container(), daemon(None));
+        stack.built_architectures.insert(
+            "c".to_string(),
+            vec![alien_core::instance_catalog::Architecture::X86_64],
+        );
+        let before = serde_json::to_string(&stack).unwrap();
+        assert!(before.contains("builtArchitectures"));
+        for version in [None, Some("3.3.31"), Some("3.3.64")] {
+            for signed in [false, true] {
+                let mut stack = stack.clone();
+                let operator = OperatorVersion::from_report(version);
+                assert!(apply(&mut stack, None, &operator, signed).is_empty());
+                assert_eq!(serde_json::to_string(&stack).unwrap(), before);
+            }
+        }
+    }
+
     fn choices_stack() -> Stack {
         let mut c = container();
         c.resource_choices = Some(alien_core::ContainerResourceChoices {

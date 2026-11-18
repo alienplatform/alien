@@ -16,8 +16,6 @@ use crate::{
     StackMutation,
 };
 
-const GATEWAY_IMAGE: &str = "ghcr.io/alienplatform/alien-egress-gateway@sha256:d29e0abb15bcf05d3c50d87d8ebc7e8f474e668304aad4a8396daabbaafd53f1";
-
 /// AWS and Kubernetes deployments run the gateway with the same compute and
 /// service-account machinery as application containers. AWS setup templates are prepared
 /// before any compute backend exists, so the gateway is installed regardless;
@@ -84,7 +82,7 @@ impl StackMutation for SandboxGatewayMutation {
         }
         let gateway = Container::new(SANDBOX_EGRESS_GATEWAY_ID.into())
             .code(ContainerCode::Image {
-                image: GATEWAY_IMAGE.into(),
+                image: alien_core::sandbox_egress::SANDBOX_EGRESS_GATEWAY_IMAGE.into(),
             })
             .cpu(ResourceSpec {
                 min: "0.25".into(),

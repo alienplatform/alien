@@ -373,6 +373,9 @@ impl PreflightRegistry {
             compile_time::sandbox_platform_support::SandboxPlatformSupportCheck,
         ));
         registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_grants_placeable::SandboxGrantsPlaceableCheck,
+        ));
+        registry.add_compile_time_check(Box::new(
             compile_time::sandbox_template_permissions::SandboxTemplatePermissionsCheck,
         ));
         registry.add_compile_time_check(Box::new(
@@ -409,6 +412,9 @@ impl PreflightRegistry {
 
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::SandboxEgressGatewayCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::AzureInternetSandboxGatewayProtocolCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(
             deployment_prerequisites::AzureSandboxGroupFromSetupCheck,
@@ -497,6 +503,7 @@ impl PreflightRegistry {
         // Phase 0: Platform normalization (adjust values before anything else)
         registry.add_mutation(Box::new(mutations::ProtectedManagementRefusalMutation));
         registry.add_mutation(Box::new(mutations::ProtectedRedisRefusalMutation));
+        registry.add_mutation(Box::new(mutations::SandboxSetupOwnedMutation));
         registry.add_mutation(Box::new(mutations::ContainerResourcesMutation));
         registry.add_mutation(Box::new(mutations::AzureMemoryAdjustmentMutation));
 

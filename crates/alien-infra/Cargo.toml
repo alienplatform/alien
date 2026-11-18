@@ -91,6 +91,8 @@ console_error_panic_hook = { workspace = true }
 alien-infra = { path = ".", features = ["all-platforms", "test-utils"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp"] }
 alien-preflights = { workspace = true }
+alien-terraform = { workspace = true }
+hcl-rs = { workspace = true }
 alien-aws-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 alien-azure-clients = { workspace = true }

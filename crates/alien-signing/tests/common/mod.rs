@@ -12,7 +12,7 @@ use alien_signing::{
     fingerprint, InstallId, ReleaseBody, Role, SecretKey, SignedStatement, Signer, SignerKind,
     SignerListBody, SigningSettings, Workload,
 };
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde::Serialize;
 
 pub const PROJECT: &str = "prj_test";
@@ -59,6 +59,7 @@ pub fn signer(id: &str, key: &SecretKey, kind: SignerKind, roles: &[Role]) -> Si
         id: id.to_string(),
         key: key.public_key().as_str().to_string(),
         kind,
+        backend: None,
         roles: roles.to_vec(),
         label: None,
     }
@@ -104,7 +105,7 @@ pub fn statement_until<B: Serialize>(
     SignedStatement::new(&envelope.to_payload().unwrap())
 }
 
-/// A signer list version, valid for 60 days from [`now`].
+/// A signer list version.
 pub fn list<B: Serialize>(
     project: &str,
     version: u64,
@@ -117,7 +118,7 @@ pub fn list<B: Serialize>(
         None,
         version,
         authorized_by,
-        Some(now() + Duration::days(60)),
+        None,
         body,
     )
 }
@@ -132,7 +133,7 @@ pub fn genesis_body(keys: &Keys) -> SignerListBody {
                 "alice-laptop",
                 &keys.admin,
                 SignerKind::Device,
-                &[Role::Release, Role::Operate, Role::Admin],
+                &[Role::Release, Role::Admin],
             ),
             signer(
                 "recovery",
@@ -142,6 +143,7 @@ pub fn genesis_body(keys: &Keys) -> SignerListBody {
             ),
         ],
         deny: Vec::new(),
+        keep: Vec::new(),
         recovered: false,
     }
 }
@@ -152,7 +154,7 @@ pub fn genesis(keys: &Keys) -> SignedStatement {
         .unwrap()
 }
 
-/// Version 2 adds Bob's laptop with `operate` and a second admin, and raises
+/// Version 2 adds Bob's laptop with `release` and a second admin, and raises
 /// the threshold to 2.
 pub fn version_2_body(keys: &Keys) -> SignerListBody {
     let mut body = genesis_body(keys);
@@ -162,7 +164,7 @@ pub fn version_2_body(keys: &Keys) -> SignerListBody {
         "bob-laptop",
         &keys.operator,
         SignerKind::Device,
-        &[Role::Operate],
+        &[Role::Release],
     ));
     body.signers.push(signer(
         "carol-laptop",

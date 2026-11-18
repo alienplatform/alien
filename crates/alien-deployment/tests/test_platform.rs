@@ -186,6 +186,7 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
         operations: None,
+        built_architectures: Default::default(),
     }
 }
 
@@ -240,6 +241,7 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
         operations: None,
+        built_architectures: Default::default(),
     }
 }
 
@@ -299,6 +301,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         allow_frozen_changes: false,
         setup_run: false,
         setup_run_id: None,
+        deployment_id: None,
         domain_metadata: None,
         public_endpoints: None,
         monitoring: None,
@@ -977,6 +980,7 @@ async fn persistent_worker_failure_surfaces_during_provisioning() {
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
         operations: None,
+        built_architectures: Default::default(),
     };
 
     let config = create_test_config("hash_v1", false);
@@ -1923,6 +1927,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
         operations: None,
+        built_architectures: Default::default(),
     };
 
     let release_v2 = ReleaseInfo {
@@ -2483,6 +2488,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
         operations: None,
+        built_architectures: Default::default(),
     }
 }
 
@@ -2555,6 +2561,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
         dynamic_container_repositories: Vec::new(),
         dynamic_container_image_resources: Vec::new(),
         operations: None,
+        built_architectures: Default::default(),
     }
 }
 

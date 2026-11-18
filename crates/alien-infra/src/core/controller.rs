@@ -631,6 +631,26 @@ pub struct ResourceControllerContext<'a> {
 }
 
 impl ResourceControllerContext<'_> {
+    /// Whether this run is a setup run with direct setup authority: the one that creates a
+    /// Frozen resource itself, as opposed to adopting what a setup package created.
+    pub fn is_direct_setup_run(&self) -> bool {
+        self.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            && self.deployment_config.setup_run
+    }
+
+    /// The deployment id a direct setup writes into ownership markers. The runner sets it on
+    /// every step; without it nothing can be marked or recognised as owned, so this fails.
+    pub fn setup_owner_deployment_id(&self) -> crate::error::Result<&str> {
+        self.deployment_config.deployment_id.as_deref().ok_or_else(|| {
+            alien_error::AlienError::new(crate::error::ErrorData::CloudPlatformError {
+                message: "the deployment id is not available, so ownership of what setup \
+                          creates cannot be recorded"
+                    .to_string(),
+                resource_id: Some(self.desired_config.id().to_string()),
+            })
+        })
+    }
+
     pub fn emit_heartbeat(&self, heartbeat: ResourceHeartbeat) {
         self.heartbeat_collector.emit(heartbeat);
     }
@@ -757,6 +777,15 @@ pub trait ResourceController: Send + Sync + Debug {
     /// transition to update.
     fn needs_update(&self, _context: &ResourceControllerContext<'_>) -> Result<bool> {
         Ok(false)
+    }
+
+    /// Whether a pending `needs_update` of this resource also holds the CREATION of resources
+    /// that depend on it. Only a controller whose update publishes what its dependents read
+    /// when they are created (a sandbox's image binding) says yes. The default is no, so an
+    /// update that is blocked (for instance waiting for setup) never stops a new dependent from
+    /// being created.
+    fn needs_update_holds_dependent_creation(&self, _resource_id: &str) -> bool {
+        false
     }
 
     /// Whether the delete flow, at the controller's current state, has removed nothing yet.

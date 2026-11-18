@@ -1,4 +1,7 @@
 use crate::error::Result;
+use crate::mutations::sandbox_setup_owned::{
+    takes_setup_lifecycle, SETUP_OWNED_SANDBOX_NOTICE,
+};
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
     ownership_policy_for_resource_type, Container, Daemon, Key, Platform, Postgres,
@@ -23,6 +26,7 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
 
     async fn check(&self, stack: &Stack, platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
+        let mut warnings = Vec::new();
         let encrypted_azure_storage_count = stack
             .resources()
             .filter_map(|(_, entry)| entry.config.downcast_ref::<Storage>())
@@ -68,24 +72,36 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
             }
 
             // A remote grant on Azure or GCP names a parent that must exist when the package
-            // applies, which only the package that creates it can do, so a Live sandbox stays
-            // AWS-only even where a runtime sandbox controller exists, as on Azure.
+            // applies, which only the package that creates it can do. A sandbox declared live
+            // for AWS runs unchanged there, so it takes the Frozen lifecycle on those clouds
+            // (`SandboxSetupOwnedMutation`) and the build says so.
             if resource_entry.config.downcast_ref::<Sandbox>().is_some()
                 && resource_entry.lifecycle == ResourceLifecycle::Live
-                && !matches!(platform, Platform::Aws | Platform::Kubernetes)
             {
-                errors.push(format!(
-                    "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not \
-                     support; only AWS and Kubernetes provision a sandbox at runtime",
-                    resource_id,
-                    platform.as_str()
-                ));
+                if takes_setup_lifecycle(platform) {
+                    warnings.push(format!(
+                        "Sandbox '{}': {}",
+                        resource_id, SETUP_OWNED_SANDBOX_NOTICE
+                    ));
+                } else if !matches!(platform, Platform::Aws | Platform::Kubernetes) {
+                    errors.push(format!(
+                        "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not \
+                         support; only AWS, Azure, Google Cloud and Kubernetes accept it",
+                        resource_id,
+                        platform.as_str()
+                    ));
+                }
             }
 
             // Setup builds a Frozen image before the deployment registers, and only registration
             // tells the registry which customer account to open the base image's repository to.
             if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
-                if resource_entry.lifecycle == ResourceLifecycle::Frozen {
+                // A Live sandbox on Azure or Google Cloud is built by setup, so it is held to
+                // the Frozen rules.
+                if resource_entry.lifecycle == ResourceLifecycle::Frozen
+                    || (resource_entry.lifecycle == ResourceLifecycle::Live
+                        && takes_setup_lifecycle(platform))
+                {
                     if sandbox.private_base_image.is_some() {
                         errors.push(format!(
                             "Sandbox '{}' declares a private base image, which requires the Live \
@@ -204,9 +220,9 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
         }
 
         if errors.is_empty() {
-            Ok(CheckResult::success())
+            Ok(CheckResult::with_warnings(warnings))
         } else {
-            Ok(CheckResult::failed(errors))
+            Ok(CheckResult::failed_with_warnings(errors, warnings))
         }
     }
 }
@@ -258,6 +274,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -294,6 +311,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -334,6 +352,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -383,6 +402,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -429,6 +449,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -464,6 +485,7 @@ mod tests {
                 dynamic_container_repositories: Vec::new(),
                 dynamic_container_image_resources: Vec::new(),
                 operations: None,
+                built_architectures: Default::default(),
                 id: "test-stack".to_string(),
                 resources,
                 permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -506,6 +528,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),
@@ -514,59 +537,67 @@ mod tests {
         }
     }
 
-    /// On Azure or GCP a remote grant names a parent that must exist when the package applies,
-    /// which only the package that creates the sandbox can do, so only AWS may declare one Live.
-    /// Kubernetes has no remote grant: the Operator builds the pods itself, so it may as well.
+    /// A sandbox declared live for AWS runs unchanged on Azure and Google Cloud: the build accepts
+    /// it and says it is created by setup there. Kubernetes has no remote grant: the Operator
+    /// builds the pods itself, so it may as well.
     #[tokio::test]
-    async fn a_live_sandbox_is_accepted_on_kubernetes() {
-        let result = FrozenResourceLifecycleCheck
-            .check(
-                &sandbox_stack(ResourceLifecycle::Live),
-                Platform::Kubernetes,
-            )
-            .await
-            .expect("the check runs");
-        assert!(
-            !result.errors.iter().any(|e| e.contains("Live lifecycle")),
-            "{:?}",
-            result.errors
-        );
-    }
-
-    #[tokio::test]
-    async fn a_live_sandbox_is_refused_where_a_remote_grant_needs_a_parent() {
-        for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+    async fn a_live_sandbox_is_accepted_on_kubernetes_azure_and_gcp() {
+        for platform in [Platform::Kubernetes, Platform::Azure, Platform::Gcp] {
             let result = FrozenResourceLifecycleCheck
                 .check(&sandbox_stack(ResourceLifecycle::Live), platform)
                 .await
                 .expect("the check runs");
-
-            assert!(
-                !result.success,
-                "a Live sandbox must be refused on {platform:?}"
-            );
-            let message = result
-                .errors
+            assert!(result.success, "{platform:?}: {:?}", result.errors);
+            let notice = result
+                .warnings
                 .iter()
-                .find(|error| {
-                    error.contains("only AWS and Kubernetes provision a sandbox at runtime")
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "the refusal must name why, on {platform:?}: {:?}",
-                        result.errors
-                    )
-                });
-            assert!(
-                message.contains(platform.as_str()),
-                "the refusal must name the platform it applies to: {message}"
+                .find(|warning| warning.contains("created by setup"));
+            assert_eq!(
+                notice.is_some(),
+                platform != Platform::Kubernetes,
+                "{platform:?}: {:?}",
+                result.warnings
             );
-            // The message reaches a user, and a Rust line continuation that loses its backslash
-            // silently pads it with the source file's indentation.
-            assert!(
-                !message.contains("  "),
-                "the refusal must not carry collapsed indentation: {message}"
-            );
+            if let Some(notice) = notice {
+                assert!(
+                    notice.contains(
+                        "on Azure and Google Cloud a live sandbox is created by setup, like \
+                         frozen; changes to it go through setup"
+                    ),
+                    "{notice}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_sandbox_is_still_refused_where_no_sandbox_controller_exists() {
+        let result = FrozenResourceLifecycleCheck
+            .check(&sandbox_stack(ResourceLifecycle::Live), Platform::Local)
+            .await
+            .expect("the check runs");
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("only AWS, Azure, Google Cloud and Kubernetes accept it")));
+    }
+
+    /// Setup builds a live sandbox on Azure and Google Cloud, so the Frozen rules for a private
+    /// base image apply to it at build, not at deploy.
+    #[tokio::test]
+    async fn a_live_private_base_image_is_refused_on_azure_and_gcp_at_build() {
+        let mut stack = sandbox_stack(ResourceLifecycle::Live);
+        let entry = stack.resources.get_mut("agents").expect("sandbox entry");
+        let mut sandbox = entry.config.downcast_ref::<Sandbox>().unwrap().clone();
+        sandbox.private_base_image = Some("123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1".to_string());
+        entry.config = alien_core::Resource::new(sandbox);
+        for platform in [Platform::Azure, Platform::Gcp] {
+            let result = FrozenResourceLifecycleCheck
+                .check(&stack, platform)
+                .await
+                .expect("the check runs");
+            assert!(!result.success, "{platform:?}");
         }
     }
 
@@ -908,6 +939,7 @@ mod tests {
             dynamic_container_repositories: Vec::new(),
             dynamic_container_image_resources: Vec::new(),
             operations: None,
+            built_architectures: Default::default(),
             id: "test-stack".to_string(),
             resources,
             permissions: alien_core::permissions::PermissionsConfig::default(),

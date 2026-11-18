@@ -1248,10 +1248,13 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     // Build the server
     let server = AlienManager::builder(config.clone())
         .token_store(token_store)
-        .charts(alien_manager::routes::charts::ChartSettings::new(
-            toml_config.operator.image.clone(),
-            toml_config.operator.insecure_registry,
-        ).with_update_older_operators(toml_config.operator.update_older_operators))
+        .charts(
+            alien_manager::routes::charts::ChartSettings::new(
+                toml_config.operator.image.clone(),
+                toml_config.operator.insecure_registry,
+            )
+            .with_update_older_operators(toml_config.operator.update_older_operators),
+        )
         .bundle_signing_key(bundle_signing_key)
         .with_standalone_defaults(&toml_config)
         .await

@@ -9,17 +9,18 @@
 //! `terraform fmt -check` + `terraform validate` against the cloud providers.
 
 use super::helpers::{
-    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, gate_input,
-    prepare_for_target, render, snapshot_module,
+    assert_terraform_formatted, assert_terraform_valid,
+    assert_terraform_variable_plan_invalid_contains, gate_input, prepare_for_target, render,
+    snapshot_module,
 };
 use alien_core::{
-    ArtifactRegistry, AzureResourceGroup, CapacityGroup, ComputeCluster, ComputePoolSelection,
-    ComputeSettings, Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, KubernetesExposureSettings,
-    KubernetesHeartbeatMode, KubernetesIngressRouteProfile, KubernetesRouteProfile,
-    KubernetesSettings, ManagementPermissions, Network, NetworkSettings, PermissionProfile,
-    PermissionsConfig, Postgres, RemoteStackManagement, ResourceLifecycle, ResourceSpec, Sandbox,
-    ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    ArtifactRegistry, AzureResourceGroup, AzureStorageAccount, CapacityGroup, ComputeCluster,
+    ComputePoolSelection, ComputeSettings, Container, ContainerCode, KubernetesCertificateMode,
+    KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+    KubernetesExposureSettings, KubernetesHeartbeatMode, KubernetesIngressRouteProfile,
+    KubernetesRouteProfile, KubernetesSettings, ManagementPermissions, Network, NetworkSettings,
+    PermissionProfile, PermissionsConfig, Postgres, RemoteStackManagement, ResourceLifecycle,
+    ResourceSpec, Sandbox, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
     generate_product_terraform_module, generate_terraform_module, TerraformHelmInstall,
@@ -2913,4 +2914,372 @@ fn a_gke_cluster_with_its_own_name_has_its_network_looked_up_under_that_name() {
     assert!(text.contains("primary_existing[0]"), "{text}");
     assert!(!text.contains("kubernetes_existing"), "{text}");
     assert_terraform_valid(&module, "gke_named_cluster_with_database");
+}
+
+/// A registered module that installs the chart, for the chart's `infrastructure` values.
+fn render_registered_with_helm(
+    stack: &Stack,
+    target: TerraformTarget,
+    product: bool,
+) -> alien_terraform::ModuleFiles {
+    let registry = TfRegistry::built_in();
+    let options = TerraformOptions {
+        setup_identity: None,
+        pins: alien_core::SetupPins::compiled_in(),
+        display_name: None,
+        registry: &registry,
+        stack_settings: StackSettings::default(),
+        registration: Some(TerraformRegistration {
+            provider_name: "acme_app".to_string(),
+            provider_source: "pkg.example.com/acme/app".to_string(),
+            provider_version: "1.0.0".to_string(),
+            resource_type: "deployment".to_string(),
+            release_id: Some("rel-test".to_string()),
+            setup_target: "kubernetes".to_string(),
+            setup_fingerprint: "test".to_string(),
+            setup_fingerprint_version: 1,
+            destroy_guard: true,
+        }),
+        helm_install: Some(TerraformHelmInstall {
+            chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+            release_name: "acme-operator".to_string(),
+        }),
+        supported_aws_regions: Vec::new(),
+    };
+    if product {
+        generate_product_terraform_module(stack, target, options, false)
+    } else {
+        generate_terraform_module(stack, target, options)
+    }
+    .expect("module should render")
+}
+
+fn chart_bound_stack(id: &str, provider: KubernetesClusterProvider, gated_extra: bool) -> Stack {
+    let mut stack = Stack::new(id.to_string());
+    if gated_extra {
+        stack = stack.inputs(vec![gate_input(
+            "extraStore",
+            "Extra store",
+            "Create the extra store.",
+        )]);
+    }
+    if provider == KubernetesClusterProvider::Aks {
+        stack = stack
+            .add(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            );
+    }
+    let stack = stack
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(provider)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Storage::new("data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+    if gated_extra {
+        stack
+            .add_enabled_when(
+                Storage::new("extra".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "extraStore",
+            )
+            .build()
+    } else {
+        stack.build()
+    }
+}
+
+/// The release the module installs gets the same `infrastructure` bindings as the
+/// `chart_infrastructure_json` output, after the provider's values that render `null`.
+#[test]
+fn the_installed_chart_gets_the_bindings_of_the_resources_the_module_created() {
+    for (target, provider, bucket) in [
+        (
+            TerraformTarget::Eks,
+            KubernetesClusterProvider::Eks,
+            "aws_s3_bucket.data",
+        ),
+        (
+            TerraformTarget::Gke,
+            KubernetesClusterProvider::Gke,
+            "google_storage_bucket.data",
+        ),
+        (
+            TerraformTarget::Aks,
+            KubernetesClusterProvider::Aks,
+            "azurerm_storage_container.data",
+        ),
+    ] {
+        let stack = chart_bound_stack("chart-helm-bindings", provider, false);
+        for product in [false, true] {
+            let module = render_registered_with_helm(&stack, target, product);
+            let helm = module.get("helm.tf").expect("helm.tf");
+            let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+            let values = compact
+                .split("values = [")
+                .nth(1)
+                .and_then(|rest| rest.split(" ]").next())
+                .unwrap_or_else(|| panic!("no values list: {helm}"));
+            let provider_at = values.find("acme_app_deployment.this.helm_values");
+            let infrastructure_at = values.find("yamlencode({ infrastructure = {");
+            assert!(
+                provider_at.is_some() && infrastructure_at.is_some(),
+                "{target:?} product={product}: {values}"
+            );
+            assert!(
+                provider_at < infrastructure_at,
+                "the bindings come after the provider's null: {values}"
+            );
+            assert!(
+                values.contains("type = \"storage\"") && values.contains(bucket),
+                "{target:?} product={product}: {values}"
+            );
+            if product {
+                assert!(
+                    values.find("infrastructure = {") < values.find("remoteOperator"),
+                    "{values}"
+                );
+            }
+            // The output carries the same object.
+            let outputs = module.get("outputs.tf").expect("outputs.tf");
+            assert!(outputs.contains("chart_infrastructure_json"), "{outputs}");
+        }
+    }
+}
+
+/// A module that creates nothing the chart binds leaves the release's values as they were.
+#[test]
+fn the_installed_chart_values_are_unchanged_without_chart_bound_resources() {
+    let stack = Stack::new("chart-no-bindings".to_string())
+        .add(
+            KubernetesCluster::new("kubernetes".to_string())
+                .provider(KubernetesClusterProvider::Eks)
+                .ownership(KubernetesClusterOwnership::Managed)
+                .namespace("default".to_string())
+                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    for product in [false, true] {
+        let module = render_registered_with_helm(&stack, TerraformTarget::Eks, product);
+        let helm = module.get("helm.tf").expect("helm.tf");
+        assert!(
+            !helm.contains("infrastructure"),
+            "product={product}: {helm}"
+        );
+        assert!(!module
+            .get("outputs.tf")
+            .expect("outputs.tf")
+            .contains("chart_infrastructure_json"));
+    }
+}
+
+/// A resource gated on an input has a binding in the release only while its gate is true.
+#[test]
+fn the_installed_chart_bindings_follow_the_resource_gates() {
+    let stack = chart_bound_stack("chart-helm-gated", KubernetesClusterProvider::Eks, true);
+    let module = render_registered_with_helm(&stack, TerraformTarget::Eks, false);
+    let helm = module.get("helm.tf").expect("helm.tf");
+    let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(compact.contains("var.input_extra_store ?"), "{helm}");
+    assert!(compact.contains("merge("), "{helm}");
+    assert!(
+        !compact.contains("aws_s3_bucket.extra.bucket"),
+        "a gated bucket needs its count index: {helm}"
+    );
+}
+
+/// A real plan, with mocked providers, of a gated chart-bound resource: the installed release's
+/// values carry the `infrastructure` entry (and the extra store's binding) only while the gate
+/// is on. The registration provider cannot be installed here, so it is the stand-in the
+/// verified-setup tests use, and its `helm_values` (which render `infrastructure: null`) are a
+/// fixed string.
+#[test]
+fn the_installed_release_values_carry_a_gated_binding_only_while_the_gate_is_on() {
+    let stack = chart_bound_stack("chart-helm-plan", KubernetesClusterProvider::Eks, true);
+    let registry = TfRegistry::built_in();
+    let module = generate_terraform_module(
+        &stack,
+        TerraformTarget::Eks,
+        TerraformOptions {
+            setup_identity: None,
+            pins: alien_core::SetupPins::compiled_in(),
+            display_name: None,
+            registry: &registry,
+            stack_settings: StackSettings::default(),
+            registration: Some(TerraformRegistration {
+                provider_name: "terraform".to_string(),
+                provider_source: "registry.example.com/acme/app".to_string(),
+                provider_version: "1.0.0".to_string(),
+                resource_type: "data".to_string(),
+                release_id: Some("rel-test".to_string()),
+                setup_target: "kubernetes".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                destroy_guard: false,
+            }),
+            helm_install: Some(TerraformHelmInstall {
+                chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                release_name: "acme-operator".to_string(),
+            }),
+            supported_aws_regions: Vec::new(),
+        },
+    )
+    .expect("module should render");
+    let mut files = super::verified_setup_tests::stand_in_files(&module);
+    let helm = files.get("helm.tf").expect("helm.tf").clone();
+    assert!(helm.contains("terraform_data.this.helm_values"), "{helm}");
+    files.insert(
+        "helm.tf".to_string(),
+        helm.replace(
+            "terraform_data.this.helm_values",
+            "\"infrastructure: null\\n\"",
+        ),
+    );
+    let required = hcl::parse(files.get("variables.tf").expect("variables.tf"))
+        .expect("variables.tf parses")
+        .blocks()
+        .filter(|block| block.identifier() == "variable")
+        .filter(|block| !block.body().attributes().any(|a| a.key() == "default"))
+        .filter_map(|block| block.labels().first().map(|l| l.as_str().to_string()))
+        .filter(|name| {
+            ![
+                "input_extra_store",
+                "management_url",
+                "eks_cluster_name",
+                "kubernetes_cluster_mode",
+                "helm_install_enabled",
+            ]
+            .contains(&name.as_str())
+        })
+        .map(|name| format!("{name} = \"xx\""))
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    files.insert(
+        "gate.tftest.hcl".to_string(),
+        format!(
+            r#"mock_provider "aws" {{
+  mock_data "aws_availability_zones" {{
+    defaults = {{ names = ["us-east-1a", "us-east-1b", "us-east-1c"] }}
+  }}
+  mock_data "aws_eks_cluster" {{
+    defaults = {{ identity = [{{ oidc = [{{ issuer = "https://oidc.eks.example.com/id/ABC" }}] }}] }}
+  }}
+}}
+mock_provider "tls" {{
+  mock_data "tls_certificate" {{
+    defaults = {{ certificates = [{{ sha1_fingerprint = "0000000000000000000000000000000000000000" }}] }}
+  }}
+}}
+mock_provider "helm" {{}}
+variables {{
+  {required}
+  management_url = "https://manager.example.com"
+  eks_cluster_name = "c"
+  kubernetes_cluster_mode = "existing"
+  helm_install_enabled = true
+  resource_prefix = "acme"
+}}
+run "gate_off" {{
+  command = plan
+  variables {{
+    input_extra_store = false
+  }}
+  assert {{
+    condition = length(helm_release.runtime[0].values) == 2 && join(",", sort(keys(yamldecode(helm_release.runtime[0].values[1]).infrastructure))) == "data"
+    error_message = "gate off: the release carries the data store's binding and not the extra store's"
+  }}
+}}
+run "gate_on" {{
+  command = plan
+  variables {{
+    input_extra_store = true
+  }}
+  assert {{
+    condition = join(",", sort(keys(yamldecode(helm_release.runtime[0].values[1]).infrastructure))) == "data,extra"
+    error_message = "gate on: both stores are bound in the release"
+  }}
+}}
+"#
+        ),
+    );
+    super::helpers::test_utils::terraform_test(&files)
+        .assert_ok("EKS chart-bound gated plan, mocked providers");
+}
+
+/// The modules that install the chart pass `terraform fmt -check` as rendered and
+/// `terraform validate` with the registration provider swapped for the stand-in the
+/// verified-setup tests use (the real one cannot be installed here); its `helm_values` are a
+/// fixed string.
+#[test]
+fn the_modules_that_install_the_chart_are_formatted_and_valid() {
+    for (target, provider) in [
+        (TerraformTarget::Eks, KubernetesClusterProvider::Eks),
+        (TerraformTarget::Gke, KubernetesClusterProvider::Gke),
+        (TerraformTarget::Aks, KubernetesClusterProvider::Aks),
+    ] {
+        let stack = chart_bound_stack("chart-helm-valid", provider, true);
+        for product in [false, true] {
+            let context = format!("{target:?} product={product}");
+            let module = render_registered_with_helm(&stack, target, product);
+            // As rendered: formatting needs no provider.
+            assert_terraform_formatted(&module, &context);
+            // The stand-in registration provider is `terraform_data`.
+            let registry = TfRegistry::built_in();
+            let options = TerraformOptions {
+                setup_identity: None,
+                pins: alien_core::SetupPins::compiled_in(),
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                registration: Some(TerraformRegistration {
+                    provider_name: "terraform".to_string(),
+                    provider_source: "registry.example.com/acme/app".to_string(),
+                    provider_version: "1.0.0".to_string(),
+                    resource_type: "data".to_string(),
+                    release_id: Some("rel-test".to_string()),
+                    setup_target: "kubernetes".to_string(),
+                    setup_fingerprint: "test".to_string(),
+                    setup_fingerprint_version: 1,
+                    destroy_guard: false,
+                }),
+                helm_install: Some(TerraformHelmInstall {
+                    chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
+                    release_name: "acme-operator".to_string(),
+                }),
+                supported_aws_regions: Vec::new(),
+            };
+            let stood_in = if product {
+                generate_product_terraform_module(&stack, target, options, false)
+            } else {
+                generate_terraform_module(&stack, target, options)
+            }
+            .expect("module should render");
+            let mut files = super::verified_setup_tests::stand_in_files(&stood_in);
+            let helm = files.get("helm.tf").expect("helm.tf").clone();
+            assert!(helm.contains("terraform_data.this.helm_values"), "{helm}");
+            files.insert(
+                "helm.tf".to_string(),
+                helm.replace(
+                    "terraform_data.this.helm_values",
+                    "\"infrastructure: null\\n\"",
+                ),
+            );
+            super::helpers::test_utils::terraform_validate(&files)
+                .assert_ok(format!("{context} terraform validate"));
+        }
+    }
 }
