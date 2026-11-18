@@ -2165,8 +2165,60 @@ impl BindingsProviderApi for BindingsProvider {
                     binding_name,
                     Arc::new(iam_client),
                 )?;
+                // The persistent store is a bucket setup created for this declaration, written
+                // with the workload's own credentials.
+                let persistent = match gcp_binding.persistent_storage.clone() {
+                    None => None,
+                    Some(storage) => {
+                        let (bucket, prefix) = match &storage.store {
+                            alien_core::bindings::PersistentStoreLocator::Gcp {
+                                bucket,
+                                prefix,
+                            } => (bucket.clone(), prefix.clone()),
+                            _ => {
+                                return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                                    binding_name: binding_name.to_string(),
+                                    env_var: alien_core::bindings::binding_env_var_name(
+                                        binding_name,
+                                    ),
+                                    reason: "a GCP sandbox's persistent store must be a Cloud \
+                                             Storage bucket"
+                                        .to_string(),
+                                }))
+                            }
+                        };
+                        let bucket = bucket
+                            .into_value(binding_name, "persistentStorage.store.bucket")
+                            .context(ErrorData::BindingSetupFailed {
+                                binding_type: "GCP Agent Platform sandbox".to_string(),
+                                reason: "the persistent store's bucket is not resolved".to_string(),
+                            })?;
+                        let store = object_store::gcp::GoogleCloudStorageBuilder::new()
+                            .with_bucket_name(&bucket)
+                            .with_credentials(Arc::new(
+                                crate::providers::storage::credential_bridge::GcpCredentialBridge::new(
+                                    gcp_config.clone(),
+                                ),
+                            ))
+                            .build()
+                            .into_alien_error()
+                            .context(ErrorData::BindingSetupFailed {
+                                binding_type: "GCP Agent Platform sandbox".to_string(),
+                                reason: format!(
+                                    "could not build a Cloud Storage client for bucket '{bucket}'"
+                                ),
+                            })?;
+                        Some(
+                            crate::providers::sandbox::gcp_agent_platform::GcpPersistentStore::new(
+                                storage,
+                                Arc::new(store),
+                                prefix,
+                            ),
+                        )
+                    }
+                };
                 let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(
-                    provider.with_egress(
+                    provider.with_persistent_store(persistent).with_egress(
                         gcp_binding
                             .egress
                             .as_ref()

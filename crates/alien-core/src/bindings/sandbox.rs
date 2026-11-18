@@ -384,6 +384,10 @@ pub struct GcpAgentPlatformSandboxBinding {
     /// which ports the sandbox declared (its template cannot carry an environment).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
+    /// The declared persistent storage, if any. Its store is a Cloud Storage bucket the binding
+    /// writes by pulling each sandbox's commits through `:execute`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_storage: Option<SandboxPersistentStorageBinding>,
 }
 
 /// Kubernetes sandbox binding configuration.
@@ -446,12 +450,13 @@ impl SandboxBinding {
             Self::Local(value) => value.egress.as_ref(),
         }
     }
-    /// The declared persistent storage. Only AWS and Local can carry one.
+    /// The declared persistent storage. Only AWS, GCP and Local can carry one.
     pub fn persistent_storage(&self) -> Option<&SandboxPersistentStorageBinding> {
         match self {
             Self::Aws(value) => value.persistent_storage.as_ref(),
+            Self::GcpAgentPlatform(value) => value.persistent_storage.as_ref(),
             Self::Local(value) => value.persistent_storage.as_ref(),
-            Self::Azure(_) | Self::GcpAgentPlatform(_) | Self::Kubernetes(_) => None,
+            Self::Azure(_) | Self::Kubernetes(_) => None,
         }
     }
 
@@ -545,6 +550,7 @@ impl SandboxBinding {
             allow_egress,
             preview_service_account: None,
             preview_ports: Vec::new(),
+            persistent_storage: None,
         })
     }
 

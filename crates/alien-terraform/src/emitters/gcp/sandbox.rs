@@ -1143,6 +1143,7 @@ mod tests {
                 allow_egress: false,
                 preview_service_account: None,
                 preview_ports: Vec::new(),
+                persistent_storage: None,
             })
             .expect("the binding type serializes");
             assert_eq!(

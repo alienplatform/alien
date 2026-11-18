@@ -22,6 +22,7 @@ use crate::error::{ErrorData, Result};
 use crate::traits::{
     Binding, CommandOutput, CreateSandboxRequest, JobError, JobExit, JobPoll, JobStart,
     PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
+    SandboxStorageStatus,
 };
 use alien_core::{SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, Context, ContextError};
@@ -223,6 +224,8 @@ pub struct GcpAgentPlatformSandbox {
     /// Granted capabilities, per sandbox and port. Only the grant is cached: the routing token
     /// and edge credential are short-lived and read fresh for every call.
     grants: std::sync::Mutex<std::collections::HashMap<(String, u16), CachedGrant>>,
+    /// The declared persistent storage and the pulls running for it.
+    persistent: Option<Arc<storage_pull::GcpPersistentStore>>,
 }
 
 /// Mints the credential the sandbox edge requires on every ingress request: a JWT signed by a
@@ -449,6 +452,7 @@ impl GcpAgentPlatformSandbox {
             preview_signer: None,
             preview_ports: Vec::new(),
             grants: Default::default(),
+            persistent: None,
         }
     }
 
@@ -1311,57 +1315,17 @@ impl GcpAgentPlatformSandbox {
     }
 }
 
-impl Binding for GcpAgentPlatformSandbox {}
-
-/// A runtime policy is validated like on every backend, then refused: Google Cloud has no
-/// outbound allowlist. `Ok` when the caller asked for none.
-fn refuse_runtime_policy(
-    requested: Option<&alien_core::EgressPolicy>,
-    declaration: Option<&SandboxEgress>,
-) -> Result<()> {
-    let Some(requested) = requested else {
-        return Ok(());
-    };
-    super::egress::validate(requested, declaration)?;
-    // `internet` equals what the sandbox already declares, so portable code may pass it.
-    if *requested == alien_core::EgressPolicy::Internet {
-        return Ok(());
-    }
-    Err(AlienError::new(
-        ErrorData::SandboxEgressAllowlistUnsupported {
-            reason: alien_core::GCP_NO_EGRESS_ALLOWLIST.to_string(),
-        },
-    ))
-}
-
-#[async_trait]
-impl Sandbox for GcpAgentPlatformSandbox {
-    fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
-        self.egress.as_ref()
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    /// Google's outbound path has no enforcement point of ours, so no policy can change.
-    async fn update_egress(
+impl GcpAgentPlatformSandbox {
+    /// A new sandbox; with `attach`, its storage key claimed and attached before it is returned.
+    /// `get_or_create` attaches only once it knows its sandbox won the key's contention window, so
+    /// a duplicate it deletes never claims the key from the one that stays.
+    async fn create_and_attach(
         &self,
-        _sandbox_id: &str,
-        egress: alien_core::EgressPolicy,
-    ) -> Result<()> {
-        refuse_runtime_policy(Some(&egress), self.egress_declaration())
-    }
-
-    /// The platform's row, unnarrowed. `sandboxLifetime` stays true even with no declared ttl:
-    /// the API always sets `expireTime` on output, so an undeclared sandbox still carries a
-    /// deadline the platform enforces.
-    fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::gcp_agent_platform()
-    }
-
-    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
-        super::storage_key::resolve_storage_key(
-            None,
+        request: CreateSandboxRequest,
+        attach: bool,
+    ) -> Result<SandboxInstance> {
+        let storage_key = super::storage_key::resolve_storage_key(
+            self.persistent_declaration(),
             request.storage_key.as_deref(),
             "sandbox.create",
         )?;
@@ -1449,7 +1413,17 @@ impl Sandbox for GcpAgentPlatformSandbox {
         let sandbox_id = sandbox_id.to_string();
 
         // Past here a sandbox exists the caller has no id for, so every failure deletes it.
-        match self.settle(CREATE, &sandbox_id).await {
+        let settled = match self.settle(CREATE, &sandbox_id).await {
+            Ok(generation) => match (&storage_key, attach) {
+                (Some(key), true) => self
+                    .attach_storage(&sandbox_id, key)
+                    .await
+                    .map(|()| generation),
+                _ => Ok(generation),
+            },
+            Err(error) => Err(error),
+        };
+        match settled {
             Ok(generation) => {
                 // The first marker, best effort: it lets a container that later replaces this
                 // one be told from this one by the marker it lacks. A failed write never fails
@@ -1473,7 +1447,18 @@ impl Sandbox for GcpAgentPlatformSandbox {
         }
     }
 
-    async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
+    /// Pulls a running sandbox this binding found, if its key is still its own. Best effort: a
+    /// sandbox found is answered even when its storage cannot be reached now.
+    async fn resume_pull_quietly(&self, found: &SandboxInstance) {
+        if self.persistent.is_none() || found.state != SandboxState::Running {
+            return;
+        }
+        if let Err(error) = self.resume_pull(&found.sandbox_id).await {
+            warn!(sandbox = %found.sandbox_id, %error, "could not resume pulling persistent storage");
+        }
+    }
+
+    async fn get_unresumed(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         Self::checked_sandbox_id(GET, sandbox_id)?;
         if is_google_id(sandbox_id) {
             return self.get_by_id(sandbox_id).await;
@@ -1512,10 +1497,71 @@ impl Sandbox for GcpAgentPlatformSandbox {
         }
         Ok(None)
     }
+}
+
+impl Binding for GcpAgentPlatformSandbox {}
+
+/// A runtime policy is validated like on every backend, then refused: Google Cloud has no
+/// outbound allowlist. `Ok` when the caller asked for none.
+fn refuse_runtime_policy(
+    requested: Option<&alien_core::EgressPolicy>,
+    declaration: Option<&SandboxEgress>,
+) -> Result<()> {
+    let Some(requested) = requested else {
+        return Ok(());
+    };
+    super::egress::validate(requested, declaration)?;
+    // `internet` equals what the sandbox already declares, so portable code may pass it.
+    if *requested == alien_core::EgressPolicy::Internet {
+        return Ok(());
+    }
+    Err(AlienError::new(
+        ErrorData::SandboxEgressAllowlistUnsupported {
+            reason: alien_core::GCP_NO_EGRESS_ALLOWLIST.to_string(),
+        },
+    ))
+}
+
+#[async_trait]
+impl Sandbox for GcpAgentPlatformSandbox {
+    fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress> {
+        self.egress.as_ref()
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    /// Google's outbound path has no enforcement point of ours, so no policy can change.
+    async fn update_egress(
+        &self,
+        _sandbox_id: &str,
+        egress: alien_core::EgressPolicy,
+    ) -> Result<()> {
+        refuse_runtime_policy(Some(&egress), self.egress_declaration())
+    }
+
+    /// The platform's row, unnarrowed. `sandboxLifetime` stays true even with no declared ttl:
+    /// the API always sets `expireTime` on output, so an undeclared sandbox still carries a
+    /// deadline the platform enforces.
+    fn capabilities(&self) -> SandboxCapabilities {
+        SandboxCapabilities::gcp_agent_platform()
+    }
+
+    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        self.create_and_attach(request, true).await
+    }
+
+    async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
+        let found = self.get_unresumed(sandbox_id).await?;
+        if let Some(found) = &found {
+            self.resume_pull_quietly(found).await;
+        }
+        Ok(found)
+    }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
-        super::storage_key::resolve_storage_key(
-            None,
+        let storage_key = super::storage_key::resolve_storage_key(
+            self.persistent_declaration(),
             request.storage_key.as_deref(),
             "sandbox.getOrCreate",
         )?;
@@ -1527,6 +1573,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
         if is_google_id(&key) {
             if let Some(found) = self.reach(&key).await? {
+                self.resume_pull_quietly(&found).await;
                 return Ok(ResolvedSandbox::found(found));
             }
             // A number is read as the id Google minted, which is what a caller that saved the id
@@ -1541,6 +1588,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // was lost, or a second process asking for the same key, would otherwise make a second.
         let candidates = self.settled_candidates(&key, GET_OR_CREATE).await?;
         if let Some(found) = self.reach_first(&candidates, None).await? {
+            self.resume_pull_quietly(&found).await;
             return Ok(ResolvedSandbox::found(found));
         }
 
@@ -1551,7 +1599,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
             Some(seconds) => CONTENTION_WINDOW.min(Duration::from_secs(u64::from(seconds)) / 2),
             None => CONTENTION_WINDOW,
         };
-        let created = self.create(request).await?;
+        let created = self.create_and_attach(request, false).await?;
         let decide_at = tokio::time::Instant::now() + wait;
         let own = created.sandbox_id.clone();
 
@@ -1599,6 +1647,13 @@ impl Sandbox for GcpAgentPlatformSandbox {
                     if sandbox_state(GET_OR_CREATE, sandbox.state.as_deref())?
                         != SandboxState::Terminated =>
                 {
+                    // This sandbox won the key, so only now does it claim the storage key: a
+                    // duplicate deleted above never takes the key from the one that stays.
+                    if let Some(storage_key) = &storage_key {
+                        if let Err(error) = self.attach_storage(&own, storage_key).await {
+                            return Err(self.discard(&own, error).await);
+                        }
+                    }
                     Ok(ResolvedSandbox::created(created))
                 }
                 _ => Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -2028,6 +2083,11 @@ impl Sandbox for GcpAgentPlatformSandbox {
     /// kept, inside the sandbox, for that comparison.
     async fn pause(&self, sandbox_id: &str) -> Result<()> {
         Self::checked_sandbox_id(PAUSE, sandbox_id)?;
+        // A paused sandbox commits nothing, so what it wrote is published first. A sandbox whose
+        // storage cannot be synced is not paused: the caller learns its writes are not durable.
+        if self.persistent.is_some() && self.resume_pull(sandbox_id).await? {
+            self.pull_sync(sandbox_id).await?;
+        }
         // The call returns Ok only when a state read made after its last request to the sandbox
         // (the probe or `:pause`) shows `STATE_PAUSED`, and one more read after a short settle
         // still does. Another pause, or this call's own probe, can wake the sandbox at any point
@@ -2247,9 +2307,95 @@ impl Sandbox for GcpAgentPlatformSandbox {
         })
     }
 
+    async fn storage_status(&self, sandbox_id: &str) -> Result<Option<SandboxStorageStatus>> {
+        if self.persistent.is_none() {
+            return Ok(None);
+        }
+        Self::checked_sandbox_id("sandbox.persistentStorage", sandbox_id)?;
+        self.pulled_status(sandbox_id).await.map(Some)
+    }
+
+    async fn sync_storage(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
+        Self::checked_sandbox_id("sandbox.sync", sandbox_id)?;
+        self.pull_sync(sandbox_id).await
+    }
+
+    async fn read_storage_file(&self, key: &str, path: &str) -> Result<Vec<u8>> {
+        let store = self.storage_key_store(key, "sandbox.readStorageFile")?;
+        alien_sandbox_storage::read_file(&store, key, path)
+            .await
+            .map_err(|e| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "readStorageFile".to_string(),
+                    reason: e.to_string(),
+                })
+            })
+    }
+
+    async fn delete_storage(&self, key: &str) -> Result<()> {
+        use alien_sandbox_storage::ObjectStore as _;
+        let store = self.storage_key_store(key, "sandbox.deleteStorage")?;
+        let failed = |reason: String| {
+            AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "deleteStorage".to_string(),
+                reason,
+            })
+        };
+        if let Some((head, _)) = alien_sandbox_storage::read_head(&store)
+            .await
+            .map_err(|e| failed(e.to_string()))?
+        {
+            // The writer is the sandbox id this binding attached; one still live holds the key.
+            if is_google_id(&head.writer) {
+                if let Some(holder) = self
+                    .read_sandbox("sandbox.deleteStorage", &head.writer)
+                    .await?
+                {
+                    if sandbox_state("sandbox.deleteStorage", holder.state.as_deref())?
+                        != SandboxState::Terminated
+                    {
+                        return Err(failed(format!(
+                            "storage key '{key}' is held by sandbox '{}'; terminate it first",
+                            head.writer
+                        )));
+                    }
+                }
+            }
+        }
+        // HEAD first: a writer that slipped in can no longer move it, and no reader finds a
+        // HEAD whose manifest is gone.
+        store
+            .delete(alien_sandbox_storage::HEAD_OBJECT)
+            .await
+            .map_err(|e| failed(e.to_string()))?;
+        for object in store.list("").await.map_err(|e| failed(e.to_string()))? {
+            store
+                .delete(&object)
+                .await
+                .map_err(|e| failed(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
+        // Persistent storage: publish what was written before the sandbox goes. Best effort: a
+        // sandbox that is already gone, unreachable or holds no key of its own still terminates.
+        if self.persistent.is_some() && Self::checked_sandbox_id(TERMINATE, sandbox_id).is_ok() {
+            match self.resume_pull(sandbox_id).await {
+                Ok(true) => {
+                    if let Err(error) = self.pull_sync(sandbox_id).await {
+                        warn!(sandbox = sandbox_id, %error, "could not sync persistent storage before terminating");
+                    }
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    warn!(sandbox = sandbox_id, %error, "could not reach persistent storage before terminating")
+                }
+            }
+        }
         let outcome = self.delete_until_gone(sandbox_id).await;
         if outcome.is_ok() {
+            self.forget_pull(sandbox_id);
             // Nothing can use a grant for a sandbox that is gone, and a long-lived binding that
             // creates sandboxes continually would otherwise hold every one it ever granted.
             self.forget_grants(sandbox_id);
@@ -3090,7 +3236,9 @@ fn truncated(body: &[u8]) -> String {
 
 #[path = "gcp_storage_pull.rs"]
 mod storage_pull;
-pub use storage_pull::{AgentPlatformStorageChannel, GCP_STORAGE_PAGE_BYTES};
+pub use storage_pull::{
+    AgentPlatformStorageChannel, GcpPersistentStore, GCP_STORAGE_PAGE_BYTES, PULL_INTERVAL,
+};
 
 #[cfg(test)]
 #[path = "gcp_agent_platform_tests.rs"]

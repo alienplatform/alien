@@ -5,36 +5,66 @@
 //! (`storagePending`, `storageRead`, `storageAck`, `storageSeed`). Reads and seed pages are at
 //! most [`GCP_STORAGE_PAGE_BYTES`] raw bytes, the same page as `readFile`, so a reply stays under
 //! the proxy's 2 MB limit after both base64 layers.
+//!
+//! The binding claims a key for a new sandbox, seeds the claimed commit into the agent's spool,
+//! attaches, and then pulls every [`PULL_INTERVAL`] for as long as it holds the sandbox. A binding
+//! that starts again (a new workload process) resumes pulling a sandbox the first time it touches
+//! it, if HEAD still names that sandbox as the writer. While no binding pulls, commits wait in the
+//! sandbox's spool; the latest one is published with the next pull.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use alien_core::bindings::SandboxPersistentStorageBinding;
 use alien_error::{AlienError, Context};
+use alien_gcp_clients::gcp::agent_platform::AgentPlatformApi;
 use alien_sandbox_storage::{
-    AckOutcome, ErrorData as StorageError, Pending, PullChannel, Result as StorageResult,
+    AckOutcome, ErrorData as StorageError, ObjectName, Pending, PullChannel, PullOutcome, Puller,
+    Result as StorageResult,
 };
 use async_trait::async_trait;
 use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::json;
+use tracing::{debug, warn};
 
-use super::{GcpAgentPlatformSandbox, AGENT_PROTOCOL_VERSION, BASE64, GCP_READ_PAGE_BYTES};
+use super::{
+    is_not_found, GcpAgentPlatformSandbox, AGENT_PROTOCOL_VERSION, BASE64, GCP_READ_PAGE_BYTES,
+};
+use crate::error::{ErrorData, Result};
+use crate::providers::sandbox::persistent_store::KeyStore;
+use crate::traits::{SandboxStorageState, SandboxStorageStatus};
 
 /// Raw bytes one storage read or seed page carries over `:execute`.
 pub const GCP_STORAGE_PAGE_BYTES: u64 = GCP_READ_PAGE_BYTES as u64;
 
-/// One sandbox's agent, as the pull transport reaches it through `:execute`.
-pub struct AgentPlatformStorageChannel<'a> {
-    provider: &'a GcpAgentPlatformSandbox,
+/// How often the binding asks a sandbox for commits. The agent commits at most once a second
+/// after a change, so a write is published about two seconds after it lands.
+#[cfg(not(test))]
+pub const PULL_INTERVAL: Duration = Duration::from_secs(1);
+#[cfg(test)]
+pub const PULL_INTERVAL: Duration = Duration::from_millis(20);
+
+/// Pulls a `sync` makes before it gives up on its commit reaching the store.
+const SYNC_PULL_ATTEMPTS: u32 = 30;
+
+/// One sandbox's agent, as the pull transport reaches it through `:execute`. Owns what it needs,
+/// so a pull loop can outlive the call that started it.
+#[derive(Clone)]
+pub struct AgentPlatformStorageChannel {
+    client: Arc<dyn AgentPlatformApi>,
+    engine: String,
     sandbox_id: String,
 }
 
 impl GcpAgentPlatformSandbox {
     /// The pull channel to `sandbox_id`'s agent.
-    pub fn storage_channel(
-        &self,
-        sandbox_id: &str,
-    ) -> crate::error::Result<AgentPlatformStorageChannel<'_>> {
+    pub fn storage_channel(&self, sandbox_id: &str) -> Result<AgentPlatformStorageChannel> {
         Self::checked_sandbox_id("sandbox.storage", sandbox_id)?;
         Ok(AgentPlatformStorageChannel {
-            provider: self,
+            client: Arc::clone(&self.client),
+            engine: self.engine.clone(),
             sandbox_id: sandbox_id.to_string(),
         })
     }
@@ -48,17 +78,28 @@ fn failed(operation: &str, object: &str, reason: impl Into<String>) -> AlienErro
     })
 }
 
-impl AgentPlatformStorageChannel<'_> {
+impl AgentPlatformStorageChannel {
+    async fn execute(&self, op: &str, mut envelope: serde_json::Value) -> Result<Vec<u8>> {
+        envelope["v"] = json!(AGENT_PROTOCOL_VERSION);
+        envelope["op"] = json!(op);
+        let body = serde_json::to_vec(&envelope).map_err(|error| {
+            AlienError::new(ErrorData::SerializationFailed {
+                message: format!("could not encode the {op} envelope: {error}"),
+            })
+        })?;
+        self.client
+            .execute(&self.engine, &self.sandbox_id, &body)
+            .await
+            .map_err(|error| GcpAgentPlatformSandbox::execute_failed(op, error))
+    }
+
     async fn call(
         &self,
         op: &str,
         object: &str,
-        mut envelope: serde_json::Value,
+        envelope: serde_json::Value,
     ) -> StorageResult<Vec<u8>> {
-        envelope["v"] = json!(AGENT_PROTOCOL_VERSION);
-        envelope["op"] = json!(op);
-        self.provider
-            .execute_op(&self.sandbox_id, "sandbox.storage", envelope)
+        self.execute(op, envelope)
             .await
             .context(StorageError::StoreFailed {
                 operation: op.to_string(),
@@ -74,6 +115,22 @@ impl AgentPlatformStorageChannel<'_> {
             _ => Err(failed(op, object, super::truncated(body))),
         }
     }
+
+    /// A storage op that answers the agent's storage status.
+    async fn status_op(
+        &self,
+        op: &str,
+        operation: &str,
+        envelope: serde_json::Value,
+    ) -> Result<SandboxStorageStatus> {
+        let body = self.execute(op, envelope).await?;
+        serde_json::from_slice(&body).map_err(|_| {
+            AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "storage".to_string(),
+                reason: format!("{operation}: {}", super::truncated(&body)),
+            })
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -88,7 +145,7 @@ struct ReadReply {
 }
 
 #[async_trait]
-impl PullChannel for AgentPlatformStorageChannel<'_> {
+impl PullChannel for AgentPlatformStorageChannel {
     async fn pending(&self) -> StorageResult<Option<Pending>> {
         let body = self.call("storagePending", "", json!({})).await?;
         let reply: PendingReply = serde_json::from_slice(&body)
@@ -161,6 +218,409 @@ impl PullChannel for AgentPlatformStorageChannel<'_> {
     }
 }
 
+/// A declaration's persistent store (a Cloud Storage bucket setup created) and the pulls this
+/// binding runs for its sandboxes.
+pub struct GcpPersistentStore {
+    storage: SandboxPersistentStorageBinding,
+    inner: Arc<dyn object_store::ObjectStore>,
+    prefix: String,
+    pulls: Mutex<HashMap<String, Arc<SandboxPull>>>,
+}
+
+/// One sandbox's pull: the key it holds, its puller (one pull at a time, whether the loop or a
+/// `sync` runs it) and what the last pull reported.
+struct SandboxPull {
+    key: String,
+    puller: tokio::sync::Mutex<Puller>,
+    last: Mutex<PullReport>,
+    task: Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+#[derive(Default, Clone)]
+struct PullReport {
+    error: Option<String>,
+    superseded: bool,
+}
+
+impl std::fmt::Debug for GcpPersistentStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcpPersistentStore")
+            .field("storage", &self.storage)
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for GcpPersistentStore {
+    fn drop(&mut self) {
+        for pull in self.pulls.get_mut().expect("pull map lock").values() {
+            pull.abort();
+        }
+    }
+}
+
+impl SandboxPull {
+    fn abort(&self) {
+        if let Some(task) = self.task.lock().expect("pull task lock").take() {
+            task.abort();
+        }
+    }
+
+    /// One pull, recorded for `storage_status`.
+    async fn pull(
+        &self,
+        channel: &AgentPlatformStorageChannel,
+        store: &KeyStore,
+    ) -> StorageResult<PullOutcome> {
+        let outcome = self
+            .puller
+            .lock()
+            .await
+            .pull(channel, store, &self.key)
+            .await;
+        let mut last = self.last.lock().expect("pull report lock");
+        match &outcome {
+            Ok(_) => last.error = None,
+            Err(error) if matches!(error.error, Some(StorageError::Superseded { .. })) => {
+                last.superseded = true;
+                last.error = Some(error.to_string());
+            }
+            Err(error) => last.error = Some(error.to_string()),
+        }
+        outcome
+    }
+}
+
+impl GcpPersistentStore {
+    /// The store for `storage`, whose locator must be a Cloud Storage bucket, reached through
+    /// `inner` (a client for that bucket).
+    pub fn new(
+        storage: SandboxPersistentStorageBinding,
+        inner: Arc<dyn object_store::ObjectStore>,
+        prefix: String,
+    ) -> Self {
+        Self {
+            storage,
+            inner,
+            prefix,
+            pulls: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// The declaration.
+    pub fn declaration(&self) -> &SandboxPersistentStorageBinding {
+        &self.storage
+    }
+
+    fn key_store(&self, key: &str, operation: &str) -> Result<KeyStore> {
+        KeyStore::new(Arc::clone(&self.inner), &self.prefix, key).map_err(|e| {
+            AlienError::new(ErrorData::InvalidInput {
+                operation_context: operation.to_string(),
+                details: e.to_string(),
+                field_name: Some("storageKey".to_string()),
+            })
+        })
+    }
+
+    fn pull_of(&self, sandbox_id: &str) -> Option<Arc<SandboxPull>> {
+        self.pulls
+            .lock()
+            .expect("pull map lock")
+            .get(sandbox_id)
+            .cloned()
+    }
+
+    /// Stops pulling `sandbox_id`.
+    fn forget(&self, sandbox_id: &str) {
+        if let Some(pull) = self.pulls.lock().expect("pull map lock").remove(sandbox_id) {
+            pull.abort();
+        }
+    }
+
+    /// Starts the loop that pulls `channel`'s sandbox into `key` every [`PULL_INTERVAL`] until the
+    /// sandbox is gone or another sandbox claims the key. A sandbox already pulled keeps its loop.
+    fn start(&self, channel: AgentPlatformStorageChannel, key: &str, puller: Puller) -> Result<()> {
+        let store = self.key_store(key, "sandbox.storage")?;
+        let sandbox_id = channel.sandbox_id.clone();
+        let pull = {
+            let mut pulls = self.pulls.lock().expect("pull map lock");
+            if pulls.contains_key(&sandbox_id) {
+                return Ok(());
+            }
+            let pull = Arc::new(SandboxPull {
+                key: key.to_string(),
+                puller: tokio::sync::Mutex::new(puller),
+                last: Mutex::new(PullReport::default()),
+                task: Mutex::new(None),
+            });
+            pulls.insert(sandbox_id.clone(), Arc::clone(&pull));
+            pull
+        };
+        let looping = Arc::clone(&pull);
+        let task = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(PULL_INTERVAL);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                match looping.pull(&channel, &store).await {
+                    Ok(PullOutcome::Idle) => {}
+                    Ok(PullOutcome::Published { commit, bytes }) => {
+                        debug!(sandbox = %channel.sandbox_id, seq = commit.map(|c| c.seq), bytes, "persistent storage published");
+                    }
+                    Err(error) if matches!(error.error, Some(StorageError::Superseded { .. })) => {
+                        warn!(sandbox = %channel.sandbox_id, key = %looping.key, "another sandbox claimed the key; pulling stopped");
+                        return;
+                    }
+                    Err(error) => {
+                        // A failed pull is retried, unless the sandbox is gone.
+                        if let Err(read) = channel
+                            .client
+                            .get_sandbox(&channel.engine, &channel.sandbox_id)
+                            .await
+                        {
+                            if is_not_found(&read) {
+                                debug!(sandbox = %channel.sandbox_id, "sandbox gone; pulling stopped");
+                                return;
+                            }
+                        }
+                        warn!(sandbox = %channel.sandbox_id, %error, "persistent storage pull failed; retrying");
+                    }
+                }
+            }
+        });
+        *pull.task.lock().expect("pull task lock") = Some(task.abort_handle());
+        Ok(())
+    }
+}
+
+impl GcpAgentPlatformSandbox {
+    /// Supplies the declaration's persistent store.
+    pub fn with_persistent_store(mut self, store: Option<GcpPersistentStore>) -> Self {
+        self.persistent = store.map(Arc::new);
+        self
+    }
+
+    pub(super) fn persistent_declaration(&self) -> Option<&SandboxPersistentStorageBinding> {
+        self.persistent
+            .as_deref()
+            .map(GcpPersistentStore::declaration)
+    }
+
+    fn persistent_store(&self, operation: &str) -> Result<&GcpPersistentStore> {
+        self.persistent.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: operation.to_string(),
+                reason: "this sandbox declares no persistent storage".to_string(),
+            })
+        })
+    }
+
+    /// Claims `key` for the new sandbox, copies the claimed commit into its agent's spool,
+    /// attaches (the agent restores and opens the image gate), and starts pulling. The claim
+    /// comes first, so a sandbox still running for the key can no longer publish over the tree
+    /// this one restores.
+    pub(super) async fn attach_storage(&self, sandbox_id: &str, key: &str) -> Result<()> {
+        let unreachable = |reason: String| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: "sandbox.create".to_string(),
+                reason,
+            })
+        };
+        let persistent = self.persistent_store("sandbox.create")?;
+        let store = persistent.key_store(key, "sandbox.create")?;
+        let claim = alien_sandbox_storage::takeover(&store, sandbox_id)
+            .await
+            .map_err(|e| unreachable(format!("could not claim storage key '{key}': {e}")))?;
+        if let Err(error) = alien_sandbox_storage::collect_garbage(&store).await {
+            warn!(%error, key, "persistent storage garbage collection failed");
+        }
+        let commit: Option<ObjectName> = alien_sandbox_storage::read_head(&store)
+            .await
+            .map_err(|e| unreachable(format!("could not read storage key '{key}': {e}")))?
+            .and_then(|(head, _)| head.commit);
+        let channel = self.storage_channel(sandbox_id)?;
+        if let Some(commit) = &commit {
+            alien_sandbox_storage::seed(&channel, &store, commit, GCP_STORAGE_PAGE_BYTES)
+                .await
+                .map_err(|e| unreachable(format!("could not seed storage key '{key}': {e}")))?;
+        }
+        channel
+            .status_op(
+                "storageAttach",
+                "sandbox.create",
+                json!({ "attach": {
+                    "key": key,
+                    "writer": sandbox_id,
+                    "headVersion": claim.head_version,
+                    "commit": commit,
+                }}),
+            )
+            .await
+            .map_err(|e| unreachable(format!("the agent refused persistent storage: {e}")))?;
+        persistent.start(
+            channel,
+            key,
+            Puller::new(sandbox_id, claim.head_version, GCP_STORAGE_PAGE_BYTES),
+        )
+    }
+
+    /// Pulls `sandbox_id` again after this binding started anew: the agent names its key, and
+    /// HEAD still naming this sandbox as the writer says nothing claimed the key since. Returns
+    /// whether the sandbox is pulled now.
+    pub(super) async fn resume_pull(&self, sandbox_id: &str) -> Result<bool> {
+        let Some(persistent) = self.persistent.as_deref() else {
+            return Ok(false);
+        };
+        if persistent.pull_of(sandbox_id).is_some() {
+            return Ok(true);
+        }
+        let channel = self.storage_channel(sandbox_id)?;
+        let status = channel
+            .status_op("storageStatus", "sandbox.persistentStorage", json!({}))
+            .await?;
+        let Some(key) = status.key else {
+            return Ok(false);
+        };
+        let store = persistent.key_store(&key, "sandbox.persistentStorage")?;
+        let Some((head, version)) = alien_sandbox_storage::read_head(&store)
+            .await
+            .map_err(|e| storage_failed("sandbox.persistentStorage", e))?
+        else {
+            return Ok(false);
+        };
+        if head.writer != sandbox_id {
+            return Ok(false);
+        }
+        persistent.start(
+            channel,
+            &key,
+            Puller::new(sandbox_id, version, GCP_STORAGE_PAGE_BYTES),
+        )?;
+        Ok(true)
+    }
+
+    /// The agent's view, with `head` and `lastSyncedAt` taken from the store: on GCP a commit is
+    /// durable only once the binding published it.
+    pub(super) async fn pulled_status(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
+        let persistent = self.persistent_store("sandbox.persistentStorage")?;
+        self.resume_pull(sandbox_id).await?;
+        let channel = self.storage_channel(sandbox_id)?;
+        let mut status = channel
+            .status_op("storageStatus", "sandbox.persistentStorage", json!({}))
+            .await?;
+        let Some(key) = status.key.clone() else {
+            return Ok(status);
+        };
+        let store = persistent.key_store(&key, "sandbox.persistentStorage")?;
+        let head = alien_sandbox_storage::read_head(&store)
+            .await
+            .map_err(|e| storage_failed("sandbox.persistentStorage", e))?;
+        match head {
+            Some((head, _)) if head.writer == sandbox_id => {
+                status.head = head.commit.map(|commit| commit.seq);
+                status.last_synced_at = Some(head.updated_at);
+            }
+            _ => {
+                status.state = SandboxStorageState::Stopped;
+                status.last_error = Some(format!("another sandbox claimed storage key '{key}'"));
+                return Ok(status);
+            }
+        }
+        if let Some(pull) = persistent.pull_of(sandbox_id) {
+            let last = pull.last.lock().expect("pull report lock").clone();
+            if last.superseded {
+                status.state = SandboxStorageState::Stopped;
+                status.last_error = last.error;
+            } else if let Some(error) = last.error {
+                if status.state == SandboxStorageState::Replicating {
+                    status.state = SandboxStorageState::Behind;
+                    status.last_error = Some(error);
+                }
+            }
+        }
+        Ok(status)
+    }
+
+    /// Commits in the sandbox, then publishes until nothing is pending, so every write made before
+    /// the call is in the store when it returns.
+    pub(super) async fn pull_sync(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
+        let persistent = self.persistent_store("sandbox.sync")?;
+        if !self.resume_pull(sandbox_id).await? {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "storage".to_string(),
+                reason: format!(
+                    "sandbox '{sandbox_id}' holds no storage key this binding can publish"
+                ),
+            }));
+        }
+        let channel = self.storage_channel(sandbox_id)?;
+        let synced = channel
+            .status_op("storageSync", "sandbox.sync", json!({}))
+            .await?;
+        let pull = persistent
+            .pull_of(sandbox_id)
+            .expect("resume_pull registered the pull");
+        let store = persistent.key_store(&pull.key, "sandbox.sync")?;
+        // Done once HEAD names the sync's commit or a later one. The agent commits at most once a
+        // second, so a sandbox that keeps writing cannot keep this going: the first publish after
+        // the sync carries a commit at least as new. An idle pull means another puller (the loop,
+        // or another binding instance) may have published it; the store says whether it did.
+        let reached = |seq: Option<u64>| seq >= synced.head;
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match pull.pull(&channel, &store).await {
+                Ok(PullOutcome::Published { commit, .. })
+                    if reached(commit.as_ref().map(|c| c.seq)) =>
+                {
+                    break
+                }
+                Ok(PullOutcome::Published { .. }) => {}
+                Ok(PullOutcome::Idle) => {
+                    let head = alien_sandbox_storage::read_head(&store)
+                        .await
+                        .map_err(|e| storage_failed("sandbox.sync", e))?;
+                    if let Some((head, _)) = head {
+                        if head.writer == sandbox_id && reached(head.commit.as_ref().map(|c| c.seq))
+                        {
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(PULL_INTERVAL).await;
+                }
+                Err(error) => return Err(storage_failed("sandbox.sync", error)),
+            }
+            if attempts >= SYNC_PULL_ATTEMPTS {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "storage".to_string(),
+                    reason: format!(
+                        "sandbox.sync: the commit did not reach the store after {attempts} pulls"
+                    ),
+                }));
+            }
+        }
+        self.pulled_status(sandbox_id).await
+    }
+
+    /// Stops pulling a sandbox that is gone.
+    pub(super) fn forget_pull(&self, sandbox_id: &str) {
+        if let Some(persistent) = self.persistent.as_deref() {
+            persistent.forget(sandbox_id);
+        }
+    }
+
+    pub(super) fn storage_key_store(&self, key: &str, operation: &str) -> Result<KeyStore> {
+        self.persistent_store(operation)?.key_store(key, operation)
+    }
+}
+
+fn storage_failed(operation: &str, error: AlienError<StorageError>) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::SandboxCommandFailed {
+        failure: "storage".to_string(),
+        reason: format!("{operation}: {error}"),
+    })
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use std::net::SocketAddr;
@@ -169,6 +629,7 @@ mod tests {
     use alien_core::sandbox_capability::{
         SandboxCapabilityClaims, SandboxOperationClass, SandboxSessionIdentity,
     };
+    use alien_error::ContextError as _;
     use alien_gcp_clients::gcp::agent_platform::MockAgentPlatformApi;
     use alien_sandbox_agent::exec::ExecIdentity;
     use alien_sandbox_agent::server::{router, AgentAuthorization, AgentState};
@@ -180,11 +641,47 @@ mod tests {
 
     use super::*;
 
+    /// The agents run on a runtime of their own. The mocked client runs its closures under a
+    /// lock and blocks on the agent's answer; with the agents on the test's runtime, the binding's
+    /// pull loop calling `:execute` meanwhile could take every worker and the agent would never
+    /// answer.
+    fn agent_runtime() -> &'static tokio::runtime::Runtime {
+        static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .enable_all()
+                .build()
+                .unwrap()
+        })
+    }
+
+    /// One `:execute` delivery: the envelope posted to the agent's root route, its body back.
+    fn post_to_agent(url: String, token: String, input: Vec<u8>) -> bytes::Bytes {
+        let (tx, rx) = std::sync::mpsc::channel();
+        agent_runtime().spawn(async move {
+            let body = reqwest::Client::new()
+                .post(url)
+                .bearer_auth(token)
+                .header("content-type", "application/json")
+                .body(input)
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let _ = tx.send(body);
+        });
+        tokio::task::block_in_place(|| rx.recv().unwrap())
+    }
+
     /// A real agent on loopback whose sandbox declares persistent storage, with its spool.
     struct Agent {
         url: String,
         token: String,
         spool: Arc<Spool>,
+        workspace: std::path::PathBuf,
         _root: tempfile::TempDir,
     }
 
@@ -229,9 +726,11 @@ mod tests {
             agent_binary: std::path::PathBuf::from("/bin/false"),
             storage: Some(storage),
         });
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}/", listener.local_addr().unwrap());
-        tokio::spawn(async move {
+        agent_runtime().spawn(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
             axum::serve(
                 listener,
                 router(state).into_make_service_with_connect_info::<SocketAddr>(),
@@ -255,6 +754,7 @@ mod tests {
             url,
             token,
             spool,
+            workspace: root.path().join("workspace"),
             _root: root,
         }
     }
@@ -274,21 +774,7 @@ mod tests {
                 .unwrap()
                 .push(serde_json::from_slice(input).unwrap());
             let (url, token, input) = (url.clone(), token.clone(), input.to_vec());
-            let body = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async move {
-                    reqwest::Client::new()
-                        .post(url)
-                        .bearer_auth(token)
-                        .header("content-type", "application/json")
-                        .body(input)
-                        .send()
-                        .await
-                        .unwrap()
-                        .bytes()
-                        .await
-                        .unwrap()
-                })
-            });
+            let body = post_to_agent(url, token, input);
             // The reply carries the agent's body base64-encoded once more.
             assert!(
                 BASE64.encode(&body).len() < 2_000_000,
@@ -365,8 +851,9 @@ mod tests {
         let envelopes = Arc::new(std::sync::Mutex::new(Vec::new()));
         let provider = through_execute(&first, Arc::clone(&envelopes));
         let channel = provider.storage_channel("sb-1").unwrap();
+        let channel = &channel;
         let mut puller = Puller::new("sandbox-1", start.head_version, GCP_STORAGE_PAGE_BYTES);
-        let outcome = puller.pull(&channel, &store, "k").await.unwrap();
+        let outcome = puller.pull(channel, &store, "k").await.unwrap();
         assert!(
             matches!(outcome, PullOutcome::Published { .. }),
             "{outcome:?}"
@@ -384,9 +871,10 @@ mod tests {
         let second = agent().await;
         let provider = through_execute(&second, Arc::new(std::sync::Mutex::new(Vec::new())));
         let channel = provider.storage_channel("sb-2").unwrap();
+        let channel = &channel;
         let (head, _) = read_head(&store).await.unwrap().unwrap();
         let manifest = seed(
-            &channel,
+            channel,
             &store,
             head.commit.as_ref().unwrap(),
             GCP_STORAGE_PAGE_BYTES,
@@ -398,6 +886,298 @@ mod tests {
             .await
             .unwrap();
         assert!(restored.0 == content);
+    }
+
+    // ---- the binding: create, pull loop, sync, status, takeover ----------------------------
+
+    /// Sandboxes as Agent Platform runs them, each a real agent reached through `:execute`.
+    #[derive(Default)]
+    struct Fleet {
+        waiting: std::sync::Mutex<Vec<Agent>>,
+        running: std::sync::Mutex<std::collections::HashMap<String, Agent>>,
+        deleted: std::sync::Mutex<std::collections::HashSet<String>>,
+        next: std::sync::atomic::AtomicU64,
+    }
+
+    fn not_found(
+        id: &str,
+    ) -> AlienError<alien_gcp_clients::gcp::agent_platform::AgentPlatformErrorData> {
+        AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+            resource_type: "SandboxEnvironment".to_string(),
+            resource_name: id.to_string(),
+        })
+        .context(
+            alien_gcp_clients::gcp::agent_platform::AgentPlatformErrorData::RequestFailed {
+                operation: "get sandbox".to_string(),
+                message: id.to_string(),
+            },
+        )
+    }
+
+    fn running(id: &str) -> alien_gcp_clients::gcp::agent_platform::SandboxEnvironment {
+        alien_gcp_clients::gcp::agent_platform::SandboxEnvironment {
+            name: Some(format!(
+                "projects/p/locations/us-central1/reasoningEngines/e/sandboxEnvironments/{id}"
+            )),
+            display_name: None,
+            state: Some("STATE_RUNNING".to_string()),
+            create_time: None,
+            sandbox_environment_template: None,
+            expire_time: None,
+            connection_info: None,
+            extra: Default::default(),
+        }
+    }
+
+    fn fleet_client(fleet: Arc<Fleet>) -> MockAgentPlatformApi {
+        let mut client = MockAgentPlatformApi::new();
+        let f = Arc::clone(&fleet);
+        client.expect_create_sandbox().returning(move |_, _| {
+            let id = format!(
+                "{}",
+                1000 + f.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            );
+            let agent = f.waiting.lock().unwrap().remove(0);
+            f.running.lock().unwrap().insert(id.clone(), agent);
+            Ok(alien_gcp_clients::gcp::longrunning::Operation {
+                name: Some("projects/p/locations/us-central1/operations/op".to_string()),
+                metadata: None,
+                done: Some(true),
+                result: Some(
+                    alien_gcp_clients::gcp::longrunning::OperationResult::Response {
+                        response: serde_json::to_value(running(&id)).unwrap(),
+                    },
+                ),
+            })
+        });
+        let f = Arc::clone(&fleet);
+        client.expect_get_sandbox().returning(move |_, id| {
+            if f.running.lock().unwrap().contains_key(id) {
+                Ok(running(id))
+            } else {
+                Err(not_found(id))
+            }
+        });
+        let f = Arc::clone(&fleet);
+        client.expect_delete_sandbox().returning(move |_, id| {
+            match f.running.lock().unwrap().remove(id) {
+                Some(_) => {
+                    f.deleted.lock().unwrap().insert(id.to_string());
+                    Ok(())
+                }
+                None => Err(not_found(id)),
+            }
+        });
+        let f = Arc::clone(&fleet);
+        client.expect_execute().returning(move |_, id, input| {
+            let (url, token) = match f.running.lock().unwrap().get(id) {
+                Some(agent) => (agent.url.clone(), agent.token.clone()),
+                None => return Err(not_found(id)),
+            };
+            let input = input.to_vec();
+            let body = post_to_agent(url, token, input);
+            Ok(body.to_vec())
+        });
+        client
+    }
+
+    fn declared() -> alien_core::bindings::SandboxPersistentStorageBinding {
+        alien_core::bindings::SandboxPersistentStorageBinding {
+            path: "/workspace".to_string(),
+            store: alien_core::bindings::PersistentStoreLocator::Gcp {
+                bucket: alien_core::BindingValue::Value("b".to_string()),
+                prefix: "keys/".to_string(),
+            },
+            exclude: vec![],
+            max_size_bytes: None,
+        }
+    }
+
+    async fn fleet(
+        agents: usize,
+    ) -> (
+        Arc<Fleet>,
+        GcpAgentPlatformSandbox,
+        Arc<object_store::memory::InMemory>,
+    ) {
+        let fleet = Arc::new(Fleet::default());
+        for _ in 0..agents {
+            let agent = agent().await;
+            fleet.waiting.lock().unwrap().push(agent);
+        }
+        let bucket = Arc::new(object_store::memory::InMemory::new());
+        let provider = GcpAgentPlatformSandbox::new(
+            Arc::new(fleet_client(Arc::clone(&fleet))),
+            "projects/p/locations/us-central1/reasoningEngines/e".to_string(),
+            "projects/p/locations/us-central1/sandboxTemplates/t".to_string(),
+            Some(3600),
+        )
+        .with_persistent_store(Some(GcpPersistentStore::new(
+            declared(),
+            Arc::clone(&bucket) as Arc<dyn object_store::ObjectStore>,
+            "keys/".to_string(),
+        )));
+        (fleet, provider, bucket)
+    }
+
+    fn workspace(fleet: &Fleet, id: &str) -> std::path::PathBuf {
+        fleet.running.lock().unwrap()[id].workspace.clone()
+    }
+
+    async fn eventually<F: std::future::Future<Output = bool>>(mut check: impl FnMut() -> F) {
+        for _ in 0..200 {
+            if check().await {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("not reached within 10 s");
+    }
+
+    fn create(key: &str) -> crate::traits::CreateSandboxRequest {
+        crate::traits::CreateSandboxRequest {
+            storage_key: Some(key.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// A key outlives its sandbox: what the first sandbox wrote is published by the pull loop
+    /// with no call from the caller, restored into the next sandbox at create, and readable
+    /// without one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_written_by_one_sandbox_is_restored_into_the_next() {
+        use crate::traits::Sandbox as _;
+        let (fleet, provider, _bucket) = fleet(2).await;
+        let first = provider.create(create("project-1")).await.unwrap();
+        std::fs::write(
+            workspace(&fleet, &first.sandbox_id).join("notes.txt"),
+            b"one",
+        )
+        .unwrap();
+        // No sync: the agent commits after a quiet second and the binding's loop publishes.
+        eventually(|| async {
+            provider
+                .read_storage_file("project-1", "notes.txt")
+                .await
+                .ok()
+                == Some(b"one".to_vec())
+        })
+        .await;
+        let status = provider
+            .storage_status(&first.sandbox_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status.state, SandboxStorageState::Replicating);
+        assert_eq!(status.key.as_deref(), Some("project-1"));
+        assert!(status.head.is_some(), "{status:?}");
+
+        provider.terminate(&first.sandbox_id).await.unwrap();
+        let second = provider.create(create("project-1")).await.unwrap();
+        assert_eq!(
+            std::fs::read(workspace(&fleet, &second.sandbox_id).join("notes.txt")).unwrap(),
+            b"one",
+            "restored before create returned"
+        );
+    }
+
+    /// `sync` returns once a write is in the store, not merely committed inside the sandbox.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sync_returns_once_the_write_is_in_the_store() {
+        use crate::traits::Sandbox as _;
+        let (fleet, provider, _bucket) = fleet(1).await;
+        let sandbox = provider.create(create("k")).await.unwrap();
+        // Stop the loop so only the sync can publish.
+        provider.forget_pull(&sandbox.sandbox_id);
+        std::fs::write(workspace(&fleet, &sandbox.sandbox_id).join("a"), b"synced").unwrap();
+        let status = provider.sync_storage(&sandbox.sandbox_id).await.unwrap();
+        assert_eq!(
+            provider.read_storage_file("k", "a").await.unwrap(),
+            b"synced"
+        );
+        let (head, _) =
+            alien_sandbox_storage::read_head(&provider.storage_key_store("k", "t").unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            status.head,
+            head.commit.map(|c| c.seq),
+            "status reports the store's HEAD"
+        );
+    }
+
+    /// A binding that starts again (a new workload process) finds its sandbox and pulls it
+    /// again; a terminate publishes the last writes before the sandbox goes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_binding_resumes_pulling_and_terminate_publishes_first() {
+        use crate::traits::Sandbox as _;
+        let (fleet, provider, bucket) = fleet(1).await;
+        let sandbox = provider.create(create("k")).await.unwrap();
+        drop(provider);
+
+        let again = GcpAgentPlatformSandbox::new(
+            Arc::new(fleet_client(Arc::clone(&fleet))),
+            "projects/p/locations/us-central1/reasoningEngines/e".to_string(),
+            "projects/p/locations/us-central1/sandboxTemplates/t".to_string(),
+            Some(3600),
+        )
+        .with_persistent_store(Some(GcpPersistentStore::new(
+            declared(),
+            bucket as Arc<dyn object_store::ObjectStore>,
+            "keys/".to_string(),
+        )));
+        again.get(&sandbox.sandbox_id).await.unwrap().unwrap();
+        std::fs::write(workspace(&fleet, &sandbox.sandbox_id).join("late"), b"kept").unwrap();
+        again.terminate(&sandbox.sandbox_id).await.unwrap();
+        assert_eq!(again.read_storage_file("k", "late").await.unwrap(), b"kept");
+    }
+
+    /// A second sandbox claiming the key stops the first: its status says `stopped` and its
+    /// later writes never reach the store.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sandbox_whose_key_was_claimed_reports_stopped() {
+        use crate::traits::Sandbox as _;
+        let (fleet, provider, _bucket) = fleet(2).await;
+        let old = provider.create(create("k")).await.unwrap();
+        let new = provider.create(create("k")).await.unwrap();
+        std::fs::write(workspace(&fleet, &new.sandbox_id).join("owner"), b"new").unwrap();
+        provider.sync_storage(&new.sandbox_id).await.unwrap();
+        std::fs::write(workspace(&fleet, &old.sandbox_id).join("owner"), b"old").unwrap();
+        eventually(|| async {
+            provider
+                .storage_status(&old.sandbox_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state
+                == SandboxStorageState::Stopped
+        })
+        .await;
+        assert!(provider.sync_storage(&old.sandbox_id).await.is_err());
+        assert_eq!(
+            provider.read_storage_file("k", "owner").await.unwrap(),
+            b"new"
+        );
+        assert!(
+            provider.delete_storage("k").await.is_err(),
+            "a running holder keeps its key"
+        );
+        provider.terminate(&new.sandbox_id).await.unwrap();
+        provider.delete_storage("k").await.unwrap();
+        assert!(provider.read_storage_file("k", "owner").await.is_err());
+    }
+
+    /// Without a declaration a key is refused, and with one a create needs it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_declaration_makes_the_key_required() {
+        use crate::traits::Sandbox as _;
+        let (_fleet, provider, _bucket) = fleet(0).await;
+        let error = provider
+            .create(crate::traits::CreateSandboxRequest::default())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("storageKey"), "{error}");
     }
 
     #[test]
