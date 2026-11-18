@@ -497,7 +497,33 @@ export interface ResolvedSandbox {
 }
 
 /** What a sandbox is created with. */
+/** Short-lived credentials the agent's mount helper uses to talk to a file system. */
+export interface SandboxMountCredentials {
+  accessKeyId: string
+  secretAccessKey: string
+  sessionToken: string
+  /** When the credentials expire, RFC 3339. */
+  expiration: string
+}
+
+/** What a caller supplies for one declared `s3files` mount when it creates a sandbox. */
+export interface SandboxMountSource {
+  /** The S3 Files file system id. */
+  fileSystemId: string
+  /** The access point id the sandbox is confined to. */
+  accessPointId: string
+  /** Region of the file system. */
+  region: string
+  credentials: SandboxMountCredentials
+}
+
 export interface CreateSandboxOptions {
+  /**
+   * One entry per declared `s3files` mount, keyed by its declared path. A declared mount with no
+   * entry, or a path the declaration does not name, is refused. Backends without mounts refuse
+   * any entry. Credentials are never logged or placed in the sandbox's environment.
+   */
+  mounts?: Record<string, SandboxMountSource>
   /**
    * Sets the runtime policy. On creation, omission uses the resource default or public internet.
    * On an existing sandbox, getOrCreate preserves its policy when egress is omitted.
@@ -654,6 +680,15 @@ export interface Sandbox {
    * `smtp.example.com:587`); `internet` and portless targets exclude them.
    */
   updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
+  /**
+   * Replaces the credentials of a mounted `s3files` path without remounting it. Mint the new
+   * credentials before the old ones expire.
+   */
+  updateMountCredentials(
+    sandboxId: string,
+    path: string,
+    credentials: SandboxMountCredentials,
+  ): Promise<void>
   /**
    * Lists this binding's sandboxes. Not offered on AWS or Azure, which raise rather than
    * enumerate. Reach a sandbox whose id you hold with `get`.

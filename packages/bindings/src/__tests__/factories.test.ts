@@ -134,6 +134,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
       throw new Error("not used by this test")
     },
     updateEgress: async () => {},
+    updateMountCredentials: async () => {},
     capabilities: () => ["reconnect"],
     sessionCapabilities: async () => ["reconnect"],
     create: async sandboxId => ({ sandboxId: sandboxId ?? "s1", state: "running", generation: 1 }),
@@ -695,15 +696,31 @@ describe("sandbox create", () => {
     expect(created.sandboxId).toBe("provider-assigned")
     // Positional, because the addon takes them positionally: a lifetime that arrives as the
     // tenant key, or not at all, is a sandbox with no deadline and no error to show for it.
-    expect(create).toHaveBeenCalledWith("mine", null, null, 600_000, null)
+    expect(create).toHaveBeenCalledWith("mine", null, null, 600_000, null, null)
 
     const resolved = await handle.getOrCreate({ sandboxId: "requested", timeoutMs: 1_000 })
     expect(resolved.sandbox.sandboxId).toBe("provider-recovered")
     expect(resolved.created).toBe(true)
-    expect(getOrCreate).toHaveBeenCalledWith("requested", null, null, 1_000, null)
+    expect(getOrCreate).toHaveBeenCalledWith("requested", null, null, 1_000, null, null)
 
     await handle.getOrCreate({ timeoutMs: 2_000 })
-    expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000, null)
+    expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000, null, null)
+
+    const mounts = {
+      "/workspace": {
+        fileSystemId: "fs-1",
+        accessPointId: "fsap-1",
+        region: "us-east-1",
+        credentials: {
+          accessKeyId: "a",
+          secretAccessKey: "b",
+          sessionToken: "c",
+          expiration: "2026-11-19T00:00:00Z",
+        },
+      },
+    }
+    await handle.create({ mounts })
+    expect(create).toHaveBeenLastCalledWith(null, null, null, null, null, mounts)
   })
 })
 

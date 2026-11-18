@@ -1269,6 +1269,47 @@ pub trait Container: Binding {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
+/// Short-lived credentials the agent's mount helper uses to talk to a file system.
+///
+/// Debug output never shows the values: they must not reach logs.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxMountCredentials {
+    /// Access key id
+    pub access_key_id: String,
+    /// Secret access key
+    pub secret_access_key: String,
+    /// Session token
+    pub session_token: String,
+    /// When the credentials expire, RFC 3339
+    pub expiration: String,
+}
+
+impl std::fmt::Debug for SandboxMountCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SandboxMountCredentials")
+            .field("expiration", &self.expiration)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a caller supplies for one declared `s3files` mount when it creates a sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SandboxMountSource {
+    /// The S3 Files file system id
+    pub file_system_id: String,
+    /// The access point id the sandbox is confined to
+    pub access_point_id: String,
+    /// Region of the file system
+    pub region: String,
+    /// Credentials for this mount
+    pub credentials: SandboxMountCredentials,
+}
+
 /// A request to create a sandbox.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -1297,6 +1338,11 @@ pub struct CreateSandboxRequest {
     /// so a caller cannot buy itself more life than the deployment allows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// What each declared `s3files` mount attaches, keyed by its declared path. Every declared
+    /// `s3files` mount needs an entry and a path the declaration does not name is refused.
+    /// Backends without mounts refuse a request that carries any.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mounts: BTreeMap<String, SandboxMountSource>,
 }
 
 /// A live sandbox.
@@ -1591,6 +1637,22 @@ fn default_caller_authorization_header() -> String {
 pub trait Sandbox: Binding {
     /// Network declaration carried by the resolved binding.
     fn egress_declaration(&self) -> Option<&alien_core::SandboxEgress>;
+
+    /// Replaces the credentials of a mounted `s3files` path without remounting it.
+    /// Backends without mounts refuse this operation explicitly.
+    async fn update_mount_credentials(
+        &self,
+        _sandbox_id: &str,
+        _path: &str,
+        _credentials: SandboxMountCredentials,
+    ) -> Result<()> {
+        Err(alien_error::AlienError::new(
+            crate::error::ErrorData::OperationNotSupported {
+                operation: "sandbox.updateMountCredentials".to_string(),
+                reason: "this sandbox backend has no mounts".to_string(),
+            },
+        ))
+    }
 
     /// Changes a sandbox's runtime policy, including while paused.
     /// Backends without gateway enforcement refuse this operation explicitly.

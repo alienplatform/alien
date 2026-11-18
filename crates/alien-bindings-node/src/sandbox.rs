@@ -418,6 +418,7 @@ impl SandboxHandle {
         env: Option<std::collections::HashMap<String, String>>,
         timeout_ms: Option<u32>,
         egress: Option<serde_json::Value>,
+        mounts: Option<serde_json::Value>,
     ) -> napi::Result<SandboxInstanceJs> {
         let sandbox = self.inner.clone();
         let created = sandbox
@@ -427,10 +428,27 @@ impl SandboxHandle {
                 tenant_key,
                 env: into_env(env),
                 timeout_ms: timeout_ms.map(u64::from),
+                mounts: parse_mounts(mounts)?,
             })
             .await
             .map_err(map_alien_error)?;
         Ok(sandbox_to_js(created))
+    }
+
+    /// Renews the credentials of a mounted `s3files` path without remounting it.
+    #[napi]
+    pub async fn update_mount_credentials(
+        &self,
+        sandbox_id: String,
+        path: String,
+        credentials: serde_json::Value,
+    ) -> napi::Result<()> {
+        let credentials = serde_json::from_value(credentials)
+            .map_err(|_| napi::Error::from_reason("mount credentials must carry accessKeyId, secretAccessKey, sessionToken and expiration"))?;
+        self.inner
+            .update_mount_credentials(&sandbox_id, &path, credentials)
+            .await
+            .map_err(map_alien_error)
     }
 
     /// Updates the sandbox's egress policy within its declaration.
@@ -466,6 +484,7 @@ impl SandboxHandle {
         env: Option<std::collections::HashMap<String, String>>,
         timeout_ms: Option<u32>,
         egress: Option<serde_json::Value>,
+        mounts: Option<serde_json::Value>,
     ) -> napi::Result<ResolvedSandboxJs> {
         let sandbox = self.inner.clone();
         let resolved = sandbox
@@ -475,6 +494,7 @@ impl SandboxHandle {
                 tenant_key,
                 env: into_env(env),
                 timeout_ms: timeout_ms.map(u64::from),
+                mounts: parse_mounts(mounts)?,
             })
             .await
             .map_err(map_alien_error)?;
@@ -879,4 +899,21 @@ mod tests {
             assert!(handle.next().await.expect("closed").is_none());
         });
     }
+}
+
+/// Reads the per-path mount sources a create call carries. The error never echoes the input:
+/// it holds credentials.
+fn parse_mounts(
+    value: Option<serde_json::Value>,
+) -> napi::Result<std::collections::BTreeMap<String, alien_bindings::traits::SandboxMountSource>> {
+    value
+        .map(|value| {
+            serde_json::from_value(value).map_err(|_| {
+                napi::Error::from_reason(
+                    "mounts must map each declared path to fileSystemId, accessPointId, region and credentials",
+                )
+            })
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
 }

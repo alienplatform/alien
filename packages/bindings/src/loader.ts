@@ -36,6 +36,8 @@ import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type {
+  SandboxMountCredentials,
+  SandboxMountSource,
   StorageGetResult,
   StorageHeadResult,
   StoragePutOptions,
@@ -258,6 +260,7 @@ export interface RawSandboxHandle {
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
     egress?: EgressPolicy | null,
+    mounts?: Record<string, SandboxMountSource> | null,
   ): Promise<RawSandboxInstance>
   get(sandboxId: string): Promise<RawSandboxInstance | null>
   getOrCreate(
@@ -266,8 +269,14 @@ export interface RawSandboxHandle {
     env?: Record<string, string> | null,
     timeoutMs?: number | null,
     egress?: EgressPolicy | null,
+    mounts?: Record<string, SandboxMountSource> | null,
   ): Promise<RawResolvedSandbox>
   updateEgress(sandboxId: string, egress: EgressPolicy): Promise<void>
+  updateMountCredentials(
+    sandboxId: string,
+    path: string,
+    credentials: SandboxMountCredentials,
+  ): Promise<void>
   list(): Promise<RawSandboxInstance[]>
   runCommand(
     sandboxId: string,

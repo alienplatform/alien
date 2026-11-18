@@ -610,6 +610,24 @@ class SandboxAllowEgress(TypedDict):
 EgressPolicy = Literal["internet"] | SandboxAllowEgress
 
 
+class MountCredentials(TypedDict):
+    """Short-lived credentials for one mount. ``expiration`` is RFC 3339."""
+
+    accessKeyId: str
+    secretAccessKey: str
+    sessionToken: str
+    expiration: str
+
+
+class MountSource(TypedDict):
+    """What one declared ``s3files`` mount attaches. Keyed by its declared path."""
+
+    fileSystemId: str
+    accessPointId: str
+    region: str
+    credentials: MountCredentials
+
+
 class Sandbox:
     def __init__(self, name: str) -> None:
         self._handle = _LazyHandle[Any]("sandbox", name)
@@ -631,6 +649,7 @@ class Sandbox:
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
         egress: EgressPolicy | None = None,
+        mounts: Mapping[str, MountSource] | None = None,
     ) -> SandboxInfo:
         value = await (await self._handle.get()).create(
             sandbox_id,
@@ -638,6 +657,7 @@ class Sandbox:
             dict(env) if env else None,
             timeout_ms,
             json.dumps(egress) if egress is not None else None,
+            json.dumps(dict(mounts)) if mounts else None,
         )
         return _sandbox_info(value)
 
@@ -655,6 +675,7 @@ class Sandbox:
         env: Mapping[str, str] | None = None,
         timeout_ms: int | None = None,
         egress: EgressPolicy | None = None,
+        mounts: Mapping[str, MountSource] | None = None,
     ) -> tuple[SandboxInfo, bool]:
         """Return the sandbox for ``sandbox_id``, creating it when none exists.
 
@@ -669,8 +690,18 @@ class Sandbox:
             dict(env) if env else None,
             timeout_ms,
             json.dumps(egress) if egress is not None else None,
+            json.dumps(dict(mounts)) if mounts else None,
         )
         return _sandbox_info(value.sandbox), value.created
+
+    @translate_errors
+    async def update_mount_credentials(
+        self, sandbox_id: str, path: str, credentials: MountCredentials
+    ) -> None:
+        """Renew a mounted ``s3files`` path's credentials without remounting it."""
+        await (await self._handle.get()).update_mount_credentials(
+            sandbox_id, path, json.dumps(credentials)
+        )
 
     @translate_errors
     async def update_egress(self, sandbox_id: str, egress: EgressPolicy) -> None:

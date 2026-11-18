@@ -202,6 +202,7 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
             options?.env ?? null,
             options?.timeoutMs ?? null,
             options?.egress ?? null,
+            options?.mounts ?? null,
           ),
         ),
       ),
@@ -223,11 +224,14 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
           options?.env ?? null,
           options?.timeoutMs ?? null,
           options?.egress ?? null,
+          options?.mounts ?? null,
         )
         return { sandbox: instance(resolved.sandbox), created: resolved.created }
       }),
     updateEgress: (sandboxId, egress) =>
       guard(handle, async raw => raw.updateEgress(sandboxId, egress)),
+    updateMountCredentials: (sandboxId, path, credentials) =>
+      guard(handle, async raw => raw.updateMountCredentials(sandboxId, path, credentials)),
     list: () => guard(handle, async raw => (await raw.list()).map(instance)),
     startJob: (sandboxId, command, options) =>
       guard(handle, async raw =>

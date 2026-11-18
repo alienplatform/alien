@@ -267,12 +267,28 @@ fn parse_egress(value: &str) -> PyResult<alien_core::EgressPolicy> {
         .map_err(map_alien_error)
 }
 
+/// Reads the per-path mount sources a create call carries. The error never echoes the input:
+/// it holds credentials.
+fn parse_mounts(
+    value: Option<&str>,
+) -> PyResult<std::collections::BTreeMap<String, alien_bindings::traits::SandboxMountSource>> {
+    match value {
+        None => Ok(Default::default()),
+        Some(value) => serde_json::from_str(value).map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err(
+                "mounts must map each declared path to fileSystemId, accessPointId, region and credentials",
+            )
+        }),
+    }
+}
+
 fn sandbox_request(
     sandbox_id: Option<String>,
     tenant_key: Option<String>,
     env: Option<HashMap<String, String>>,
     timeout_ms: Option<u64>,
     egress: Option<alien_core::EgressPolicy>,
+    mounts: std::collections::BTreeMap<String, alien_bindings::traits::SandboxMountSource>,
 ) -> CreateSandboxRequest {
     CreateSandboxRequest {
         egress,
@@ -282,6 +298,7 @@ fn sandbox_request(
             .map(|value| value.into_iter().collect())
             .unwrap_or_default(),
         timeout_ms,
+        mounts,
     }
 }
 
@@ -346,7 +363,7 @@ impl SandboxHandle {
         })
     }
 
-    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]
+    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None, mounts_json=None))]
     fn create<'py>(
         &self,
         py: Python<'py>,
@@ -355,16 +372,39 @@ impl SandboxHandle {
         env: Option<HashMap<String, String>>,
         timeout_ms: Option<u64>,
         egress_json: Option<String>,
+        mounts_json: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let egress = egress_json.as_deref().map(parse_egress).transpose()?;
+        let mounts = parse_mounts(mounts_json.as_deref())?;
         let inner = self.inner.clone();
         future_into_py(py, async move {
             inner
                 .create(sandbox_request(
-                    sandbox_id, tenant_key, env, timeout_ms, egress,
+                    sandbox_id, tenant_key, env, timeout_ms, egress, mounts,
                 ))
                 .await
                 .map(sandbox_info)
+                .map_err(map_alien_error)
+        })
+    }
+
+    fn update_mount_credentials<'py>(
+        &self,
+        py: Python<'py>,
+        sandbox_id: String,
+        path: String,
+        credentials_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let credentials = serde_json::from_str(&credentials_json).map_err(|_| {
+            pyo3::exceptions::PyValueError::new_err(
+                "mount credentials must carry accessKeyId, secretAccessKey, sessionToken and expiration",
+            )
+        })?;
+        let inner = self.inner.clone();
+        future_into_py(py, async move {
+            inner
+                .update_mount_credentials(&sandbox_id, &path, credentials)
+                .await
                 .map_err(map_alien_error)
         })
     }
@@ -396,7 +436,7 @@ impl SandboxHandle {
         })
     }
 
-    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]
+    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None, mounts_json=None))]
     fn get_or_create<'py>(
         &self,
         py: Python<'py>,
@@ -405,13 +445,15 @@ impl SandboxHandle {
         env: Option<HashMap<String, String>>,
         timeout_ms: Option<u64>,
         egress_json: Option<String>,
+        mounts_json: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let egress = egress_json.as_deref().map(parse_egress).transpose()?;
+        let mounts = parse_mounts(mounts_json.as_deref())?;
         let inner = self.inner.clone();
         future_into_py(py, async move {
             let value = inner
                 .get_or_create(sandbox_request(
-                    sandbox_id, tenant_key, env, timeout_ms, egress,
+                    sandbox_id, tenant_key, env, timeout_ms, egress, mounts,
                 ))
                 .await
                 .map_err(map_alien_error)?;

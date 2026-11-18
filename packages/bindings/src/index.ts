@@ -63,6 +63,8 @@ export type {
   JobError,
   JobExit,
   JobPoll,
+  SandboxMountCredentials,
+  SandboxMountSource,
   Key,
   KeyOptions,
   Kv,
