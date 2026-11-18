@@ -73,6 +73,16 @@ pub trait CredentialResolver: Send + Sync {
         deployment: &DeploymentRecord,
         _resource_id: &str,
     ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        // Azure's remote data access belongs to the Remote Bindings identity.
+        // `resolve` would hand out the management identity, so a resolver
+        // that does not override this method must not serve Azure.
+        if deployment.platform == Platform::Azure {
+            return Err(AlienError::new(alien_error::GenericError {
+                message: "This credential resolver does not implement remote Storage access for Azure: \
+                          override resolve_remote_storage_source to use the Remote Bindings identity"
+                    .to_string(),
+            }));
+        }
         Ok(RemoteStorageCredentialSource::Direct(
             self.resolve(deployment).await?,
         ))
