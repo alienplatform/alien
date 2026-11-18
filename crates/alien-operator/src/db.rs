@@ -1331,56 +1331,66 @@ impl OperatorDb {
                     message: "Failed to fetch approval row".to_string(),
                 })?
         {
-            let id: String = row
-                .get(0)
-                .into_alien_error()
-                .context(ErrorData::DatabaseError {
-                    message: "Failed to read approval id".to_string(),
-                })?;
-            let release_info_json: Option<String> = row.get(1).ok();
-            let config_json: String =
-                row.get(2)
-                    .into_alien_error()
-                    .context(ErrorData::DatabaseError {
-                        message: "Failed to read approval deployment_config".to_string(),
-                    })?;
-            let status_str: String = row.get(3).unwrap_or_else(|_| "pending".to_string());
-            let reason: Option<String> = row.get(4).ok();
-            let created_at: String =
-                row.get(5)
-                    .into_alien_error()
-                    .context(ErrorData::DatabaseError {
-                        message: "Failed to read approval created_at".to_string(),
-                    })?;
-            let decided_at: Option<String> = row.get(6).ok();
-            let decided_by: Option<String> = row.get(7).ok();
-
-            let release_info = release_info_json
-                .map(|json| serde_json::from_str(&json))
-                .transpose()
-                .into_alien_error()
-                .context(ErrorData::DatabaseError {
-                    message: "Failed to parse approval release_info".to_string(),
-                })?;
-            let deployment_config = serde_json::from_str(&config_json)
-                .into_alien_error()
-                .context(ErrorData::DatabaseError {
-                    message: "Failed to parse approval deployment_config".to_string(),
-                })?;
-
-            approvals.push(Approval {
-                id,
-                release_info,
-                deployment_config,
-                status: ApprovalStatus::from_str(&status_str),
-                reason,
-                created_at,
-                decided_at,
-                decided_by,
-            });
+            approvals.push(approval_from_row(&row)?);
         }
 
         Ok(approvals)
+    }
+
+    /// Number of approval records for a release, whatever their status.
+    #[cfg(test)]
+    pub(crate) async fn count_approvals_for_release(&self, release_id: &str) -> Result<usize> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM approvals WHERE json_extract(release_info, '$.releaseId') = ?",
+                (release_id.to_string(),),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to count approvals".to_string(),
+            })?;
+        let row = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch approval count".to_string(),
+            })?;
+        let count: i64 = match row {
+            Some(row) => row.get(0).unwrap_or(0),
+            None => 0,
+        };
+        Ok(count as usize)
+    }
+
+    /// The newest approval record for a release, whatever its status.
+    pub async fn get_latest_approval_for_release(
+        &self,
+        release_id: &str,
+    ) -> Result<Option<Approval>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT id, release_info, deployment_config, status, reason, created_at, decided_at, decided_by FROM approvals WHERE json_extract(release_info, '$.releaseId') = ? ORDER BY created_at DESC LIMIT 1",
+                (release_id.to_string(),),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query approval".to_string(),
+            })?;
+        match rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch approval row".to_string(),
+            })? {
+            Some(row) => Ok(Some(approval_from_row(&row)?)),
+            None => Ok(None),
+        }
     }
 
     /// Get approval status for a specific release
@@ -2633,6 +2643,56 @@ impl OperatorDb {
         })?;
         Ok(())
     }
+}
+
+fn approval_from_row(row: &turso::Row) -> Result<Approval> {
+    let id: String = row
+        .get(0)
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to read approval id".to_string(),
+        })?;
+    let release_info_json: Option<String> = row.get(1).ok();
+    let config_json: String = row
+        .get(2)
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to read approval deployment_config".to_string(),
+        })?;
+    let status_str: String = row.get(3).unwrap_or_else(|_| "pending".to_string());
+    let reason: Option<String> = row.get(4).ok();
+    let created_at: String = row
+        .get(5)
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to read approval created_at".to_string(),
+        })?;
+    let decided_at: Option<String> = row.get(6).ok();
+    let decided_by: Option<String> = row.get(7).ok();
+
+    let release_info = release_info_json
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to parse approval release_info".to_string(),
+        })?;
+    let deployment_config = serde_json::from_str(&config_json)
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to parse approval deployment_config".to_string(),
+        })?;
+
+    Ok(Approval {
+        id,
+        release_info,
+        deployment_config,
+        status: ApprovalStatus::from_str(&status_str),
+        reason,
+        created_at,
+        decided_at,
+        decided_by,
+    })
 }
 
 #[cfg(test)]

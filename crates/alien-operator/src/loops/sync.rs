@@ -1050,18 +1050,27 @@ pub(crate) async fn accept_target(
     // release with no approval record as approved, so the pending record must
     // exist by the time the target can be read or the loop is woken. A refresh
     // changes nothing that was not already approved. A target sent again while
-    // its approval is still pending keeps that record: a newer one would hide
-    // the decision on the first.
+    // its approval is still pending, or already decided, keeps that record: a
+    // newer one would hide the decision. A changed release or config is a new
+    // target and needs its own approval (compared by the hash the loop uses).
     let release_id = target_deployment
         .release_info
         .release_id
         .as_deref()
         .unwrap_or_default();
-    if !refresh
-        && state.config.requires_deployment_approval()
-        && state.db.get_approval_status_for_release(release_id).await?
-            != Some(ApprovalStatus::Pending)
-    {
+    let covered = match state.db.get_latest_approval_for_release(release_id).await? {
+        Some(latest) => {
+            crate::db::approved_target_hash(
+                latest.release_info.as_ref(),
+                &latest.deployment_config,
+            )? == crate::db::approved_target_hash(
+                Some(&target_deployment.release_info),
+                &target_deployment.config,
+            )?
+        }
+        None => false,
+    };
+    if !refresh && state.config.requires_deployment_approval() && !covered {
         let apr_id = format!("apr_{}", Uuid::new_v4().simple());
         let approval = Approval {
             id: apr_id.clone(),
@@ -2742,6 +2751,112 @@ mod tests {
         );
     }
 
+    async fn approval_fixture() -> (
+        tempfile::TempDir,
+        Arc<OperatorDb>,
+        OperatorState,
+        alien_core::sync::TargetDeployment,
+        String,
+    ) {
+        use crate::protected::tests as fixtures;
+        let data_dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
+                .await
+                .unwrap(),
+        );
+        let state = approval_required_state(data_dir.path(), db.clone());
+        let release = fixtures::signed_release(5, &fixtures::stack(&fixtures::pinned()));
+        let release_id = release.release_id.clone().unwrap();
+        let target = fixtures::target(release, vec![]);
+        (data_dir, db, state, target, release_id)
+    }
+
+    async fn approval_records(db: &OperatorDb, release_id: &str) -> usize {
+        db.count_approvals_for_release(release_id).await.unwrap()
+    }
+
+    /// The manager repeats the target on every sync. A decided approval stays
+    /// the answer: the repeat must not open a newer Pending record over it.
+    #[tokio::test]
+    async fn a_target_repeated_after_approval_stays_approved() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Approved)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_target_repeated_after_rejection_stays_rejected() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Rejected,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Rejected)
+        );
+        assert_eq!(approval_records(&db, &release_id).await, 1);
+    }
+
+    /// The same release with a changed config is a new thing to approve: the
+    /// decision on the old config does not cover it.
+    #[tokio::test]
+    async fn a_changed_config_for_an_approved_release_needs_a_new_approval() {
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let mut changed = target.clone();
+        changed
+            .config
+            .input_values
+            .insert("logLevel".to_string(), serde_json::json!("trace"));
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
+        // The changed target repeated keeps its one pending record.
+        super::accept_target(&state, &changed, false).await.unwrap();
+        assert_eq!(db.get_pending_approvals().await.unwrap().len(), 1);
+    }
+
     #[tokio::test]
     async fn a_retry_request_from_the_manager_wakes_the_deployment_loop() {
         let data_dir = tempfile::tempdir().unwrap();
@@ -3100,8 +3215,8 @@ mod tests {
             stack: Stack::new("app".into())
                 .add(worker(image), alien_core::ResourceLifecycle::Live)
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut stack_state = alien_core::StackState::new(Platform::Kubernetes);
         let mut internal = serde_json::to_value(
@@ -3284,8 +3399,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3424,8 +3539,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -3522,8 +3637,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Live,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let mut keyless = config.clone();
         keyless.runtime_identity_audience = None;
@@ -3622,8 +3737,8 @@ mod tests {
                     alien_core::ResourceLifecycle::Frozen,
                 )
                 .build(),
-                signed: None,
-                signer_lists: Vec::new(),
+            signed: None,
+            signer_lists: Vec::new(),
         };
         let config = alien_core::DeploymentConfig::builder()
             .stack_settings(Default::default())
@@ -5515,8 +5630,8 @@ mod tests {
                         alien_core::ResourceLifecycle::Live,
                     )
                     .build(),
-                    signed: None,
-                    signer_lists: Vec::new(),
+                signed: None,
+                signer_lists: Vec::new(),
             };
             let applying = status == DeploymentStatus::UpdatePending;
             DeploymentState {
