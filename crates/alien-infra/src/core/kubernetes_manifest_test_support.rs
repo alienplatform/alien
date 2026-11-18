@@ -349,19 +349,21 @@ pub(crate) async fn check_certificate_wait<C>(
     }
 
     let now = chrono::Utc::now().timestamp();
-    backdate(&mut controller, now - 20 * 60);
+    backdate(&mut controller, now - 5 * 60);
     controller
         .step(&harness.ctx())
         .await
         .expect("still inside the certificate bound");
     assert_eq!(controller.get_status(), status);
 
-    backdate(&mut controller, now - 31 * 60);
+    backdate(&mut controller, now - 11 * 60);
     let error = controller
         .step(&harness.ctx())
         .await
         .expect_err("the saved bound has passed");
-    assert!(error.to_string().contains("managed certificate"), "{error}");
+    // The error the 60-poll limit gave before: the deployment retries automatically after it.
+    assert_eq!(error.code, "RESOURCE_POLLING_TIMEOUT", "{error}");
+    assert!(!error.retryable, "{error}");
 
     // A status the issuer reports as failed is retried by the issuer: it still waits.
     managed_certificate_config(

@@ -19,6 +19,7 @@ use crate::kubernetes_public_endpoint::{
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
+    KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -43,6 +44,22 @@ fn daemonset_is_ready(daemonset: &DaemonSet) -> bool {
     daemonset.status.as_ref().is_some_and(|status| {
         status.number_ready >= status.desired_number_scheduled
             && status.desired_number_scheduled > 0
+    })
+}
+
+/// Polls (5 s apart) a rolling update may take before the update fails: the workload-wide limit.
+const UPDATE_WAIT_MAX_POLLS: u32 = KUBERNETES_WORKLOAD_READY_MAX_POLLS;
+
+/// Whether the DaemonSet's current pod template runs on every node it schedules on: the
+/// controller has seen the latest spec, every pod is updated, and every pod is available.
+/// `daemonset_is_ready` alone passes right after a patch (old pods still ready) and mid-roll.
+fn daemonset_rollout_complete(daemonset: &DaemonSet) -> bool {
+    daemonset.status.as_ref().is_some_and(|status| {
+        let desired = status.desired_number_scheduled;
+        status.observed_generation.unwrap_or(0) >= daemonset.metadata.generation.unwrap_or(1)
+            && desired > 0
+            && status.updated_number_scheduled.unwrap_or(0) == desired
+            && status.number_available.unwrap_or(0) == desired
     })
 }
 
@@ -717,7 +734,12 @@ impl KubernetesDaemonController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self.daemonset_ready(ctx).await? {
+        if self
+            .read_daemonset(ctx)
+            .await?
+            .as_ref()
+            .is_some_and(daemonset_rollout_complete)
+        {
             return Ok(HandlerAction::Continue {
                 state: ReconcilePublicEndpointAfterUpdate,
                 suggested_delay: None,
@@ -730,7 +752,7 @@ impl KubernetesDaemonController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: Some(60),
+            max_times: Some(UPDATE_WAIT_MAX_POLLS),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -1482,6 +1504,72 @@ mod tests {
         ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
         ENV_ALIEN_WORKER_GRPC_ADDRESS,
     };
+
+    fn daemonset_status(
+        generation: i64,
+        observed: i64,
+        desired: i32,
+        updated: i32,
+        available: i32,
+    ) -> DaemonSet {
+        use k8s_openapi::api::apps::v1::DaemonSetStatus;
+        DaemonSet {
+            metadata: ObjectMeta {
+                generation: Some(generation),
+                ..Default::default()
+            },
+            status: Some(DaemonSetStatus {
+                observed_generation: Some(observed),
+                desired_number_scheduled: desired,
+                number_ready: available,
+                updated_number_scheduled: Some(updated),
+                number_available: Some(available),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_stale_generation_is_not_a_complete_rollout() {
+        // Old pods are all ready right after the patch, before the controller saw the new spec.
+        let stale = daemonset_status(2, 1, 10, 10, 10);
+        assert!(daemonset_is_ready(&stale));
+        assert!(!daemonset_rollout_complete(&stale));
+    }
+
+    #[test]
+    fn a_roll_with_pods_not_yet_updated_is_not_complete() {
+        let mid_roll = daemonset_status(2, 2, 10, 4, 10);
+        assert!(daemonset_is_ready(&mid_roll));
+        assert!(!daemonset_rollout_complete(&mid_roll));
+    }
+
+    #[test]
+    fn an_updated_pod_that_is_not_available_is_not_complete() {
+        let one_unavailable = daemonset_status(2, 2, 10, 10, 9);
+        assert!(!daemonset_rollout_complete(&one_unavailable));
+    }
+
+    #[test]
+    fn a_fully_rolled_daemonset_is_complete_and_recovers_on_the_next_check() {
+        assert!(!daemonset_rollout_complete(&daemonset_status(
+            2, 2, 10, 6, 10
+        )));
+        assert!(daemonset_rollout_complete(&daemonset_status(
+            2, 2, 10, 10, 10
+        )));
+        assert!(!daemonset_rollout_complete(&daemonset_status(
+            2, 2, 0, 0, 0
+        )));
+        assert!(!daemonset_rollout_complete(&DaemonSet::default()));
+    }
+
+    #[test]
+    fn the_update_wait_is_the_thirty_minute_workload_limit() {
+        // 5 s polls: a large cluster's roll takes far longer than the old 5 minute bound.
+        assert_eq!(UPDATE_WAIT_MAX_POLLS * 5, 30 * 60);
+    }
 
     fn manifest_test_daemon(environment: &[(&str, &str)]) -> Daemon {
         let mut config = Daemon::new("agent".to_string())
