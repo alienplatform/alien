@@ -285,9 +285,55 @@ pub struct SandboxEnvironmentTemplate {
     /// Lifecycle state, e.g. `ACTIVE`; unset on a create request
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<String>,
+    /// A disk attached to each sandbox cut from this template. Only the `v1beta1` API has the
+    /// field (`v1` refuses it as unknown and omits it from a read), so a template that carries it
+    /// is created through `v1beta1`; one without it stays on `v1`, byte for byte.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persistent_disk_config: Option<PersistentDiskConfig>,
     /// Preview fields not modelled above, kept rather than dropped.
     #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A persistent disk per sandbox (`v1beta1` only). It belongs to one sandbox, not to a key: it
+/// survives pause and resume and an in-place restart, and goes with the sandbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistentDiskConfig {
+    /// Whether the disk is attached
+    pub enabled: bool,
+    /// Size in GB, an int64 the API sends as a string
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_gb: Option<String>,
+    /// Where the disk is mounted in the container
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount_path: Option<String>,
+}
+
+impl PersistentDiskConfig {
+    /// The smallest disk a persistent-storage template asks for, in GB. The replicated tree, its
+    /// excluded scratch and the agent's staging copy all live on it.
+    pub const MIN_GB: u128 = 10;
+
+    /// The disk under a declared persistent-storage path, as the controller sends it and the
+    /// verifier expects it. The directory a key's tree is restored into and replicated from is
+    /// then a disk that survives the sandbox's in-place restart (an out-of-memory restart wipes the
+    /// root file system and keeps this disk, measured), so a restart resumes from local state.
+    /// The disk is the sandbox's, never the key's: the key's copy is the one in object storage.
+    /// `maxSize` sizes it, rounded up to whole GB, never below [`Self::MIN_GB`].
+    pub fn for_storage(storage: &alien_core::SandboxPersistentStorage) -> Self {
+        const GB: u128 = 1_000_000_000;
+        let size_gb = storage
+            .max_size_bytes()
+            .map(|bytes| bytes.div_ceil(GB))
+            .unwrap_or(0)
+            .max(Self::MIN_GB);
+        Self {
+            enabled: true,
+            size_gb: Some(size_gb.to_string()),
+            mount_path: Some(storage.path.clone()),
+        }
+    }
 }
 
 /// Body for creating a sandbox: from a template, or restored from a snapshot.
@@ -614,10 +660,21 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     async fn get_operation(&self, name: &str) -> Result<Operation>;
 }
 
+/// The `v1beta1` endpoint for a `v1` one: the regional host's version swapped, or a test server's
+/// base with the version appended (the `v1` base of a test server carries no version).
+fn beta_endpoint(endpoint: &str) -> String {
+    match endpoint.strip_suffix("/v1") {
+        Some(host) => format!("{host}/v1beta1"),
+        None => format!("{}/v1beta1", endpoint.trim_end_matches('/')),
+    }
+}
+
 /// Client for the Agent Platform sandbox API.
 #[derive(Debug)]
 pub struct AgentPlatformClient {
     base: GcpClientBase,
+    /// The same host on `v1beta1`, for the one field `v1` lacks (`persistentDiskConfig`).
+    beta: GcpClientBase,
 }
 
 impl AgentPlatformClient {
@@ -635,8 +692,18 @@ impl AgentPlatformClient {
             .entry(SERVICE_KEY.to_string())
             .or_insert(host);
 
+        let mut beta_config = config.clone();
+        if let Some(endpoint) = beta_config
+            .service_overrides
+            .as_mut()
+            .and_then(|overrides| overrides.endpoints.get_mut(SERVICE_KEY))
+        {
+            *endpoint = beta_endpoint(endpoint);
+        }
+
         Self {
-            base: GcpClientBase::new(client, config, Box::new(AgentPlatformServiceConfig)),
+            base: GcpClientBase::new(client.clone(), config, Box::new(AgentPlatformServiceConfig)),
+            beta: GcpClientBase::new(client, beta_config, Box::new(AgentPlatformServiceConfig)),
         }
     }
 
@@ -886,8 +953,12 @@ impl AgentPlatformApi for AgentPlatformClient {
         template: SandboxEnvironmentTemplate,
     ) -> Result<Operation> {
         let path = self.templates_path(engine);
-        self.base
-            .execute_request_once(Method::POST, &path, None, Some(template), engine)
+        let base = if template.persistent_disk_config.is_some() {
+            &self.beta
+        } else {
+            &self.base
+        };
+        base.execute_request_once(Method::POST, &path, None, Some(template), engine)
             .await
             .context(AgentPlatformErrorData::RequestFailed {
                 operation: "create template".to_string(),
@@ -1254,6 +1325,92 @@ mod tests {
             create.hits_async().await,
             1,
             "create template must be sent once"
+        );
+    }
+
+    /// `v1` refuses `persistentDiskConfig` as an unknown field (measured 2026-11-18), so a template
+    /// that carries a disk goes to `v1beta1`, and one without stays on `v1` with the same body.
+    #[tokio::test]
+    async fn only_a_template_with_a_disk_is_created_through_v1beta1() {
+        const TEMPLATES: &str = "/projects/test-project/locations/us-central1/reasoningEngines/eng1/sandboxEnvironmentTemplates";
+        let server = MockServer::start_async().await;
+        let plain = server
+            .mock_async(|when, then| {
+                when.method(POST).path(TEMPLATES).matches(|req| {
+                    !String::from_utf8_lossy(req.body.as_deref().unwrap_or_default())
+                        .contains("persistentDiskConfig")
+                });
+                then.status(200)
+                    .json_body(serde_json::json!({ "name": "op-plain" }));
+            })
+            .await;
+        let beta = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(format!("/v1beta1{TEMPLATES}"))
+                    .json_body_partial(
+                        r#"{"persistentDiskConfig":{"enabled":true,"sizeGb":"10","mountPath":"/workspace"}}"#,
+                    );
+                then.status(200).json_body(serde_json::json!({ "name": "op-beta" }));
+            })
+            .await;
+
+        let op = client(&server)
+            .create_template(ENGINE, SandboxEnvironmentTemplate::default_for_test())
+            .await
+            .expect("plain create");
+        assert_eq!(op.name.as_deref(), Some("op-plain"));
+
+        let mut with_disk = SandboxEnvironmentTemplate::default_for_test();
+        with_disk.persistent_disk_config = Some(PersistentDiskConfig {
+            enabled: true,
+            size_gb: Some("10".to_string()),
+            mount_path: Some("/workspace".to_string()),
+        });
+        let op = client(&server)
+            .create_template(ENGINE, with_disk)
+            .await
+            .expect("disk create");
+        assert_eq!(op.name.as_deref(), Some("op-beta"));
+        assert_eq!(plain.hits_async().await, 1);
+        assert_eq!(beta.hits_async().await, 1);
+    }
+
+    #[test]
+    fn the_disk_is_the_declared_path_sized_by_max_size_in_whole_gb() {
+        let storage = |max_size: Option<&str>| alien_core::SandboxPersistentStorage {
+            path: "/home/agent/work".to_string(),
+            storage: alien_core::ResourceRef::new(alien_core::Storage::RESOURCE_TYPE, "workspaces"),
+            exclude: vec![],
+            max_size: max_size.map(str::to_string),
+        };
+        let size = |max_size| PersistentDiskConfig::for_storage(&storage(max_size)).size_gb;
+        assert_eq!(size(None).as_deref(), Some("10"), "no maxSize: the floor");
+        assert_eq!(
+            size(Some("8Gi")).as_deref(),
+            Some("10"),
+            "8Gi = 8.6 GB: the floor"
+        );
+        assert_eq!(
+            size(Some("20Gi")).as_deref(),
+            Some("22"),
+            "20Gi = 21.5 GB, rounded up"
+        );
+        assert_eq!(size(Some("30G")).as_deref(), Some("30"));
+        let disk = PersistentDiskConfig::for_storage(&storage(None));
+        assert!(disk.enabled);
+        assert_eq!(disk.mount_path.as_deref(), Some("/home/agent/work"));
+    }
+
+    #[test]
+    fn the_beta_endpoint_swaps_the_version_of_the_regional_host() {
+        assert_eq!(
+            beta_endpoint("https://us-central1-aiplatform.googleapis.com/v1"),
+            "https://us-central1-aiplatform.googleapis.com/v1beta1"
+        );
+        assert_eq!(
+            beta_endpoint("http://127.0.0.1:9/"),
+            "http://127.0.0.1:9/v1beta1"
         );
     }
 
@@ -1849,6 +2006,7 @@ mod tests {
                     extra: serde_json::Map::new(),
                 }),
                 state: None,
+                persistent_disk_config: None,
                 extra: serde_json::Map::new(),
             }
         }

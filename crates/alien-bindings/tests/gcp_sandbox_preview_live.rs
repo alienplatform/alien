@@ -350,6 +350,7 @@ impl Live {
                         extra: Default::default(),
                     }),
                     state: None,
+                    persistent_disk_config: None,
                     extra: Default::default(),
                 },
             )

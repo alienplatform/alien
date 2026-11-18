@@ -53,6 +53,7 @@ fn active() -> SandboxEnvironmentTemplate {
         custom_container_environment: None,
         egress_control_config: None,
         state: Some("ACTIVE".to_string()),
+        persistent_disk_config: None,
         extra: Default::default(),
     }
 }

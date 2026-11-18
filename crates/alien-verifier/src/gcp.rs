@@ -224,13 +224,11 @@ impl Gcp {
     }
 
     /// POST a body to Agent Platform under the install's project and region (`path` is below
-    /// `locations/<region>`), and answer with the long-running operation it starts.
+    /// `locations/<region>`), and answer with the long-running operation it starts. A body with
+    /// a `persistentDiskConfig` goes to `v1beta1`, the only version that has the field; every
+    /// other body stays on `v1`.
     pub async fn create_agent_platform(&self, path: &str, body: &Value) -> Result<Value> {
-        let url = format!(
-            "https://{region}-aiplatform.googleapis.com/v1/projects/{}/locations/{region}/{path}",
-            self.project,
-            region = self.region
-        );
+        let url = agent_platform_url(&self.region, &self.project, path, body);
         self.call(
             reqwest::Method::POST,
             &url,
@@ -1143,9 +1141,39 @@ impl ServiceStore for Gcp {
     }
 }
 
+/// The Agent Platform URL a create is sent to: `v1beta1` only for a body that carries a disk.
+fn agent_platform_url(region: &str, project: &str, path: &str, body: &Value) -> String {
+    let version = if body.get("persistentDiskConfig").is_some() {
+        "v1beta1"
+    } else {
+        "v1"
+    };
+    format!(
+        "https://{region}-aiplatform.googleapis.com/{version}/projects/{project}/locations/{region}/{path}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_template_with_a_disk_is_sent_to_v1beta1() {
+        let path = "reasoningEngines/1/sandboxEnvironmentTemplates";
+        assert_eq!(
+            agent_platform_url("us-central1", "p", path, &json!({"displayName": "t"})),
+            "https://us-central1-aiplatform.googleapis.com/v1/projects/p/locations/us-central1/reasoningEngines/1/sandboxEnvironmentTemplates"
+        );
+        assert_eq!(
+            agent_platform_url(
+                "us-central1",
+                "p",
+                path,
+                &json!({"displayName": "t", "persistentDiskConfig": {"enabled": true}})
+            ),
+            "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/p/locations/us-central1/reasoningEngines/1/sandboxEnvironmentTemplates"
+        );
+    }
 
     fn version(name: &str, created: &str, disabled: bool) -> Value {
         json!({"name": name, "createTime": created, "disabled": disabled})

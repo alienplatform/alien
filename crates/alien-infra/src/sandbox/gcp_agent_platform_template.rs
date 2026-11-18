@@ -26,7 +26,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
     ContainerPort, ContainerResources, CustomContainerEnvironment, CustomContainerSpec,
-    EgressControlConfig, SandboxEnvironmentTemplate,
+    EgressControlConfig, PersistentDiskConfig, SandboxEnvironmentTemplate,
 };
 use alien_gcp_clients::longrunning::OperationResult;
 use alien_macros::controller;
@@ -223,6 +223,13 @@ fn build_template_body(
             extra: Default::default(),
         }),
         state: None,
+        // Only a sandbox that declares persistent storage carries a disk; any other body is
+        // unchanged, and stays on the `v1` API.
+        persistent_disk_config: sandbox
+            .persistent_storage
+            .as_ref()
+            .map(PersistentDiskConfig::for_storage),
+
         extra: Default::default(),
     })
 }
@@ -997,6 +1004,7 @@ mod tests {
             custom_container_environment: None,
             egress_control_config: None,
                 state: Some(TEMPLATE_ACTIVE.to_string()),
+                persistent_disk_config: None,
             extra: Default::default(),
         }
     }
@@ -1678,6 +1686,7 @@ mod tests {
         m.expect_get_template().returning(|_, id| {
             Ok(SandboxEnvironmentTemplate {
                 state: Some("FAILED".to_string()),
+                persistent_disk_config: None,
                 ..active_template(id)
             })
         });
@@ -1797,6 +1806,80 @@ mod tests {
         let mut other_port = wire;
         other_port["customContainerEnvironment"]["ports"][0]["port"] = serde_json::json!(8080);
         check_sandbox_template(&sandbox, "pfx", "123", &other_port).expect_err("another port");
+    }
+
+    fn with_persistent_storage(max_size: Option<&str>) -> Sandbox {
+        let mut sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+            path: "/workspace".to_string(),
+            storage: ResourceRef::new(alien_core::Storage::RESOURCE_TYPE, "workspaces"),
+            exclude: vec!["tmp".to_string()],
+            max_size: max_size.map(str::to_string),
+        });
+        sandbox
+    }
+
+    /// A sandbox that declares persistent storage gets a per-sandbox disk at its path, sized from
+    /// `maxSize`; one that does not has no `persistentDiskConfig` key at all, so its body (and the
+    /// `v1` API it goes to) is what it was before persistent storage existed.
+    #[test]
+    fn only_a_declared_persistent_storage_puts_a_disk_on_the_template() {
+        let plain = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let wire = serde_json::to_value(
+            build_template_body(&plain, "pfx-agent-sbx", &deployment_config(None, None))
+                .expect("builds"),
+        )
+        .expect("serializes");
+        assert!(wire.get("persistentDiskConfig").is_none(), "{wire}");
+
+        let declared = with_persistent_storage(Some("20Gi"));
+        let wire = serde_json::to_value(
+            build_template_body(&declared, "pfx-agent-sbx", &deployment_config(None, None))
+                .expect("builds"),
+        )
+        .expect("serializes");
+        assert_eq!(
+            wire["persistentDiskConfig"],
+            serde_json::json!({"enabled": true, "sizeGb": "22", "mountPath": "/workspace"})
+        );
+    }
+
+    /// The verifier signs off on the disk the controller sends for a signed persistent storage,
+    /// and on nothing else: no disk where none is declared, no other path or size.
+    #[test]
+    fn the_verifier_accepts_only_the_signed_persistent_disk() {
+        use alien_verifier::cloud_write::resource::check_sandbox_template;
+        let declared = with_persistent_storage(None);
+        let wire = serde_json::to_value(
+            build_template_body(&declared, "pfx-agent-sbx", &deployment_config(None, None))
+                .expect("builds"),
+        )
+        .expect("serializes");
+        check_sandbox_template(&declared, "pfx", "123", &wire).expect("the controller's own body");
+
+        let mut elsewhere = wire.clone();
+        elsewhere["persistentDiskConfig"]["mountPath"] = serde_json::json!("/etc/cron.d");
+        check_sandbox_template(&declared, "pfx", "123", &elsewhere).expect_err("another path");
+        let mut bigger = wire.clone();
+        bigger["persistentDiskConfig"]["sizeGb"] = serde_json::json!("64000");
+        check_sandbox_template(&declared, "pfx", "123", &bigger).expect_err("another size");
+        let mut without = wire.clone();
+        without
+            .as_object_mut()
+            .expect("object")
+            .remove("persistentDiskConfig");
+        check_sandbox_template(&declared, "pfx", "123", &without).expect_err("no disk");
+
+        let plain = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let mut unsigned = serde_json::to_value(
+            build_template_body(&plain, "pfx-agent-sbx", &deployment_config(None, None))
+                .expect("builds"),
+        )
+        .expect("serializes");
+        check_sandbox_template(&plain, "pfx", "123", &unsigned).expect("the plain body");
+        unsigned["persistentDiskConfig"] = wire["persistentDiskConfig"].clone();
+        check_sandbox_template(&plain, "pfx", "123", &unsigned)
+            .expect_err("a disk the signed sandbox does not declare");
     }
 
     /// The preview ports the signed sandbox declares are the ones the verifier lets the template
