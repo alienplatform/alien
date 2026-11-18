@@ -87,8 +87,8 @@ libc = "0.2"
 
 [dev-dependencies]
 alien-client-core = { workspace = true }
+alien-infra = { workspace = true, features = ["kubernetes", "test-utils"] }
 httpmock = { workspace = true }
-alien-infra = { workspace = true, features = ["test-utils"] }
 alien-cloudformation = { workspace = true }
 alien-terraform = { workspace = true }
 hcl-rs = { workspace = true }
