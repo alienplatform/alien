@@ -553,11 +553,14 @@ impl AzureRuntimePermissionsGenerator {
                     } else {
                         format!("{}:{}", permission_set.id, entry_label)
                     };
-                    // One role per scope when the grant names the Build identities: keyed by the
-                    // identity's name, so adding a Build later does not rename existing roles.
+                    // A grant that names the Build identity gets one role definition for the
+                    // stack. All Builds of an Azure stack share one permission profile, hence one
+                    // identity, so the key does not carry the identity's name: setup renders
+                    // this role before the identity exists and the runtime renders it with the
+                    // real one, and both must ask for the same role id.
                     let per_identity = binding_spec.scope.contains("${buildIdentityId}");
                     let key = if per_identity {
-                        format!("{key}-{}", scope_key_suffix(&scope))
+                        format!("{key}-identity")
                     } else {
                         key
                     };
@@ -567,22 +570,36 @@ impl AzureRuntimePermissionsGenerator {
                         &scope,
                         context,
                     )?;
-                    // Azure role names are unique per directory: the id differs per identity, so
-                    // the name must too, or a second Build's role is refused as a duplicate name.
-                    if per_identity {
-                        role_definition.name =
-                            format!("{} {}", role_definition.name, scope_key_suffix(&scope));
-                    }
-                    role_definition.assignable_scopes = vec![role_assignable_scope(
+                    let assignable = role_assignable_scope(
                         &binding_spec.scope,
                         &scope,
                         context,
                         &permission_set.id,
-                    )?];
-                    custom_roles.push(AzureCustomRole {
-                        key: key.clone(),
-                        role_definition,
-                    });
+                    )?;
+                    // Several identities share the one role: it becomes assignable wherever
+                    // each of them lives.
+                    let shared = per_identity
+                        .then(|| {
+                            custom_roles
+                                .iter_mut()
+                                .find(|role: &&mut AzureCustomRole| role.key == key)
+                        })
+                        .flatten();
+                    if let Some(existing) = shared {
+                        if !existing
+                            .role_definition
+                            .assignable_scopes
+                            .contains(&assignable)
+                        {
+                            existing.role_definition.assignable_scopes.push(assignable);
+                        }
+                    } else {
+                        role_definition.assignable_scopes = vec![assignable];
+                        custom_roles.push(AzureCustomRole {
+                            key: key.clone(),
+                            role_definition,
+                        });
+                    }
                     bindings.push(AzureRoleBinding {
                         permission_set_id: permission_set.id.clone(),
                         role_name: self.generate_scoped_role_name(permission_set, index),
@@ -1227,21 +1244,4 @@ pub fn role_definition_assignable_scopes(role_scopes: &[String], home_group: &st
         }
     }
     scopes
-}
-
-fn scope_key_suffix(scope: &str) -> String {
-    let last = scope
-        .trim_end_matches(['/', '}'])
-        .rsplit('/')
-        .next()
-        .unwrap_or(scope);
-    last.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }

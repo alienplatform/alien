@@ -199,29 +199,18 @@ impl AcaBuild {
     }
 
     /// The execution of a job that was just started: the job is new, so it has exactly one.
-    async fn find_started_execution(&self, job_name: &str) -> Result<String, Error> {
-        let executions = self
+    async fn find_started_execution(&self, job_name: &str) -> Option<String> {
+        match self
             .client
             .list_job_executions(&self.resource_group_name, job_name)
             .await
-            .map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!("Failed to list executions of Azure Container Apps job '{job_name}'"),
-                    None,
-                )
-            })?;
-        executions
-            .into_iter()
-            .find_map(|execution| execution.name)
-            .ok_or_else(|| {
-                Error::new(ErrorData::BuildOperationFailed {
-                    binding_name: self.binding_name.clone(),
-                    operation: format!(
-                        "start Azure Container Apps job '{job_name}': no execution was created"
-                    ),
-                })
-            })
+        {
+            Ok(executions) => executions.into_iter().find_map(|execution| execution.name),
+            Err(error) => {
+                tracing::warn!(job = %job_name, error = %error, "Could not list the executions of a job that was started");
+                None
+            }
+        }
     }
 
     /// Polls the job's provisioning state until the create has finished. A create that ends in
@@ -416,7 +405,7 @@ impl Build for AcaBuild {
 
         // From here the job exists but has not run. If it cannot be provisioned or started it
         // would stay behind, unstarted and unnamed by any build id, so delete it before failing.
-        let started_execution: Result<String, Error> = async {
+        let started_execution: Result<Option<String>, Error> = async {
             // A long-running create has not finished when it returns: starting the job before it has
             // provisioned is refused. Wait for the job to be provisioned, then start it.
             if let OperationResult::LongRunning(_) = operation_result {
@@ -440,9 +429,12 @@ impl Build for AcaBuild {
                 OperationResult::Completed(execution) => execution.name,
                 OperationResult::LongRunning(_) => None,
             };
+            // The start was accepted: an execution may be running even when it is not listed yet,
+            // so the job is never deleted from here on. A build id without an execution names the
+            // job, and the status call finds the execution once it is listed.
             let execution_name = match execution_name {
-                Some(name) => name,
-                None => self.find_started_execution(&job_name).await?,
+                Some(name) => Some(name),
+                None => self.find_started_execution(&job_name).await,
             };
             Ok(execution_name)
         }
@@ -462,7 +454,10 @@ impl Build for AcaBuild {
         };
 
         Ok(BuildExecution {
-            id: format!("{job_name}/executions/{execution_name}"),
+            id: match execution_name {
+                Some(execution_name) => format!("{job_name}/executions/{execution_name}"),
+                None => job_name,
+            },
             status: BuildStatus::Queued,
             start_time: Some(chrono::Utc::now().to_rfc3339()),
             end_time: None,
@@ -781,6 +776,29 @@ mod tests {
             .returning(|_, _| Ok(vec![serde_json::from_str(r#"{"name":"j-xyz"}"#).unwrap()]));
         let started = build(client).start_build(config()).await.unwrap();
         assert!(started.id.ends_with("/executions/j-xyz"), "{}", started.id);
+    }
+
+    /// A start the cloud accepted may be running even when no execution is listed yet. The job is
+    /// never deleted then: the build id names the job, and the status call finds the execution.
+    #[tokio::test]
+    async fn an_accepted_start_with_no_listed_execution_keeps_the_job() {
+        let mut client = MockContainerAppsApi::new();
+        client.expect_create_or_update_job().returning(|_, _, _| {
+            Ok(OperationResult::Completed(
+                serde_json::from_str(r#"{"location":"eastus"}"#).unwrap(),
+            ))
+        });
+        client.expect_start_job().returning(|_, _| {
+            Ok(OperationResult::Completed(
+                serde_json::from_str("{}").unwrap(),
+            ))
+        });
+        client
+            .expect_list_job_executions()
+            .returning(|_, _| Ok(vec![]));
+        client.expect_delete_job().times(0);
+        let started = build(client).start_build(config()).await.unwrap();
+        assert!(!started.id.contains("/executions/"), "{}", started.id);
     }
 
     fn status_of_execution(status: &'static str) -> MockContainerAppsApi {

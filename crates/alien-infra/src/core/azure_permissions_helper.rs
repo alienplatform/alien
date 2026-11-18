@@ -229,6 +229,7 @@ impl AzurePermissionsHelper {
                     ctx,
                     &authorization_client,
                     resource_id,
+                    resource_type,
                     profile_name,
                     &combined_refs,
                     &generator,
@@ -416,6 +417,7 @@ impl AzurePermissionsHelper {
         ctx: &ResourceControllerContext<'_>,
         authorization_client: &Arc<dyn AuthorizationApi>,
         resource_id: &str,
+        resource_type: &str,
         profile_name: &str,
         permission_set_refs: &[alien_core::permissions::PermissionSetReference],
         generator: &AzureRuntimePermissionsGenerator,
@@ -503,15 +505,24 @@ impl AzurePermissionsHelper {
                     &role_definition_scope,
                     azure_config,
                 );
-                let role_assignment_id = Uuid::new_v5(
-                    &Uuid::NAMESPACE_OID,
-                    format!(
-                        "deployment:azure:res-role-assign:{}:{}:{}:{}",
-                        ctx.resource_prefix, resource_id, profile_name, binding_index
+                let role_assignment_id = if resource_type == "build" {
+                    build_role_assignment_id(
+                        ctx.resource_prefix,
+                        &managed_identity_principal_id,
+                        &role_definition_id,
+                        &assignment_scope,
                     )
-                    .as_bytes(),
-                )
-                .to_string();
+                } else {
+                    Uuid::new_v5(
+                        &Uuid::NAMESPACE_OID,
+                        format!(
+                            "deployment:azure:res-role-assign:{}:{}:{}:{}",
+                            ctx.resource_prefix, resource_id, profile_name, binding_index
+                        )
+                        .as_bytes(),
+                    )
+                    .to_string()
+                };
 
                 PlannedRoleAssignment {
                     scope: assignment_scope,
@@ -1703,6 +1714,31 @@ fn management_self_assignment_refs(
         all_wildcard_refs,
         self_refs,
     })
+}
+
+/// The id of a Build's role assignment. It names the grant (who gets which role where), not the
+/// Build: every Build of a stack shares one profile, so two Builds ask for equal assignments, and
+/// ids numbered per Build made the second Build's write replace the first's. With one id per
+/// grant the second write finds the assignment already there, and
+/// [`build_assignments_still_needed`] keeps it until the last Build is gone.
+pub(crate) fn build_role_assignment_id(
+    resource_prefix: &str,
+    principal_id: &str,
+    role_definition_id: &str,
+    scope: &str,
+) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_OID,
+        format!(
+            "deployment:azure:build-role-assign:{}:{}:{}:{}",
+            resource_prefix,
+            principal_id.to_ascii_lowercase(),
+            role_definition_id.to_ascii_lowercase(),
+            scope.trim_matches('/').to_ascii_lowercase()
+        )
+        .as_bytes(),
+    )
+    .to_string()
 }
 
 fn is_worker_command_transport_permission(resource_type: &str, permission_set_id: &str) -> bool {
