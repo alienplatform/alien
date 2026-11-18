@@ -97,14 +97,19 @@ if (sandbox) {
   executionPermissions.push("sandbox/execute")
 }
 
+const buildSets = ["build/execute", "build/provision"]
+const buildGrantStackWide = process.env.ALIEN_E2E_BUILD_GRANT === "stack-wide"
+
 let stackBuilder = new alien.Stack("alien-rs-stack")
   .permissions({
     profiles: {
       execution: {
-        "*": executionPermissions,
+        // ALIEN_E2E_BUILD_GRANT=stack-wide runs the build under a stack-wide grant instead of the
+        // named one: "*" carries build/execute and build/provision for every Build.
+        "*": [...executionPermissions, ...(build && buildGrantStackWide ? buildSets : [])],
         "test-alien-sa": ["service-account/impersonate"],
         // Named grant: the worker may start and read only this build's runs.
-        ...(build ? { "test-alien-build": ["build/execute", "build/provision"] } : {}),
+        ...(build && !buildGrantStackWide ? { "test-alien-build": buildSets } : {}),
       },
       // The build's own identity needs nothing beyond what the platform grants it.
       build: {
