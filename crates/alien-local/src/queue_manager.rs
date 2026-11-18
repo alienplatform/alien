@@ -192,6 +192,27 @@ impl Queue for ManagedQueue {
             .await
     }
 }
+/// Writes `bytes` to a temporary file beside `path`, flushes it, and renames it into place, so a
+/// crash or a full disk leaves the previous file (or none) and never a partial one.
+async fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    let result = async {
+        let mut file = tokio::fs::File::create(&temporary).await?;
+        file.write_all(bytes).await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::rename(&temporary, path).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result
+}
+
 fn queue_error(id: &str, reason: impl Into<String>) -> ErrorData {
     ErrorData::BindingsStoreError {
         binding_id: id.into(),
@@ -314,15 +335,22 @@ impl LocalQueueManager {
     }
 
     async fn read_dead_letter(&self, id: &str) -> Result<Option<DeadLetterFile>> {
-        match tokio::fs::read(self.dead_letter_path(id)).await {
+        let path = self.dead_letter_path(id);
+        match tokio::fs::read(&path).await {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .into_alien_error()
-                .context(queue_error(id, "Read the dead-letter setting"))
+                .context(queue_error(
+                    id,
+                    format!(
+                        "The dead-letter setting file '{}' is not valid; remove it and deploy again",
+                        path.display()
+                    ),
+                ))
                 .map(Some),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(AlienError::new(queue_error(
                 id,
-                format!("Read the dead-letter setting: {error}"),
+                format!("Read the dead-letter setting '{}': {error}", path.display()),
             ))),
         }
     }
@@ -370,7 +398,7 @@ impl LocalQueueManager {
                 let bytes = serde_json::to_vec(setting)
                     .into_alien_error()
                     .context(queue_error(id, "Encode the dead-letter setting"))?;
-                tokio::fs::write(&path, bytes)
+                write_atomically(&path, &bytes)
                     .await
                     .into_alien_error()
                     .context(queue_error(id, "Persist the dead-letter setting"))?;
@@ -609,6 +637,45 @@ mod tests {
             tasks.nack("tasks", &got[0].receipt_handle).await.unwrap();
         }
         assert_eq!(tasks.stats().await.unwrap().total, 1);
+    }
+
+    /// The setting is replaced by renaming a finished temporary file: a partial file left by an
+    /// interrupted write is never read as the setting, and the next write replaces it.
+    #[tokio::test]
+    async fn the_dead_letter_setting_is_written_atomically() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = LocalQueueManager::new(directory.path().to_owned());
+        manager.create_queue("tasks").await.unwrap();
+        manager.create_queue("failed").await.unwrap();
+        manager
+            .set_dead_letter("tasks", Some(("failed", 5)))
+            .await
+            .unwrap();
+        let path = manager.dead_letter_path("tasks");
+
+        // An interrupted write: a truncated temporary file beside the good setting.
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, b"{\"queue\":\"fai").unwrap();
+        let read = manager.read_dead_letter("tasks").await.unwrap().unwrap();
+        assert_eq!((read.queue.as_str(), read.max_attempts), ("failed", 5));
+
+        // The next write replaces the setting whole and leaves no temporary file.
+        manager
+            .set_dead_letter("tasks", Some(("failed", 9)))
+            .await
+            .unwrap();
+        assert!(!temporary.exists());
+        let read = manager.read_dead_letter("tasks").await.unwrap().unwrap();
+        assert_eq!(read.max_attempts, 9);
+
+        // A file that is already corrupt gives an error that names it.
+        std::fs::write(&path, b"{\"queue\":\"fai").unwrap();
+        let error = manager.read_dead_letter("tasks").await.unwrap_err();
+        assert!(
+            error.to_string().contains(&path.display().to_string())
+                || format!("{error:?}").contains(&path.display().to_string()),
+            "{error:?}"
+        );
     }
 
     #[tokio::test]

@@ -92,6 +92,13 @@ pub struct GcpQueueController {
     /// Publisher on the topic is granted (another queue dead-letters into this one).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) dead_letter_publisher: bool,
+    /// The subscriber grant's intended state, recorded in a step of its own before the write, so
+    /// a grant whose response is lost is still revoked if the setting is removed before the retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dead_letter_subscriber_pending: Option<bool>,
+    /// The same for the publisher grant on the topic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dead_letter_publisher_pending: Option<bool>,
 }
 
 #[controller]
@@ -325,6 +332,7 @@ impl GcpQueueController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         self.prepare_storage_publisher(ctx).await?;
+        self.prepare_dead_letter(ctx).await?;
         Ok(HandlerAction::Continue {
             state: ApplyingStoragePublisher,
             suggested_delay: None,
@@ -451,6 +459,7 @@ impl GcpQueueController {
         let config = ctx.desired_resource_config::<Queue>()?;
         info!(id=%config.id, "Reconciling GCP Queue storage ingress");
         self.prepare_storage_publisher(ctx).await?;
+        self.prepare_dead_letter(ctx).await?;
         Ok(HandlerAction::Continue {
             state: UpdatingStoragePublisher,
             suggested_delay: None,
@@ -1195,6 +1204,138 @@ mod tests {
         );
     }
 
+    /// A dead-letter grant reaches Google but its response is lost; the setting is removed before
+    /// the retry. The grant is still revoked. `on_target` selects the publisher grant on the
+    /// target topic, otherwise the subscriber grant on the source's pull subscription.
+    async fn lost_dead_letter_grant_then_removal(on_target: bool) {
+        const AGENT: &str = "serviceAccount:service-4242@gcp-sa-pubsub.iam.gserviceaccount.com";
+        let mut source = Queue::new("tasks".into()).build();
+        source.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(Queue::RESOURCE_TYPE, "failed"))
+                .max_attempts(6)
+                .build(),
+        );
+        let plain = Queue::new("tasks".into()).build();
+        let target = Queue::new("failed".into()).build();
+        let iam = Arc::new(std::sync::Mutex::new(IamPolicy::default()));
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut pubsub = MockPubSubApi::new();
+        let (reads_topic, reads_sub) = (iam.clone(), iam.clone());
+        pubsub
+            .expect_get_topic_iam_policy()
+            .returning(move |_| Ok(reads_topic.lock().unwrap().clone()));
+        pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(move |_| Ok(reads_sub.lock().unwrap().clone()));
+        let write = {
+            let (stored, attempts) = (iam.clone(), writes.clone());
+            move |value: IamPolicy| {
+                *stored.lock().unwrap() = value.clone();
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteServiceUnavailable {
+                            message: "response lost after the write".into(),
+                        },
+                    ));
+                }
+                Ok(value)
+            }
+        };
+        let (topic_write, sub_write) = (write.clone(), write);
+        pubsub
+            .expect_set_topic_iam_policy()
+            .returning(move |_, value| topic_write(value));
+        pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(move |_, value| sub_write(value));
+        pubsub
+            .expect_patch_subscription()
+            .returning(|_, _, _| Ok(Subscription::default()));
+        let pubsub = Arc::new(pubsub);
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let (own, other, name) = if on_target {
+            (target.clone(), source.clone(), "failed")
+        } else {
+            (plain.clone(), target.clone(), "tasks")
+        };
+        let mut run = SingleControllerExecutor::builder()
+            .resource(own.clone())
+            .controller(GcpQueueController {
+                state: GcpQueueState::Ready,
+                topic_name: Some(format!("test-{name}")),
+                subscription_name: Some(format!("test-{name}-sub")),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(other, ResourceLifecycle::Live)
+            .build()
+            .await
+            .unwrap();
+        // The declaration appears: on the source queue itself, or on the other queue.
+        if on_target {
+            assert!(run.needs_update().unwrap());
+            run.update(own.clone()).unwrap();
+        } else {
+            *run.desired_resource_config_mut("tasks").unwrap() =
+                alien_core::Resource::new(source.clone());
+            run.update(source.clone()).unwrap();
+        }
+        while writes.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            let _ = run.step().await;
+        }
+        assert_eq!(
+            iam.lock().unwrap().bindings.len(),
+            1,
+            "the lost write still granted the service agent"
+        );
+        assert_eq!(iam.lock().unwrap().bindings[0].members, [AGENT]);
+
+        // The setting is removed before the retry.
+        if on_target {
+            *run.desired_resource_config_mut("tasks").unwrap() =
+                alien_core::Resource::new(plain.clone());
+        } else {
+            *run.desired_resource_config_mut("tasks").unwrap() =
+                alien_core::Resource::new(plain.clone());
+        }
+        run.run_until_terminal().await.unwrap();
+        if run.needs_update().unwrap() {
+            run.update(if on_target { own } else { plain }).unwrap();
+            run.run_until_terminal().await.unwrap();
+        }
+        assert_eq!(run.status(), ResourceStatus::Running);
+        assert!(!run.needs_update().unwrap());
+        assert!(
+            iam.lock().unwrap().bindings.is_empty(),
+            "no service-agent grant may outlive the setting"
+        );
+    }
+
+    #[tokio::test]
+    async fn subscriber_grant_with_lost_response_is_revoked_when_the_dead_letter_is_removed() {
+        lost_dead_letter_grant_then_removal(false).await;
+    }
+
+    #[tokio::test]
+    async fn publisher_grant_with_lost_response_is_revoked_when_the_dead_letter_is_removed() {
+        lost_dead_letter_grant_then_removal(true).await;
+    }
+
     #[tokio::test]
     async fn ordinary_queue_and_frozen_import_never_request_ingress_updates() {
         for (notifying, lifecycle) in [
@@ -1295,7 +1436,9 @@ impl GcpQueueController {
             policy_key(&dead_letter_policy(ctx, &queue)?) != self.dead_letter_policy
                 || queue.dead_letter.is_some() != self.dead_letter_subscriber
                 || !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty()
-                    != self.dead_letter_publisher,
+                    != self.dead_letter_publisher
+                || self.dead_letter_subscriber_pending.is_some()
+                || self.dead_letter_publisher_pending.is_some(),
         )
     }
 
@@ -1307,8 +1450,6 @@ impl GcpQueueController {
             return Ok(());
         }
         let queue = ctx.desired_resource_config::<Queue>()?;
-        let want_subscriber = queue.dead_letter.is_some();
-        let want_publisher = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
         let desired_policy = dead_letter_policy(ctx, &queue)?;
         let invalid = |message: &str| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -1320,37 +1461,26 @@ impl GcpQueueController {
             .service_provider
             .get_gcp_pubsub_client(ctx.get_gcp_config()?)?;
 
-        if (want_subscriber || want_publisher) && self.dead_letter_agent.is_none() {
-            // Recorded before any write, so a lost response is still revoked later.
-            self.dead_letter_agent = Some(pubsub_service_agent(ctx, &queue.id).await?);
-        }
         let agent = self.dead_letter_agent.clone();
         let topic = self.topic_name.clone();
         let subscription = self.subscription_name.clone();
 
-        if let Some(agent) = &agent {
-            if want_publisher && !self.dead_letter_publisher {
-                let topic = topic
-                    .clone()
-                    .ok_or_else(|| invalid("Topic name not set in state"))?;
-                set_agent_on_topic(ctx, client.as_ref(), &queue.id, &topic, agent, true).await?;
-                self.dead_letter_publisher = true;
-            }
-            if want_subscriber && !self.dead_letter_subscriber {
-                let subscription = subscription
-                    .clone()
-                    .ok_or_else(|| invalid("Subscription name not set in state"))?;
-                set_agent_on_subscription(
-                    ctx,
-                    client.as_ref(),
-                    &queue.id,
-                    &subscription,
-                    agent,
-                    true,
-                )
+        if let (Some(agent), Some(true)) = (&agent, self.dead_letter_publisher_pending) {
+            let topic = topic
+                .clone()
+                .ok_or_else(|| invalid("Topic name not set in state"))?;
+            set_agent_on_topic(ctx, client.as_ref(), &queue.id, &topic, agent, true).await?;
+            self.dead_letter_publisher = true;
+            self.dead_letter_publisher_pending = None;
+        }
+        if let (Some(agent), Some(true)) = (&agent, self.dead_letter_subscriber_pending) {
+            let subscription = subscription
+                .clone()
+                .ok_or_else(|| invalid("Subscription name not set in state"))?;
+            set_agent_on_subscription(ctx, client.as_ref(), &queue.id, &subscription, agent, true)
                 .await?;
-                self.dead_letter_subscriber = true;
-            }
+            self.dead_letter_subscriber = true;
+            self.dead_letter_subscriber_pending = None;
         }
 
         if policy_key(&desired_policy) != self.dead_letter_policy {
@@ -1393,13 +1523,18 @@ impl GcpQueueController {
             self.dead_letter_policy = policy_key(&desired_policy);
         }
 
-        if let Some(agent) = &agent {
-            if !want_publisher && self.dead_letter_publisher {
+        // Revoking is idempotent, so a grant that may have been written without being recorded
+        // is removed too.
+        if self.dead_letter_publisher_pending == Some(false) {
+            if let Some(agent) = &agent {
                 let topic = topic.ok_or_else(|| invalid("Topic name not set in state"))?;
                 set_agent_on_topic(ctx, client.as_ref(), &queue.id, &topic, agent, false).await?;
-                self.dead_letter_publisher = false;
             }
-            if !want_subscriber && self.dead_letter_subscriber {
+            self.dead_letter_publisher = false;
+            self.dead_letter_publisher_pending = None;
+        }
+        if self.dead_letter_subscriber_pending == Some(false) {
+            if let Some(agent) = &agent {
                 let subscription =
                     subscription.ok_or_else(|| invalid("Subscription name not set in state"))?;
                 set_agent_on_subscription(
@@ -1411,11 +1546,35 @@ impl GcpQueueController {
                     false,
                 )
                 .await?;
-                self.dead_letter_subscriber = false;
             }
+            self.dead_letter_subscriber = false;
+            self.dead_letter_subscriber_pending = None;
         }
         if !self.dead_letter_publisher && !self.dead_letter_subscriber {
             self.dead_letter_agent = None;
+        }
+        Ok(())
+    }
+
+    /// Records the intended grants, and the service agent they are for, in a step of their own
+    /// before any write. A grant whose response is lost is then still reconciled, including when
+    /// the setting is removed before the retry.
+    async fn prepare_dead_letter(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<()> {
+        let queue = ctx.desired_resource_config::<Queue>()?;
+        let want_subscriber = queue.dead_letter.is_some();
+        let want_publisher = !queues_dead_lettering_to(ctx.desired_stack, &queue.id).is_empty();
+        if want_subscriber != self.dead_letter_subscriber
+            || self.dead_letter_subscriber_pending.is_some()
+        {
+            self.dead_letter_subscriber_pending = Some(want_subscriber);
+        }
+        if want_publisher != self.dead_letter_publisher
+            || self.dead_letter_publisher_pending.is_some()
+        {
+            self.dead_letter_publisher_pending = Some(want_publisher);
+        }
+        if (want_subscriber || want_publisher) && self.dead_letter_agent.is_none() {
+            self.dead_letter_agent = Some(pubsub_service_agent(ctx, &queue.id).await?);
         }
         Ok(())
     }

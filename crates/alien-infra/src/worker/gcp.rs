@@ -344,6 +344,11 @@ pub struct GcpWorkerController {
     /// first grant is written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) push_dead_letter_agent: Option<String>,
+    /// Push subscriptions whose subscriber grant for the service agent was started, recorded
+    /// before the grant is written. A grant whose response is lost is then still revoked when
+    /// the setting is removed before the retry.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub(crate) push_dead_letter_grants: std::collections::BTreeSet<String>,
     /// Pub/Sub topic names created for storage trigger notifications
     pub(crate) storage_notification_topics: Vec<String>,
     /// GCS notification IDs for storage triggers (for cleanup)
@@ -3798,6 +3803,7 @@ impl GcpWorkerController {
                 self.push_subscriptions.clear();
                 self.push_dead_letters.clear();
                 self.push_dead_letter_agent = None;
+                self.push_dead_letter_grants.clear();
                 self.storage_notification_topics.clear();
                 self.gcs_notification_ids.clear();
                 self.scheduler_job_names.clear();
@@ -4517,6 +4523,7 @@ impl GcpWorkerController {
                 self.push_subscriptions.clear();
                 self.push_dead_letters.clear();
                 self.push_dead_letter_agent = None;
+                self.push_dead_letter_grants.clear();
 
                 Ok(HandlerAction::Continue {
                     state: Deleted,
@@ -4634,6 +4641,7 @@ impl GcpWorkerController {
                 self.push_subscriptions.clear();
                 self.push_dead_letters.clear();
                 self.push_dead_letter_agent = None;
+                self.push_dead_letter_grants.clear();
 
                 Ok(HandlerAction::Continue {
                     state: Deleted,
@@ -5654,7 +5662,9 @@ impl GcpWorkerController {
                     &Self::desired_push_dead_letter(ctx, queue)?,
                 );
                 let name = Self::push_subscription_name(ctx, &worker, queue);
-                if desired.as_ref() != self.push_dead_letters.get(&name) {
+                if desired.as_ref() != self.push_dead_letters.get(&name)
+                    || (desired.is_none() && self.push_dead_letter_grants.contains(&name))
+                {
                     return Ok(true);
                 }
             }
@@ -5675,7 +5685,8 @@ impl GcpWorkerController {
         let name = Self::push_subscription_name(ctx, worker_config, queue_ref);
         let desired = Self::desired_push_dead_letter(ctx, queue_ref)?;
         let key = policy_key(&desired);
-        if key.as_ref() == self.push_dead_letters.get(&name) {
+        let grant_to_revoke = key.is_none() && self.push_dead_letter_grants.contains(&name);
+        if key.as_ref() == self.push_dead_letters.get(&name) && !grant_to_revoke {
             return Ok(());
         }
         let client = ctx
@@ -5688,32 +5699,38 @@ impl GcpWorkerController {
                     Some(pubsub_service_agent(ctx, &worker_config.id).await?);
             }
             let agent = self.push_dead_letter_agent.clone().unwrap_or_default();
+            // Recorded before the write: a lost response must not hide the grant.
+            self.push_dead_letter_grants.insert(name.clone());
             set_subscriber(client.as_ref(), &worker_config.id, &name, &agent, true).await?;
         }
-        // An absent policy in the patch removes it.
-        client
-            .patch_subscription(
-                name.clone(),
-                SubscriptionPatch {
-                    dead_letter_policy: desired.clone(),
-                    ..Default::default()
-                },
-                Some("deadLetterPolicy".to_string()),
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to update the dead-letter policy of '{name}'"),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+        // An absent policy in the patch removes it. When only the grant was started (its response
+        // was lost, no policy was ever written) there is no policy to remove.
+        if desired.is_some() || self.push_dead_letters.contains_key(&name) {
+            client
+                .patch_subscription(
+                    name.clone(),
+                    SubscriptionPatch {
+                        dead_letter_policy: desired.clone(),
+                        ..Default::default()
+                    },
+                    Some("deadLetterPolicy".to_string()),
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to update the dead-letter policy of '{name}'"),
+                    resource_id: Some(worker_config.id.clone()),
+                })?;
+        }
         if desired.is_none() {
             if let Some(agent) = self.push_dead_letter_agent.clone() {
                 set_subscriber(client.as_ref(), &worker_config.id, &name, &agent, false).await?;
             }
             self.push_dead_letters.remove(&name);
+            self.push_dead_letter_grants.remove(&name);
         } else if let Some(key) = key {
             self.push_dead_letters.insert(name, key);
         }
-        if self.push_dead_letters.is_empty() {
+        if self.push_dead_letters.is_empty() && self.push_dead_letter_grants.is_empty() {
             self.push_dead_letter_agent = None;
         }
         Ok(())
@@ -5943,6 +5960,7 @@ impl GcpWorkerController {
         self.push_subscriptions.clear();
         self.push_dead_letters.clear();
         self.push_dead_letter_agent = None;
+        self.push_dead_letter_grants.clear();
         Ok(())
     }
 
@@ -6393,6 +6411,7 @@ impl GcpWorkerController {
             push_subscriptions: Vec::new(),
             push_dead_letters: Default::default(),
             push_dead_letter_agent: None,
+            push_dead_letter_grants: Default::default(),
             storage_notification_topics: Vec::new(),
             gcs_notification_ids: Vec::new(),
             scheduler_job_names: Vec::new(),
@@ -8472,6 +8491,7 @@ mod tests {
                     push_subscriptions: vec!["test-queue-func-test-queue".into()],
                     push_dead_letters: Default::default(),
                     push_dead_letter_agent: None,
+                    push_dead_letter_grants: Default::default(),
                     ..GcpWorkerController::mock_ready("test-queue-func")
                 };
                 let restored: GcpWorkerController =
@@ -8495,6 +8515,8 @@ mod tests {
                             dead_letter_agent: None,
                             dead_letter_subscriber: false,
                             dead_letter_publisher: false,
+                            dead_letter_subscriber_pending: None,
+                            dead_letter_publisher_pending: None,
                             _internal_stay_count: None,
                         },
                     )
@@ -8555,6 +8577,8 @@ mod tests {
             dead_letter_agent: None,
             dead_letter_subscriber: false,
             dead_letter_publisher: false,
+            dead_letter_subscriber_pending: None,
+            dead_letter_publisher_pending: None,
             _internal_stay_count: None,
         };
 
@@ -8632,6 +8656,8 @@ mod tests {
             dead_letter_agent: None,
             dead_letter_subscriber: false,
             dead_letter_publisher: false,
+            dead_letter_subscriber_pending: None,
+            dead_letter_publisher_pending: None,
             _internal_stay_count: None,
         };
 
@@ -8775,6 +8801,131 @@ mod tests {
         *executor.desired_resource_config_mut("test-queue").unwrap() =
             alien_core::Resource::new(queue);
         assert!(executor.needs_update().unwrap(), "a removed dead letter");
+    }
+
+    /// The subscriber grant reaches Google but its response is lost; the queue's dead-letter
+    /// setting is removed before the retry. The grant is still revoked.
+    #[tokio::test]
+    async fn push_grant_with_lost_response_is_revoked_when_the_dead_letter_is_removed() {
+        use alien_gcp_clients::iam::IamPolicy;
+        use alien_gcp_clients::pubsub::{DeadLetterPolicy, SubscriptionPatch};
+        let worker = function_with_queue_trigger();
+        let worker_for_update = worker.clone();
+        let function_name = format!("test-{}", worker.id);
+        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false);
+        let mut queue = test_queue();
+        queue.dead_letter = Some(
+            alien_core::QueueDeadLetter::builder()
+                .queue(alien_core::ResourceRef::new(
+                    alien_core::Queue::RESOURCE_TYPE,
+                    "failed",
+                ))
+                .max_attempts(8)
+                .build(),
+        );
+
+        let subscription_policy = Arc::new(std::sync::Mutex::new(IamPolicy::default()));
+        let patches: Arc<std::sync::Mutex<Vec<(Option<DeadLetterPolicy>, Option<String>)>>> =
+            Default::default();
+        let mut mock_pubsub = MockPubSubApi::new();
+        mock_pubsub
+            .expect_create_subscription()
+            .withf(|_, subscription| subscription.dead_letter_policy.is_none())
+            .returning(|_, _| Ok(Subscription::default()));
+        let reads = subscription_policy.clone();
+        mock_pubsub
+            .expect_get_subscription_iam_policy()
+            .returning(move |name| {
+                assert_eq!(name, "test-queue-func-test-queue");
+                Ok(reads.lock().unwrap().clone())
+            });
+        let writes = subscription_policy.clone();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = attempts.clone();
+        mock_pubsub
+            .expect_set_subscription_iam_policy()
+            .returning(move |_, policy| {
+                *writes.lock().unwrap() = policy.clone();
+                if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    return Err(AlienError::new(
+                        alien_client_core::ErrorData::RemoteServiceUnavailable {
+                            message: "response lost after the write".into(),
+                        },
+                    ));
+                }
+                Ok(policy)
+            });
+        let sink = patches.clone();
+        mock_pubsub.expect_patch_subscription().returning(
+            move |_, patch: SubscriptionPatch, mask| {
+                sink.lock().unwrap().push((patch.dead_letter_policy, mask));
+                Ok(Subscription::default())
+            },
+        );
+        let mut manager = alien_gcp_clients::resource_manager::MockResourceManagerApi::new();
+        manager.expect_get_project_metadata().returning(|_| {
+            Ok(alien_gcp_clients::resource_manager::Project::builder()
+                .project_number("4242".to_string())
+                .build())
+        });
+        let manager = Arc::new(manager);
+        let mut provider = MockPlatformServiceProvider::new();
+        let cloudrun = mock_cloudrun.clone();
+        provider
+            .expect_get_gcp_cloudrun_client()
+            .returning(move |_| Ok(cloudrun.clone()));
+        let iam = create_gcp_iam_mock_for_resource_permissions();
+        provider
+            .expect_get_gcp_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let pubsub = Arc::new(mock_pubsub);
+        provider
+            .expect_get_gcp_pubsub_client()
+            .returning(move |_| Ok(pubsub.clone()));
+        provider
+            .expect_get_gcp_resource_manager_client()
+            .returning(move |_| Ok(manager.clone()));
+        let queue_controller = GcpQueueController {
+            state: GcpQueueState::Ready,
+            topic_name: Some("test-test-queue".to_string()),
+            subscription_name: Some("test-test-queue-sub".to_string()),
+            ..Default::default()
+        };
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .with_dependency(queue.clone(), queue_controller)
+            .build()
+            .await
+            .unwrap();
+        while attempts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            let _ = executor.step().await;
+        }
+        assert_eq!(
+            subscription_policy.lock().unwrap().bindings.len(),
+            1,
+            "the lost write still granted the service agent"
+        );
+
+        // The setting is removed before the retry.
+        queue.dead_letter = None;
+        *executor.desired_resource_config_mut("test-queue").unwrap() =
+            alien_core::Resource::new(queue);
+        executor.run_until_terminal().await.unwrap();
+        if executor.needs_update().unwrap() {
+            executor.update(worker_for_update).unwrap();
+            executor.run_until_terminal().await.unwrap();
+        }
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert!(!executor.needs_update().unwrap());
+        assert!(
+            subscription_policy.lock().unwrap().bindings.is_empty(),
+            "no service-agent grant may outlive the setting"
+        );
     }
 
     #[tokio::test]
@@ -9219,6 +9370,7 @@ mod tests {
             push_subscriptions: Vec::new(),
             push_dead_letters: Default::default(),
             push_dead_letter_agent: None,
+            push_dead_letter_grants: Default::default(),
             fqdn: None,
             certificate_id: None,
             ssl_certificate_name: None,

@@ -150,9 +150,11 @@ pub(crate) const STORAGE_NOTIFICATIONS: Feature = feature(
     Action::Refuse,
     "declared behavior an older Operator would silently not provide",
 );
+/// Pinned to the first release that ships the setting (3.3.69 was cut without it),
+/// not to [`NEXT_RELEASE`], which is older than the Operators already released.
 pub(crate) const QUEUE_DEAD_LETTER: Feature = feature(
     "queue dead-letter targets",
-    NEXT_RELEASE,
+    "3.3.70",
     Action::Refuse,
     "declared behavior an older Operator would silently not provide",
 );
@@ -991,7 +993,7 @@ mod tests {
                 )
                 .build()
         };
-        for version in [None, Some("3.3.31"), Some("3.3.62")] {
+        for version in [None, Some("3.3.31"), Some("3.3.62"), Some("3.3.68"), Some("3.3.69")] {
             assert_eq!(
                 refused_for(&queue(true), version),
                 ["queue dead-letter targets"],
@@ -999,7 +1001,10 @@ mod tests {
             );
             assert!(refused_for(&queue(false), version).is_empty());
         }
-        assert!(refused_for(&queue(true), Some(NEXT_RELEASE)).is_empty());
+        assert!(refused_for(&queue(true), Some("3.3.70")).is_empty());
+        let message = refusal_message(&[&QUEUE_DEAD_LETTER]);
+        assert!(message.contains("queue dead-letter targets"));
+        assert!(message.contains("must be 3.3.70 or newer"));
     }
 
     #[test]

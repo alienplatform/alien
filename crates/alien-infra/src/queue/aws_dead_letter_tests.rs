@@ -178,3 +178,25 @@ async fn queues_without_a_dead_letter_setting_are_never_written() {
     .await;
     assert!(!run.needs_update().unwrap());
 }
+
+#[test]
+fn the_target_arn_uses_the_partition_of_the_region() {
+    for (region, partition) in [
+        ("us-east-1", "aws"),
+        ("us-gov-west-1", "aws-us-gov"),
+        ("cn-north-1", "aws-cn"),
+    ] {
+        let policy: Value = serde_json::from_str(&redrive_policy_json(
+            region,
+            "123456789012",
+            "test-failed",
+            5,
+        ))
+        .unwrap();
+        assert_eq!(
+            policy["deadLetterTargetArn"],
+            format!("arn:{partition}:sqs:{region}:123456789012:test-failed")
+        );
+        assert_eq!(policy["maxReceiveCount"], 5);
+    }
+}

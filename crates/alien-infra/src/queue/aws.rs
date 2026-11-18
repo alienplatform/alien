@@ -508,13 +508,28 @@ fn desired_redrive_policy(
     };
     let cfg = ctx.get_aws_config()?;
     let target = aws_prefixed_resource_name(ctx.resource_prefix, &dead_letter.queue.id);
-    Ok(Some(
-        serde_json::json!({
-            "deadLetterTargetArn": format!("arn:aws:sqs:{}:{}:{target}", cfg.region, cfg.account_id),
-            "maxReceiveCount": dead_letter.max_attempts,
-        })
-        .to_string(),
-    ))
+    Ok(Some(redrive_policy_json(
+        &cfg.region,
+        &cfg.account_id,
+        &target,
+        dead_letter.max_attempts,
+    )))
+}
+
+/// The policy document. The ARN partition follows the region (GovCloud, China), the same rule the
+/// verifier applies when it checks the write.
+fn redrive_policy_json(
+    region: &str,
+    account_id: &str,
+    target_name: &str,
+    max_attempts: u32,
+) -> String {
+    let partition = alien_aws_clients::aws::sandbox_image_build::aws_partition(region);
+    serde_json::json!({
+        "deadLetterTargetArn": format!("arn:{partition}:sqs:{region}:{account_id}:{target_name}"),
+        "maxReceiveCount": max_attempts,
+    })
+    .to_string()
 }
 
 impl AwsQueueController {

@@ -371,6 +371,8 @@ mod tests {
                     dead_letter_agent: None,
                     dead_letter_subscriber: false,
                     dead_letter_publisher: false,
+                    dead_letter_subscriber_pending: None,
+                    dead_letter_publisher_pending: None,
                     _internal_stay_count: None,
                 },
             )
@@ -533,6 +535,8 @@ mod tests {
                     dead_letter_agent: None,
                     dead_letter_subscriber: false,
                     dead_letter_publisher: false,
+                    dead_letter_subscriber_pending: None,
+                    dead_letter_publisher_pending: None,
                     _internal_stay_count: None,
                 },
             )
@@ -626,6 +630,8 @@ mod tests {
             dead_letter_agent: None,
             dead_letter_subscriber: false,
             dead_letter_publisher: false,
+            dead_letter_subscriber_pending: None,
+            dead_letter_publisher_pending: None,
             _internal_stay_count: None,
         };
         let checkpoint = GcpStorageController {
