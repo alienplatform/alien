@@ -1002,3 +1002,276 @@ async fn an_expired_grant_sends_nothing() {
     assert!(store.denied());
     assert!(bucket.objects.lock().unwrap().is_empty());
 }
+
+/// SQLite without a freezer: a database is copied with its journal, and kept only when it did
+/// not change across the copies.
+mod sqlite_without_a_freezer {
+    use super::*;
+    use rusqlite::Connection;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    const ROWS: i64 = 200;
+    const TOTAL: i64 = ROWS * 1000;
+
+    /// A database whose rows always add up to `TOTAL`; each transaction moves one unit.
+    fn create(path: &Path, wal: bool) -> Connection {
+        let db = Connection::open(path).expect("open");
+        db.pragma_update(None, "journal_mode", if wal { "WAL" } else { "DELETE" })
+            .expect("journal mode");
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS t(id INTEGER PRIMARY KEY, v INTEGER, pad BLOB);",
+        )
+        .expect("table");
+        let tx = db.unchecked_transaction().expect("tx");
+        for id in 0..ROWS {
+            tx.execute(
+                "INSERT OR REPLACE INTO t VALUES (?1, 1000, zeroblob(2000))",
+                [id],
+            )
+            .expect("row");
+        }
+        tx.commit().expect("commit");
+        db
+    }
+
+    fn step(db: &Connection, n: i64) {
+        let tx = db.unchecked_transaction().expect("tx");
+        tx.execute("UPDATE t SET v = v - 1 WHERE id = ?1", [n % ROWS])
+            .expect("debit");
+        tx.execute("UPDATE t SET v = v + 1 WHERE id = ?1", [(n * 7 + 3) % ROWS])
+            .expect("credit");
+        tx.commit().expect("commit");
+    }
+
+    /// Opens a restored database (recovering its WAL or journal) and returns its total, or why
+    /// it is not a good database.
+    fn total(path: &Path) -> Result<i64, String> {
+        let db = Connection::open(path).map_err(|e| e.to_string())?;
+        let check: String = db
+            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if check != "ok" {
+            return Err(check);
+        }
+        db.query_row("SELECT sum(v) FROM t", [], |r| r.get(0))
+            .map_err(|e| e.to_string())
+    }
+
+    async fn restored(store: &MemoryStore, replicator: &Replicator) -> tempfile::TempDir {
+        let target = tempfile::tempdir().expect("tempdir");
+        restore(
+            store,
+            replicator.head().expect("head"),
+            &mut DirSink::new(tree::open_root(target.path()).expect("open"), false),
+        )
+        .await
+        .expect("restore");
+        target
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_database_written_during_every_copy_keeps_heads_copy_until_it_is_quiet() {
+        let source = tempfile::tempdir().expect("tempdir");
+        let staging = tempfile::tempdir().expect("tempdir");
+        let root = source.path().to_path_buf();
+        let db = create(&root.join("app.db"), false);
+        write(&root, "notes.txt", b"one");
+        let_the_clock_tick();
+        let store = MemoryStore::new();
+        let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
+        replicator.commit(&store).await.expect("first commit");
+        assert!(replicator.deferred_for().is_none());
+
+        // The application commits a transaction while each copy of the database is taken.
+        for n in 0..3 {
+            step(&db, n);
+        }
+        write(&root, "notes.txt", b"two");
+        let_the_clock_tick();
+        let mut n = 100;
+        let target = commit_staged(&store, &mut replicator, &mut |phase| {
+            if phase == super::super::Phase::DatabaseCopied {
+                step(&db, n);
+                n += 1;
+            }
+        })
+        .await;
+        assert_eq!(n, 103, "every attempt saw the database change");
+        assert_eq!(
+            std::fs::read(target.path().join("notes.txt")).expect("notes"),
+            b"two",
+            "the rest of the tree is committed"
+        );
+        let head_db = target.path().join("app.db");
+        assert_eq!(total(&head_db), Ok(TOTAL), "HEAD's copy is kept, whole");
+        let kept: i64 = Connection::open(&head_db)
+            .expect("open")
+            .query_row("SELECT v FROM t WHERE id = 0", [], |r| r.get(0))
+            .expect("row");
+        assert_eq!(kept, 1000, "the database is the first commit's");
+        assert!(replicator.deferred_for().is_some(), "the wait is reported");
+
+        // A quiet moment: the database is taken with every transaction.
+        let_the_clock_tick();
+        replicator.commit(&store).await.expect("commit");
+        assert!(replicator.deferred_for().is_none());
+        let target = restored(&store, &replicator).await;
+        let db_now = Connection::open(target.path().join("app.db")).expect("open");
+        let v: i64 = db_now
+            .query_row("SELECT v FROM t WHERE id = 0", [], |r| r.get(0))
+            .expect("row");
+        assert_ne!(v, 1000, "the later transactions are in");
+        assert_eq!(total(&target.path().join("app.db")), Ok(TOTAL));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_new_database_busy_during_every_copy_waits_for_the_next_commit() {
+        let source = tempfile::tempdir().expect("tempdir");
+        let staging = tempfile::tempdir().expect("tempdir");
+        let root = source.path().to_path_buf();
+        let store = MemoryStore::new();
+        let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
+        let db = create(&root.join("new.db"), true);
+        let_the_clock_tick();
+        let mut n = 0;
+        // In WAL mode the database changes at a checkpoint; force one during every copy.
+        let target = commit_staged(&store, &mut replicator, &mut |phase| {
+            if phase == super::super::Phase::DatabaseCopied {
+                step(&db, n);
+                db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                    .expect("checkpoint");
+                n += 1;
+            }
+        })
+        .await;
+        assert!(!target.path().join("new.db").exists());
+        assert!(!target.path().join("new.db-wal").exists());
+        let_the_clock_tick();
+        let target = commit_staged(&store, &mut replicator, &mut |_| {}).await;
+        assert_eq!(total(&target.path().join("new.db")), Ok(TOTAL));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_symlink_planted_at_a_database_or_its_sidecars_redirects_nothing() {
+        let outside = tempfile::tempdir().expect("tempdir");
+        let secret = outside.path().join("secret.db");
+        create(&secret, false)
+            .execute_batch("CREATE TABLE s(x TEXT); INSERT INTO s VALUES ('outside-marker');")
+            .expect("marker");
+        let marker = b"outside-marker";
+        let holds_marker =
+            |bytes: &[u8]| bytes.windows(marker.len()).any(|w| w == marker.as_slice());
+        assert!(holds_marker(&std::fs::read(&secret).expect("secret")));
+        let source = tempfile::tempdir().expect("tempdir");
+        let staging = tempfile::tempdir().expect("tempdir");
+        let root = source.path().to_path_buf();
+        create(&root.join("app.db"), false);
+        for name in ["app.db-wal", "app.db-journal", "app.db-shm", "linked.db"] {
+            std::os::unix::fs::symlink(&secret, root.join(name)).expect("symlink");
+        }
+        let_the_clock_tick();
+        let store = MemoryStore::new();
+        let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
+        replicator.commit(&store).await.expect("commit");
+        let target = restored(&store, &replicator).await;
+        for entry in std::fs::read_dir(target.path()).expect("list") {
+            let path = entry.expect("entry").path();
+            let meta = std::fs::symlink_metadata(&path).expect("stat");
+            if meta.file_type().is_file() {
+                assert!(
+                    !holds_marker(&std::fs::read(&path).expect("read")),
+                    "{} holds the file outside",
+                    path.display()
+                );
+            }
+        }
+        assert_eq!(total(&target.path().join("app.db")), Ok(TOTAL));
+        assert!(
+            std::fs::symlink_metadata(target.path().join("linked.db"))
+                .expect("stat")
+                .file_type()
+                .is_symlink(),
+            "a symlink stays a symlink"
+        );
+    }
+
+    /// A writer that never stops, in each journal mode: every commit's database opens, passes
+    /// the integrity check and keeps the total. Many rounds make a copy that crosses a write
+    /// near certain, so a missing or wrong bracket fails here.
+    async fn many_rounds(wal: bool, pace: std::time::Duration) -> (usize, usize) {
+        let source = tempfile::tempdir().expect("tempdir");
+        let staging = tempfile::tempdir().expect("tempdir");
+        let root = source.path().to_path_buf();
+        create(&root.join("app.db"), wal);
+        let_the_clock_tick();
+        let store = MemoryStore::new();
+        let mut replicator = replicator(&store, &root, staging.path(), &[]).await;
+        replicator.commit(&store).await.expect("first commit");
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let stop = stop.clone();
+            let path = root.join("app.db");
+            std::thread::spawn(move || {
+                let db = Connection::open(path).expect("open");
+                db.busy_timeout(std::time::Duration::from_secs(5))
+                    .expect("busy timeout");
+                // No fsync per transaction: as many writes as possible cross each copy.
+                db.pragma_update(None, "synchronous", "OFF")
+                    .expect("synchronous");
+                let mut n = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    step(&db, n);
+                    n += 1;
+                    if !pace.is_zero() {
+                        std::thread::sleep(pace);
+                    }
+                }
+                n
+            })
+        };
+        let (mut taken, rounds) = (0usize, 150usize);
+        let mut last_head = replicator.head().map(|m| m.seq);
+        for round in 0..rounds {
+            replicator.commit(&store).await.expect("commit");
+            if replicator.deferred_for().is_none() {
+                taken += 1;
+            }
+            let head = replicator.head().map(|m| m.seq);
+            if head != last_head {
+                let target = restored(&store, &replicator).await;
+                assert_eq!(
+                    total(&target.path().join("app.db")),
+                    Ok(TOTAL),
+                    "round {round} (wal={wal}) committed a bad database"
+                );
+                last_head = head;
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        let writes = writer.join().expect("writer");
+        assert!(
+            writes as usize > rounds,
+            "the writer kept writing ({writes})"
+        );
+        eprintln!(
+            "wal={wal} pace={pace:?}: {writes} writes, {taken}/{rounds} rounds took the database"
+        );
+        (taken, rounds)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_database_under_a_busy_writer_is_never_committed_torn() {
+        let (taken, rounds) = many_rounds(true, std::time::Duration::ZERO).await;
+        assert!(
+            taken > 0,
+            "WAL mode: no round took the database ({taken}/{rounds})"
+        );
+        let (taken, rounds) = many_rounds(false, std::time::Duration::from_millis(2)).await;
+        assert!(
+            taken > 0,
+            "rollback mode: no round took the database ({taken}/{rounds})"
+        );
+    }
+}
