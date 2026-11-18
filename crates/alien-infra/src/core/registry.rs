@@ -7,7 +7,7 @@ use crate::core::ResourceController;
 use crate::error::{ErrorData, Result};
 #[cfg(any(feature = "kubernetes", feature = "local"))]
 use alien_core::ComputeCluster;
-#[cfg(any(feature = "kubernetes", feature = "local"))]
+#[cfg(any(feature = "kubernetes", feature = "local", feature = "azure"))]
 use alien_core::Container;
 #[cfg(any(feature = "kubernetes", feature = "local"))]
 use alien_core::Daemon;
