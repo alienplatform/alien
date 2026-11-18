@@ -3623,10 +3623,7 @@ async fn the_oldest_wins_when_one_duplicate_is_tagged_and_one_is_not() {
             .await
             .unwrap();
         let oldest = if plain_is_older { plain_id } else { tagged };
-        assert_eq!(
-            found.sandbox.sandbox_id, oldest,
-            "plain_is_older={plain_is_older}"
-        );
+        assert_eq!(found.sandbox.sandbox_id, oldest, "plain_is_older={plain_is_older}");
         assert!(!found.created);
     }
 }
@@ -3994,11 +3991,7 @@ async fn refreshing_the_pause_marker_never_leaves_it_absent() {
     }
     stop.store(true, Ordering::SeqCst);
     reader.join().unwrap();
-    assert_eq!(
-        absent.load(Ordering::SeqCst),
-        0,
-        "the marker was absent or empty"
-    );
+    assert_eq!(absent.load(Ordering::SeqCst), 0, "the marker was absent or empty");
     assert_eq!(std::fs::read_to_string(&marker).unwrap(), "7");
 }
 
@@ -4078,10 +4071,7 @@ async fn a_pause_whose_marker_write_wakes_the_sandbox_pauses_it_again() {
     }
     provider(client).pause("s1").await.expect("paused again");
     assert_eq!(*fake.state.lock().unwrap(), "STATE_PAUSED");
-    assert!(
-        failed_once.load(Ordering::SeqCst) >= 2,
-        "the marker write was retried"
-    );
+    assert!(failed_once.load(Ordering::SeqCst) >= 2, "the marker write was retried");
     assert_eq!(pauses.load(Ordering::SeqCst), 1);
 }
 
@@ -4181,10 +4171,7 @@ async fn a_sandbox_that_keeps_waking_fails_the_pause_after_three_attempts() {
             Ok(done_op(serde_json::json!({})))
         });
     }
-    let error = provider(client)
-        .pause("s1")
-        .await
-        .expect_err("did not hold");
+    let error = provider(client).pause("s1").await.expect_err("did not hold");
     assert!(
         error.to_string().contains("pause did not hold"),
         "unexpected error: {error}"
