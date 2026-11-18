@@ -45,7 +45,14 @@ export default new alien.Stack("queue-dead-letter")
       execution:
         process.env.DLQ_E2E_LIVE === "1"
           ? // AWS rejects resource-scoped data permissions on Live resources.
-            { "*": ["queue/data-read", "queue/data-write", "storage/data-read", "storage/data-write"] }
+            {
+              "*": [
+                "queue/data-read",
+                "queue/data-write",
+                "storage/data-read",
+                "storage/data-write",
+              ],
+            }
           : {
               tasks: ["queue/data-read", "queue/data-write"],
               "tasks-failed": ["queue/data-read", "queue/data-write"],
