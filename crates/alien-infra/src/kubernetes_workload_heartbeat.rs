@@ -91,9 +91,17 @@ impl NotReadyObservations {
     }
 }
 
+/// Text of the reason for a pod that keeps exiting with an error while it is polled in the
+/// Running or Terminated state (not Waiting), so no back-off reason is visible.
+const CRASH_LOOP_MARKER: &str = "is crash-looping";
+
+/// Restarts of a not-ready container, with a non-zero last exit code, that count as a crash loop.
+const CRASH_LOOP_MIN_RESTARTS: i32 = 2;
+
 /// Pod reasons that will not clear by waiting: an update over them fails now.
-const FAIL_FAST_POD_REASONS: [&str; 4] = [
+const FAIL_FAST_POD_REASONS: [&str; 5] = [
     "CrashLoopBackOff",
+    CRASH_LOOP_MARKER,
     "ImagePullBackOff",
     "ErrImagePull",
     "CreateContainerConfigError",
@@ -457,8 +465,33 @@ pub(crate) fn pod_waiting_reason(pods: &[k8s_openapi::api::core::v1::Pod]) -> Op
             let name = pod.metadata.name.as_deref().unwrap_or("?");
             match waiting {
                 Some(reason) => Some(format!("pod {name} is waiting: {reason}")),
-                None => unscheduled_reason(pod).map(|why| format!("pod {name} is Pending: {why}")),
+                None => crash_loop_reason(pod)
+                    .map(|why| format!("pod {name} {CRASH_LOOP_MARKER}: {why}"))
+                    .or_else(|| {
+                        unscheduled_reason(pod).map(|why| format!("pod {name} is Pending: {why}"))
+                    }),
             }
+        })
+}
+
+/// A container that is not ready, has restarted repeatedly and last exited with an error: a
+/// crash loop seen between back-offs (Running or Terminated), e.g. "restarted 3 times, last
+/// exit code 1".
+fn crash_loop_reason(pod: &k8s_openapi::api::core::v1::Pod) -> Option<String> {
+    pod.status
+        .as_ref()?
+        .container_statuses
+        .as_deref()?
+        .iter()
+        .filter(|status| !status.ready && status.restart_count >= CRASH_LOOP_MIN_RESTARTS)
+        .find_map(|status| {
+            let code = status.last_state.as_ref()?.terminated.as_ref()?.exit_code;
+            (code != 0).then(|| {
+                format!(
+                    "restarted {} times, last exit code {code}",
+                    status.restart_count
+                )
+            })
         })
 }
 
@@ -1397,6 +1430,36 @@ mod tests {
             pod_waiting_reason(&pods).as_deref(),
             Some("pod agent-x7k2p is Pending: Unschedulable \"0/10 nodes are available: Insufficient cpu\"")
         );
+    }
+
+    #[test]
+    fn a_pod_polled_while_running_between_crashes_is_a_crash_loop() {
+        let pods: Vec<k8s_openapi::api::core::v1::Pod> =
+            serde_json::from_value(serde_json::json!([
+                {"metadata":{"name":"web-x"},"status":{"phase":"Running","containerStatuses":[
+                    {"name":"web","image":"i","imageID":"","ready":false,"restartCount":3,
+                     "state":{"running":{}},
+                     "lastState":{"terminated":{"exitCode":1}}}]}}
+            ]))
+            .unwrap();
+        let reason = pod_waiting_reason(&pods).unwrap();
+        assert_eq!(
+            reason,
+            "pod web-x is crash-looping: restarted 3 times, last exit code 1"
+        );
+        assert!(!unchanged_update_rechecks(true, Some(&reason)));
+        // One restart, a clean exit, or a ready container is not a crash loop.
+        for (restarts, code, ready) in [(1, 1, false), (3, 0, false), (3, 1, true)] {
+            let pods: Vec<k8s_openapi::api::core::v1::Pod> =
+                serde_json::from_value(serde_json::json!([
+                    {"metadata":{"name":"web-x"},"status":{"phase":"Running","containerStatuses":[
+                        {"name":"web","image":"i","imageID":"","ready":ready,"restartCount":restarts,
+                         "state":{"running":{}},
+                         "lastState":{"terminated":{"exitCode":code}}}]}}
+                ]))
+                .unwrap();
+            assert_eq!(pod_waiting_reason(&pods), None);
+        }
     }
 
     #[test]
