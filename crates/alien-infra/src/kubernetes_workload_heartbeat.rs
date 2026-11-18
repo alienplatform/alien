@@ -731,8 +731,8 @@ fn hold_now_unix() -> i64 {
     Utc::now().timestamp()
 }
 
-/// In tests every poll takes 30 s, so the 60 s hold, so a hold is reached in a few steps
-/// without waiting. The clock is per test thread.
+/// In tests every poll advances the clock by 30 s, so the 60 s hold is reached after a few
+/// polls without waiting. The clock is per test thread.
 #[cfg(test)]
 fn hold_now_unix() -> i64 {
     thread_local! {
