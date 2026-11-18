@@ -1338,6 +1338,10 @@ pub struct SandboxStorageStatus {
     /// Why the state is `behind` or `stopped`.
     #[serde(default)]
     pub last_error: Option<String>,
+    /// Bytes committed inside the sandbox that are not in the store yet. Only where the binding
+    /// pulls commits (GCP); absent where the sandbox pushes them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_bytes: Option<u64>,
 }
 
 /// A live sandbox.

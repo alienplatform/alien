@@ -46,6 +46,10 @@ pub const PULL_INTERVAL: Duration = Duration::from_secs(1);
 #[cfg(test)]
 pub const PULL_INTERVAL: Duration = Duration::from_millis(20);
 
+/// How long a commit may wait in the sandbox, unpublished, before the status says `behind`: a
+/// commit after a quiet second plus a pull every second, with room for a slow pull.
+const BEHIND_AFTER: Duration = Duration::from_secs(10);
+
 /// Pulls a `sync` makes before it gives up on its commit reaching the store.
 const SYNC_PULL_ATTEMPTS: u32 = 30;
 
@@ -526,13 +530,29 @@ impl GcpAgentPlatformSandbox {
                 return Ok(status);
             }
         }
+        // What the sandbox committed that no pull has published yet. Not durable: on GCP a write
+        // is published only while a binding pulls (a running workload), so a sandbox left
+        // unpulled longer than a commit takes reports `behind` and how much is waiting.
+        let pending = channel
+            .pending()
+            .await
+            .map_err(|e| storage_failed("sandbox.persistentStorage", e))?;
+        let (pending_bytes, behind) = unpublished(pending.as_ref(), super::wall_now());
+        status.pending_bytes = Some(pending_bytes);
+        if behind && status.state == SandboxStorageState::Replicating {
+            status.state = SandboxStorageState::Behind;
+            status.last_error = Some(format!(
+                "{pending_bytes} bytes committed in the sandbox are not in the store yet; on GCP \
+                 writes are published while a workload with this binding runs"
+            ));
+        }
         if let Some(pull) = persistent.pull_of(sandbox_id) {
             let last = pull.last.lock().expect("pull report lock").clone();
             if last.superseded {
                 status.state = SandboxStorageState::Stopped;
                 status.last_error = last.error;
             } else if let Some(error) = last.error {
-                if status.state == SandboxStorageState::Replicating {
+                if status.state != SandboxStorageState::Stopped {
                     status.state = SandboxStorageState::Behind;
                     status.last_error = Some(error);
                 }
@@ -612,6 +632,27 @@ impl GcpAgentPlatformSandbox {
     pub(super) fn storage_key_store(&self, key: &str, operation: &str) -> Result<KeyStore> {
         self.persistent_store(operation)?.key_store(key, operation)
     }
+}
+
+/// The bytes a sandbox committed that are not in the store, and whether they have waited longer
+/// than [`BEHIND_AFTER`] since the oldest unpublished commit (an older agent names only its
+/// latest commit's time). The sandbox's clock and this one may differ a little; the threshold is
+/// far above that.
+fn unpublished(pending: Option<&Pending>, now: chrono::DateTime<chrono::Utc>) -> (u64, bool) {
+    let Some(pending) = pending else {
+        return (0, false);
+    };
+    let bytes = pending.objects.iter().map(|o| o.size).sum();
+    let committed_at = pending.since.or_else(|| {
+        serde_json::from_str::<alien_sandbox_storage::Head>(&pending.head)
+            .ok()
+            .map(|head| head.updated_at)
+    });
+    let behind = committed_at.is_none_or(|at| {
+        now.signed_duration_since(at)
+            > chrono::Duration::from_std(BEHIND_AFTER).expect("a small duration")
+    });
+    (bytes, behind)
 }
 
 fn storage_failed(operation: &str, error: AlienError<StorageError>) -> AlienError<ErrorData> {
@@ -1178,6 +1219,49 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("storageKey"), "{error}");
+    }
+
+    #[test]
+    fn writes_unpublished_for_longer_than_a_pull_takes_are_behind() {
+        let now = chrono::Utc::now();
+        let pending = |since: Option<chrono::DateTime<chrono::Utc>>,
+                       head_at: chrono::DateTime<chrono::Utc>| Pending {
+            generation: 3,
+            head: serde_json::json!({ "commit": null, "writer": "1001", "updatedAt": head_at })
+                .to_string(),
+            objects: vec![
+                alien_sandbox_storage::PendingObject {
+                    name: "packs/a".to_string(),
+                    size: 700,
+                },
+                alien_sandbox_storage::PendingObject {
+                    name: "manifests/a".to_string(),
+                    size: 50,
+                },
+            ],
+            since,
+        };
+        let secs = |n: i64| chrono::Duration::seconds(n);
+        assert_eq!(unpublished(None, now), (0, false));
+        // The oldest commit decides, not the latest: a sandbox that keeps writing while nothing
+        // pulls is behind although its newest commit is a second old.
+        assert_eq!(
+            unpublished(Some(&pending(Some(now - secs(60)), now - secs(1))), now),
+            (750, true)
+        );
+        assert_eq!(
+            unpublished(Some(&pending(Some(now - secs(2)), now - secs(1))), now),
+            (750, false)
+        );
+        // An older agent: only the latest commit's time is known.
+        assert_eq!(
+            unpublished(Some(&pending(None, now - secs(60))), now),
+            (750, true)
+        );
+        assert_eq!(
+            unpublished(Some(&pending(None, now - secs(1))), now),
+            (750, false)
+        );
     }
 
     #[test]
