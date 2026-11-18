@@ -1343,6 +1343,9 @@ pub struct SandboxStorageStatus {
     /// When the sandbox's grant expires; bindings renew it past half its life.
     #[serde(default)]
     pub grant_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the sandbox received that grant.
+    #[serde(default)]
+    pub grant_issued_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// A live sandbox.

@@ -123,6 +123,8 @@ pub struct StorageStatus {
     pub last_error: Option<String>,
     /// When the grant the agent holds expires; the binding renews it past half its life.
     pub grant_expires_at: Option<DateTime<Utc>>,
+    /// When the agent received that grant: with `grant_expires_at`, its life.
+    pub grant_issued_at: Option<DateTime<Utc>>,
 }
 
 struct Live {
@@ -169,6 +171,7 @@ impl PersistentStorage {
                 head: None,
                 last_error: None,
                 grant_expires_at: None,
+                grant_issued_at: None,
             }),
         }
     }
@@ -266,6 +269,7 @@ impl PersistentStorage {
             s.head = head;
             s.last_synced_at = Some(Utc::now());
             s.grant_expires_at = Some(grant_expires_at);
+            s.grant_issued_at = Some(Utc::now());
         });
         image.restored()?;
         let this = Arc::clone(self);
@@ -285,6 +289,7 @@ impl PersistentStorage {
         live.store.renew(request.grant);
         self.update(|s| {
             s.grant_expires_at = Some(expires_at);
+            s.grant_issued_at = Some(Utc::now());
             if s.state == ReplicationState::Denied {
                 s.state = ReplicationState::Behind;
             }

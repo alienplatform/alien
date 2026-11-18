@@ -653,6 +653,7 @@ async fn an_expired_grant_reports_denied_until_renewed() {
         .await
         .expect_err("the store refuses the grant");
     assert_eq!(storage.status().state, ReplicationState::Denied);
+    let first_issued = storage.status().grant_issued_at.expect("issued at attach");
 
     storage
         .renew(
@@ -665,6 +666,9 @@ async fn an_expired_grant_reports_denied_until_renewed() {
         .expect("renew");
     let synced = storage.sync().await.expect("renewed grant works");
     assert_eq!(synced.state, ReplicationState::Replicating);
+    // The binding reads the renewed grant's life from these two.
+    assert!(synced.grant_issued_at.expect("issued at renewal") >= first_issued);
+    assert!(synced.grant_expires_at.expect("expiry") > synced.grant_issued_at.unwrap());
 }
 
 /// A grant past its expiry is refused before anything is sent.

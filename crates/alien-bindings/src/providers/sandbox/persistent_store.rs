@@ -159,6 +159,49 @@ impl ObjectStore for KeyStore {
     }
 }
 
+/// Whether the grant a sandbox holds should be renewed at `now`: it is past half its life, it
+/// has expired, or the agent reports it refused. A status without a grant (nothing attached, or
+/// a pulled key that holds none) needs nothing.
+pub fn grant_needs_renewal(
+    status: &crate::traits::SandboxStorageStatus,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if status.key.is_none() {
+        return false;
+    }
+    if status.state == crate::traits::SandboxStorageState::Denied {
+        return true;
+    }
+    match (status.grant_issued_at, status.grant_expires_at) {
+        (Some(issued), Some(expires)) => now >= issued + (expires - issued) / 2,
+        // An agent that reports an expiry but not when it got it: renew once half the longest
+        // grant is left, which never lets one lapse.
+        (None, Some(expires)) => now >= expires - chrono::Duration::minutes(5),
+        _ => false,
+    }
+}
+
+/// Renews the grant behind `status` with `renew` (which mints a fresh grant for `key` and hands
+/// it to the agent) when [`grant_needs_renewal`] says so. Bindings call this from every call they
+/// make for a sandbox that carries its storage status (get, sync, status), so a live workload
+/// keeps its grant fresh and the grant of one nobody calls for lapses no later than its sandbox
+/// would. Returns whether it renewed.
+pub async fn refresh_if_past_half<F, Fut>(
+    status: &crate::traits::SandboxStorageStatus,
+    renew: F,
+) -> crate::error::Result<bool>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = crate::error::Result<()>>,
+{
+    if !grant_needs_renewal(status, chrono::Utc::now()) {
+        return Ok(false);
+    }
+    let key = status.key.clone().expect("checked by grant_needs_renewal");
+    renew(key).await?;
+    Ok(true)
+}
+
 /// S3 grants: a SigV4 POST policy for `<prefix><key>/`, a presigned conditional PUT for HEAD and
 /// presigned GETs, all signed with the binding's own credentials and expiring with them.
 #[cfg(feature = "aws")]
@@ -400,5 +443,72 @@ mod tests {
         assert!(a.list("").await.unwrap().is_empty());
         assert_eq!(b.list("").await.unwrap(), vec!["HEAD"]);
         assert!(KeyStore::new(inner, "p/", "../x").is_err());
+    }
+
+    fn status(
+        state: crate::traits::SandboxStorageState,
+        issued: Option<i64>,
+        expires: Option<i64>,
+    ) -> crate::traits::SandboxStorageStatus {
+        let at = |m: i64| chrono::DateTime::from_timestamp(m * 60, 0).unwrap();
+        crate::traits::SandboxStorageStatus {
+            key: Some("engine-42".to_string()),
+            state,
+            last_synced_at: None,
+            head: None,
+            last_error: None,
+            grant_expires_at: expires.map(at),
+            grant_issued_at: issued.map(at),
+        }
+    }
+
+    /// A grant is renewed past half its life, whatever that life was (an 8 h grant, or one a
+    /// one-hour signing session cut short), and at once when the agent reports it denied.
+    #[test]
+    fn a_grant_is_renewed_past_half_its_life_or_when_denied() {
+        use crate::traits::SandboxStorageState::*;
+        let at = |m: i64| chrono::DateTime::from_timestamp(m * 60, 0).unwrap();
+        let eight_hours = status(Replicating, Some(0), Some(480));
+        assert!(!grant_needs_renewal(&eight_hours, at(239)));
+        assert!(grant_needs_renewal(&eight_hours, at(240)));
+        let one_hour = status(Replicating, Some(0), Some(60));
+        assert!(!grant_needs_renewal(&one_hour, at(29)));
+        assert!(grant_needs_renewal(&one_hour, at(30)));
+        assert!(grant_needs_renewal(&one_hour, at(61)), "expired");
+        assert!(grant_needs_renewal(
+            &status(Denied, Some(0), Some(480)),
+            at(1)
+        ));
+        let mut detached = status(Replicating, Some(0), Some(60));
+        detached.key = None;
+        assert!(!grant_needs_renewal(&detached, at(59)));
+        assert!(!grant_needs_renewal(
+            &status(Replicating, None, None),
+            at(1000)
+        ));
+        let old_agent = status(Replicating, None, Some(60));
+        assert!(!grant_needs_renewal(&old_agent, at(54)));
+        assert!(grant_needs_renewal(&old_agent, at(55)));
+    }
+
+    #[tokio::test]
+    async fn refresh_calls_renew_only_when_needed() {
+        use crate::traits::SandboxStorageState::*;
+        let now = chrono::Utc::now().timestamp() / 60;
+        let fresh = status(Replicating, Some(now), Some(now + 480));
+        let renewed = refresh_if_past_half(&fresh, |_| async { panic!("not due") })
+            .await
+            .unwrap();
+        assert!(!renewed);
+        let due = status(Replicating, Some(now - 300), Some(now + 180));
+        let seen = std::sync::Mutex::new(None);
+        let renewed = refresh_if_past_half(&due, |key| {
+            *seen.lock().unwrap() = Some(key);
+            async { Ok(()) }
+        })
+        .await
+        .unwrap();
+        assert!(renewed);
+        assert_eq!(seen.lock().unwrap().as_deref(), Some("engine-42"));
     }
 }
