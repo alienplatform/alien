@@ -61,6 +61,11 @@ impl PackBuilder {
         (hash, offset, len)
     }
 
+    /// Bytes written so far.
+    pub fn len(&self) -> usize {
+        self.tar.get_ref().len()
+    }
+
     /// Whether no chunk was added.
     pub fn is_empty(&self) -> bool {
         self.chunks.is_empty()

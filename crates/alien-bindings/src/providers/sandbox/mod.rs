@@ -23,6 +23,8 @@ pub mod interactive;
 #[cfg(feature = "aws")]
 pub mod aws;
 
+pub mod persistent_store;
+
 #[cfg(feature = "azure")]
 pub mod azure;
 // Called by the create path's attach once the shared binding attach (claim, then grant) lands;

@@ -357,7 +357,7 @@ impl Staging {
 }
 
 impl FileSource for Staging {
-    fn open(&mut self, path: &str) -> StorageResult<Box<dyn Read + '_>> {
+    fn open(&mut self, path: &str) -> StorageResult<Box<dyn Read + Send + '_>> {
         let staged = self.files.get(path).ok_or_else(|| {
             tree_io(
                 "read",

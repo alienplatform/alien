@@ -124,7 +124,7 @@ async fn delete_with_identity(path: &str) {
 struct Files(BTreeMap<String, Vec<u8>>);
 
 impl FileSource for Files {
-    fn open(&mut self, path: &str) -> Result<Box<dyn Read + '_>> {
+    fn open(&mut self, path: &str) -> Result<Box<dyn Read + Send + '_>> {
         // `src/again` is another name for `src/main.rs`'s inode; the core opens a hard-link
         // group by its first name.
         let path = if path == "src/again" {

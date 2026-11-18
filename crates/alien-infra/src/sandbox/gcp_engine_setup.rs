@@ -224,13 +224,9 @@ pub(crate) async fn set_up_engine_access(
                         resource_id: Some(sandbox.id.clone()),
                     },
                 )?;
-                if existing
-                    .description
-                    .as_deref()
-                    .is_some_and(|description| {
-                        crate::setup_owner::description_names_owner(description, &owner)
-                    })
-                {
+                if existing.description.as_deref().is_some_and(|description| {
+                    crate::setup_owner::description_names_owner(description, &owner)
+                }) {
                     record.signer_created = Some(email.clone());
                 } else {
                     return Err(AlienError::new(ErrorData::CloudPlatformError {

@@ -2321,6 +2321,42 @@ impl BindingsProviderApi for BindingsProvider {
                         reason: "Failed to create credential provider".to_string(),
                     })?;
 
+                // The persistent store is a bucket of its own in the same region as the
+                // sandbox (setup creates both), signed with the same credentials.
+                let persistent_grants = match aws_binding
+                    .persistent_storage
+                    .as_ref()
+                    .map(|storage| &storage.store)
+                {
+                    None => None,
+                    Some(alien_core::bindings::PersistentStoreLocator::Aws { bucket, prefix }) => {
+                        let bucket = bucket
+                            .clone()
+                            .into_value(binding_name, "persistentStorage.store.bucket")
+                            .context(ErrorData::BindingSetupFailed {
+                                binding_type: "AWS sandbox".to_string(),
+                                reason: "the persistent store's bucket is not resolved".to_string(),
+                            })?;
+                        let max_object_bytes = alien_sandbox_storage::MAX_PACK_BYTES as u64
+                            + 2 * alien_sandbox_storage::CHUNK_SIZE as u64;
+                        Some(Arc::new(
+                            crate::providers::sandbox::persistent_store::s3::S3Grants::new(
+                                bucket,
+                                prefix.clone(),
+                                credentials.clone(),
+                                max_object_bytes,
+                            )?,
+                        ))
+                    }
+                    Some(_) => {
+                        return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                            binding_name: binding_name.to_string(),
+                            env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                            reason: "an AWS sandbox's persistent store must be an S3 bucket"
+                                .to_string(),
+                        }))
+                    }
+                };
                 let client = LambdaMicrovmsClient::new(reqwest::Client::new(), credentials);
 
                 let egress_connector_arns = aws_binding
@@ -2371,6 +2407,7 @@ impl BindingsProviderApi for BindingsProvider {
                     aws_binding.max_lifetime_seconds,
                 )
                 .with_persistent_storage(aws_binding.persistent_storage.clone())
+                .with_persistent_grants(persistent_grants)
                 .with_egress(
                     aws_binding
                         .egress

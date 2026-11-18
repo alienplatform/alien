@@ -6,8 +6,8 @@ use std::io::Read;
 
 use alien_sandbox_storage::{
     collect_garbage, read_file, read_head, restore, takeover, CommitOutcome, Committer, Entry,
-    EntryKind, FileSource, Manifest, MemoryStore, ObjectStore, Result, TreeEntry, TreeEntryKind,
-    TreeSink, CHUNK_SIZE,
+    EntryKind, FileSource, Manifest, MemoryStore, ObjectName, ObjectStore, Result, TreeEntry,
+    TreeEntryKind, TreeSink, CHUNK_SIZE,
 };
 
 /// A tree held in memory: what a walk would report and the bytes behind each file.
@@ -86,7 +86,7 @@ struct Source<'a> {
 }
 
 impl FileSource for Source<'_> {
-    fn open(&mut self, path: &str) -> Result<Box<dyn Read + '_>> {
+    fn open(&mut self, path: &str) -> Result<Box<dyn Read + Send + '_>> {
         self.opened.push(path.to_string());
         Ok(Box::new(&self.tree.content[path][..]))
     }
@@ -627,4 +627,57 @@ async fn a_precondition_must_carry_the_whole_version_it_read() {
             .unwrap(),
         alien_sandbox_storage::PutOutcome::Conflict
     );
+}
+
+/// Bytes in which no two chunks repeat (unlike `pattern`, which repeats every 256 bytes).
+fn distinct(len: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state as u8
+        })
+        .collect()
+}
+
+/// A commit larger than the pack cap is split into several packs, each uploaded as soon as it
+/// fills (so the writer never holds the whole commit), and the tree still restores exactly.
+#[tokio::test]
+async fn a_large_commit_is_split_into_capped_packs() {
+    let store = MemoryStore::new();
+    let start = takeover(&store, "sandbox-1").await.unwrap();
+    let cap = 3 * CHUNK_SIZE;
+    let mut writer = Committer::new("sandbox-1", start.head_version, None, None).with_pack_cap(cap);
+    let tree = Tree::default()
+        .file("big", distinct(10 * CHUNK_SIZE + 5), 1)
+        .file("small", b"tail".to_vec(), 1);
+    let (outcome, _) = commit(&store, &mut writer, &tree).await;
+    let CommitOutcome::Committed { pack_bytes, .. } = outcome.unwrap() else {
+        panic!("expected a commit");
+    };
+    let packs: Vec<String> = store
+        .names()
+        .into_iter()
+        .filter(|name| name.starts_with("packs/"))
+        .collect();
+    assert_eq!(packs.len(), 4, "{packs:?}");
+    let mut total = 0;
+    for pack in &packs {
+        let bytes = store.get(pack).await.unwrap().unwrap().bytes;
+        // A pack closes on the chunk that reaches the cap, so it can exceed it by one chunk
+        // and its tar framing, never more.
+        assert!(
+            bytes.len() < cap + CHUNK_SIZE + 2048,
+            "{pack}: {}",
+            bytes.len()
+        );
+        assert_eq!(*pack, ObjectName::of(1, &bytes).pack(), "named by its hash");
+        total += bytes.len() as u64;
+    }
+    assert_eq!(total, pack_bytes);
+    let restored = restore_head(&store).await;
+    assert_eq!(restored.files["big"].1, tree.content["big"]);
+    assert_eq!(restored.files["small"].1, b"tail");
 }

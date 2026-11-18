@@ -20,10 +20,12 @@ use crate::providers::sandbox::refusal::Unreachable;
 use crate::traits::{
     Binding, CommandOutput, CreateSandboxRequest, InteractiveCommand, JobPoll, JobStart,
     PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
+    SandboxStorageStatus,
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_sandbox_storage::ObjectStore as _;
 use tracing::warn;
 
 /// Header the proxy reads to decide which port inside the MicroVM a request reaches.
@@ -103,8 +105,14 @@ pub struct AwsSandbox {
     max_lifetime_seconds: Option<u32>,
     /// The declared persistent storage, which makes `storageKey` required on create.
     persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
+    /// Claims keys and mints the agent's grants in the declaration's own bucket.
+    persistent_grants: Option<Arc<super::persistent_store::s3::S3Grants>>,
     agent: reqwest::Client,
 }
+
+/// How long a grant handed to the agent lasts, at most; the binding's credentials may end it
+/// sooner. Lambda ends a MicroVM after eight hours.
+const STORAGE_GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(8 * 3600);
 
 impl AwsSandbox {
     /// Supplies the declaration carried by the resolved binding.
@@ -129,6 +137,134 @@ impl AwsSandbox {
     ) -> Self {
         self.persistent_storage = storage;
         self
+    }
+
+    /// Supplies the persistent store's grant signer (the declaration's own bucket).
+    pub fn with_persistent_grants(
+        mut self,
+        grants: Option<Arc<super::persistent_store::s3::S3Grants>>,
+    ) -> Self {
+        self.persistent_grants = grants;
+        self
+    }
+
+    /// Claims `key` for the new MicroVM, then hands its agent the claimed commit and a grant to
+    /// read it and write the key. The claim comes first, so a sandbox still running for the key
+    /// can no longer publish over the tree this one restores.
+    async fn attach_storage(&self, microvm_id: &str, key: &str) -> Result<()> {
+        let unreachable = |reason: String| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: "sandbox.create".to_string(),
+                reason,
+            })
+        };
+        let grants = self.persistent_grants.as_ref().ok_or_else(|| {
+            unreachable("the binding has no persistent store to attach".to_string())
+        })?;
+        let store = grants
+            .key_store(key)
+            .map_err(|e| unreachable(format!("storage key '{key}': {e}")))?;
+        let claim = alien_sandbox_storage::takeover(&store, microvm_id)
+            .await
+            .map_err(|e| unreachable(format!("could not claim storage key '{key}': {e}")))?;
+        // After the claim no other writer can publish, and this one has not started: whatever
+        // HEAD does not reach is garbage now. A failed collection only leaves garbage behind.
+        if let Err(error) = alien_sandbox_storage::collect_garbage(&store).await {
+            warn!(%error, key, "persistent storage garbage collection failed");
+        }
+        let commit = match alien_sandbox_storage::read_head(&store)
+            .await
+            .map_err(|e| unreachable(format!("could not read storage key '{key}': {e}")))?
+        {
+            Some((head, _)) => head.commit,
+            None => None,
+        };
+        let mut reads = Vec::new();
+        if let (Some(commit), Some(manifest)) = (&commit, &claim.manifest) {
+            reads.push(commit.manifest());
+            reads.extend(manifest.packs().into_iter().map(|pack| pack.pack()));
+        }
+        let grant = grants
+            .grant(key, &reads, STORAGE_GRANT_TTL)
+            .await
+            .map_err(|e| unreachable(format!("could not sign the storage grant: {e}")))?;
+        let body = serde_json::json!({
+            "key": key,
+            "writer": microvm_id,
+            "headVersion": claim.head_version,
+            "commit": commit,
+            "grant": grant,
+        });
+        let response = self
+            .authorized_request(microvm_id, reqwest::Method::PUT, "/v1/storage")
+            .await?
+            .json(&body)
+            .timeout(SANDBOX_READY_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| unreachable(format!("could not attach persistent storage: {e}")))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(unreachable(format!(
+                "the agent refused persistent storage ({status}): {}",
+                text.chars().take(500).collect::<String>()
+            )));
+        }
+        Ok(())
+    }
+
+    fn key_store(&self, key: &str, operation: &str) -> Result<super::persistent_store::KeyStore> {
+        let grants = self.persistent_grants.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: operation.to_string(),
+                reason: "this sandbox declares no persistent storage".to_string(),
+            })
+        })?;
+        grants.key_store(key).map_err(|e| {
+            AlienError::new(ErrorData::InvalidInput {
+                operation_context: operation.to_string(),
+                details: e.to_string(),
+                field_name: Some("storageKey".to_string()),
+            })
+        })
+    }
+
+    async fn agent_storage(
+        &self,
+        sandbox_id: &str,
+        method: reqwest::Method,
+        path: &str,
+        operation: &str,
+    ) -> Result<SandboxStorageStatus> {
+        let response = self
+            .authorized_request(sandbox_id, method, path)
+            .await?
+            .timeout(SANDBOX_READY_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: operation.to_string(),
+                    reason: e.to_string(),
+                })
+            })?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "storage".to_string(),
+                reason: format!("{status}: {}", text.chars().take(500).collect::<String>()),
+            }));
+        }
+        serde_json::from_str(&text).map_err(|e| {
+            AlienError::new(ErrorData::UnexpectedResponseFormat {
+                provider: "aws-sandbox".to_string(),
+                binding_name: operation.to_string(),
+                field: "persistentStorage".to_string(),
+                response_json: e.to_string(),
+            })
+        })
     }
 
     pub fn with_default_policy(mut self, policy: Option<alien_core::EgressPolicy>) -> Self {
@@ -368,6 +504,7 @@ impl AwsSandbox {
             idle_pause_seconds,
             max_lifetime_seconds,
             persistent_storage: None,
+            persistent_grants: None,
             agent: reqwest::Client::new(),
         }
     }
@@ -833,11 +970,10 @@ impl Sandbox for AwsSandbox {
             request.storage_key.as_deref(),
             "sandbox.create",
         )?;
-        if storage_key.is_some() {
+        if storage_key.is_some() && self.persistent_grants.is_none() {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: "sandbox.create".to_string(),
-                reason: "this binding cannot attach persistent storage to a MicroVM yet"
-                    .to_string(),
+                reason: "the binding names no persistent store for this sandbox".to_string(),
             }));
         }
         let max_lifetime_seconds = self.lifetime_seconds(request.timeout_ms, "sandbox.create")?;
@@ -894,7 +1030,11 @@ impl Sandbox for AwsSandbox {
                 self.install_egress(&microvm_id, delivery).await?;
             }
             self.wait_until_servable("sandbox.create", &microvm_id)
-                .await
+                .await?;
+            if let Some(key) = &storage_key {
+                self.attach_storage(&microvm_id, key).await?;
+            }
+            Ok(())
         }
         .await;
         if let Err(mut error) = ready {
@@ -1232,7 +1372,92 @@ impl Sandbox for AwsSandbox {
     /// Idempotent per the trait: a sandbox AWS has already reaped is terminated, not an error.
     /// Absence and "someone else's" part ways here and in `resume`; every other operation needs
     /// the sandbox to exist, so for them the two are the same refusal.
+    async fn storage_status(&self, sandbox_id: &str) -> Result<Option<SandboxStorageStatus>> {
+        if self.persistent_storage.is_none() {
+            return Ok(None);
+        }
+        self.agent_storage(
+            sandbox_id,
+            reqwest::Method::GET,
+            "/v1/storage",
+            "sandbox.persistentStorage",
+        )
+        .await
+        .map(Some)
+    }
+
+    async fn sync_storage(&self, sandbox_id: &str) -> Result<SandboxStorageStatus> {
+        if self.persistent_storage.is_none() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.sync".to_string(),
+                reason: "this sandbox declares no persistent storage".to_string(),
+            }));
+        }
+        self.agent_storage(
+            sandbox_id,
+            reqwest::Method::POST,
+            "/v1/storage/sync",
+            "sandbox.sync",
+        )
+        .await
+    }
+
+    async fn read_storage_file(&self, key: &str, path: &str) -> Result<Vec<u8>> {
+        let store = self.key_store(key, "sandbox.readStorageFile")?;
+        alien_sandbox_storage::read_file(&store, key, path)
+            .await
+            .map_err(|e| {
+                AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "readStorageFile".to_string(),
+                    reason: e.to_string(),
+                })
+            })
+    }
+
+    async fn delete_storage(&self, key: &str) -> Result<()> {
+        let store = self.key_store(key, "sandbox.deleteStorage")?;
+        let failed = |reason: String| {
+            AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "deleteStorage".to_string(),
+                reason,
+            })
+        };
+        if let Some((head, _)) = alien_sandbox_storage::read_head(&store)
+            .await
+            .map_err(|e| failed(e.to_string()))?
+        {
+            if let Some(holder) = self.fetch(&head.writer, "sandbox.deleteStorage").await? {
+                if holder.state != SandboxState::Terminated {
+                    return Err(failed(format!(
+                        "storage key '{key}' is held by sandbox '{}'; terminate it first",
+                        head.writer
+                    )));
+                }
+            }
+        }
+        // HEAD first: a writer that slipped in can no longer move it, and no reader finds a
+        // HEAD whose manifest is gone.
+        store
+            .delete(alien_sandbox_storage::HEAD_OBJECT)
+            .await
+            .map_err(|e| failed(e.to_string()))?;
+        for object in store.list("").await.map_err(|e| failed(e.to_string()))? {
+            store
+                .delete(&object)
+                .await
+                .map_err(|e| failed(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     async fn terminate(&self, sandbox_id: &str) -> Result<()> {
+        // Persistent storage: commit what was written before the MicroVM goes. Best effort: a
+        // sandbox that is already gone or unreachable still terminates.
+        if self.persistent_storage.is_some() {
+            if let Err(error) = self.sync_storage(sandbox_id).await {
+                warn!(sandbox = sandbox_id, %error, "could not sync persistent storage before terminating");
+            }
+        }
         let state = match self
             .fetched_microvm("sandbox.terminate", sandbox_id)
             .await?

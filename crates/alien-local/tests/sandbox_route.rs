@@ -44,6 +44,7 @@ impl Harness {
             egress: SandboxEgressMode::Allow,
             preview_ports: vec![8080],
             env: Default::default(),
+            persistent_storage: None,
         };
 
         let route = SandboxRoute::ensure(manager, SANDBOX, template)
@@ -364,6 +365,7 @@ async fn a_create_in_flight_at_removal_is_visible_to_the_reap_that_follows() {
         egress: SandboxEgressMode::Allow,
         preview_ports: Vec::new(),
         env: Default::default(),
+        persistent_storage: None,
     };
     let route = SandboxRoute::ensure(Arc::clone(&manager), SANDBOX_SLOW, template)
         .await
