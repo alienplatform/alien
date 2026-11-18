@@ -29,9 +29,11 @@ use alien_core::{
 /// The oldest supported Operator, assumed when none reports its version.
 const OLDEST_OPERATOR: &str = "3.3.31";
 
-/// The release that first ships features that are on main but in no tag. Set it
-/// to the version the next release gets.
-pub(crate) const NEXT_RELEASE: &str = "3.3.65";
+/// The release that first ships features that are on main but in no tag: the
+/// version after the newest release tag. Bump it with each release, and give a
+/// feature its literal version once it ships. CI fails when this is not newer
+/// than the latest tag.
+pub(crate) const NEXT_RELEASE: &str = "3.3.70";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -85,7 +87,7 @@ pub(crate) const RESOURCE_CHOICES: Feature = feature(
 );
 pub(crate) const REPLICATION_REGIONS_INPUT: Feature = feature(
     "registry replication inputs",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Strip,
     "setup reads the input; the pull Operator never renders replication",
 );
@@ -100,7 +102,7 @@ pub(crate) const AI_MODELS: Feature = feature(
 /// release, whose stack is never altered.
 pub(crate) const UNREADABLE_SECURITY: Feature = feature(
     "pod security settings",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Strip,
     "older Operators apply no pod security context; delivery removes the settings",
 );
@@ -118,19 +120,19 @@ pub(crate) const EGRESS: Feature = feature(
 );
 pub(crate) const WRITABLE_PATHS: Feature = feature(
     "writable paths for restricted containers",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Refuse,
     "an older Operator would mount a read-only root without them",
 );
 pub(crate) const DAEMON_SECURITY: Feature = feature(
     "restricted security settings for daemons",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Refuse,
     "a declared restriction; older Operators cannot apply it",
 );
 pub(crate) const WORKER_SECURITY: Feature = feature(
     "restricted security settings for workers",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Refuse,
     "a declared restriction; older Operators cannot apply it",
 );
@@ -172,13 +174,13 @@ pub(crate) const REDIS: Feature = feature(
 );
 pub(crate) const SIGNING_VERIFIER: Feature = feature(
     "signing verifier resources",
-    NEXT_RELEASE,
+    "3.3.65",
     Action::Refuse,
     "older Operators cannot parse the resource type",
 );
 pub(crate) const AZURE_SANDBOX_INTERNET: Feature = feature(
     "internet egress for Azure sandboxes",
-    NEXT_RELEASE,
+    "3.3.69",
     Action::Refuse,
     "the setup-created gateway's binding carries replica addresses and a protocol floor older Operators reject, and they have no Azure gateway to enforce the rules",
 );
@@ -795,11 +797,10 @@ mod tests {
     fn an_azure_internet_sandbox_is_refused_for_operators_before_its_gateway_binding() {
         use alien_core::Platform;
         let stack = internet_sandbox();
-        for version in [None, Some("3.3.31"), Some("3.3.62")] {
+        for version in [None, Some("3.3.31"), Some("3.3.62"), Some("3.3.68")] {
             let operator = OperatorVersion::from_report(version);
             assert_eq!(
-                refuse_for_platform(&stack, Platform::Azure, &operator)
-                    .map(|feature| feature.name),
+                refuse_for_platform(&stack, Platform::Azure, &operator).map(|feature| feature.name),
                 Some("internet egress for Azure sandboxes"),
                 "{version:?}"
             );
@@ -807,7 +808,7 @@ mod tests {
             assert!(refuse_for_platform(&stack, Platform::Aws, &operator).is_none());
             assert!(refuse_for_platform(&stack, Platform::Kubernetes, &operator).is_none());
         }
-        let reads = OperatorVersion::from_report(Some(NEXT_RELEASE));
+        let reads = OperatorVersion::from_report(Some("3.3.69"));
         assert!(refuse_for_platform(&stack, Platform::Azure, &reads).is_none());
         let mut none = stack.clone();
         for (_, entry) in none.resources_mut() {
@@ -815,12 +816,10 @@ mod tests {
                 sandbox.egress = alien_core::SandboxEgress::None;
             }
         }
-        assert!(refuse_for_platform(
-            &none,
-            Platform::Azure,
-            &OperatorVersion::from_report(None)
-        )
-        .is_none());
+        assert!(
+            refuse_for_platform(&none, Platform::Azure, &OperatorVersion::from_report(None))
+                .is_none()
+        );
     }
 
     #[test]
