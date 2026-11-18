@@ -219,6 +219,21 @@ impl PersistentStorage {
                     "own the storage directory",
                     self.config.path.clone(),
                 ))?;
+        } else if is_unclaimed_mount_root(path)
+            .into_alien_error()
+            .context(failed(
+                "inspect the storage directory",
+                self.config.path.clone(),
+            ))?
+        {
+            // A disk the platform mounted at the path (GCP's persistent disk): root's, empty but
+            // for the file system's lost+found, so the commands could not write their own tree.
+            std::os::unix::fs::chown(path, Some(identity.uid), Some(identity.gid))
+                .into_alien_error()
+                .context(failed(
+                    "own the storage directory",
+                    self.config.path.clone(),
+                ))?;
         }
         let open = || {
             tree::open_root(path).into_alien_error().context(failed(
@@ -388,5 +403,53 @@ impl PersistentStorage {
                 Err(error) => tracing::warn!(%error, "persistent storage check failed"),
             }
         }
+    }
+}
+
+/// Whether `path` is a directory nobody has used yet that root owns: empty, or holding only the
+/// `lost+found` a fresh file system creates. A platform-mounted disk looks like this; a directory
+/// with anything else in it, or owned by anyone else, is left as it is.
+fn is_unclaimed_mount_root(path: &std::path::Path) -> std::io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Ok(false);
+    }
+    let names = std::fs::read_dir(path)?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    Ok(unclaimed(
+        metadata.uid(),
+        names.iter().map(|name| name.as_os_str()),
+    ))
+}
+
+fn unclaimed<'a>(owner: u32, mut names: impl Iterator<Item = &'a std::ffi::OsStr>) -> bool {
+    owner == 0 && names.all(|name| name == "lost+found")
+}
+
+#[cfg(test)]
+mod unclaimed_tests {
+    use super::unclaimed;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn only_an_empty_root_owned_directory_is_handed_to_the_commands() {
+        let names = |list: &'static [&'static str]| list.iter().map(OsStr::new);
+        assert!(unclaimed(0, names(&[])));
+        assert!(unclaimed(0, names(&["lost+found"])));
+        assert!(!unclaimed(0, names(&["lost+found", "notes.md"])));
+        assert!(!unclaimed(0, names(&["notes.md"])));
+        assert!(!unclaimed(1000, names(&["lost+found"])));
+    }
+
+    #[test]
+    fn a_symlink_at_the_path_is_not_followed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).expect("mkdir");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        assert!(!super::is_unclaimed_mount_root(&link).expect("inspect"));
     }
 }

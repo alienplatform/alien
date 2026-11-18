@@ -144,3 +144,13 @@ Controller readers must support `ConfiguringLifecycle`, `VerifyingLifecycle`,
 `UpdatingLifecycle`, and `VerifyingUpdatedLifecycle` before setup writes these
 checkpoints. Old checkpoints default `lifecycleRuleNames` to empty and retain
 account identity; imported accounts have no direct-setup rule ownership.
+
+## Sandbox persistent storage in direct setup
+
+| Platform | Direct setup | CloudFormation / Terraform |
+|---|---|---|
+| AWS | Refused while planning (`SANDBOX_PERSISTENT_STORAGE_DIRECT_SETUP_UNSUPPORTED`), before anything is created | Creates the store bucket, the session roles' object access and the store network path |
+
+Direct setup creates no persistent store, no gateway endpoint to it and no connector rule, so a
+sandbox that declares `persistentStorage` on AWS needs the CloudFormation or Terraform setup
+package for now.

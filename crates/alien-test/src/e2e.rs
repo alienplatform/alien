@@ -175,12 +175,15 @@ pub enum TestApp {
     /// A frozen, remotely published sandbox the test drives itself, with no Worker
     /// (`tests/e2e/test-apps/sandbox-remote`).
     SandboxRemote,
-    /// A frozen remote sandbox that declares persistent storage, driven by the test
-    /// (`tests/e2e/test-apps/sandbox-storage`).
+    /// A Live sandbox with persistent storage on `/workspace` and a Worker that drives its
+    /// sessions (`tests/e2e/test-apps/sandbox-storage`).
     SandboxStorage,
+    /// A remote-free sandbox with persistent storage the test drives through the binding, on
+    /// Azure (`tests/e2e/test-apps/sandbox-storage-azure`).
+    SandboxStorageAzure,
     /// The same sandbox with internet egress through the gateway
-    /// (`tests/e2e/test-apps/sandbox-storage/alien.internet.ts`).
-    SandboxStorageInternet,
+    /// (`tests/e2e/test-apps/sandbox-storage-azure/alien.internet.ts`).
+    SandboxStorageAzureInternet,
 }
 
 impl std::fmt::Display for TestApp {
@@ -200,7 +203,8 @@ impl std::fmt::Display for TestApp {
             TestApp::SandboxSession => write!(f, "sandbox-session"),
             TestApp::SandboxRemote => write!(f, "sandbox-remote"),
             TestApp::SandboxStorage => write!(f, "sandbox-storage"),
-            TestApp::SandboxStorageInternet => write!(f, "sandbox-storage-internet"),
+            TestApp::SandboxStorageAzure => write!(f, "sandbox-storage-azure"),
+            TestApp::SandboxStorageAzureInternet => write!(f, "sandbox-storage-azure-internet"),
         }
     }
 }
@@ -436,7 +440,10 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::StorageNotifications => "test-apps/storage-notifications",
         TestApp::SandboxSession => "test-apps/sandbox-session",
         TestApp::SandboxRemote => "test-apps/sandbox-remote",
-        TestApp::SandboxStorage | TestApp::SandboxStorageInternet => "test-apps/sandbox-storage",
+        TestApp::SandboxStorage => "test-apps/sandbox-storage",
+        TestApp::SandboxStorageAzure | TestApp::SandboxStorageAzureInternet => {
+            "test-apps/sandbox-storage-azure"
+        }
     }
 }
 
@@ -449,7 +456,7 @@ const CONFIG_FILE: &str = "alien.ts";
 /// directory.
 fn config_file(app: TestApp) -> &'static str {
     match app {
-        TestApp::SandboxStorageInternet => "alien.internet.ts",
+        TestApp::SandboxStorageAzureInternet => "alien.internet.ts",
         _ => CONFIG_FILE,
     }
 }
@@ -469,7 +476,8 @@ fn deployment_environment_variables(
         | TestApp::SandboxSession
         | TestApp::SandboxRemote
         | TestApp::SandboxStorage
-        | TestApp::SandboxStorageInternet => None,
+        | TestApp::SandboxStorageAzure
+        | TestApp::SandboxStorageAzureInternet => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {

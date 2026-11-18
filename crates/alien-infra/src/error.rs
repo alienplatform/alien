@@ -55,6 +55,15 @@ pub enum ErrorData {
     )]
     SandboxInternetDirectExistingVpcUnsupported { resource_id: String },
 
+    /// AWS direct setup creates no persistent store or store network path yet.
+    #[error(
+        code = "SANDBOX_PERSISTENT_STORAGE_DIRECT_SETUP_UNSUPPORTED",
+        message = "Sandbox '{resource_id}' declares persistent storage, which on AWS needs the CloudFormation or Terraform setup package for now. Set this deployment up with one of them.",
+        retryable = "false",
+        internal = "false"
+    )]
+    SandboxPersistentStorageDirectSetupUnsupported { resource_id: String },
+
     /// A direct setup would create a resource without the customer-managed key it names.
     #[error(
         code = "KEY_CONSUMER_UNSUPPORTED_IN_DIRECT_SETUP",

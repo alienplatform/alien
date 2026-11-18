@@ -186,6 +186,54 @@ impl DeploymentPrerequisiteCheck for AzureSandboxGroupFromSetupCheck {
     }
 }
 
+/// AWS persistent storage behind a connector needs the agent's in-guest redirect, which only the
+/// image command contract installs under `none`. The build resolves `imageUser`, so a build-time
+/// check can only see the declaration; the released stack is checked here.
+pub struct AwsPersistentStorageImageUserCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for AwsPersistentStorageImageUserCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("SANDBOX_PERSISTENT_STORAGE_UNAVAILABLE")
+    }
+
+    fn description(&self) -> &'static str {
+        "AWS sandbox persistent storage needs the image command contract"
+    }
+
+    fn should_run(&self, stack: &Stack, state: &StackState, _config: &DeploymentConfig) -> bool {
+        state.platform == Platform::Aws
+            && stack.resources().any(|(_, entry)| {
+                entry
+                    .config
+                    .downcast_ref::<alien_core::Sandbox>()
+                    .is_some_and(|sandbox| sandbox.persistent_storage.is_some())
+            })
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        _state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let errors: Vec<String> = stack
+            .resources()
+            .filter_map(|(_, entry)| entry.config.downcast_ref::<alien_core::Sandbox>())
+            .filter_map(|sandbox| {
+                alien_core::sandbox_egress::aws_persistent_storage_image_user_refusal(
+                    stack, sandbox,
+                )
+            })
+            .collect();
+        if errors.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(errors))
+        }
+    }
+}
+
 /// The internet declaration requires a prepared gateway; legacy paths stay unchanged.
 pub struct SandboxEgressGatewayCheck;
 
@@ -1664,6 +1712,50 @@ mod tests {
             remote_access: false,
             enabled_when: None,
         }
+    }
+
+    /// The build resolves `imageUser` after the build-time checks ran, so a released AWS sandbox
+    /// with persistent storage and no resolved image user is refused when it is deployed.
+    #[tokio::test]
+    async fn aws_persistent_storage_is_refused_for_an_image_without_the_command_contract() {
+        let sandbox = |image_user: Option<u32>| {
+            let mut sandbox = alien_core::Sandbox::new("boxes".into())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://example/box.zip".into(),
+                    bundled_from: None,
+                })
+                .egress(alien_core::SandboxEgress::None)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build();
+            sandbox.image_user = image_user;
+            sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+                path: "/workspace".into(),
+                exclude: vec![],
+                max_size: None,
+                encryption_key: None,
+            });
+            Stack::new("test".into())
+                .add(sandbox, ResourceLifecycle::Live)
+                .build()
+        };
+        let config = deployment_config();
+        let state = stack_state(Platform::Aws);
+        let check = AwsPersistentStorageImageUserCheck;
+        let legacy = sandbox(None);
+        assert!(check.should_run(&legacy, &state, &config));
+        let refused = check.check(&legacy, &state, &config).await.unwrap();
+        assert!(!refused.success);
+        assert!(
+            refused.errors[0].contains("imageUser"),
+            "{:?}",
+            refused.errors
+        );
+        let built = sandbox(Some(1001));
+        assert!(check.check(&built, &state, &config).await.unwrap().success);
+        assert!(!check.should_run(&legacy, &stack_state(Platform::Local), &config));
     }
 
     #[tokio::test]

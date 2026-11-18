@@ -166,6 +166,9 @@ pub struct E2eArtifactRegistryConfig {
     // AWS
     pub aws_ar_push_role_arn: Option<String>,
     pub aws_ar_pull_role_arn: Option<String>,
+    /// ECR repository prefix the push role may write (`ALIEN_E2E_REPOSITORY_PREFIX`, default
+    /// `alien-e2e`), for a run in an account whose roles scope another prefix.
+    pub aws_repository_prefix: Option<String>,
     // GCP
     pub gcp_gar_repository: Option<String>,
     pub gcp_ar_pull_sa_email: Option<String>,
@@ -566,6 +569,7 @@ impl TestConfig {
         E2eArtifactRegistryConfig {
             aws_ar_push_role_arn: env::var("E2E_AWS_AR_PUSH_ROLE_ARN").ok(),
             aws_ar_pull_role_arn: env::var("E2E_AWS_AR_PULL_ROLE_ARN").ok(),
+            aws_repository_prefix: env_opt("ALIEN_E2E_REPOSITORY_PREFIX"),
             gcp_gar_repository: env::var("E2E_GCP_GAR_REPOSITORY").ok(),
             gcp_ar_pull_sa_email: env::var("E2E_GCP_AR_PULL_SA_EMAIL").ok(),
             gcp_ar_push_sa_email: env::var("E2E_GCP_AR_PUSH_SA_EMAIL").ok(),

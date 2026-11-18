@@ -22,30 +22,28 @@ use dockdash::{
 };
 use oci_client::errors::{OciDistributionError, OciErrorCode};
 use oci_client::Reference;
+use sha2::{Digest, Sha256};
 use std::error::Error as StdError;
 use tokio::time::sleep;
 use tracing::warn;
 
-/// Names another agent image to layer, for testing an agent that is not released yet. The
-/// image must be pullable without credentials. It is part of the build's cache identity, so an
-/// image built with it is never reused without it.
-pub const SANDBOX_AGENT_IMAGE_ENV: &str = "ALIEN_SANDBOX_AGENT_IMAGE";
+/// Names a local agent binary to layer instead of pulling [`sandbox_agent_image`]: for testing an
+/// unreleased agent on a real cloud. A release built with it records the file's digest.
+pub const DEVELOPMENT_AGENT_BINARY_ENV: &str = "ALIEN_SANDBOX_AGENT_BINARY";
 
-/// The sandbox agent layered onto a sandbox image: the one released with the same version as
-/// `alien-build`, so a build never layers an agent from a different release than the CLI's,
-/// unless [`SANDBOX_AGENT_IMAGE_ENV`] names another.
-pub fn sandbox_agent_image() -> String {
-    agent_image_from(std::env::var(SANDBOX_AGENT_IMAGE_ENV).ok())
+fn development_agent_binary() -> Option<std::path::PathBuf> {
+    std::env::var_os(DEVELOPMENT_AGENT_BINARY_ENV)
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
-fn agent_image_from(overridden: Option<String>) -> String {
-    match overridden.map(|image| image.trim().to_string()) {
-        Some(image) if !image.is_empty() => image,
-        _ => format!(
-            "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
-            env!("CARGO_PKG_VERSION")
-        ),
-    }
+/// The sandbox agent layered onto a GCP sandbox, released with the same version as
+/// `alien-build`, so a build never layers an agent from a different release than the CLI's.
+pub fn sandbox_agent_image() -> String {
+    format!(
+        "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// A layered sandbox image and the agent it was layered from.
@@ -171,43 +169,63 @@ pub(crate) async fn build_sandbox_agent_image(
     let base_layers = image_layers(&base)?;
     drop(base);
 
-    // The agent image is public, so no registry credential is sent to its registry.
-    let pulling_agent = format!("Pulling the agent image {agent_image}");
-    let (agent, agent_build) = build_with_retry(
-        resource_name,
-        agent_image,
-        Pulled::Agent,
-        &pulling_agent,
-        || async {
-            Ok(Image::builder()
-                .from(agent_image)
-                .platform("linux", &layering.arch)
-                .pull_policy(PullPolicy::Always)
-                .protocol(protocol.clone())
-                .auth(RegistryAuth::Anonymous)
-                .blob_cache(cache.clone()))
-        },
-    )
-    .await?;
-    let agent_binary = match agent.read_file(AGENT_PATH).await {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            let context = unreadable_file(
-                &error,
-                resource_name,
-                AGENT_PATH,
-                &format!("the agent image {agent_image}"),
+    let (agent_binary, agent_digest) = match development_agent_binary() {
+        Some(path) => {
+            let bytes = std::fs::read(&path)
+                .into_alien_error()
+                .context(failed(format!(
+                    "Cannot read the agent binary {} named by {DEVELOPMENT_AGENT_BINARY_ENV}",
+                    path.display()
+                )))?;
+            let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+            warn!(
+                path = %path.display(),
+                %digest,
+                "{DEVELOPMENT_AGENT_BINARY_ENV} is set: layering a local agent binary instead of {agent_image}"
             );
-            return Err(error).into_alien_error().context(context);
+            (bytes, digest)
         }
-    }
-    .ok_or_else(|| {
-        AlienError::new(rejected(format!(
-            "The agent image {agent_image} has no file at {AGENT_PATH}"
-        )))
-    })?;
-    // Each pulled image holds a full archive on disk; only the agent binary was needed.
-    drop(agent);
+        None => {
+            // The agent image is public, so no registry credential is sent to its registry.
+            let pulling_agent = format!("Pulling the agent image {agent_image}");
+            let (agent, agent_build) = build_with_retry(
+                resource_name,
+                agent_image,
+                Pulled::Agent,
+                &pulling_agent,
+                || async {
+                    Ok(Image::builder()
+                        .from(agent_image)
+                        .platform("linux", &layering.arch)
+                        .pull_policy(PullPolicy::Always)
+                        .protocol(protocol.clone())
+                        .auth(RegistryAuth::Anonymous)
+                        .blob_cache(cache.clone()))
+                },
+            )
+            .await?;
+            let agent_binary = match agent.read_file(AGENT_PATH).await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let context = unreadable_file(
+                        &error,
+                        resource_name,
+                        AGENT_PATH,
+                        &format!("the agent image {agent_image}"),
+                    );
+                    return Err(error).into_alien_error().context(context);
+                }
+            }
+            .ok_or_else(|| {
+                AlienError::new(rejected(format!(
+                    "The agent image {agent_image} has no file at {AGENT_PATH}"
+                )))
+            })?;
+            // Each pulled image holds a full archive on disk; only the agent binary was needed.
+            drop(agent);
+            (agent_binary, agent_build.resolved_manifest_digest)
+        }
+    };
 
     let passwd = merge_identity(
         identity.passwd.as_deref(),
@@ -315,7 +333,7 @@ pub(crate) async fn build_sandbox_agent_image(
         ))?;
     Ok(SandboxAgentImage {
         image,
-        agent_digest: agent_build.resolved_manifest_digest,
+        agent_digest,
     })
 }
 
@@ -517,20 +535,6 @@ fn merge_identity(base: Option<&str>, root_line: &str, exec_line: &str, exec_id:
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_released_agent_unless_another_is_named() {
-        let released = format!(
-            "ghcr.io/alienplatform/alien-sandbox-agent:v{}",
-            env!("CARGO_PKG_VERSION")
-        );
-        assert_eq!(agent_image_from(None), released);
-        assert_eq!(agent_image_from(Some("  ".to_string())), released);
-        assert_eq!(
-            agent_image_from(Some("registry.example.com/agent:test".to_string())),
-            "registry.example.com/agent:test"
-        );
-    }
     use dockdash::test_utils::setup_local_registry;
     use dockdash::PushOptions;
     use httpmock::Method::GET;
