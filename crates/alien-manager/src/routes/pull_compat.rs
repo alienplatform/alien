@@ -824,8 +824,7 @@ mod tests {
         for version in [None, Some("3.3.31"), Some("3.3.62"), Some("3.3.68")] {
             let operator = OperatorVersion::from_report(version);
             assert_eq!(
-                refuse_for_platform(&stack, Platform::Azure, &operator)
-                    .map(|feature| feature.name),
+                refuse_for_platform(&stack, Platform::Azure, &operator).map(|feature| feature.name),
                 Some("internet egress for Azure sandboxes"),
                 "{version:?}"
             );
@@ -841,12 +840,10 @@ mod tests {
                 sandbox.egress = alien_core::SandboxEgress::None;
             }
         }
-        assert!(refuse_for_platform(
-            &none,
-            Platform::Azure,
-            &OperatorVersion::from_report(None)
-        )
-        .is_none());
+        assert!(
+            refuse_for_platform(&none, Platform::Azure, &OperatorVersion::from_report(None))
+                .is_none()
+        );
     }
 
     /// The v3.3.68 shape of an external AI binding (`alien-core`
