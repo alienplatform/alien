@@ -356,6 +356,10 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route("/v1/jobs/start", post(job_start))
         .route("/v1/jobs/poll", post(job_poll))
         .route("/v1/jobs/cancel", post(job_cancel))
+        .route("/v1/storage/pending", post(storage_pending))
+        .route("/v1/storage/read", post(storage_read))
+        .route("/v1/storage/ack", post(storage_ack))
+        .route("/v1/storage/seed", post(storage_seed))
         .route("/v1/interactive", post(interactive_start))
         .route("/v1/storage", get(storage_status).put(storage_attach))
         .route("/v1/storage/sync", post(storage_sync))
@@ -1084,6 +1088,51 @@ async fn agent_platform(
             Json(reparse(&body)?),
         )
         .await?),
+        "storagePending" => Ok(storage_pending(State(state), ConnectInfo(peer), headers)
+            .await?
+            .into_response()),
+        "storageRead" => Ok(storage_read(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        "storageAck" => Ok(storage_ack(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        "storageSeed" => Ok(storage_seed(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        // The attach request refuses unknown fields, so it travels under `attach`.
+        "storageAttach" => {
+            let envelope: StorageAttachEnvelope = reparse(&body)?;
+            Ok(storage_attach(
+                State(state),
+                ConnectInfo(peer),
+                headers,
+                Json(envelope.attach),
+            )
+            .await?
+            .into_response())
+        }
+        "storageStatus" => Ok(storage_status(State(state), ConnectInfo(peer), headers)
+            .await?
+            .into_response()),
+        "storageSync" => Ok(storage_sync(State(state), ConnectInfo(peer), headers)
+            .await?
+            .into_response()),
         "health" => Ok(health(State(state), Query(HealthQuery { version: None }))
             .await?
             .into_response()),
@@ -1091,6 +1140,191 @@ async fn agent_platform(
             reason: format!("unknown op '{other}'"),
         }))),
     }
+}
+
+/// Most raw bytes one storage read or seed page carries. Base64 in the agent's JSON and again in
+/// GCP's `:execute` reply puts 900 KB at about 1.6 MB, under that channel's 2 MB reply limit; the
+/// binding asks for no more, and the agent caps a larger ask so a reply stays bounded.
+pub const STORAGE_PAGE_BYTES: u64 = 900_000;
+
+/// `storageAttach` over the envelope: the attach request as `PUT /v1/storage` takes it.
+#[derive(Debug, Deserialize)]
+struct StorageAttachEnvelope {
+    attach: serde_json::Value,
+}
+
+/// The spool a seed writes to, created on first use; only a sandbox that declares persistent
+/// storage has one.
+#[cfg(target_os = "linux")]
+async fn seed_spool(
+    state: &AgentState,
+) -> std::result::Result<Arc<alien_sandbox_storage::Spool>, ApiError> {
+    Ok(declared_storage(state)?.spool().await?)
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn seed_spool(
+    _: &AgentState,
+) -> std::result::Result<Arc<alien_sandbox_storage::Spool>, ApiError> {
+    Err(no_storage_spool())
+}
+
+/// The spool the binding drains, or a refusal for a sandbox whose storage it does not pull.
+#[cfg(target_os = "linux")]
+fn spool(state: &AgentState) -> std::result::Result<Arc<alien_sandbox_storage::Spool>, ApiError> {
+    declared_storage(state)?
+        .existing_spool()
+        .ok_or_else(no_storage_spool)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spool(_: &AgentState) -> std::result::Result<Arc<alien_sandbox_storage::Spool>, ApiError> {
+    Err(no_storage_spool())
+}
+
+fn no_storage_spool() -> ApiError {
+    ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+        reason: "this sandbox has no persistent storage pulled by its binding".to_string(),
+    }))
+}
+
+fn storage_failed(
+    operation: &str,
+    error: AlienError<alien_sandbox_storage::ErrorData>,
+) -> ApiError {
+    ApiError::from(AlienError::new(ErrorData::OperationFailed {
+        operation: operation.to_string(),
+        reason: error.to_string(),
+    }))
+}
+
+/// What the agent has committed and the binding has not yet published.
+#[derive(Debug, Serialize)]
+pub struct StoragePendingResponse {
+    /// `None` when everything committed is published.
+    pub pending: Option<alien_sandbox_storage::Pending>,
+}
+
+/// One page of a pending or seeded storage object.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageReadBody {
+    /// `packs/…` or `manifests/…`.
+    pub object: String,
+    /// Bytes to skip.
+    pub offset: u64,
+    /// Bytes wanted; capped at [`STORAGE_PAGE_BYTES`].
+    pub length: u64,
+}
+
+/// A page of a storage object on the way out.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageReadResponse {
+    /// The bytes, base64.
+    pub contents_base64: String,
+}
+
+/// What the binding did with a pending snapshot.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageAckBody {
+    /// The snapshot's generation.
+    pub generation: u64,
+    /// Published, or superseded by another sandbox.
+    pub outcome: alien_sandbox_storage::AckOutcome,
+}
+
+/// A page of an object the binding copies in for a restore.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageSeedBody {
+    /// `packs/…` or `manifests/…`.
+    pub object: String,
+    /// Bytes of the object already sent.
+    pub offset: u64,
+    /// This page, base64.
+    pub contents_base64: String,
+    /// Whether this page ends the object.
+    pub last: bool,
+}
+
+async fn storage_pending(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<StoragePendingResponse>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let spool = spool(&state)?;
+    Ok(Json(StoragePendingResponse {
+        pending: spool.pending(),
+    }))
+}
+
+async fn storage_read(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<StorageReadBody>,
+) -> std::result::Result<Json<StorageReadResponse>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let spool = spool(&state)?;
+    let length = body.length.min(STORAGE_PAGE_BYTES);
+    let bytes = tokio::task::spawn_blocking(move || spool.read(&body.object, body.offset, length))
+        .await
+        .map_err(|e| {
+            ApiError::from(AlienError::new(ErrorData::OperationFailed {
+                operation: "storage read".to_string(),
+                reason: e.to_string(),
+            }))
+        })?
+        .map_err(|e| storage_failed("storage read", e))?;
+    Ok(Json(StorageReadResponse {
+        contents_base64: BASE64.encode(bytes),
+    }))
+}
+
+async fn storage_ack(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<StorageAckBody>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    spool(&state)?
+        .ack(body.generation, body.outcome)
+        .map_err(|e| storage_failed("storage ack", e))?;
+    Ok(Json(serde_json::json!({})))
+}
+
+async fn storage_seed(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<StorageSeedBody>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    authorize_control(&state, peer, &headers, SandboxOperationClass::Execute).await?;
+    let spool = seed_spool(&state).await?;
+    let bytes = BASE64.decode(&body.contents_base64).map_err(|error| {
+        AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("contents are not valid base64: {error}"),
+        })
+    })?;
+    if bytes.len() as u64 > STORAGE_PAGE_BYTES {
+        return Err(ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("a seed page carries at most {STORAGE_PAGE_BYTES} bytes"),
+        })));
+    }
+    tokio::task::spawn_blocking(move || spool.seed(&body.object, body.offset, &bytes, body.last))
+        .await
+        .map_err(|e| {
+            ApiError::from(AlienError::new(ErrorData::OperationFailed {
+                operation: "storage seed".to_string(),
+                reason: e.to_string(),
+            }))
+        })?
+        .map_err(|e| storage_failed("storage seed", e))?;
+    Ok(Json(serde_json::json!({})))
 }
 
 /// Reads the operation's own fields out of an envelope body once its `op` has selected the type.

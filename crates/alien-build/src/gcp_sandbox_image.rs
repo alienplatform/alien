@@ -91,6 +91,7 @@ pub async fn build_gcp_sandbox_image(
             contract: GCP_AGENT_PLATFORM,
             image_command_env: true,
             caller_authorization_header: true,
+            environment: Default::default(),
         },
     )
     .await
@@ -120,6 +121,7 @@ pub async fn build_azure_sandbox_image(
             contract: AZURE_SANDBOX,
             image_command_env: true,
             caller_authorization_header: false,
+            environment: Default::default(),
         },
     )
     .await
@@ -138,6 +140,10 @@ pub(crate) struct AgentLayering {
     /// consumes `Authorization`; the agent reads the other name from the image, so setting it
     /// anywhere else would make the agent drop the bearer callers still send as `Authorization`.
     pub(crate) caller_authorization_header: bool,
+    /// Agent variables of this one sandbox's declaration that its backend cannot set at create
+    /// time. Only GCP has such: its template carries no environment, so persistent storage
+    /// travels in the image. Empty for every sandbox that declares none, which keeps its image.
+    pub(crate) environment: std::collections::BTreeMap<String, String>,
 }
 
 pub(crate) async fn build_sandbox_agent_image(
@@ -321,6 +327,9 @@ pub(crate) async fn build_sandbox_agent_image(
                     alien_core::sandbox_image::ENV_CALLER_AUTHORIZATION_HEADER,
                     alien_core::sandbox_image::CALLER_AUTHORIZATION_HEADER,
                 );
+            }
+            for (name, value) in &layering.environment {
+                builder = builder.env(name, value);
             }
             Ok(builder)
         },
@@ -848,7 +857,7 @@ mod tests {
                 // The stand-in agent is amd64 only; the layering's other choices are the cloud's.
                 AgentLayering {
                     arch: Arch::Amd64,
-                    ..layering.for_build()
+                    ..layering.for_build(Default::default())
                 },
             )
             .await
@@ -871,6 +880,81 @@ mod tests {
                 .map(|values| values.iter().filter_map(|value| value.as_str()).collect())
                 .unwrap_or_default();
             assert_eq!(env.contains(&named.as_str()), expected, "{cloud}: {env:?}");
+        }
+    }
+
+    /// The sandbox's own variables (GCP's persistent storage) land in the image config beside
+    /// the contract's, and an empty set adds nothing.
+    #[tokio::test]
+    async fn the_sandbox_environment_lands_in_the_image() {
+        let (_registry, host) = setup_local_registry().await.expect("local registry");
+        let agent_image = format!("{host}/alien/agent:test");
+        push_image(&agent_image, &[(AGENT_PATH, b"#!/bin/sh\nexit 0\n")]).await;
+        let variable = alien_core::sandbox_egress::ENV_PERSISTENT_STORAGE;
+        for (name, environment) in [
+            (
+                "stored",
+                std::collections::BTreeMap::from([(
+                    variable.to_string(),
+                    r#"{"path":"/workspace"}"#.to_string(),
+                )]),
+            ),
+            ("plain", Default::default()),
+        ] {
+            let base_image = format!("{host}/proj/{name}:base");
+            let base = push_image(
+                &base_image,
+                &[("/etc/passwd", b"root:x:0:0::/root:/bin/sh\n")],
+            )
+            .await;
+            let expected = environment
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect::<Vec<_>>();
+            let layered = build_sandbox_agent_image(
+                "box",
+                base,
+                &base_image,
+                &agent_image,
+                ClientProtocol::HttpsExcept(vec![host.to_string()]),
+                RegistryAuth::Anonymous,
+                default_cache(),
+                crate::SandboxAgentLayering::GCP.for_build(environment),
+            )
+            .await
+            .expect("the agent layers onto the base");
+            let target = format!("{base_image}-agent");
+            layered
+                .image
+                .push(
+                    &target,
+                    &PushOptions {
+                        protocol: ClientProtocol::Http,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("the layered image pushes");
+            let config = pushed_config(&target).await;
+            let env: Vec<String> = config["config"]["Env"]
+                .as_array()
+                .map(|values| {
+                    values
+                        .iter()
+                        .filter_map(|value| value.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let ours: Vec<String> = env
+                .iter()
+                .filter(|entry| entry.starts_with(&format!("{variable}=")))
+                .cloned()
+                .collect();
+            assert_eq!(ours, expected, "{name}: {env:?}");
+            assert!(
+                env.contains(&"ALIEN_SANDBOX_IMAGE_COMMAND=true".to_string()),
+                "{name}: {env:?}"
+            );
         }
     }
 

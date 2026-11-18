@@ -593,8 +593,11 @@ impl SandboxCapabilities {
             // No separate supervisor identity: the command is not run under a different identity
             // than the process supervising it.
             supervisor_isolation: false,
-            // The replication transport for Agent Platform sandboxes is not built yet.
-            persistent_storage: false,
+            // No volume reaches a sandbox by key, so the agent replicates the directory to a
+            // bucket setup creates: the workload's binding pulls each commit over `:execute` and
+            // writes it, so writes are published while a workload holding the binding runs.
+            // Setup creates the bucket, so a Live sandbox is refused at plan time.
+            persistent_storage: true,
         }
     }
 
@@ -2610,7 +2613,7 @@ mod tests {
         }
     }
 
-    /// AWS and Local carry persistent storage; every other platform refuses it at plan time
+    /// AWS, GCP and Local carry persistent storage; every other platform refuses it at plan time
     /// with the capability named, rather than accepting a directory that is never replicated.
     #[test]
     fn persistent_storage_is_refused_where_no_transport_exists() {
@@ -2619,9 +2622,12 @@ mod tests {
             .validate_for_platform(Platform::Aws)
             .expect("AWS replicates through the S3 gateway endpoint");
         sandbox
+            .validate_for_platform(Platform::Gcp)
+            .expect("GCP replicates through the binding's pull over :execute");
+        sandbox
             .validate_for_platform(Platform::Local)
             .expect("Local keeps a host directory per key");
-        for platform in [Platform::Azure, Platform::Gcp, Platform::Kubernetes] {
+        for platform in [Platform::Azure, Platform::Kubernetes] {
             let error = sandbox
                 .validate_for_platform(platform)
                 .expect_err("no transport on this platform yet");

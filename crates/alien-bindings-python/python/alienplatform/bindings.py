@@ -533,7 +533,8 @@ class SandboxStorageStatus:
     ``replicating``: every change seen is committed or in flight. ``behind``: the last commit
     failed and is retried. ``denied``: the sandbox's grant to its store lapsed; it resumes once
     renewed. ``stopped``: another sandbox claimed the key. ``awaitingRestore``: the key is being
-    restored. Times are RFC 3339."""
+    restored. ``pending_bytes``: on GCP, where the binding pulls commits from the sandbox, the
+    bytes committed inside the sandbox that are not in the store yet. Times are RFC 3339."""
 
     key: str | None
     state: Literal["awaitingRestore", "replicating", "behind", "stopped", "denied"]
@@ -541,6 +542,7 @@ class SandboxStorageStatus:
     head: int | None
     last_error: str | None
     grant_expires_at: str | None
+    pending_bytes: int | None = None
 
 
 def _storage_status(value: Any) -> SandboxStorageStatus:
@@ -551,6 +553,7 @@ def _storage_status(value: Any) -> SandboxStorageStatus:
         value.head,
         value.last_error,
         value.grant_expires_at,
+        value.pending_bytes,
     )
 
 

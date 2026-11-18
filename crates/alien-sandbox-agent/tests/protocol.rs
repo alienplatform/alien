@@ -62,12 +62,42 @@ impl Agent {
     }
 
     async fn start_with_authorization(authorization: Option<AgentAuthorization>) -> Self {
+        Self::start_with(authorization, false).await
+    }
+
+    /// An agent whose sandbox declares persistent storage at `<root>/workspace`, waiting for the
+    /// binding to attach it.
+    #[cfg(target_os = "linux")]
+    async fn start_with_storage() -> Self {
+        Self::start_with(None, true).await
+    }
+
+    async fn start_with(authorization: Option<AgentAuthorization>, with_storage: bool) -> Self {
         let dir = TempDir::new().expect("temp dir");
         let root = dir.path().canonicalize().expect("canonical root");
         let keys = KeyPair::from_seed(Seed::new([3u8; 32]));
+        #[cfg(target_os = "linux")]
+        let storage = with_storage.then(|| {
+            std::fs::create_dir_all(root.join("workspace")).expect("workspace");
+            Arc::new(
+                alien_sandbox_agent::storage::attach::PersistentStorage::with_staging(
+                    alien_sandbox_agent::storage::attach::StorageConfig {
+                        path: root.join("workspace").display().to_string(),
+                        exclude: vec![],
+                        max_size_bytes: None,
+                    },
+                    dir.path().join("staging"),
+                ),
+            )
+        });
+        let image_process = if with_storage {
+            alien_sandbox_agent::image_command::ImageProcess::default().awaiting_restore()
+        } else {
+            alien_sandbox_agent::image_command::ImageProcess::not_configured()
+        };
 
         let state = Arc::new(AgentState {
-            image_process: alien_sandbox_agent::image_command::ImageProcess::not_configured(),
+            image_process,
             #[cfg(target_os = "linux")]
             gateway_egress: None,
             session_root: root.clone(),
@@ -85,7 +115,7 @@ impl Agent {
             preview: Default::default(),
             agent_binary: agent_binary(),
             #[cfg(target_os = "linux")]
-            storage: None,
+            storage,
         });
 
         let served = Arc::clone(&state);
@@ -2941,6 +2971,199 @@ async fn read_file_pages_by_offset_and_length() {
         .expect("rewrite");
     assert!(put.status().is_success());
     assert_ne!(page(300, 200).await["version"], second["version"]);
+}
+
+/// The binding's side of the pull transport, speaking the `:execute` envelope to a live agent.
+struct EnvelopeChannel<'a> {
+    agent: &'a Agent,
+    client: reqwest::Client,
+}
+
+impl EnvelopeChannel<'_> {
+    async fn call(
+        &self,
+        body: serde_json::Value,
+    ) -> alien_sandbox_storage::Result<serde_json::Value> {
+        let response = self
+            .client
+            .post(format!("{}/", self.agent.base_url))
+            .bearer_auth(self.agent.capability())
+            .json(&body)
+            .send()
+            .await
+            .expect("responds");
+        let status = response.status();
+        let body = response.text().await.expect("body");
+        if !status.is_success() {
+            return Err(alien_error::AlienError::new(
+                alien_sandbox_storage::ErrorData::StoreFailed {
+                    operation: "agent".to_string(),
+                    object: String::new(),
+                    reason: format!("{status}: {body}"),
+                },
+            ));
+        }
+        Ok(serde_json::from_str(&body).expect("json"))
+    }
+}
+
+#[async_trait::async_trait]
+impl alien_sandbox_storage::PullChannel for EnvelopeChannel<'_> {
+    async fn pending(
+        &self,
+    ) -> alien_sandbox_storage::Result<Option<alien_sandbox_storage::Pending>> {
+        let body = self.call(json!({"v": 1, "op": "storagePending"})).await?;
+        Ok(serde_json::from_value(body["pending"].clone()).expect("pending parses"))
+    }
+    async fn read(
+        &self,
+        object: &str,
+        offset: u64,
+        len: u64,
+    ) -> alien_sandbox_storage::Result<Vec<u8>> {
+        let body = self
+            .call(json!({"v": 1, "op": "storageRead", "object": object, "offset": offset, "length": len}))
+            .await?;
+        Ok(BASE64
+            .decode(body["contentsBase64"].as_str().expect("contents"))
+            .expect("base64"))
+    }
+    async fn ack(
+        &self,
+        generation: u64,
+        outcome: alien_sandbox_storage::AckOutcome,
+    ) -> alien_sandbox_storage::Result<()> {
+        self.call(json!({"v": 1, "op": "storageAck", "generation": generation, "outcome": outcome}))
+            .await
+            .map(|_| ())
+    }
+    async fn seed(
+        &self,
+        object: &str,
+        offset: u64,
+        bytes: Vec<u8>,
+        last: bool,
+    ) -> alien_sandbox_storage::Result<()> {
+        self.call(
+            json!({"v": 1, "op": "storageSeed", "object": object, "offset": offset,
+            "contentsBase64": BASE64.encode(bytes), "last": last}),
+        )
+        .await
+        .map(|_| ())
+    }
+}
+
+struct OneFile(Vec<u8>);
+
+impl alien_sandbox_storage::FileSource for OneFile {
+    fn open(
+        &mut self,
+        _: &str,
+    ) -> alien_sandbox_storage::Result<Box<dyn std::io::Read + Send + '_>> {
+        Ok(Box::new(&self.0[..]))
+    }
+}
+
+/// The wire contract the GCP binding drives over `:execute`: attach without a grant, a commit
+/// the agent spools reaches the store through the envelope's pull ops, and a new sandbox is
+/// seeded through the envelope before its attach opens the image gate, then restores.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_pulls_and_seeds_through_the_envelope() {
+    use alien_sandbox_storage::{read_head, seed, takeover, MemoryStore, PullOutcome, Puller};
+
+    let store = MemoryStore::new();
+    let agent = Agent::start_with_storage().await;
+    let channel = EnvelopeChannel {
+        agent: &agent,
+        client: reqwest::Client::new(),
+    };
+    let refused = channel
+        .call(json!({"v": 1, "op": "storagePending"}))
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("400"),
+        "nothing to pull before the attach: {refused}"
+    );
+
+    let start = takeover(&store, "sandbox-1").await.unwrap();
+    let status = channel
+        .call(json!({"v": 1, "op": "storageAttach", "attach": {
+            "key": "k", "writer": "sandbox-1", "headVersion": start.head_version}}))
+        .await
+        .expect("attach without a grant");
+    assert_eq!(status["state"], "replicating");
+
+    // Larger than one page, so reads are paged by the agent's cap.
+    let content: Vec<u8> = (0..2_500_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(agent.root.join("workspace/data.bin"), &content).unwrap();
+    let synced = channel
+        .call(json!({"v": 1, "op": "storageSync"}))
+        .await
+        .expect("sync");
+    // The replicator's own tick may commit first; either way the write is committed.
+    assert!(synced["head"].as_u64() >= Some(1), "{synced}");
+
+    // The binding asks for more than the cap; the agent answers at most the cap per read.
+    let pending = alien_sandbox_storage::PullChannel::pending(&channel)
+        .await
+        .unwrap()
+        .expect("the commit is pending");
+    let pack = pending
+        .objects
+        .iter()
+        .find(|object| object.name.starts_with("packs/"))
+        .unwrap();
+    assert!(pack.size > 900_000);
+    let page = alien_sandbox_storage::PullChannel::read(&channel, &pack.name, 0, 4_000_000)
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 900_000);
+    let mut puller = Puller::new("sandbox-1", start.head_version, 4_000_000);
+    let outcome = puller.pull(&channel, &store, "k").await.unwrap();
+    assert!(
+        matches!(outcome, PullOutcome::Published { .. }),
+        "{outcome:?}"
+    );
+    assert!(alien_sandbox_storage::PullChannel::pending(&channel)
+        .await
+        .unwrap()
+        .is_none());
+
+    // A new sandbox: seeded while its image still waits for the restore, then attached.
+    let second = Agent::start_with_storage().await;
+    let channel = EnvelopeChannel {
+        agent: &second,
+        client: reqwest::Client::new(),
+    };
+    let next = takeover(&store, "sandbox-2").await.unwrap();
+    let (head, _) = read_head(&store).await.unwrap().unwrap();
+    let commit = head.commit.expect("a commit");
+    seed(&channel, &store, &commit, 900_000)
+        .await
+        .expect("seeding needs no restored tree");
+    let status = channel
+        .call(json!({"v": 1, "op": "storageAttach", "attach": {
+            "key": "k", "writer": "sandbox-2", "headVersion": next.head_version,
+            "commit": commit}}))
+        .await
+        .expect("attach");
+    assert_eq!(status["restoredFrom"], json!(commit));
+    let restored = std::fs::read(second.root.join("workspace/data.bin")).unwrap();
+    assert!(restored == content, "the restored file matches");
+}
+
+#[tokio::test]
+async fn storage_ops_need_a_capability() {
+    let agent = Agent::start().await;
+    let response = reqwest::Client::new()
+        .post(format!("{}/", agent.base_url))
+        .json(&json!({"v": 1, "op": "storagePending"}))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
 /// Persistent storage: until the binding attaches the key, nothing runs in the sandbox (a

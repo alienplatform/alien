@@ -109,6 +109,11 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 .await
                 .expect("abrupt terminations lose at most seconds and keep integrity");
         }
+        TestApp::SandboxStorageGcp => {
+            common::sandbox_storage_gcp::check_persistent_storage(ctx)
+                .await
+                .expect("persistent storage passes the acceptance checks");
+        }
         TestApp::SandboxRemote => {
             common::sandbox::check_remote_interactive_command(&ctx.deployment, ctx.platform)
                 .await
@@ -1228,6 +1233,21 @@ distribution_test_context!(
 #[test_context(TerraformAzurePushSandboxRemote)]
 #[tokio::test]
 async fn terraform_azure_push_sandbox_remote(ctx: &mut TerraformAzurePushSandboxRemote) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformGcpPushSandboxStorage,
+    DistributionFlow::TerraformGcpPush,
+    TestApp::SandboxStorageGcp
+);
+
+/// Frozen GCP sandboxes with persistent storage, installed by Terraform so setup creates their
+/// stores: the design's acceptance checks 1 to 6 through the Worker that holds the binding, with
+/// abrupt kills through the Agent Platform API.
+#[test_context(TerraformGcpPushSandboxStorage)]
+#[tokio::test]
+async fn terraform_gcp_push_sandbox_storage(ctx: &mut TerraformGcpPushSandboxStorage) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }
 

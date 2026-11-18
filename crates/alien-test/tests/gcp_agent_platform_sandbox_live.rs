@@ -231,6 +231,7 @@ fn template_body(image: &str, internet_access: bool) -> SandboxEnvironmentTempla
             extra: Default::default(),
         }),
         state: None,
+        persistent_disk_config: None,
         extra: Default::default(),
     }
 }

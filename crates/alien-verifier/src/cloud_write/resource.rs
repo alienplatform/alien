@@ -1275,6 +1275,17 @@ pub fn check_sandbox_template(
             "the template's display name is not {own_name}"
         )));
     }
+    // A disk only under a signed persistent-storage path, exactly as the controller sizes it.
+    let expected_disk = sandbox
+        .persistent_storage
+        .as_ref()
+        .map(alien_gcp_clients::gcp::agent_platform::PersistentDiskConfig::for_storage);
+    if template.persistent_disk_config != expected_disk {
+        return Err(refused(match expected_disk {
+            Some(_) => "the template's disk is not the signed persistent storage's",
+            None => "the template attaches a disk the signed sandbox does not declare",
+        }));
+    }
     if template
         .egress_control_config
         .as_ref()

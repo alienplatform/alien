@@ -69,6 +69,7 @@ impl ResourceImporter for GcpSandboxImporter {
             state: GcpAgentPlatformTemplateState::CreateStart,
             region: Some(data.region),
             preview_service_account: data.preview_service_account,
+            persistent_storage_bucket: data.persistent_storage_bucket,
             ..Default::default()
         };
         make_imported_state_with_status(controller, ctx, ResourceStatus::Provisioning)
@@ -179,6 +180,7 @@ mod tests {
                     preview_service_account: Some(
                         "agents-preview@proj.iam.gserviceaccount.com".to_string(),
                     ),
+                    persistent_storage_bucket: Some("acme-agents-storage".to_string()),
                 },
                 &ctx,
             )
@@ -200,6 +202,11 @@ mod tests {
         assert_eq!(
             controller.preview_service_account.as_deref(),
             Some("agents-preview@proj.iam.gserviceaccount.com")
+        );
+        // So does the bucket setup created for persistent storage.
+        assert_eq!(
+            controller.persistent_storage_bucket.as_deref(),
+            Some("acme-agents-storage")
         );
     }
 

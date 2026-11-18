@@ -178,6 +178,9 @@ pub enum TestApp {
     /// A Live sandbox with persistent storage on `/workspace` and a Worker that drives its
     /// sessions (`tests/e2e/test-apps/sandbox-storage`).
     SandboxStorage,
+    /// Two Frozen GCP sandboxes with persistent storage (egress none and direct internet) and a
+    /// Worker that runs one whole check per request (`tests/e2e/test-apps/sandbox-storage-gcp`).
+    SandboxStorageGcp,
 }
 
 impl std::fmt::Display for TestApp {
@@ -197,6 +200,7 @@ impl std::fmt::Display for TestApp {
             TestApp::SandboxSession => write!(f, "sandbox-session"),
             TestApp::SandboxRemote => write!(f, "sandbox-remote"),
             TestApp::SandboxStorage => write!(f, "sandbox-storage"),
+            TestApp::SandboxStorageGcp => write!(f, "sandbox-storage-gcp"),
         }
     }
 }
@@ -433,6 +437,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::SandboxSession => "test-apps/sandbox-session",
         TestApp::SandboxRemote => "test-apps/sandbox-remote",
         TestApp::SandboxStorage => "test-apps/sandbox-storage",
+        TestApp::SandboxStorageGcp => "test-apps/sandbox-storage-gcp",
     }
 }
 
@@ -455,7 +460,8 @@ fn deployment_environment_variables(
         | TestApp::StorageNotifications
         | TestApp::SandboxSession
         | TestApp::SandboxRemote
-        | TestApp::SandboxStorage => None,
+        | TestApp::SandboxStorage
+        | TestApp::SandboxStorageGcp => None,
         TestApp::ByoEncryptionKey | TestApp::ByoAi => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {

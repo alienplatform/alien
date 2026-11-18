@@ -459,6 +459,7 @@ mod tests {
             last_error: None,
             grant_expires_at: expires.map(at),
             grant_issued_at: issued.map(at),
+            pending_bytes: None,
         }
     }
 

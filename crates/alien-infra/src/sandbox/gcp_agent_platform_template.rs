@@ -26,7 +26,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
     ContainerPort, ContainerResources, CustomContainerEnvironment, CustomContainerSpec,
-    EgressControlConfig, SandboxEnvironmentTemplate,
+    EgressControlConfig, PersistentDiskConfig, SandboxEnvironmentTemplate,
 };
 use alien_gcp_clients::longrunning::OperationResult;
 use alien_macros::controller;
@@ -223,6 +223,13 @@ fn build_template_body(
             extra: Default::default(),
         }),
         state: None,
+        // Only a sandbox that declares persistent storage carries a disk; any other body is
+        // unchanged, and stays on the `v1` API.
+        persistent_disk_config: sandbox
+            .persistent_storage
+            .as_ref()
+            .map(PersistentDiskConfig::for_storage),
+
         extra: Default::default(),
     })
 }
@@ -300,6 +307,12 @@ pub struct GcpAgentPlatformTemplateController {
     /// and carried into the binding so a deployed workload can sign.
     #[serde(default)]
     pub(crate) preview_service_account: Option<String>,
+    /// Cloud Storage bucket setup created for persistent storage; imported, never created here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) persistent_storage_bucket: Option<String>,
+    /// The persistent storage the binding carries: the declaration with that bucket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
     /// What a direct setup run created around the engine (signing identity, signing role, engine
     /// grants), so teardown removes exactly that. Empty when a setup package made them.
     #[serde(default)]
@@ -352,6 +365,20 @@ impl GcpAgentPlatformTemplateController {
         self.preview_ports = config.preview_ports.clone();
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
+        // A direct setup run has no package to create the persistent storage bucket.
+        if ctx.is_direct_setup_run() {
+            if let Some(bucket) = crate::sandbox::gcp_engine_setup::set_up_persistent_store(
+                ctx,
+                config,
+                &mut self.engine_setup,
+            )
+            .await?
+            {
+                self.persistent_storage_bucket = Some(bucket);
+            }
+        }
+        self.persistent_storage =
+            gcp_persistent_storage(config, self.persistent_storage_bucket.as_deref())?;
 
         // A direct setup run has no package to place the grants and the preview signing identity
         // around the engine, so it places them here, the same ones the package would.
@@ -645,6 +672,19 @@ impl GcpAgentPlatformTemplateController {
         self.egress = Some(config.egress.clone());
         self.default_policy = config.default_policy.clone();
         self.preview_ports = config.preview_ports.clone();
+        if ctx.is_direct_setup_run() {
+            if let Some(bucket) = crate::sandbox::gcp_engine_setup::set_up_persistent_store(
+                ctx,
+                config,
+                &mut self.engine_setup,
+            )
+            .await?
+            {
+                self.persistent_storage_bucket = Some(bucket);
+            }
+        }
+        self.persistent_storage =
+            gcp_persistent_storage(config, self.persistent_storage_bucket.as_deref())?;
         let previous = ctx.previous_resource_config::<Sandbox>()?;
 
         // A direct setup run owns the grants around the engine, so each setup run places the ones
@@ -834,6 +874,7 @@ impl GcpAgentPlatformTemplateController {
                 .preview_service_account
                 .clone()
                 .map(BindingValue::value);
+            value.persistent_storage = self.persistent_storage.clone();
         }
 
         Ok(Some(
@@ -845,6 +886,39 @@ impl GcpAgentPlatformTemplateController {
             )?,
         ))
     }
+}
+
+/// The persistent storage a binding carries: the declaration, with the bucket setup created for
+/// it. A declaration without that bucket cannot run: setup creates the bucket and the workload's
+/// access to it, so only a setup run (a Frozen sandbox gaining persistent storage) supplies it.
+fn gcp_persistent_storage(
+    sandbox: &Sandbox,
+    bucket: Option<&str>,
+) -> Result<Option<alien_core::bindings::SandboxPersistentStorageBinding>> {
+    let Some(declared) = sandbox.persistent_storage.as_ref() else {
+        return Ok(None);
+    };
+    let bucket = bucket.ok_or_else(|| {
+        AlienError::new(ErrorData::SetupRerunRequired {
+            resource_id: sandbox.id.clone(),
+            message: "persistent storage is declared, but setup has not created its Cloud Storage \
+                      bucket; update the setup"
+                .to_string(),
+        })
+    })?;
+    Ok(Some(
+        alien_core::bindings::SandboxPersistentStorageBinding {
+            path: declared.path.clone(),
+            store: alien_core::bindings::PersistentStoreLocator::Gcp {
+                bucket: alien_core::bindings::BindingValue::value(bucket.to_string()),
+                prefix: String::new(),
+            },
+            exclude: declared.exclude.clone(),
+            max_size_bytes: declared
+                .max_size_bytes()
+                .and_then(|bytes| u64::try_from(bytes).ok()),
+        },
+    ))
 }
 
 /// Requires a long-running operation to carry a name to poll — a nameless one cannot be resumed.
@@ -914,6 +988,8 @@ impl GcpAgentPlatformTemplateController {
             allow_egress: None,
             preview_ports: Vec::new(),
             preview_service_account: None,
+            persistent_storage_bucket: None,
+            persistent_storage: None,
             engine_setup: Default::default(),
             reconciled_grants: None,
             _internal_stay_count: None,
@@ -997,6 +1073,7 @@ mod tests {
             custom_container_environment: None,
             egress_control_config: None,
                 state: Some(TEMPLATE_ACTIVE.to_string()),
+                persistent_disk_config: None,
             extra: Default::default(),
         }
     }
@@ -1678,6 +1755,7 @@ mod tests {
         m.expect_get_template().returning(|_, id| {
             Ok(SandboxEnvironmentTemplate {
                 state: Some("FAILED".to_string()),
+                persistent_disk_config: None,
                 ..active_template(id)
             })
         });
@@ -1797,6 +1875,161 @@ mod tests {
         let mut other_port = wire;
         other_port["customContainerEnvironment"]["ports"][0]["port"] = serde_json::json!(8080);
         check_sandbox_template(&sandbox, "pfx", "123", &other_port).expect_err("another port");
+    }
+
+    fn with_persistent_storage(max_size: Option<&str>) -> Sandbox {
+        let mut sandbox = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+            path: "/workspace".to_string(),
+            encryption_key: None,
+            exclude: vec!["tmp".to_string()],
+            max_size: max_size.map(str::to_string),
+        });
+        sandbox
+    }
+
+    /// The binding a workload reads names the bucket setup created, with the declaration's path,
+    /// exclusions and size cap; a sandbox without persistent storage carries no such key.
+    #[tokio::test]
+    async fn the_binding_carries_persistent_storage_in_the_bucket_setup_created() {
+        use crate::core::ResourceController;
+        let binding = |executor: &SingleControllerExecutor| {
+            executor
+                .internal_state::<GcpAgentPlatformTemplateController>()
+                .unwrap()
+                .get_binding_params()
+                .unwrap()
+                .unwrap()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(with_persistent_storage(Some("8Gi")))
+            .controller(GcpAgentPlatformTemplateController {
+                persistent_storage_bucket: Some("acme-agents-storage".to_string()),
+                ..Default::default()
+            })
+            .platform(Platform::Gcp)
+            // A package install: its import data carries the bucket.
+            .setup_run(false)
+            .service_provider(provider_with(happy_client()))
+            .with_test_dependencies()
+            .with_dependency(
+                GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("agent-sbx"))
+                    .build(),
+                GcpAgentPlatformEngineController::mock_ready("eng"),
+            )
+            .build()
+            .await
+            .expect("executor builds");
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(
+            binding(&executor)["persistentStorage"],
+            serde_json::json!({
+                "path": "/workspace",
+                "store": { "type": "gcp", "bucket": "acme-agents-storage" },
+                "exclude": ["tmp"],
+                "maxSizeBytes": 8u64 << 30,
+            })
+        );
+
+        let mut plain = build_executor(
+            sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None),
+            provider_with(happy_client()),
+        )
+        .await;
+        plain.run_until_terminal().await.unwrap();
+        assert!(binding(&plain).get("persistentStorage").is_none());
+    }
+
+    /// Setup creates the bucket and the workload's access to it, so a declaration that reaches a
+    /// deployment whose setup has not created one stops for a setup run, before any template.
+    #[tokio::test]
+    async fn persistent_storage_without_the_setup_bucket_waits_for_setup() {
+        let mut m = MockAgentPlatformApi::new();
+        m.expect_create_template().never();
+        // Not a direct setup run, which would create the bucket itself.
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(with_persistent_storage(None))
+            .controller(GcpAgentPlatformTemplateController::default())
+            .platform(Platform::Gcp)
+            .setup_run(false)
+            .service_provider(provider_with(Arc::new(m)))
+            .with_test_dependencies()
+            .with_dependency(
+                GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("agent-sbx"))
+                    .build(),
+                GcpAgentPlatformEngineController::mock_ready("eng"),
+            )
+            .build()
+            .await
+            .expect("executor builds");
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("no bucket, no template");
+        assert!(crate::error::requires_setup_rerun(&error), "{error:?}");
+    }
+
+    /// A sandbox that declares persistent storage gets a per-sandbox disk at its path, sized from
+    /// `maxSize`; one that does not has no `persistentDiskConfig` key at all, so its body (and the
+    /// `v1` API it goes to) is what it was before persistent storage existed.
+    #[test]
+    fn only_a_declared_persistent_storage_puts_a_disk_on_the_template() {
+        let plain = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let wire = serde_json::to_value(
+            build_template_body(&plain, "pfx-agent-sbx", &deployment_config(None, None))
+                .expect("builds"),
+        )
+        .expect("serializes");
+        assert!(wire.get("persistentDiskConfig").is_none(), "{wire}");
+
+        let declared = with_persistent_storage(Some("20Gi"));
+        let wire = serde_json::to_value(
+            build_template_body(&declared, "pfx-agent-sbx", &deployment_config(None, None))
+                .expect("builds"),
+        )
+        .expect("serializes");
+        assert_eq!(
+            wire["persistentDiskConfig"],
+            serde_json::json!({"enabled": true, "sizeGb": "22", "mountPath": "/workspace"})
+        );
+    }
+
+    /// The verifier signs off on the disk the controller sends for a signed persistent storage,
+    /// and on nothing else: no disk where none is declared, no other path or size.
+    #[test]
+    fn the_verifier_accepts_only_the_signed_persistent_disk() {
+        use alien_verifier::cloud_write::resource::check_sandbox_template;
+        let declared = with_persistent_storage(None);
+        let wire = serde_json::to_value(
+            build_template_body(&declared, "pfx-agent-sbx", &deployment_config(None, None))
+                .expect("builds"),
+        )
+        .expect("serializes");
+        check_sandbox_template(&declared, "pfx", "123", &wire).expect("the controller's own body");
+
+        let mut elsewhere = wire.clone();
+        elsewhere["persistentDiskConfig"]["mountPath"] = serde_json::json!("/etc/cron.d");
+        check_sandbox_template(&declared, "pfx", "123", &elsewhere).expect_err("another path");
+        let mut bigger = wire.clone();
+        bigger["persistentDiskConfig"]["sizeGb"] = serde_json::json!("64000");
+        check_sandbox_template(&declared, "pfx", "123", &bigger).expect_err("another size");
+        let mut without = wire.clone();
+        without
+            .as_object_mut()
+            .expect("object")
+            .remove("persistentDiskConfig");
+        check_sandbox_template(&declared, "pfx", "123", &without).expect_err("no disk");
+
+        let plain = sandbox_with(SandboxEgress::None, "ubuntu:24.04", None, None);
+        let mut unsigned = serde_json::to_value(
+            build_template_body(&plain, "pfx-agent-sbx", &deployment_config(None, None))
+                .expect("builds"),
+        )
+        .expect("serializes");
+        check_sandbox_template(&plain, "pfx", "123", &unsigned).expect("the plain body");
+        unsigned["persistentDiskConfig"] = wire["persistentDiskConfig"].clone();
+        check_sandbox_template(&plain, "pfx", "123", &unsigned)
+            .expect_err("a disk the signed sandbox does not declare");
     }
 
     /// The preview ports the signed sandbox declares are the ones the verifier lets the template

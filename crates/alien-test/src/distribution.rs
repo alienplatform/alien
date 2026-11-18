@@ -3002,6 +3002,7 @@ async fn wait_and_finalize(ctx: &mut TestContext) -> anyhow::Result<()> {
                 | TestApp::StorageNotifications
                 | TestApp::SandboxRemote
                 | TestApp::SandboxStorage
+                | TestApp::SandboxStorageGcp
         )
         && matches!(
             ctx.platform,

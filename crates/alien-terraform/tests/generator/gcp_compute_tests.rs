@@ -663,3 +663,79 @@ fn two_gcp_preview_sandboxes_share_one_signing_role() {
     assert_terraform_valid(&module, "two gcp preview sandboxes");
     snapshot_module("gcp_two_preview_sandboxes", &module);
 }
+
+/// Persistent storage on a Frozen GCP sandbox: setup creates a private bucket of its own, gives
+/// the workload that drives the sandbox object access to it, keeps the bucket under the data
+/// policy, and registers it for the controller. The rendered module must validate.
+#[test]
+fn a_frozen_gcp_sandbox_with_persistent_storage_gets_a_private_bucket() {
+    let mut sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "python:3.12".to_string(),
+            bundled_from: None,
+        })
+        .egress(SandboxEgress::None)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build();
+    sandbox.persistent_storage = Some(alien_core::SandboxPersistentStorage {
+        path: "/workspace".to_string(),
+        exclude: vec!["tmp/".to_string()],
+        max_size: Some("8Gi".to_string()),
+        encryption_key: None,
+    });
+    let stack = Stack::new("acme-pst".to_string())
+        .add(
+            ServiceAccount::new("worker-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_dependencies(
+            sandbox,
+            ResourceLifecycle::Frozen,
+            vec![ResourceRef::new(
+                GcpAgentPlatformEngine::RESOURCE_TYPE,
+                "agents-engine".to_string(),
+            )],
+        )
+        .permission(
+            "worker",
+            alien_core::permissions::PermissionProfile::new()
+                .resource("agents", ["sandbox/execute"]),
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        rendered.contains("resource \"google_storage_bucket\" \"agents_storage\""),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("public_access_prevention = \"enforced\""),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("persistentStorageBucket = google_storage_bucket.agents_storage.name")
+            || rendered.contains(
+                "persistentStorageBucket = \"${google_storage_bucket.agents_storage.name}\""
+            ),
+        "the controller learns the bucket:\n{rendered}"
+    );
+
+    assert_terraform_valid(&module, "gcp sandbox with persistent storage");
+    snapshot_module("gcp_sandbox_persistent_storage", &module);
+}

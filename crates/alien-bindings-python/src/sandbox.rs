@@ -89,6 +89,9 @@ pub(crate) struct StorageStatus {
     head: Option<u64>,
     /// Why the state is `behind`, `denied` or `stopped`.
     last_error: Option<String>,
+    /// Bytes committed inside the sandbox that are not in the store yet. Only on GCP, where the
+    /// binding pulls commits from the sandbox.
+    pending_bytes: Option<u64>,
     /// RFC 3339 time the sandbox's grant to its store expires.
     grant_expires_at: Option<String>,
 }
@@ -103,6 +106,7 @@ fn storage_status(value: alien_bindings::traits::SandboxStorageStatus) -> Storag
         last_synced_at: value.last_synced_at.map(|at| at.to_rfc3339()),
         head: value.head,
         last_error: value.last_error,
+        pending_bytes: value.pending_bytes,
         grant_expires_at: value.grant_expires_at.map(|at| at.to_rfc3339()),
     }
 }

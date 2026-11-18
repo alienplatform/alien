@@ -172,7 +172,7 @@ fn emit_notifications(
     Ok(())
 }
 
-fn emit_storage_key_access(fragment: &mut TfFragment, label: &str, key_label: &str) {
+pub(crate) fn emit_storage_key_access(fragment: &mut TfFragment, label: &str, key_label: &str) {
     let service_agent_label = format!("{label}_service_agent");
     fragment.data_blocks.push(data_block(
         "google_storage_project_service_account",

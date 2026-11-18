@@ -11,6 +11,8 @@ pub mod runner;
 pub mod runtime_less;
 pub mod sandbox;
 pub mod sandbox_storage;
+#[allow(dead_code)]
+pub mod sandbox_storage_gcp;
 pub mod storage_cleanup;
 pub mod storage_notifications;
 

@@ -317,6 +317,7 @@ export interface RawSandboxStorageStatus {
   head?: number | null
   lastError?: string | null
   grantExpiresAt?: string | null
+  pendingBytes?: number | null
 }
 
 /** Raw napi bindings entry point. Construction validates the environment. */
