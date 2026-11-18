@@ -1365,16 +1365,13 @@ impl OperatorDb {
         Ok(count as usize)
     }
 
-    /// The newest approval record for a release, whatever its status.
-    pub async fn get_latest_approval_for_release(
-        &self,
-        release_id: &str,
-    ) -> Result<Option<Approval>> {
+    /// The newest approval record, whatever its release or status.
+    pub async fn get_latest_approval(&self) -> Result<Option<Approval>> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT id, release_info, deployment_config, status, reason, created_at, decided_at, decided_by FROM approvals WHERE json_extract(release_info, '$.releaseId') = ? ORDER BY created_at DESC LIMIT 1",
-                (release_id.to_string(),),
+                "SELECT id, release_info, deployment_config, status, reason, created_at, decided_at, decided_by FROM approvals ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (),
             )
             .await
             .into_alien_error()

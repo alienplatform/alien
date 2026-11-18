@@ -1053,12 +1053,9 @@ pub(crate) async fn accept_target(
     // its approval is still pending, or already decided, keeps that record: a
     // newer one would hide the decision. A changed release or config is a new
     // target and needs its own approval (compared by the hash the loop uses).
-    let release_id = target_deployment
-        .release_info
-        .release_id
-        .as_deref()
-        .unwrap_or_default();
-    let covered = match state.db.get_latest_approval_for_release(release_id).await? {
+    // Only the newest record of all counts as a repeat: a target that returns
+    // after another release was proposed (a rollback) is asked about again.
+    let covered = match state.db.get_latest_approval().await? {
         Some(latest) => {
             crate::db::approved_target_hash(
                 latest.release_info.as_ref(),
@@ -2855,6 +2852,36 @@ mod tests {
         // The changed target repeated keeps its one pending record.
         super::accept_target(&state, &changed, false).await.unwrap();
         assert_eq!(db.get_pending_approvals().await.unwrap().len(), 1);
+    }
+
+    /// A release that returns after another one was proposed (a rollback) is
+    /// asked about again, as before: its old decision is not a repeat.
+    #[tokio::test]
+    async fn an_older_approved_release_sent_again_after_another_needs_a_new_approval() {
+        use crate::protected::tests as fixtures;
+        let (_dir, db, state, target, release_id) = approval_fixture().await;
+        super::accept_target(&state, &target, false).await.unwrap();
+        let pending = db.get_pending_approvals().await.unwrap();
+        db.decide_approval(
+            &pending[0].id,
+            crate::db::ApprovalStatus::Approved,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let other = fixtures::target(
+            fixtures::signed_release(6, &fixtures::stack(&fixtures::pinned())),
+            vec![],
+        );
+        super::accept_target(&state, &other, false).await.unwrap();
+        super::accept_target(&state, &target, false).await.unwrap();
+        assert_eq!(
+            db.get_approval_status_for_release(&release_id)
+                .await
+                .unwrap(),
+            Some(crate::db::ApprovalStatus::Pending)
+        );
     }
 
     #[tokio::test]
