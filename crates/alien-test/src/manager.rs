@@ -15,7 +15,7 @@ use alien_manager::{
     stores::sqlite::{SqliteDatabase, SqliteTokenStore},
     traits::{
         CreateTokenParams, CredentialResolver, DeploymentRecord, DeploymentStore,
-        ResolvedCredentials, TokenStore, TokenType,
+        RemoteStorageCredentialSource, ResolvedCredentials, TokenStore, TokenType,
     },
     AlienManagerBuilder, ManagerTomlConfig,
 };
@@ -96,6 +96,18 @@ impl CredentialResolver for AzureManagementConfigResolver {
         deployment: &DeploymentRecord,
     ) -> Result<ResolvedCredentials, AlienError> {
         self.inner.resolve_with_capability(deployment).await
+    }
+
+    /// Azure remote data access belongs to the Remote Bindings identity; the
+    /// trait default would call `resolve` and mint the management identity.
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+        resource_id: &str,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        self.inner
+            .resolve_remote_storage_source(deployment, resource_id)
+            .await
     }
 
     async fn resolve_management_config(
@@ -853,6 +865,42 @@ mod tests {
         )
         .is_none());
         assert!(TestManager::build_azure_management_resolver(&[Platform::Azure], None).is_none());
+    }
+
+    #[tokio::test]
+    async fn azure_ci_manager_forwards_the_remote_storage_source_to_the_environment_resolver() {
+        let config = ManagementConfig::Azure(AzureManagementConfig {
+            managing_tenant_id: "tenant".into(),
+            oidc_issuer: "https://issuer.example".into(),
+            oidc_subject: "subject".into(),
+        });
+        let resolver =
+            TestManager::build_azure_management_resolver(&[Platform::Azure], Some(config))
+                .expect("azure only, with a management config");
+        let deployment: alien_manager::traits::DeploymentRecord =
+            serde_json::from_value(serde_json::json!({
+                "id": "dp",
+                "name": "dp",
+                "deploymentGroupId": "group",
+                "platform": "azure",
+                "deploymentProtocolVersion": alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                "status": "running",
+                "retryRequested": false,
+                "createdAt": "2026-01-01T00:00:00Z",
+            }))
+            .expect("minimal deployment record");
+        // The environment resolver refuses a deployment without Remote Bindings
+        // state. The trait default would instead fall back to `resolve`.
+        let error = resolver
+            .resolve_remote_storage_source(&deployment, "storage")
+            .await
+            .expect_err("no Remote Bindings state");
+        assert!(
+            error
+                .to_string()
+                .contains("Remote Bindings identity state is required"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
