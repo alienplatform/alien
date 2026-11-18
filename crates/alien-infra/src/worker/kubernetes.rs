@@ -413,7 +413,7 @@ impl KubernetesWorkerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -616,7 +616,7 @@ impl KubernetesWorkerController {
             .await?;
             if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
                 return Ok(HandlerAction::Stay {
-                    max_times: Some(60),
+                    max_times: None,
                     suggested_delay: Some(suggested_delay),
                 });
             }
@@ -974,7 +974,7 @@ impl KubernetesWorkerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -2076,6 +2076,68 @@ mod tests {
             .expect("Worker outputs")
             .commands_push_target
             .is_none());
+    }
+
+    /// A managed certificate issues asynchronously: the endpoint waits for it with a bound saved
+    /// when the wait starts (not a poll count), on first install and on update, and a failed
+    /// issuance fails at once.
+    #[tokio::test]
+    async fn endpoint_waits_for_the_certificate_on_create_and_update() {
+        use crate::core::kubernetes_manifest_test_support::check_certificate_wait;
+        let config = Worker::new("worker".into())
+            .code(WorkerCode::Image {
+                image: "example.test/worker:1".into(),
+            })
+            .permissions("default".into())
+            .public_endpoint(alien_core::WorkerPublicEndpoint {
+                name: "api".into(),
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        // The worker's own Service is written before the endpoint; every other lookup finds nothing.
+        let server = httpmock::MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(httpmock::Method::POST);
+            then.status(201).json_body(serde_json::json!({
+                "metadata": {"name": "worker", "namespace": "test-ns"},
+                "spec": {}
+            }));
+        });
+        server.mock(|when, then| {
+            when.any_request();
+            then.status(404).json_body(serde_json::json!({
+                "kind": "Status", "apiVersion": "v1", "status": "Failure",
+                "reason": "NotFound", "code": 404
+            }));
+        });
+        let mut harness =
+            KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![])
+                .with_server_url(server.base_url());
+        for (state, status) in [
+            (
+                KubernetesWorkerState::ReconcilePublicEndpoint,
+                ResourceStatus::Provisioning,
+            ),
+            (
+                KubernetesWorkerState::ReconcilePublicEndpointAfterUpdate,
+                ResourceStatus::Updating,
+            ),
+        ] {
+            let controller = KubernetesWorkerController {
+                state,
+                deployment_name: Some("worker".into()),
+                namespace: Some("test-ns".into()),
+                ..Default::default()
+            };
+            check_certificate_wait(&mut harness, controller, "worker", status, |c, at| {
+                c.public_endpoint.wait_started_unix.insert(
+                    crate::kubernetes_public_endpoint::EndpointWait::Certificate,
+                    at,
+                );
+            })
+            .await;
+        }
     }
 }
 

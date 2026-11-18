@@ -881,7 +881,7 @@ impl KubernetesContainerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -1176,7 +1176,7 @@ impl KubernetesContainerController {
             .await?;
             if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
                 return Ok(HandlerAction::Stay {
-                    max_times: Some(60),
+                    max_times: None,
                     suggested_delay: Some(suggested_delay),
                 });
             }
@@ -1803,7 +1803,7 @@ impl KubernetesContainerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: Some(60),
+                max_times: None,
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -5633,6 +5633,58 @@ mod tests {
         assert!(!controller
             .needs_update(&harness.ctx())
             .expect("needs_update"));
+    }
+
+    /// See `check_certificate_wait`: the same wait, on first install and on update.
+    #[tokio::test]
+    async fn endpoint_waits_for_the_certificate_on_create_and_update() {
+        use crate::core::kubernetes_manifest_test_support::check_certificate_wait;
+        let config = Container::new("web".into())
+            .code(ContainerCode::Image {
+                image: "nginx:latest".into(),
+            })
+            .permissions("web".into())
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".into(),
+                desired: "0.5".into(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".into(),
+                desired: "512Mi".into(),
+            })
+            .public_endpoint(alien_core::PublicEndpoint {
+                name: "default".into(),
+                port: 8080,
+                protocol: alien_core::ExposeProtocol::Http,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .build();
+        let mut harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        for (state, status) in [
+            (
+                KubernetesContainerState::ReconcilePublicEndpoint,
+                ResourceStatus::Provisioning,
+            ),
+            (
+                KubernetesContainerState::ReconcilePublicEndpointAfterUpdate,
+                ResourceStatus::Updating,
+            ),
+        ] {
+            let controller = KubernetesContainerController {
+                state,
+                workload_name: Some("web".into()),
+                namespace: Some("test-ns".into()),
+                ..Default::default()
+            };
+            check_certificate_wait(&mut harness, controller, "web", status, |c, at| {
+                c.public_endpoint.wait_started_unix.insert(
+                    crate::kubernetes_public_endpoint::EndpointWait::Certificate,
+                    at,
+                );
+            })
+            .await;
+        }
     }
 }
 
