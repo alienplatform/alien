@@ -2143,3 +2143,37 @@ fn the_operator_can_read_only_the_cluster_dns_service() {
     assert_eq!(binding["subjects"][0]["namespace"], "customer-aa-one");
     assert!(role["metadata"]["name"].as_str().unwrap().len() <= 63);
 }
+
+/// A cluster can refuse a Role in `kube-system` (Google Kubernetes Engine's managed namespaces), and a
+/// refused Role would fail the whole install. `auto` renders the Role everywhere but on that
+/// kind of cluster, and `sandbox.readClusterDNS` forces either way; with no Role the chart still renders.
+#[test]
+fn the_cluster_dns_role_is_not_rendered_where_it_may_be_refused_or_when_turned_off() {
+    let chart = render(
+        &sandbox_with_linked_app_as(Some(0)),
+        StackSettings::default(),
+    );
+    let has_dns_role = |extra: &str, kube_version: &str| {
+        let values = format!(
+            "management:\n  name: acme-install\nsandbox:\n  runtimeClassName: gvisor\n{extra}"
+        );
+        let rendered = super::test_utils::helm_template_for_kube_version(
+            &chart.files,
+            Some(&values),
+            "acme",
+            Some(kube_version),
+        );
+        rendered.assert_ok("cluster DNS RBAC render");
+        rendered_documents(&rendered).iter().any(|document| {
+            document["metadata"]["namespace"] == "kube-system"
+                && document["metadata"]["name"]
+                    .as_str()
+                    .is_some_and(|name| name.contains("kube-dns"))
+        })
+    };
+    assert!(has_dns_role("", "v1.36.0"), "default on a generic cluster");
+    assert!(has_dns_role("", "v1.36.0-eks-abc123"), "default on EKS");
+    assert!(!has_dns_role("", "v1.31.5-gke.1169000"), "default on GKE");
+    assert!(has_dns_role("  readClusterDNS: true\n", "v1.31.5-gke.1169000"), "forced on");
+    assert!(!has_dns_role("  readClusterDNS: false\n", "v1.36.0"), "forced off");
+}

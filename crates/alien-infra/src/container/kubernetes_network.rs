@@ -274,7 +274,7 @@ fn cluster_dns_config(namespace: &str, domain: &str, service_address: &str) -> P
 
 impl KubernetesContainerController {
     /// Applies [`cluster_dns_config`] to a pod that has egress enforced. Left as the cluster
-    /// default when the cluster domain or the `kube-dns` Service cannot be determined.
+    /// default when the cluster domain or the `kube-dns` Service cannot be determined, for any reason.
     pub(super) async fn use_cluster_dns(
         &self,
         pod_spec: &mut k8s_openapi::api::core::v1::PodSpec,
@@ -292,24 +292,16 @@ impl KubernetesContainerController {
             .await;
         let service = match service {
             Ok(service) => service,
-            Err(error)
-                if matches!(
-                    error.error,
-                    Some(
-                        ClientError::RemoteResourceNotFound { .. }
-                            | ClientError::RemoteAccessDenied { .. }
-                    )
-                ) =>
-            {
-                // An install made before the Operator could read this Service keeps the
-                // cluster resolver until its chart is upgraded.
-                return Ok(());
-            }
             Err(error) => {
-                return Err(error.context(ErrorData::CloudPlatformError {
-                    message: "Failed to read the cluster DNS Service".into(),
-                    resource_id: Some(ctx.desired_config.id().into()),
-                }))
+                // Whatever the reason (the read is refused, the Service is absent, the API server
+                // answers 5xx or does not answer), the gateway keeps the cluster resolver. The
+                // address only improves a cluster whose resolver is a node-local cache; it never
+                // decides whether the gateway deploys.
+                tracing::warn!(
+                    error = %error,
+                    "Could not read the cluster DNS Service; the gateway keeps the cluster resolver"
+                );
+                return Ok(());
             }
         };
         let address = service

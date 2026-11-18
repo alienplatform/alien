@@ -4830,10 +4830,12 @@ mod tests {
         assert_eq!(dns.hits_async().await, 1);
     }
 
-    /// An install made before the Operator could read the cluster DNS Service is refused the
-    /// read. Its gateway keeps the cluster's resolver rather than failing to deploy.
+    /// The cluster DNS Service read decides only which resolver the gateway uses, never whether
+    /// it deploys. A refused read (an install made before the Operator could read it, or a cluster
+    /// that does not let the grant be created), an absent Service, a server error and an API server
+    /// that does not answer all leave the gateway the cluster's resolver.
     #[tokio::test]
-    async fn a_gateway_keeps_the_cluster_resolver_when_the_dns_service_is_not_readable() {
+    async fn a_gateway_keeps_the_cluster_resolver_when_the_dns_service_cannot_be_read() {
         unsafe {
             std::env::set_var(
                 crate::sandbox::kubernetes_egress::CLUSTER_DOMAIN_ENV,
@@ -4841,34 +4843,57 @@ mod tests {
             )
         };
         use httpmock::Method::GET;
-        let server = httpmock::MockServer::start_async().await;
-        server
-            .mock_async(|when, then| {
-                when.method(GET)
-                    .path("/api/v1/namespaces/kube-system/services/kube-dns");
-                then.status(403).json_body(serde_json::json!({
-                    "kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403
-                }));
-            })
-            .await;
-        let gateway = gateway_container(
-            "example.invalid/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        );
-        let harness = KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
-        let state = secrets_vault_state();
-        let mut ctx = harness.ctx();
-        ctx.state = &state;
-        point_at(&mut ctx, &server);
-        let pod = manifest_test_controller()
-            .build_deployment(&gateway, "gateway", "test-ns", "gateway-sa", None, None, &ctx)
-            .await
-            .expect("a refused read leaves the default resolver")
-            .spec
-            .expect("deployment spec")
-            .template
-            .spec
-            .expect("pod spec");
-        assert!(pod.dns_policy.is_none() && pod.dns_config.is_none());
+        for status in [Some(403u16), Some(404), Some(500), Some(503), None] {
+            let server = httpmock::MockServer::start_async().await;
+            if let Some(status) = status {
+                server
+                    .mock_async(|when, then| {
+                        when.method(GET)
+                            .path("/api/v1/namespaces/kube-system/services/kube-dns");
+                        then.status(status).json_body(serde_json::json!({
+                            "kind":"Status","apiVersion":"v1","status":"Failure","code":status
+                        }));
+                    })
+                    .await;
+            }
+            let gateway = gateway_container(
+                "example.invalid/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            );
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(gateway.clone()), vec![]);
+            let state = secrets_vault_state();
+            let mut ctx = harness.ctx();
+            ctx.state = &state;
+            point_at(&mut ctx, &server);
+            if status.is_none() {
+                // Nothing listens at the address: the request gets no answer.
+                drop(server);
+                let alien_core::ClientConfig::Kubernetes(client) = &mut ctx.client_config else {
+                    panic!("Kubernetes config")
+                };
+                let alien_core::KubernetesClientConfig::Manual { server_url, .. } =
+                    client.as_mut()
+                else {
+                    panic!("manual config")
+                };
+                *server_url = "http://127.0.0.1:9".to_string();
+            }
+            let pod = manifest_test_controller()
+                .build_deployment(&gateway, "gateway", "test-ns", "gateway-sa", None, None, &ctx)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{status:?}: a failed read must leave the default resolver: {error}")
+                })
+                .spec
+                .expect("deployment spec")
+                .template
+                .spec
+                .expect("pod spec");
+            assert!(
+                pod.dns_policy.is_none() && pod.dns_config.is_none(),
+                "{status:?}"
+            );
+        }
     }
 
     /// A gateway on an image that reads mounted files gets the vault's configuration Secret and
