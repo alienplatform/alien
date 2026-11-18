@@ -1288,6 +1288,7 @@ fn every_field_added_since_an_older_operator_is_handled() {
         .collect();
     let handled = handled();
     let mut unhandled = Vec::new();
+    let mut too_old = Vec::new();
     let mut used = std::collections::BTreeSet::new();
     for (version, shapes) in OLDER_OPERATORS {
         for (name, fields) in &head {
@@ -1298,6 +1299,18 @@ fn every_field_added_since_an_older_operator_is_handled() {
                 match handled.iter().position(|(n, f, _)| n == name && f == field) {
                     Some(index) => {
                         used.insert(index);
+                        // A gate at or below the older Operator's own version
+                        // does not protect it: it already reads that version.
+                        if let Handling::Feature(feature) = &handled[index].2 {
+                            let since = semver::Version::parse(feature.since).expect("since");
+                            let operator = semver::Version::parse(version).expect("version");
+                            if since <= operator {
+                                too_old.push(format!(
+                                    "{name}.{field}: gated at {} ({}), but the {version} Operator rejects it",
+                                    feature.since, feature.name
+                                ));
+                            }
+                        }
                     }
                     None => unhandled.push(format!("{name}.{field} (new since {version})")),
                 }
@@ -1310,6 +1323,13 @@ fn every_field_added_since_an_older_operator_is_handled() {
         unhandled.is_empty(),
         "fields older Operators reject, with no handling in pull_compat:\n{}",
         unhandled.join("\n")
+    );
+    too_old.sort();
+    too_old.dedup();
+    assert!(
+        too_old.is_empty(),
+        "features gated at a version the older Operator already runs:\n{}",
+        too_old.join("\n")
     );
     for (index, (name, field, handling)) in handled.iter().enumerate() {
         assert!(

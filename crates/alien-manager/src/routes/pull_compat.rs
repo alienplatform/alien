@@ -186,6 +186,12 @@ pub(crate) const AZURE_SANDBOX_INTERNET: Feature = feature(
     Action::Refuse,
     "the setup-created gateway's binding carries replica addresses and a protocol floor older Operators reject, and they have no Azure gateway to enforce the rules",
 );
+pub(crate) const AMBIENT_AI_BINDING: Feature = feature(
+    "external AI bindings that use the workload's cloud identity (Bedrock)",
+    "3.3.69",
+    Action::Refuse,
+    "older Operators read an external AI binding only as a provider and an API key, so one without them fails to parse and they reject the whole target",
+);
 pub(crate) const CUSTOM_BASE_DOMAIN: Feature = feature(
     "custom base domains for Kubernetes endpoints",
     "3.3.44",
@@ -214,6 +220,7 @@ pub(crate) const FEATURES: &[&Feature] = &[
     &REDIS,
     &SIGNING_VERIFIER,
     &AZURE_SANDBOX_INTERNET,
+    &AMBIENT_AI_BINDING,
     &CUSTOM_BASE_DOMAIN,
 ];
 
@@ -401,6 +408,21 @@ pub(crate) fn apply(
         })
     {
         refuse(&CUSTOM_BASE_DOMAIN);
+    }
+    // External bindings travel in the deployment's settings and its
+    // configuration; an Operator that cannot read one rejects the whole target.
+    if settings
+        .and_then(|settings| settings.external_bindings.as_ref())
+        .is_some_and(|bindings| {
+            bindings.0.values().any(|binding| {
+                matches!(
+                    binding,
+                    alien_core::ExternalBinding::Ai(alien_core::ExternalAi::Ambient(_))
+                )
+            })
+        })
+    {
+        refuse(&AMBIENT_AI_BINDING);
     }
     refused
 }
@@ -822,6 +844,86 @@ mod tests {
             refuse_for_platform(&none, Platform::Azure, &OperatorVersion::from_report(None))
                 .is_none()
         );
+    }
+
+    /// The v3.3.68 shape of an external AI binding (`alien-core`
+    /// `ExternalBinding::Ai(ExternalAiBinding)`), copied so the failure older
+    /// Operators have is reproduced, not assumed.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum OldExternalBinding {
+        #[allow(dead_code)]
+        Ai(OldExternalAiBinding),
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(dead_code)]
+    struct OldExternalAiBinding {
+        provider: String,
+        api_key: serde_json::Value,
+    }
+
+    fn bedrock_settings() -> alien_core::StackSettings {
+        let binding: alien_core::ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "service": "bedrock", "region": "us-east-1"
+        }))
+        .unwrap();
+        alien_core::StackSettings {
+            external_bindings: Some(alien_core::ExternalBindings(
+                [("llm".to_string(), binding)].into(),
+            )),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn an_ambient_bedrock_binding_is_refused_for_operators_that_cannot_parse_it() {
+        let settings = bedrock_settings();
+        // What a 3.3.68 Operator does with the binding this manager would send.
+        let sent =
+            serde_json::to_value(&settings.external_bindings.as_ref().unwrap().0["llm"]).unwrap();
+        let old = serde_json::from_value::<OldExternalBinding>(sent);
+        let error = old.unwrap_err().to_string();
+        assert!(error.contains("missing field `provider`"), "{error}");
+
+        let stack = stack_with(container(), daemon(None));
+        for version in [None, Some("3.3.31"), Some("3.3.65"), Some("3.3.68")] {
+            let refused = apply(
+                &mut stack.clone(),
+                Some(&settings),
+                &OperatorVersion::from_report(version),
+                false,
+            );
+            assert_eq!(
+                refused.iter().map(|f| f.since).collect::<Vec<_>>(),
+                ["3.3.69"],
+                "{version:?}"
+            );
+        }
+        assert!(apply(
+            &mut stack.clone(),
+            Some(&settings),
+            &OperatorVersion::from_report(Some("3.3.69")),
+            false
+        )
+        .is_empty());
+        // A bring-your-own-key binding was always readable.
+        let key: alien_core::ExternalBinding = serde_json::from_value(serde_json::json!({
+            "type": "ai", "provider": "openai", "apiKey": "k"
+        }))
+        .unwrap();
+        let settings = alien_core::StackSettings {
+            external_bindings: Some(alien_core::ExternalBindings([("llm".into(), key)].into())),
+            ..Default::default()
+        };
+        assert!(apply(
+            &mut stack.clone(),
+            Some(&settings),
+            &OperatorVersion::from_report(None),
+            false
+        )
+        .is_empty());
     }
 
     #[test]
