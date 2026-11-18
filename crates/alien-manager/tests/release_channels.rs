@@ -320,7 +320,7 @@ async fn releases_follow_channels_and_pins() {
 }
 
 #[tokio::test]
-async fn deployments_mid_rollout_are_left_alone() {
+async fn deployments_mid_rollout_take_the_release_and_keep_their_status() {
     let f = Fixture::new().await;
     let a = f.running_deployment("a").await;
     {
@@ -333,9 +333,12 @@ async fn deployments_mid_rollout_are_left_alone() {
         .unwrap();
     }
     let r1 = f.publish(DEFAULT_CHANNEL).await;
-    // Same rule as releases without channels: only settled deployments take
-    // a new release; the channel still records it for later.
-    assert_eq!(f.desired(&a).await.0, None);
+    // Same rule as releases without channels: a deployment already updating
+    // takes the release as its target and keeps its status.
+    assert_eq!(
+        f.desired(&a).await,
+        (Some(r1.clone()), "update-pending".to_string())
+    );
     assert_eq!(
         f.channels
             .get_channel(DEFAULT_CHANNEL)
@@ -810,4 +813,63 @@ async fn the_store_refuses_a_retarget_chosen_from_routing_that_changed() {
         .retarget_settled_deployment(&admin(), &a, &r1, &r2, Some(chosen))
         .await
         .unwrap());
+}
+
+#[tokio::test]
+async fn a_channel_release_becomes_the_target_of_a_deployment_that_is_already_updating() {
+    let f = Fixture::new().await;
+    let r1 = f.publish(DEFAULT_CHANNEL).await;
+    let statuses = [
+        "pending",
+        "preflights-failed",
+        "initial-setup",
+        "initial-setup-failed",
+        "provisioning",
+        "waiting-for-machines",
+        "waiting-for-secrets",
+        "provisioning-failed",
+        "running",
+        "refresh-failed",
+        "update-pending",
+        "updating",
+        "update-failed",
+        "delete-pending",
+        "deleting",
+        "delete-failed",
+        "teardown-required",
+        "teardown-failed",
+        "retention-required",
+        "retained",
+        "deleted",
+        "error",
+    ];
+    let mut ids = Vec::new();
+    for status in statuses {
+        let id = f.running_deployment(&format!("d-{status}")).await;
+        {
+            let conn = f.db.conn().lock().await;
+            conn.execute(
+                "UPDATE deployments SET status = ?1, current_release_id = ?2, desired_release_id = ?2 WHERE id = ?3",
+                (status, r1.as_str(), id.as_str()),
+            )
+            .await
+            .unwrap();
+        }
+        ids.push((status, id));
+    }
+
+    let r2 = f.publish(DEFAULT_CHANNEL).await;
+
+    for (status, id) in ids {
+        let expected = match status {
+            "running" | "update-failed" | "refresh-failed" | "update-pending" => {
+                (Some(r2.clone()), "update-pending")
+            }
+            "updating" => (Some(r2.clone()), "updating"),
+            // Not yet installed or on their way out: unchanged.
+            other => (Some(r1.clone()), other),
+        };
+        let (desired, after) = f.desired(&id).await;
+        assert_eq!((desired, after.as_str()), expected, "{status}");
+    }
 }

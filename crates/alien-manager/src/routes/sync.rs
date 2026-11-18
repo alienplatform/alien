@@ -5008,6 +5008,82 @@ pub(crate) mod tests {
         assert!(may_deliver_agent_target(&deployment, true, true));
     }
 
+    /// A release posted while a pull deployment is updating reaches its Operator as the
+    /// target on the next sync: the self-hosted store keeps no execution claims, so
+    /// delivery depends only on the record. The Operator then prepares it when the
+    /// running update fails.
+    #[tokio::test]
+    async fn release_posted_mid_update_is_delivered_to_the_operator_as_its_target() {
+        use crate::traits::deployment_store::{CreateDeploymentGroupParams, CreateDeploymentParams};
+        use crate::traits::DeploymentStore;
+
+        let temp = tempfile::tempdir().expect("test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("database"),
+        );
+        let store = crate::stores::sqlite::SqliteDeploymentStore::new(db.clone());
+        assert!(!store.requires_execution_claims());
+        let system = crate::auth::Subject::system();
+        let group = store
+            .create_deployment_group(
+                &system,
+                CreateDeploymentGroupParams {
+                    name: "group".to_string(),
+                    max_deployments: 10,
+                    setup: Default::default(),
+                },
+            )
+            .await
+            .expect("group");
+        for status in ["updating", "update-pending"] {
+            let deployment = store
+                .create_deployment(
+                    &system,
+                    CreateDeploymentParams {
+                        deployment_protocol_version:
+                            alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                        name: format!("d-{status}"),
+                        deployment_group_id: group.id.clone(),
+                        platform: Platform::Kubernetes,
+                        base_platform: None,
+                        stack_settings: Default::default(),
+                        stack_state: None,
+                        environment_variables: None,
+                        public_subdomain: None,
+                        input_values: Default::default(),
+                        setup_item: None,
+                        deployment_token: None,
+                    },
+                )
+                .await
+                .expect("deployment");
+            {
+                let conn = db.conn().lock().await;
+                conn.execute(
+                    "UPDATE deployments SET status = ?1, current_release_id = 'rel_a', desired_release_id = 'rel_b' WHERE id = ?2",
+                    (status, deployment.id.as_str()),
+                )
+                .await
+                .expect("set status");
+            }
+            // Release B is updating; release C is posted.
+            store
+                .set_desired_release(&system, "rel_c", Some(Platform::Kubernetes))
+                .await
+                .expect("set desired");
+            let record = store
+                .get_deployment(&system, &deployment.id)
+                .await
+                .expect("get")
+                .expect("record");
+            assert_eq!(record.status, status);
+            assert_eq!(deployment_target_release_id(&record), Some("rel_c"));
+            assert!(may_deliver_agent_target(&record, false, false), "{status}");
+        }
+    }
+
     #[test]
     fn standalone_pull_target_does_not_require_a_control_plane_claim() {
         let mut deployment = deployment_record_with_state("update-pending", None);
