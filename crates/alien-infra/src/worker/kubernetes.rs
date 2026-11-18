@@ -12,11 +12,11 @@ use crate::kubernetes_public_endpoint::{
     worker_public_endpoint_target, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
+    assess_rollout, deployment_has_ready_replicas, readiness_holds, deployment_rollout_complete,
     emit_kubernetes_workload_heartbeat, label_selector, last_poll, recovery_check,
     rollout_timeout_message, stalled_rollout_message, update_wait_max_polls, workload_fully_ready,
     workload_pod_reason, KubernetesWorkload, KubernetesWorkloadDataKind,
-    KubernetesWorkloadHeartbeatInput, NotReadyObservations, RolloutWait, RolloutWatch,
+    KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold, RolloutWait, RolloutWatch,
     KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -72,6 +72,9 @@ pub struct KubernetesWorkerController {
     /// Not-ready observations of the Running workload; the third in a window fails the refresh.
     #[serde(default)]
     pub(crate) not_ready: NotReadyObservations,
+    /// Ready polls of the create or update wait; the rollout completes when readiness holds.
+    #[serde(default)]
+    pub(crate) ready_hold: ReadyHold,
     /// Whether the last update left the pod template as it was (no pods roll). Such an update
     /// waits for readiness only briefly.
     #[serde(default)]
@@ -354,8 +357,20 @@ impl KubernetesWorkerController {
                                 && status.updated_replicas.unwrap_or(0) == total
                         })
                 });
-                if ready {
+                if !ready {
+                    self.ready_hold.reset();
+                }
+                if ready
+                    && readiness_holds(
+                        ctx,
+                        &mut self.ready_hold,
+                        namespace,
+                        &worker_labels(deployment_name),
+                    )
+                    .await?
+                {
                     info!(deployment_name=%deployment_name, namespace=%namespace, "Deployment is ready");
+                    self.ready_hold.reset();
                     return Ok(HandlerAction::Continue {
                         state: ReconcilePublicEndpoint,
                         suggested_delay: None,
@@ -951,12 +966,25 @@ impl KubernetesWorkerController {
                     .as_ref()
                     .and_then(|spec| spec.replicas)
                     .unwrap_or(1);
-                if deployment_rollout_complete(
+                let complete = deployment_rollout_complete(
                     &deployment,
                     desired,
                     self.expected_generation.or(deployment.metadata.generation),
-                ) {
+                );
+                if !complete {
+                    self.ready_hold.reset();
+                }
+                if complete
+                    && readiness_holds(
+                        ctx,
+                        &mut self.ready_hold,
+                        namespace,
+                        &worker_labels(deployment_name),
+                    )
+                    .await?
+                {
                     info!(deployment_name=%deployment_name, "Deployment rollout complete");
+                    self.ready_hold.reset();
                     return Ok(HandlerAction::Continue {
                         state: ReconcilePublicEndpointAfterUpdate,
                         suggested_delay: None,
@@ -1524,6 +1552,7 @@ impl KubernetesWorkerController {
             applied_architecture: None,
             recovery_checks: 0,
             not_ready: Default::default(),
+            ready_hold: Default::default(),
             update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
@@ -1665,6 +1694,7 @@ mod tests {
             expected_generation: Some(2),
             ..Default::default()
         };
+        crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
         server.mock(|when, then| {
             when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
             then.status(200).json_body(serde_json::json!({
@@ -1673,12 +1703,18 @@ mod tests {
                 "status":{"replicas":1,"readyReplicas":1,"availableReplicas":1,"updatedReplicas":1,"observedGeneration":2}
             }));
         });
+        let mut action = None;
+        for _ in 0..3 {
+            action = Some(
+                controller
+                    .waiting_for_deployment(&ctx)
+                    .await
+                    .expect("read adopted workload"),
+            );
+        }
         assert!(matches!(
-            controller
-                .waiting_for_deployment(&ctx)
-                .await
-                .expect("read adopted workload"),
-            KubernetesWorkerHandlerAction::Continue { .. }
+            action,
+            Some(KubernetesWorkerHandlerAction::Continue { .. })
         ));
     }
 
@@ -1830,10 +1866,17 @@ mod tests {
                 namespace: Some("test-ns".into()),
                 ..Default::default()
             };
-            let action = controller
+            let mut action = controller
                 .waiting_for_deployment(&ctx)
                 .await
                 .expect("create poll");
+            // Ready capacity completes once readiness has held for three polls.
+            for _ in 0..2 {
+                action = controller
+                    .waiting_for_deployment(&ctx)
+                    .await
+                    .expect("create poll");
+            }
             assert_eq!(
                 matches!(action, KubernetesWorkerHandlerAction::Continue { .. }),
                 complete,
@@ -1859,9 +1902,12 @@ mod tests {
                     "status":{"replicas":3,"readyReplicas":3,"updatedReplicas":3,"availableReplicas":3,"observedGeneration":2}
                 }));
             });
-            crate::core::ResourceController::step(&mut controller, &ctx)
-                .await
-                .expect("slow rollout completes");
+            // Readiness must hold for three polls.
+            for _ in 0..3 {
+                crate::core::ResourceController::step(&mut controller, &ctx)
+                    .await
+                    .expect("slow rollout completes");
+            }
             assert!(matches!(
                 controller.state,
                 KubernetesWorkerState::ReconcilePublicEndpointAfterUpdate
@@ -1872,6 +1918,7 @@ mod tests {
     #[tokio::test]
     async fn worker_update_waits_for_submitted_generation() {
         let server = httpmock::MockServer::start_async().await;
+        crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
         let mut response = server.mock(|when, then| {
             when.method(httpmock::Method::GET).path("/apis/apps/v1/namespaces/test-ns/deployments/worker");
             then.status(200).json_body(serde_json::json!({
@@ -1916,8 +1963,12 @@ mod tests {
                 "status":{"replicas":1,"readyReplicas":1,"updatedReplicas":1,"availableReplicas":1,"observedGeneration":3}
             }));
         });
+        let mut action = controller.waiting_for_update(&ctx).await.unwrap();
+        for _ in 0..2 {
+            action = controller.waiting_for_update(&ctx).await.unwrap();
+        }
         assert!(matches!(
-            controller.waiting_for_update(&ctx).await.unwrap(),
+            action,
             KubernetesWorkerHandlerAction::Continue { .. }
         ));
     }
@@ -2170,6 +2221,7 @@ mod tests {
             applied_architecture: None,
             recovery_checks: 0,
             not_ready: Default::default(),
+            ready_hold: Default::default(),
             update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
@@ -2217,6 +2269,7 @@ mod tests {
             applied_architecture: None,
             recovery_checks: 0,
             not_ready: Default::default(),
+            ready_hold: Default::default(),
             update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,

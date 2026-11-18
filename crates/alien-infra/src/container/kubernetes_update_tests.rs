@@ -49,6 +49,11 @@ struct FakeApi {
     changed_before_next_update: Option<String>,
     /// Workload paths whose pods crash-loop: no replica is ready until the pod template changes.
     crash_looping: BTreeSet<String>,
+    /// Pods that are Ready for a moment after each start and then crash again, as a container
+    /// without a readiness probe is: the workload reports ready, and the restart count of the
+    /// ready pod grows with every pod list.
+    restart_blip: bool,
+    pod_lists: i64,
 }
 
 fn status(code: u16, reason: &str, name: &str) -> Value {
@@ -90,6 +95,22 @@ impl FakeApi {
         let name = path.rsplit('/').next().unwrap_or_default().to_string();
         match *method {
             // The health check lists pods and events: the fake cluster has none.
+            Method::GET if self.restart_blip && path.ends_with("/pods") => {
+                self.pod_lists += 1;
+                (
+                    200,
+                    json!({"apiVersion": "v1", "kind": "PodList", "metadata": {}, "items": [{
+                        "metadata": {"name": "platform-abc"},
+                        "status": {
+                            "conditions": [{"type": "Ready", "status": "True"}],
+                            "containerStatuses": [{
+                                "name": "platform", "ready": true, "image": "i", "imageID": "i",
+                                "restartCount": self.pod_lists,
+                            }],
+                        },
+                    }]}),
+                )
+            }
             Method::GET if path.ends_with("/pods") || path.ends_with("/events") => {
                 let kind = if path.ends_with("/pods") {
                     "PodList"
@@ -502,9 +523,10 @@ async fn a_release_of_a_container_chain_waits_on_dependencies_without_api_calls(
         waiting_writes.is_empty(),
         "waiting dependents wrote: {waiting_writes:#?}"
     );
-    // Each Container takes three steps: submit its rollout, see it complete, publish its
-    // endpoints (Running). Its dependent submits in the step after.
-    assert_eq!(release.steps, 3 * CHAIN.len());
+    // Each Container takes five steps: submit its rollout, see it complete on three polls in a
+    // row (readiness must hold), publish its endpoints (Running). Its dependent submits in the
+    // step after.
+    assert_eq!(release.steps, 5 * CHAIN.len());
 }
 
 /// An update carries the `resourceVersion` the controller read. When the workload changed in
@@ -548,7 +570,7 @@ async fn an_update_of_a_workload_changed_since_it_was_read_is_retried_by_the_exe
         "rolled out once"
     );
     // One step more than a release without the conflict.
-    assert_eq!(release.steps, 3 * CHAIN.len() + 1);
+    assert_eq!(release.steps, 5 * CHAIN.len() + 1);
 }
 
 /// Installs release 1, marks `failed` as a Container whose readiness check failed (its refresh
@@ -977,4 +999,36 @@ async fn a_flapping_container_reaches_refresh_failed() {
         state.resources["platform"].error.as_ref().unwrap().code,
         "WORKLOAD_NOT_READY"
     );
+}
+
+/// A pod that is Ready for a moment after each restart makes the workload look ready on every
+/// poll. The rollout never completes, because the restart count of the ready pod grows: the
+/// update fails at its bound with the not-ready error instead of reporting a finished rollout.
+#[tokio::test]
+async fn a_crash_looping_pod_that_is_briefly_ready_on_each_restart_never_completes_the_rollout() {
+    let (url, api, state, first_step) = crash_loop_until_refresh_failed("platform").await;
+    {
+        let mut api = api.lock().unwrap();
+        api.crash_looping.clear();
+        api.restart_blip = true;
+    }
+    let config = deployment_config();
+    let update = StackExecutor::builder(&stack("1"), client_config(&url))
+        .deployment_config(&config)
+        .resume_unchanged_failed_resources(true)
+        .running_resource_policy(RunningResourcePolicy::OptIn)
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
+        .service_provider(Arc::new(DefaultPlatformServiceProvider::default()))
+        .build()
+        .expect("update executor");
+    let (state, steps) = step_until_settled(&update, &api, state, first_step).await;
+    assert_eq!(
+        state.resources["platform"].status,
+        ResourceStatus::UpdateFailed
+    );
+    assert_eq!(
+        state.resources["platform"].error.as_ref().unwrap().code,
+        "WORKLOAD_NOT_READY"
+    );
+    assert!(steps < 40, "the short bound applies: {steps} steps");
 }

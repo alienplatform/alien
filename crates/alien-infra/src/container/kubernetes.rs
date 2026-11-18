@@ -20,10 +20,10 @@ use crate::kubernetes_public_endpoint::{
 };
 use crate::kubernetes_workload_heartbeat::{
     assess_rollout, deployment_has_ready_replicas, deployment_rollout_complete,
-    emit_kubernetes_workload_heartbeat, label_selector, last_poll, recovery_check,
+    emit_kubernetes_workload_heartbeat, label_selector, last_poll, readiness_holds, recovery_check,
     rollout_timeout_message, stalled_rollout_message, statefulset_has_ready_replicas,
     update_wait_max_polls, workload_fully_ready, workload_pod_reason, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold,
     RolloutWait, RolloutWatch, KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -224,6 +224,9 @@ pub struct KubernetesContainerController {
     /// Not-ready observations of the Running workload; the third in a window fails the refresh.
     #[serde(default)]
     pub(crate) not_ready: NotReadyObservations,
+    /// Ready polls of the create or update wait; the rollout completes when readiness holds.
+    #[serde(default)]
+    pub(crate) ready_hold: ReadyHold,
     /// Whether the last update left the pod template as it was (no pods roll). Such an update
     /// waits for readiness only briefly.
     #[serde(default)]
@@ -866,18 +869,26 @@ impl KubernetesContainerController {
             }
         };
 
-        if healthy {
+        let ready_selector =
+            self.workload_labels(ctx, &config.id, self.build_labels(workload_name));
+        if healthy
+            && readiness_holds(ctx, &mut self.ready_hold, namespace, &ready_selector).await?
+        {
             let workload_type = if self.is_stateful {
                 "StatefulSet"
             } else {
                 "Deployment"
             };
             info!(workload_name=%workload_name, namespace=%namespace, workload_type=%workload_type, "Container workload is ready");
+            self.ready_hold.reset();
 
             return Ok(HandlerAction::Continue {
                 state: ReconcilePublicEndpoint,
                 suggested_delay: None,
             });
+        }
+        if !healthy {
+            self.ready_hold.reset();
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, "Container workload not yet ready");
         let restricted_hint = if let Some(template) = &template {
@@ -1846,17 +1857,24 @@ impl KubernetesContainerController {
             }
         };
 
-        if rollout_complete {
+        let selector = self.workload_labels(ctx, &config.id, self.build_labels(workload_name));
+        if rollout_complete
+            && readiness_holds(ctx, &mut self.ready_hold, namespace, &selector).await?
+        {
             let workload_type = if self.is_stateful {
                 "StatefulSet"
             } else {
                 "Deployment"
             };
             info!(workload_name=%workload_name, workload_type=%workload_type, "Container workload rollout complete");
+            self.ready_hold.reset();
             return Ok(HandlerAction::Continue {
                 state: ReconcilePublicEndpointAfterUpdate,
                 suggested_delay: None,
             });
+        }
+        if !rollout_complete {
+            self.ready_hold.reset();
         }
         debug!(workload_name=%workload_name, ready=?ready_replicas, total=?replicas, desired=desired_replicas, expected_generation=?self.update_generation, "Container workload rollout in progress");
         // A re-rendered workload can start refusing an image or filesystem the old one allowed:
@@ -2618,6 +2636,7 @@ mod output_tests {
             rollout_watch: None,
             recovery_checks: 0,
             not_ready: Default::default(),
+            ready_hold: Default::default(),
             update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
@@ -2696,6 +2715,7 @@ mod output_tests {
             rollout_watch: None,
             recovery_checks: 0,
             not_ready: Default::default(),
+            ready_hold: Default::default(),
             update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
@@ -2773,6 +2793,7 @@ impl KubernetesContainerController {
             rollout_watch: None,
             recovery_checks: 0,
             not_ready: Default::default(),
+            ready_hold: Default::default(),
             update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,
@@ -3648,6 +3669,7 @@ mod tests {
             } else {
                 "deployments"
             };
+            crate::core::kubernetes_manifest_test_support::mock_empty_pod_list(&server);
             server.mock(|when, then| {
                 when.method(httpmock::Method::GET).path(format!("/apis/apps/v1/namespaces/test-ns/{collection}/web"));
                 then.status(200).json_body(serde_json::json!({
@@ -3656,14 +3678,18 @@ mod tests {
                     "status":{"replicas":1,"readyReplicas":1,"availableReplicas":1,"updatedReplicas":1,"observedGeneration":2,"currentRevision":"old","updateRevision":"new"}
                 }));
             });
-            assert!(
-                matches!(
+            // Readiness must hold across three polls before the workload counts as ready.
+            let mut action = None;
+            for _ in 0..3 {
+                action = Some(
                     controller
                         .waiting_for_workload(&ctx)
                         .await
                         .expect("read adopted workload"),
-                    KubernetesContainerHandlerAction::Continue { .. }
-                ),
+                );
+            }
+            assert!(
+                matches!(action, Some(KubernetesContainerHandlerAction::Continue { .. })),
                 "all created replicas run the new template, stateful={stateful}"
             );
         }
@@ -4407,10 +4433,17 @@ mod tests {
                 point_at(&mut ctx, &server);
                 let mut controller = manifest_test_controller();
                 controller.is_stateful = stateful;
-                let action = controller
+                // Ready capacity completes once readiness has held for three polls.
+                let mut action = controller
                     .waiting_for_workload(&ctx)
                     .await
                     .expect("workload poll");
+                for _ in 0..2 {
+                    action = controller
+                        .waiting_for_workload(&ctx)
+                        .await
+                        .expect("workload poll");
+                }
                 assert_eq!(
                     matches!(action, KubernetesContainerHandlerAction::Continue { .. }),
                     complete,
@@ -4678,6 +4711,7 @@ mod tests {
             rollout_watch: None,
             recovery_checks: 0,
             not_ready: Default::default(),
+            ready_hold: Default::default(),
             update_template_unchanged: false,
             recovering: false,
             last_recovery_check_unix: None,

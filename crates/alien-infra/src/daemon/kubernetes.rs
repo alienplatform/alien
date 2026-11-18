@@ -17,9 +17,9 @@ use crate::kubernetes_public_endpoint::{
     reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
 };
 use crate::kubernetes_workload_heartbeat::{
-    emit_kubernetes_workload_heartbeat, label_selector, last_poll, recovery_check,
+    emit_kubernetes_workload_heartbeat, label_selector, last_poll, readiness_holds, recovery_check,
     rollout_timeout_message, update_wait_max_polls, workload_pod_reason, KubernetesWorkload,
-    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations,
+    KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput, NotReadyObservations, ReadyHold,
     KUBERNETES_WORKLOAD_READY_MAX_POLLS,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -115,6 +115,9 @@ pub struct KubernetesDaemonController {
     /// Not-ready observations of the Running DaemonSet; the third in a window fails the refresh.
     #[serde(default)]
     pub(crate) not_ready: NotReadyObservations,
+    /// Ready polls of the create or update wait; the rollout completes when readiness holds.
+    #[serde(default)]
+    pub(crate) ready_hold: ReadyHold,
     /// Consecutive ready checks since the resource failed a health check.
     #[serde(default)]
     pub(crate) recovery_checks: u32,
@@ -399,10 +402,15 @@ impl KubernetesDaemonController {
     ) -> Result<HandlerAction> {
         let live = self.read_daemonset(ctx).await?;
         if live.as_ref().is_some_and(daemonset_is_ready) {
-            return Ok(HandlerAction::Continue {
-                state: ReconcilePublicEndpoint,
-                suggested_delay: None,
-            });
+            if self.readiness_holds(ctx).await? {
+                self.ready_hold.reset();
+                return Ok(HandlerAction::Continue {
+                    state: ReconcilePublicEndpoint,
+                    suggested_delay: None,
+                });
+            }
+        } else {
+            self.ready_hold.reset();
         }
         let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
@@ -821,18 +829,18 @@ impl KubernetesDaemonController {
         &mut self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
-        if self
-            .read_daemonset(ctx)
-            .await?
-            .as_ref()
-            .is_some_and(daemonset_rollout_complete)
-        {
-            return Ok(HandlerAction::Continue {
-                state: ReconcilePublicEndpointAfterUpdate,
-                suggested_delay: None,
-            });
-        }
         let live = self.read_daemonset(ctx).await?;
+        if live.as_ref().is_some_and(daemonset_rollout_complete) {
+            if self.readiness_holds(ctx).await? {
+                self.ready_hold.reset();
+                return Ok(HandlerAction::Continue {
+                    state: ReconcilePublicEndpointAfterUpdate,
+                    suggested_delay: None,
+                });
+            }
+        } else {
+            self.ready_hold.reset();
+        }
         let restricted_hint = self.root_image_hint(ctx).await?;
         self.record_workload_failure(ctx).await;
         if self.workload_failure.is_none() {
@@ -1354,6 +1362,14 @@ impl KubernetesDaemonController {
             }
             _ => None,
         };
+    }
+
+    /// Records a poll that found the DaemonSet ready; true once readiness has held.
+    async fn readiness_holds(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let name = self.daemon_set_name.clone().unwrap_or_default();
+        let namespace = self.namespace.clone().unwrap_or_default();
+        let selector = self.build_labels(&name);
+        readiness_holds(ctx, &mut self.ready_hold, &namespace, &selector).await
     }
 
     /// The error for a DaemonSet that did not become ready in time: the counts and the first

@@ -532,6 +532,120 @@ pub(crate) fn recovery_check(
     }
 }
 
+/// Consecutive polls a finished-looking rollout must stay ready before it counts as complete.
+pub(crate) const READY_HOLD_POLLS: u32 = 3;
+/// Seconds the ready polls must span.
+pub(crate) const READY_HOLD_MIN_SECS: i64 = 10;
+
+/// Whether readiness holds across the polls of a create or update wait. A container without a
+/// readiness probe is ready for a moment after each start, so one ready poll proves nothing: the
+/// rollout is complete only after `READY_HOLD_POLLS` ready polls spanning `READY_HOLD_MIN_SECS`,
+/// with no restart of a ready pod across them. A not-ready or restarted poll starts over.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ReadyHold {
+    #[serde(default)]
+    polls: u32,
+    #[serde(default)]
+    first_unix: Option<i64>,
+    /// Restart count of each ready pod at the last ready poll.
+    #[serde(default)]
+    restarts: std::collections::BTreeMap<String, i32>,
+}
+
+impl ReadyHold {
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Records a poll that found the rollout complete; `ready_pod_restarts` maps each ready pod
+    /// to its container restart count. True once readiness has held.
+    pub(crate) fn observe_ready(
+        &mut self,
+        ready_pod_restarts: std::collections::BTreeMap<String, i32>,
+        now_unix: i64,
+    ) -> bool {
+        let restarted = ready_pod_restarts
+            .iter()
+            .any(|(pod, count)| self.restarts.get(pod).is_some_and(|before| count > before));
+        if restarted {
+            self.polls = 0;
+            self.first_unix = None;
+        }
+        self.restarts = ready_pod_restarts;
+        self.polls += 1;
+        let first = *self.first_unix.get_or_insert(now_unix);
+        self.polls >= READY_HOLD_POLLS && now_unix.saturating_sub(first) >= READY_HOLD_MIN_SECS
+    }
+}
+
+/// Restart counts of the ready pods in `pods`.
+pub(crate) fn ready_pod_restarts(
+    pods: &[k8s_openapi::api::core::v1::Pod],
+) -> std::collections::BTreeMap<String, i32> {
+    pods.iter()
+        .filter(|pod| pod.metadata.deletion_timestamp.is_none())
+        .filter(|pod| {
+            pod.status
+                .as_ref()
+                .and_then(|status| status.conditions.as_deref())
+                .is_some_and(|conditions| {
+                    conditions
+                        .iter()
+                        .any(|c| c.type_ == "Ready" && c.status == "True")
+                })
+        })
+        .map(|pod| {
+            let restarts = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.container_statuses.as_deref())
+                .map(|statuses| statuses.iter().map(|s| s.restart_count).sum())
+                .unwrap_or(0);
+            (pod.metadata.name.clone().unwrap_or_default(), restarts)
+        })
+        .collect()
+}
+
+/// Called by a wait that found the rollout complete: true once readiness holds. A failure to
+/// list pods is an error, not a pass.
+pub(crate) async fn readiness_holds(
+    ctx: &ResourceControllerContext<'_>,
+    hold: &mut ReadyHold,
+    namespace: &str,
+    selector: &std::collections::BTreeMap<String, String>,
+) -> Result<bool> {
+    let client = ctx
+        .service_provider
+        .get_kubernetes_pod_client(ctx.get_kubernetes_config()?)
+        .await?;
+    let pods = client
+        .list_pods(namespace, Some(label_selector(selector)), None)
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to list pods in '{namespace}' to confirm readiness"),
+            resource_id: None,
+        })?;
+    Ok(hold.observe_ready(ready_pod_restarts(&pods.items), hold_now_unix()))
+}
+
+#[cfg(not(test))]
+fn hold_now_unix() -> i64 {
+    Utc::now().timestamp()
+}
+
+/// In tests every poll takes the 5 s a real poll does, so a hold is reached in a few steps
+/// without waiting. The clock is per test thread.
+#[cfg(test)]
+fn hold_now_unix() -> i64 {
+    thread_local! {
+        static TICKS: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+    }
+    TICKS.with(|ticks| {
+        ticks.set(ticks.get() + 5);
+        Utc::now().timestamp() + ticks.get()
+    })
+}
+
 pub(crate) fn deployment_rollout_complete(
     deployment: &Deployment,
     desired_replicas: i32,
@@ -651,6 +765,55 @@ pub async fn emit_kubernetes_workload_heartbeat(
 
 #[cfg(test)]
 mod tests {
+    fn pods(restarts: &[(&str, i32)]) -> std::collections::BTreeMap<String, i32> {
+        restarts.iter().map(|(n, r)| (n.to_string(), *r)).collect()
+    }
+
+    #[test]
+    fn readiness_holds_after_three_polls_spanning_ten_seconds() {
+        let mut hold = ReadyHold::default();
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_005));
+        assert!(hold.observe_ready(pods(&[("a", 0)]), 1_010));
+    }
+
+    #[test]
+    fn three_polls_in_quick_succession_do_not_hold() {
+        let mut hold = ReadyHold::default();
+        for _ in 0..5 {
+            assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
+        }
+        assert!(hold.observe_ready(pods(&[("a", 0)]), 1_010));
+    }
+
+    #[test]
+    fn a_restart_of_a_ready_pod_starts_the_hold_again() {
+        let mut hold = ReadyHold::default();
+        assert!(!hold.observe_ready(pods(&[("a", 7)]), 1_000));
+        assert!(!hold.observe_ready(pods(&[("a", 7)]), 1_005));
+        // Ready again after one more restart: the count starts over.
+        assert!(!hold.observe_ready(pods(&[("a", 8)]), 1_010));
+        assert!(!hold.observe_ready(pods(&[("a", 8)]), 1_015));
+        assert!(hold.observe_ready(pods(&[("a", 8)]), 1_020));
+    }
+
+    #[test]
+    fn a_not_ready_poll_resets_the_hold() {
+        let mut hold = ReadyHold::default();
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_000));
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_005));
+        hold.reset();
+        assert!(!hold.observe_ready(pods(&[("a", 0)]), 1_010));
+    }
+
+    #[test]
+    fn a_replaced_pod_is_not_a_restart() {
+        let mut hold = ReadyHold::default();
+        assert!(!hold.observe_ready(pods(&[("old", 3)]), 1_000));
+        assert!(!hold.observe_ready(pods(&[("new", 0)]), 1_005));
+        assert!(hold.observe_ready(pods(&[("new", 0)]), 1_010));
+    }
+
     #[test]
     fn a_ready_check_between_not_ready_observations_does_not_reset_the_count() {
         let mut watch = NotReadyObservations::default();
