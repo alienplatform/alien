@@ -4659,3 +4659,66 @@ async fn a_new_release_becomes_the_target_of_a_deployment_that_is_already_updati
         }
     }
 }
+
+/// A push deployment the manager is stepping: the new release moves the target and
+/// leaves the in-flight update's own state alone. The next step then sees a target
+/// different from the release it prepared, which the update step already handles
+/// (see the superseding-release tests in alien-deployment), so nothing applies twice.
+#[tokio::test]
+async fn a_push_update_keeps_its_progress_when_a_new_release_becomes_its_target() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group = create_test_group(&store).await;
+    let deployment = create_test_deployment_with_settings(
+        &store,
+        &group,
+        "pushed",
+        Platform::Aws,
+        StackSettings {
+            deployment_model: alien_core::DeploymentModel::Push,
+            ..Default::default()
+        },
+    )
+    .await;
+    {
+        let conn = db.conn().lock().await;
+        conn.execute(
+            "UPDATE deployments SET status = 'updating', current_release_id = 'rel_a', desired_release_id = 'rel_b', \
+             runtime_metadata = '{\"pendingPreparedReleaseId\":\"rel_b\"}' WHERE id = ?1",
+            (deployment.id.as_str(),),
+        )
+        .await
+        .unwrap();
+    }
+    let before = store
+        .get_deployment(&test_subject(), &deployment.id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    store
+        .set_desired_release(&test_subject(), "rel_c", Some(Platform::Aws))
+        .await
+        .unwrap();
+
+    let after = store
+        .get_deployment(&test_subject(), &deployment.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.desired_release_id.as_deref(), Some("rel_c"));
+    assert_eq!(after.status, "updating");
+    assert_eq!(after.current_release_id.as_deref(), Some("rel_a"));
+    assert_eq!(
+        serde_json::to_value(&after.runtime_metadata).unwrap(),
+        serde_json::to_value(&before.runtime_metadata).unwrap()
+    );
+    assert_eq!(
+        after
+            .runtime_metadata
+            .unwrap()
+            .pending_prepared_release_id
+            .as_deref(),
+        Some("rel_b")
+    );
+}
