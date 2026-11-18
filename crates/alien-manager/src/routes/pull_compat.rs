@@ -150,8 +150,6 @@ pub(crate) const STORAGE_NOTIFICATIONS: Feature = feature(
     Action::Refuse,
     "declared behavior an older Operator would silently not provide",
 );
-/// Pinned to the first release that ships the setting (3.3.69 was cut without it),
-/// not to [`NEXT_RELEASE`], which is older than the Operators already released.
 pub(crate) const QUEUE_DEAD_LETTER: Feature = feature(
     "queue dead-letter targets",
     "3.3.70",
