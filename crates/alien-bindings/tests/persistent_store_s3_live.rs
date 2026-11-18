@@ -146,3 +146,54 @@ async fn an_s3_grant_reaches_one_key_and_moves_head_only_from_the_version_it_saw
     }
     assert!(binding.list("").await.expect("list").is_empty());
 }
+
+/// A grant never outlives the credential that signed it. Signed with a short STS session, the
+/// grant reports the session's expiry (not the 8 h it asked for), works until then, and S3
+/// refuses it afterwards. Give `AWS_TARGET_SESSION_*` a session of a few minutes.
+#[tokio::test]
+#[ignore = "needs a live AWS account, a bucket and a short STS session"]
+async fn a_grant_signed_with_a_session_ends_with_the_session() {
+    let expires_at: chrono::DateTime<chrono::Utc> = env("AWS_TARGET_SESSION_EXPIRES_AT")
+        .parse()
+        .expect("RFC 3339");
+    let aws = AwsClientConfig {
+        account_id: env("AWS_TARGET_ACCOUNT_ID"),
+        region: env("AWS_TARGET_REGION"),
+        credentials: AwsCredentials::SessionCredentials {
+            access_key_id: env("AWS_TARGET_SESSION_ACCESS_KEY_ID"),
+            secret_access_key: env("AWS_TARGET_SESSION_SECRET_ACCESS_KEY"),
+            session_token: env("AWS_TARGET_SESSION_TOKEN"),
+            expires_at: expires_at.to_rfc3339(),
+        },
+        service_overrides: None,
+    };
+    let prefix = format!("{}/", env("ALIEN_TEST_PERSISTENT_PREFIX"));
+    let grants = S3Grants::new(
+        env("ALIEN_TEST_PERSISTENT_BUCKET"),
+        prefix.clone(),
+        AwsCredentialProvider::from_config_sync(aws),
+        1 << 20,
+    )
+    .expect("grants");
+    let grant = grants
+        .grant("engine-42", &[], Duration::from_secs(8 * 3600))
+        .await
+        .expect("grant");
+    let reported = grant.expires_at();
+    println!("session expires {expires_at}, grant reports {reported}");
+    assert!(
+        (reported - expires_at).num_seconds().abs() <= 1,
+        "the grant ends with its signing session"
+    );
+
+    let pack = format!("{prefix}engine-42/packs/1-session");
+    let before = post(&grant, &pack, b"x").await;
+    println!("{} upload before expiry: {before}", chrono::Utc::now());
+    assert!(before.is_success());
+
+    let wait = (expires_at - chrono::Utc::now()).to_std().unwrap_or_default();
+    tokio::time::sleep(wait + Duration::from_secs(5)).await;
+    let after = post(&grant, &pack, b"y").await;
+    println!("{} upload after expiry: {after}", chrono::Utc::now());
+    assert_eq!(after, 403);
+}
