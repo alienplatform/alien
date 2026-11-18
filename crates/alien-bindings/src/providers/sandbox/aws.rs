@@ -101,6 +101,8 @@ pub struct AwsSandbox {
     /// Wall-clock ceiling on a sandbox, where the declaration asked for one. Lambda terminates
     /// the MicroVM when it elapses.
     max_lifetime_seconds: Option<u32>,
+    /// The declared persistent storage, which makes `storageKey` required on create.
+    persistent_storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
     agent: reqwest::Client,
 }
 
@@ -117,6 +119,15 @@ impl AwsSandbox {
         manager: Arc<crate::sandbox_egress::SandboxEgressManager>,
     ) -> Self {
         self.egress_manager = Some(manager);
+        self
+    }
+
+    /// Supplies the persistent storage the declaration carries.
+    pub fn with_persistent_storage(
+        mut self,
+        storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
+    ) -> Self {
+        self.persistent_storage = storage;
         self
     }
 
@@ -356,6 +367,7 @@ impl AwsSandbox {
             preview_ports,
             idle_pause_seconds,
             max_lifetime_seconds,
+            persistent_storage: None,
             agent: reqwest::Client::new(),
         }
     }
@@ -816,6 +828,18 @@ impl Sandbox for AwsSandbox {
         self.validate_egress(request.egress.as_ref())?;
         let _ = request.sandbox_id;
         refuse_unsupported_create_fields(&request, "sandbox.create")?;
+        let storage_key = super::storage_key::resolve_storage_key(
+            self.persistent_storage.as_ref(),
+            request.storage_key.as_deref(),
+            "sandbox.create",
+        )?;
+        if storage_key.is_some() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.create".to_string(),
+                reason: "this binding cannot attach persistent storage to a MicroVM yet"
+                    .to_string(),
+            }));
+        }
         let max_lifetime_seconds = self.lifetime_seconds(request.timeout_ms, "sandbox.create")?;
         // AWS has an eight-hour hard lifetime ceiling, including when no smaller limit is set.
         let expires_at = crate::sandbox_egress::now_unix()?.saturating_add(i64::from(
@@ -965,6 +989,11 @@ impl Sandbox for AwsSandbox {
         // Refused on the reconnect path too: an existing sandbox honors these fields no more
         // than a fresh one would.
         refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;
+        super::storage_key::resolve_storage_key(
+            self.persistent_storage.as_ref(),
+            request.storage_key.as_deref(),
+            "sandbox.getOrCreate",
+        )?;
         if let Some(id) = request.sandbox_id.as_deref() {
             // A MicroVM that is terminating or terminated never serves again, so the id is
             // answered with a fresh sandbox, as on GCP and Azure. It can also end between the read

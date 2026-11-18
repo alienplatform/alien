@@ -523,6 +523,14 @@ export interface CreateSandboxOptions {
    * one, and Kubernetes and Local ignore it (#1475).
    */
   tenantKey?: string
+  /**
+   * Key whose persistent storage the sandbox restores and replicates.
+   *
+   * Required when the sandbox declares `persistentStorage`, refused otherwise. One path segment
+   * of letters, digits, `.`, `_` and `-` (at most 128). Never the sandbox id: a replacement
+   * sandbox gets a new id but keeps the key, and with it the tree.
+   */
+  storageKey?: string
   /** Environment every command in the sandbox starts with. */
   env?: Record<string, string>
   /**

@@ -10,14 +10,15 @@
 //!
 //! Under `sandbox-storage/<sandbox id>/<key>/` in the linked Storage:
 //!
-//! - `packs/<seq>-<commit>.tar`: a tar of 64 KiB content-addressed chunks, each member named by
+//! - `packs/<seq>-<sha256>.tar`: a tar of 64 KiB content-addressed chunks, each member named by
 //!   the SHA-256 of its bytes.
-//! - `manifests/<seq>-<commit>.json`: the whole tree at commit `seq` (path, type, mode, owner,
+//! - `manifests/<seq>-<sha256>.json`: the whole tree at commit `seq` (path, type, mode, owner,
 //!   mtime, size, chunks, hard links, symlink targets) and where every chunk it uses lives.
-//! - `HEAD`: the current commit, moved only with a conditional put.
+//! - `HEAD`: the current manifest's name (and so its hash), moved only with a conditional put.
 //!
-//! Pack and manifest names carry a random commit id next to the sequence number, so a superseded
-//! writer racing the live one can never overwrite an object HEAD points at.
+//! Packs and manifests are named by their sequence number and the SHA-256 of their bytes, and
+//! written with `If-None-Match: *` where the transport allows it, so a superseded writer racing
+//! the live one can never change what a name HEAD reaches means.
 //!
 //! # One writer per key
 //!
@@ -45,4 +46,4 @@ pub use layout::{
 pub use manifest::{ChunkLocation, Entry, EntryKind, Manifest, MANIFEST_VERSION};
 pub use pack::{chunk_hash, PackBuilder, CHUNK_SIZE};
 pub use read::{read_file, read_head, read_manifest, restore, takeover, Takeover, TreeSink};
-pub use store::{MemoryStore, ObjectStore, Precondition, PutOutcome, StoredObject};
+pub use store::{create, MemoryStore, ObjectStore, Precondition, PutOutcome, StoredObject};

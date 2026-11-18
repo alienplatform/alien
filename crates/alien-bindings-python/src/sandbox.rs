@@ -273,6 +273,7 @@ fn sandbox_request(
     env: Option<HashMap<String, String>>,
     timeout_ms: Option<u64>,
     egress: Option<alien_core::EgressPolicy>,
+    storage_key: Option<String>,
 ) -> CreateSandboxRequest {
     CreateSandboxRequest {
         egress,
@@ -282,6 +283,7 @@ fn sandbox_request(
             .map(|value| value.into_iter().collect())
             .unwrap_or_default(),
         timeout_ms,
+        storage_key,
     }
 }
 
@@ -347,7 +349,7 @@ impl SandboxHandle {
         })
     }
 
-    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]
+    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None, storage_key=None))]
     fn create<'py>(
         &self,
         py: Python<'py>,
@@ -356,13 +358,19 @@ impl SandboxHandle {
         env: Option<HashMap<String, String>>,
         timeout_ms: Option<u64>,
         egress_json: Option<String>,
+        storage_key: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let egress = egress_json.as_deref().map(parse_egress).transpose()?;
         let inner = self.inner.clone();
         future_into_py(py, async move {
             inner
                 .create(sandbox_request(
-                    sandbox_id, tenant_key, env, timeout_ms, egress,
+                    sandbox_id,
+                    tenant_key,
+                    env,
+                    timeout_ms,
+                    egress,
+                    storage_key,
                 ))
                 .await
                 .map(sandbox_info)
@@ -397,7 +405,7 @@ impl SandboxHandle {
         })
     }
 
-    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None))]
+    #[pyo3(signature = (sandbox_id=None, tenant_key=None, env=None, timeout_ms=None, egress_json=None, storage_key=None))]
     fn get_or_create<'py>(
         &self,
         py: Python<'py>,
@@ -406,13 +414,19 @@ impl SandboxHandle {
         env: Option<HashMap<String, String>>,
         timeout_ms: Option<u64>,
         egress_json: Option<String>,
+        storage_key: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let egress = egress_json.as_deref().map(parse_egress).transpose()?;
         let inner = self.inner.clone();
         future_into_py(py, async move {
             let value = inner
                 .get_or_create(sandbox_request(
-                    sandbox_id, tenant_key, env, timeout_ms, egress,
+                    sandbox_id,
+                    tenant_key,
+                    env,
+                    timeout_ms,
+                    egress,
+                    storage_key,
                 ))
                 .await
                 .map_err(map_alien_error)?;

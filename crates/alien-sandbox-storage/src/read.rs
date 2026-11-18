@@ -3,6 +3,7 @@ use chrono::Utc;
 
 use crate::error::{ErrorData, Result};
 use crate::layout::{Head, ObjectName, HEAD_OBJECT};
+use crate::pack::chunk_hash;
 use crate::manifest::{Entry, EntryKind, Manifest};
 use crate::store::{ObjectStore, Precondition, PutOutcome};
 
@@ -23,7 +24,7 @@ pub async fn read_head(store: &dyn ObjectStore) -> Result<Option<(Head, String)>
     Ok(Some((head, object.etag)))
 }
 
-/// The manifest of a commit, checked.
+/// The manifest HEAD names, checked against the hash in its name and then parsed.
 pub async fn read_manifest(store: &dyn ObjectStore, commit: &ObjectName) -> Result<Manifest> {
     let object = commit.manifest();
     let stored = store.get(&object).await?.ok_or_else(|| {
@@ -32,7 +33,20 @@ pub async fn read_manifest(store: &dyn ObjectStore, commit: &ObjectName) -> Resu
             reason: "HEAD names a manifest that does not exist".to_string(),
         })
     })?;
-    Manifest::parse(&object, &stored.bytes)
+    if chunk_hash(&stored.bytes) != commit.hash {
+        return Err(AlienError::new(ErrorData::Corrupt {
+            object,
+            reason: "the manifest is not the one HEAD names".to_string(),
+        }));
+    }
+    let manifest = Manifest::parse(&object, &stored.bytes)?;
+    if manifest.seq != commit.seq {
+        return Err(AlienError::new(ErrorData::Corrupt {
+            object,
+            reason: "the manifest names a different commit".to_string(),
+        }));
+    }
+    Ok(manifest)
 }
 
 /// The result of taking a key over.

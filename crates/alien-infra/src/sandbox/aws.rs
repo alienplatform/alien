@@ -1311,6 +1311,7 @@ impl AwsSandboxController {
             idle_pause_seconds: self.idle_pause_seconds,
             max_lifetime_seconds: self.max_lifetime_seconds,
             allow_egress: self.allow_egress,
+            persistent_storage: None,
         });
 
         Ok(Some(

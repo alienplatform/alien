@@ -395,7 +395,7 @@ async fn a_damaged_pack_fails_the_restore() {
         .unwrap();
     let mut bytes = store.get(&pack).await.unwrap().unwrap().bytes;
     bytes[600] ^= 1;
-    store.put(&pack, bytes).await.unwrap();
+    store.overwrite(&pack, bytes);
 
     let error = read_file(&store, "engine-42", "db.sqlite")
         .await
@@ -408,7 +408,7 @@ fn a_manifest_cannot_name_a_path_outside_the_root() {
     for path in ["../etc/passwd", "/etc/passwd", "a/../../b"] {
         let manifest = serde_json::json!({
             "version": 1,
-            "commit": { "seq": 1, "commit": "x" },
+            "seq": 1,
             "writer": "w",
             "entries": [{ "path": path, "type": "dir", "mode": 493, "uid": 0, "gid": 0, "mtimeNs": 0 }],
             "chunks": {},
@@ -422,10 +422,167 @@ fn a_manifest_cannot_name_a_path_outside_the_root() {
 fn a_hard_link_must_point_at_an_earlier_file() {
     let manifest = serde_json::json!({
         "version": 1,
-        "commit": { "seq": 1, "commit": "x" },
+        "seq": 1,
         "writer": "w",
         "entries": [{ "path": "a", "type": "hardLink", "target": "b", "mode": 420, "uid": 0, "gid": 0, "mtimeNs": 0 }],
         "chunks": {},
     });
     assert!(Manifest::parse("m", &serde_json::to_vec(&manifest).unwrap()).is_err());
+}
+
+/// Every object a store holds, with its bytes.
+async fn snapshot(store: &MemoryStore) -> BTreeMap<String, Vec<u8>> {
+    let mut objects = BTreeMap::new();
+    for name in store.names() {
+        objects.insert(name.clone(), store.get(&name).await.unwrap().unwrap().bytes);
+    }
+    objects
+}
+
+/// The race seen on another cloud: a superseded writer, still at the sequence number the new
+/// owner has just used, publishes its pack and manifest before its HEAD put is refused. Nothing
+/// the owner published may change, and a restore must return the owner's tree.
+#[tokio::test]
+async fn a_stale_writer_racing_the_new_owner_never_changes_the_owners_tree() {
+    let store = MemoryStore::new();
+    let first = takeover(&store, "sandbox-1").await.unwrap();
+    let mut stale = Committer::new("sandbox-1", first.head_etag, None, None);
+    commit(&store, &mut stale, &sample()).await.0.unwrap();
+
+    // The owner takes over and commits seq 2 while the stale writer still believes it is at 1.
+    let second = takeover(&store, "sandbox-2").await.unwrap();
+    let mut owner = Committer::new("sandbox-2", second.head_etag, second.manifest, None);
+    let owners = sample()
+        .file("db.sqlite", pattern(2 * CHUNK_SIZE, 77), 20)
+        .file("notes.md", b"owner".to_vec(), 20);
+    let CommitOutcome::Committed { commit: owner_commit, .. } =
+        commit(&store, &mut owner, &owners).await.0.unwrap()
+    else {
+        panic!("the owner's tree changed")
+    };
+    assert_eq!(owner_commit.seq, 2);
+    let published = snapshot(&store).await;
+
+    // The stale writer's commit is also seq 2.
+    let stales = sample()
+        .file("db.sqlite", pattern(2 * CHUNK_SIZE, 13), 30)
+        .file("notes.md", b"stale".to_vec(), 30);
+    let refused = commit(&store, &mut stale, &stales).await.0.unwrap_err();
+    assert_eq!(refused.code, "SANDBOX_STORAGE_SUPERSEDED");
+
+    let after = snapshot(&store).await;
+    for (name, bytes) in &published {
+        assert_eq!(after.get(name), Some(bytes), "{name} changed");
+    }
+    let restored = restore_head(&store).await;
+    assert_eq!(restored.files["notes.md"].1, b"owner");
+    assert_eq!(restored.files["db.sqlite"].1, pattern(2 * CHUNK_SIZE, 77));
+}
+
+/// No writer can replace an object once it exists: creating a name that is taken is refused.
+#[tokio::test]
+async fn a_published_object_cannot_be_created_again() {
+    let store = MemoryStore::new();
+    alien_sandbox_storage::create(&store, "manifests/x.json", b"one".to_vec())
+        .await
+        .unwrap();
+    let error = alien_sandbox_storage::create(&store, "manifests/x.json", b"two".to_vec())
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "SANDBOX_STORAGE_STORE_FAILED");
+    assert_eq!(store.get("manifests/x.json").await.unwrap().unwrap().bytes, b"one");
+}
+
+/// A manifest replaced behind the store's back (raw access, damage) is refused by its hash in
+/// HEAD rather than restored.
+#[tokio::test]
+async fn a_replaced_manifest_is_refused_by_heads_hash() {
+    let store = MemoryStore::new();
+    let start = takeover(&store, "sandbox-1").await.unwrap();
+    let mut writer = Committer::new("sandbox-1", start.head_etag, None, None);
+    commit(&store, &mut writer, &sample()).await.0.unwrap();
+    let (head, _) = read_head(&store).await.unwrap().unwrap();
+    let object = head.commit.as_ref().unwrap().manifest();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&store.get(&object).await.unwrap().unwrap().bytes).unwrap();
+    manifest["writer"] = serde_json::json!("someone-else");
+    store.overwrite(&object, serde_json::to_vec(&manifest).unwrap());
+
+    let error = read_file(&store, "engine-42", "src/main.rs")
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "SANDBOX_STORAGE_CORRUPT");
+}
+
+/// A store whose uploads ignore `If-None-Match`, as an S3 presigned POST does (measured: a
+/// second POST to the same name overwrites). Only HEAD's `If-Match` is honored.
+struct OverwritingStore(MemoryStore);
+
+#[async_trait::async_trait]
+impl ObjectStore for OverwritingStore {
+    async fn get(&self, object: &str) -> Result<Option<alien_sandbox_storage::StoredObject>> {
+        self.0.get(object).await
+    }
+    async fn get_range(&self, object: &str, offset: u64, len: u64) -> Result<Vec<u8>> {
+        self.0.get_range(object, offset, len).await
+    }
+    async fn put_if(
+        &self,
+        object: &str,
+        bytes: Vec<u8>,
+        precondition: alien_sandbox_storage::Precondition,
+    ) -> Result<alien_sandbox_storage::PutOutcome> {
+        if precondition == alien_sandbox_storage::Precondition::Absent && object != "HEAD" {
+            self.0.overwrite(object, bytes);
+            return Ok(alien_sandbox_storage::PutOutcome::Written {
+                etag: "overwritten".to_string(),
+            });
+        }
+        self.0.put_if(object, bytes, precondition).await
+    }
+    async fn list(&self, prefix: &str) -> Result<Vec<String>> {
+        self.0.list(prefix).await
+    }
+    async fn delete(&self, object: &str) -> Result<()> {
+        self.0.delete(object).await
+    }
+}
+
+/// The same race on a store that cannot refuse an upload: names are content hashes, so the
+/// stale writer's same-sequence objects land under other names and the owner's tree survives.
+#[tokio::test]
+async fn a_stale_writer_cannot_change_the_owners_tree_even_when_uploads_overwrite() {
+    let store = OverwritingStore(MemoryStore::new());
+    let first = takeover(&store, "sandbox-1").await.unwrap();
+    let mut stale = Committer::new("sandbox-1", first.head_etag, None, None);
+    let tree = sample();
+    let mut source = Source { tree: &tree, opened: vec![] };
+    stale
+        .commit(&store, "engine-42", tree.entries.clone(), &mut source)
+        .await
+        .unwrap();
+
+    let second = takeover(&store, "sandbox-2").await.unwrap();
+    let mut owner = Committer::new("sandbox-2", second.head_etag, second.manifest, None);
+    let owners = sample().file("notes.md", b"owner".to_vec(), 20);
+    let mut source = Source { tree: &owners, opened: vec![] };
+    owner
+        .commit(&store, "engine-42", owners.entries.clone(), &mut source)
+        .await
+        .unwrap();
+    let published = snapshot(&store.0).await;
+
+    let stales = sample().file("notes.md", b"stale".to_vec(), 30);
+    let mut source = Source { tree: &stales, opened: vec![] };
+    let refused = stale
+        .commit(&store, "engine-42", stales.entries.clone(), &mut source)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, "SANDBOX_STORAGE_SUPERSEDED");
+
+    let after = snapshot(&store.0).await;
+    for (name, bytes) in &published {
+        assert_eq!(after.get(name), Some(bytes), "{name} changed");
+    }
+    assert_eq!(read_file(&store, "engine-42", "notes.md").await.unwrap(), b"owner");
 }

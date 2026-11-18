@@ -174,6 +174,28 @@ pub struct SandboxEgressSigningKey {
     pub key: String,
 }
 
+/// Persistent storage as the binding needs it: where the directory is in the sandbox and where
+/// its keys live in the linked Storage.
+///
+/// Absent on every sandbox that does not declare persistent storage, so its binding serializes
+/// exactly as before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxPersistentStorageBinding {
+    /// Absolute directory inside the sandbox.
+    pub path: String,
+    /// The linked Storage's bucket (AWS) or host directory (Local).
+    pub bucket: BindingValue<String>,
+    /// Object prefix every key lives under: `sandbox-storage/<sandbox resource id>`.
+    pub prefix: String,
+    /// Paths relative to `path` the agent never replicates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Largest replicated tree in bytes; a commit above it is refused whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_size_bytes: Option<u64>,
+}
+
 /// AWS sandbox binding configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -223,6 +245,9 @@ pub struct AwsSandboxBinding {
     /// indistinguishable from `allow`. Absent means `deny`, which is the answer that fails closed.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_egress: bool,
+    /// The declared persistent storage, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_storage: Option<SandboxPersistentStorageBinding>,
 }
 
 /// Azure sandbox binding configuration.
@@ -365,6 +390,9 @@ pub struct LocalSandboxBinding {
     /// File holding the route's bearer token. A locator, not the token: a binding is
     /// serialized into the workload's environment, and a secret there is a secret in state.
     pub token_path: BindingValue<String>,
+    /// The declared persistent storage, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persistent_storage: Option<SandboxPersistentStorageBinding>,
 }
 
 impl SandboxBinding {
@@ -378,6 +406,15 @@ impl SandboxBinding {
             Self::Local(value) => value.egress.as_ref(),
         }
     }
+    /// The declared persistent storage. Only AWS and Local can carry one.
+    pub fn persistent_storage(&self) -> Option<&SandboxPersistentStorageBinding> {
+        match self {
+            Self::Aws(value) => value.persistent_storage.as_ref(),
+            Self::Local(value) => value.persistent_storage.as_ref(),
+            Self::Azure(_) | Self::GcpAgentPlatform(_) | Self::Kubernetes(_) => None,
+        }
+    }
+
     /// Default runtime policy, including the released allowDomains alias.
     pub fn default_policy(&self) -> Option<&EgressPolicy> {
         let explicit = match self {
@@ -408,6 +445,7 @@ impl SandboxBinding {
             idle_pause_seconds: None,
             max_lifetime_seconds: None,
             allow_egress: false,
+            persistent_storage: None,
         })
     }
 
@@ -505,6 +543,7 @@ impl SandboxBinding {
             manager_url: manager_url.into(),
             sandbox_key: sandbox_key.into(),
             token_path: token_path.into(),
+            persistent_storage: None,
         })
     }
 }

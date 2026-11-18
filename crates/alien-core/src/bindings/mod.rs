@@ -64,7 +64,7 @@ pub use redis::{
 };
 pub use sandbox::{
     AwsSandboxBinding, AzureSandboxBinding, GcpAgentPlatformSandboxBinding,
-    KubernetesSandboxBinding, LocalSandboxBinding, SandboxBinding, SandboxEgressBinding,
+    KubernetesSandboxBinding, LocalSandboxBinding, SandboxBinding, SandboxEgressBinding, SandboxPersistentStorageBinding,
     SandboxEgressGateway, SandboxEgressReplicas, SandboxEgressSigningKey,
     EGRESS_GATEWAY_ADMIN_PROTOCOL,
 };

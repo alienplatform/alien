@@ -137,7 +137,13 @@ impl Committer {
             .sum();
         self.check_size(walked_size)?;
 
-        let name = ObjectName::next(self.head.as_ref().map_or(0, |m| m.commit.seq));
+        let seq = self.head.as_ref().map_or(0, |m| m.seq) + 1;
+        // New chunks point at this commit's pack, whose name is its hash and so only known
+        // once the pack is finished; they carry this placeholder until then.
+        let name = ObjectName {
+            seq,
+            hash: String::new(),
+        };
         let previous = self.head.as_ref();
         let mut pack = PackBuilder::new();
         let mut chunks: BTreeMap<String, ChunkLocation> = BTreeMap::new();
@@ -195,10 +201,9 @@ impl Committer {
             });
         }
         // A file that grew while it was read is checked again on what was actually read.
-        let manifest = Manifest {
+        let mut manifest = Manifest {
             version: MANIFEST_VERSION,
-            commit: name.clone(),
-            parent: previous.map(|m| m.commit.clone()),
+            seq,
             writer: self.writer.clone(),
             entries,
             chunks,
@@ -212,10 +217,17 @@ impl Committer {
         let pack_bytes = pack.finish();
         let pack_len = pack_bytes.len() as u64;
         if !pack_empty {
-            store.put(&name.pack(), pack_bytes).await?;
+            let pack_name = ObjectName::of(seq, &pack_bytes);
+            for location in manifest.chunks.values_mut() {
+                if location.pack == name {
+                    location.pack = pack_name.clone();
+                }
+            }
+            create_named(store, &pack_name.pack(), pack_bytes).await?;
         }
         let manifest_bytes = serde_json::to_vec(&manifest).expect("a manifest serializes");
-        store.put(&name.manifest(), manifest_bytes).await?;
+        let name = ObjectName::of(seq, &manifest_bytes);
+        create_named(store, &name.manifest(), manifest_bytes).await?;
         let head = Head {
             commit: Some(name.clone()),
             writer: self.writer.clone(),
@@ -255,6 +267,15 @@ impl Committer {
             _ => Ok(()),
         }
     }
+}
+
+/// Creates a content-addressed object. A name that already exists holds the same bytes (the
+/// name is their hash), so finding it is success, not a conflict.
+async fn create_named(store: &dyn ObjectStore, object: &str, bytes: Vec<u8>) -> Result<()> {
+    store
+        .put_if(object, bytes, crate::store::Precondition::Absent)
+        .await
+        .map(|_| ())
 }
 
 /// Makes the first name of every hard-link group, in path order, the one that carries the

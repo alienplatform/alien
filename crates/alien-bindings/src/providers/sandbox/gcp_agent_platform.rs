@@ -1360,6 +1360,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        super::storage_key::resolve_storage_key(None, request.storage_key.as_deref(), "sandbox.create")?;
         refuse_runtime_policy(request.egress.as_ref(), self.egress_declaration())?;
         // A sandbox takes no environment of its own: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
@@ -1509,6 +1510,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        super::storage_key::resolve_storage_key(None, request.storage_key.as_deref(), "sandbox.getOrCreate")?;
         refuse_runtime_policy(request.egress.as_ref(), self.egress_declaration())?;
         let Some(key) = request.sandbox_id.clone() else {
             return self.create(request).await.map(ResolvedSandbox::created);

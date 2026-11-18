@@ -66,33 +66,37 @@ pub fn key_root(sandbox_id: &str, key: &str) -> Result<String> {
     Ok(format!("{ROOT_PREFIX}/{sandbox_id}/{key}/"))
 }
 
-/// A commit's sequence number and random id, which together name its pack and manifest.
+/// A pack or manifest: its key's sequence number and the SHA-256 of its bytes.
+///
+/// Content-addressed so that no write can change what a name means. Object storage cannot make
+/// every upload create-only (an S3 POST policy upload ignores `If-None-Match`), so two writers
+/// using the same name must be writing the same bytes; a reader checks the hash anyway.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectName {
     /// Position in the key's history; HEAD's manifest has the highest live one.
     pub seq: u64,
-    /// Random per commit, so two writers never produce the same object name.
-    pub commit: String,
+    /// Hex SHA-256 of the object's bytes.
+    pub hash: String,
 }
 
 impl ObjectName {
-    /// A fresh name for the commit after `seq`.
-    pub fn next(seq: u64) -> Self {
+    /// The name of `bytes` at `seq`.
+    pub fn of(seq: u64, bytes: &[u8]) -> Self {
         Self {
-            seq: seq + 1,
-            commit: uuid::Uuid::new_v4().simple().to_string(),
+            seq,
+            hash: crate::pack::chunk_hash(bytes),
         }
     }
 
-    /// `packs/<seq>-<commit>.tar`
+    /// `packs/<seq>-<sha256>.tar`
     pub fn pack(&self) -> String {
-        format!("{PACKS_DIR}/{:020}-{}.tar", self.seq, self.commit)
+        format!("{PACKS_DIR}/{:020}-{}.tar", self.seq, self.hash)
     }
 
-    /// `manifests/<seq>-<commit>.json`
+    /// `manifests/<seq>-<sha256>.json`
     pub fn manifest(&self) -> String {
-        format!("{MANIFESTS_DIR}/{:020}-{}.json", self.seq, self.commit)
+        format!("{MANIFESTS_DIR}/{:020}-{}.json", self.seq, self.hash)
     }
 
     /// Reads a name back from a pack or manifest object, or `None` for anything else.
@@ -105,10 +109,10 @@ impl ObjectName {
                     .strip_prefix(&format!("{MANIFESTS_DIR}/"))
                     .and_then(|f| f.strip_suffix(".json"))
             })?;
-        let (seq, commit) = file.split_once('-')?;
+        let (seq, hash) = file.split_once('-')?;
         Some(Self {
             seq: seq.parse().ok()?,
-            commit: commit.to_string(),
+            hash: hash.to_string(),
         })
     }
 }
@@ -117,7 +121,8 @@ impl ObjectName {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Head {
-    /// The current commit, or `None` for a key taken over before its first commit.
+    /// The current commit's manifest, or `None` for a key taken over before its first commit.
+    /// Its name carries the manifest's hash, so HEAD pins the exact bytes.
     pub commit: Option<ObjectName>,
     /// The sandbox that last moved HEAD. A takeover changes it, which is what refuses the
     /// previous writer.
@@ -162,13 +167,14 @@ mod tests {
 
     #[test]
     fn object_names_round_trip_and_sort_by_seq() {
-        let name = ObjectName::next(9);
+        let name = ObjectName::of(10, b"bytes");
         assert_eq!(name.seq, 10);
+        assert_eq!(name.hash.len(), 64);
         assert_eq!(ObjectName::parse(&name.pack()), Some(name.clone()));
         assert_eq!(ObjectName::parse(&name.manifest()), Some(name.clone()));
         assert_eq!(ObjectName::parse("HEAD"), None);
         assert_eq!(ObjectName::parse("packs/x.tar"), None);
-        assert!(ObjectName::next(1).pack() < ObjectName::next(10).pack());
+        assert!(ObjectName::of(1, b"z").pack() < ObjectName::of(10, b"a").pack());
     }
 
     #[test]
