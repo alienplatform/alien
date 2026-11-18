@@ -31,6 +31,9 @@ fn gateway_policy_holds(expected: &EgressPolicy, effective: &EgressPolicy) -> bo
 /// `proxy_failover`); commands' proxy variables point here when two gateway replicas exist.
 const PROXY_LOOPBACK: &str = "127.0.0.1:18128";
 
+/// Azure's platform resolver, the one non-gateway destination the sandbox subnet allows (DNS).
+const AZURE_RESOLVER: &str = "168.63.129.16";
+
 impl AzureSandbox {
     /// Use the deployment's gateway for policy writes and create-time proxy credentials.
     pub fn with_egress_manager(
@@ -57,10 +60,11 @@ impl AzureSandbox {
         Ok(Some(policy))
     }
 
-    /// A bounded policy (`none`, `allowDomains`) with the persistent storage store's blob host
-    /// allowed ahead of every other rule, so the agent reaches its store. Commands are kept from
-    /// it inside the guest: their sockets carry the guest mark, which the agent drops on the way
-    /// out. An open policy (or none at all) is returned as is.
+    /// A policy (`none`, or the gateway floor under `internet`) with the persistent storage
+    /// store's blob host allowed ahead of every other rule, so the agent reaches its store.
+    /// Commands are kept from it inside the guest: their sockets carry the guest mark, and the
+    /// agent drops their direct connections (see [`Self::guest_egress`]). No policy (open
+    /// egress) stays none.
     pub(super) fn with_store_host(&self, policy: Option<EgressPolicy>) -> Option<EgressPolicy> {
         let Some(account) = self.store_account.as_ref() else {
             return policy;
@@ -74,6 +78,38 @@ impl AzureSandbox {
             },
         );
         Some(policy)
+    }
+
+    /// What the agent enforces on guest sockets when persistent storage opens the store's host:
+    /// `none` under `none`, and under `internet` the gateway replicas and the platform resolver
+    /// alone, which are the direct destinations commands have today. Nothing for a sandbox
+    /// without persistent storage or with open egress.
+    pub(super) fn guest_egress(&self) -> Result<Option<String>> {
+        if self.store_account.is_none() {
+            return Ok(None);
+        }
+        let Some(manager) = &self.egress_manager else {
+            return Ok(match self.egress {
+                alien_core::SandboxEgress::None => Some("none".to_string()),
+                _ => None,
+            });
+        };
+        let mut allowed = Vec::new();
+        for authority in manager.proxy_authorities() {
+            let address = authority
+                .rsplit_once(':')
+                .map_or(authority.as_str(), |(host, _)| host)
+                .parse::<std::net::Ipv4Addr>()
+                .map_err(|_| {
+                    not_as_declared(
+                        "new",
+                        &format!("gateway address '{authority}' is not an IPv4 address"),
+                    )
+                })?;
+            allowed.push(address.to_string());
+        }
+        allowed.push(AZURE_RESOLVER.to_string());
+        Ok(Some(format!("only:{}", allowed.join(","))))
     }
 
     pub(super) fn creation_deadline(&self) -> Option<i64> {
@@ -93,7 +129,7 @@ impl AzureSandbox {
         // rule for an IP does not open a TCP port. Setup's NSG allows the linked gateway ports
         // and denies platform DNS/IMDS and other traffic; the admin port has no rule and is not
         // reachable from sandboxes.
-        Some(EgressPolicy {
+        self.with_store_host(Some(EgressPolicy {
             default_action: "Allow".into(),
             traffic_inspection: Some("Partial".into()),
             host_rules: vec![EgressHostRule {
@@ -102,7 +138,7 @@ impl AzureSandbox {
             }],
             rules: Vec::new(),
             unmodelled: Default::default(),
-        })
+        }))
     }
 
     pub(super) async fn prepare_identity(

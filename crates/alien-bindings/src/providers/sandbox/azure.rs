@@ -202,6 +202,17 @@ impl AzureSandbox {
         storage: Option<alien_core::bindings::SandboxPersistentStorageBinding>,
         binding_name: &str,
     ) -> Result<Self> {
+        if storage.is_some()
+            && matches!(self.egress, alien_core::SandboxEgress::AllowDomains { .. })
+        {
+            return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                binding_name: binding_name.to_string(),
+                env_var: alien_core::bindings::binding_env_var_name(binding_name),
+                reason: "persistent storage on Azure needs egress none, internet or open, not \
+                         allowDomains"
+                    .to_string(),
+            }));
+        }
         self.store_account = match &storage {
             None => None,
             Some(declared) => match &declared.store {
@@ -523,6 +534,24 @@ impl Sandbox for AzureSandbox {
                     .collect::<Vec<_>>()
                     .join(","),
             );
+        }
+
+        if let Some(storage) = &self.persistent_storage {
+            // The agent's half of the declaration; the store and the rights arrive at attach.
+            request.env.insert(
+                alien_core::ENV_ALIEN_SANDBOX_PERSISTENT_STORAGE.to_string(),
+                serde_json::json!({
+                    "path": storage.path,
+                    "exclude": storage.exclude,
+                    "maxSizeBytes": storage.max_size_bytes,
+                })
+                .to_string(),
+            );
+        }
+        if let Some(guest) = self.guest_egress()? {
+            request
+                .env
+                .insert(alien_core::ENV_ALIEN_SANDBOX_GUEST_EGRESS.to_string(), guest);
         }
 
         let mut labels = BTreeMap::new();

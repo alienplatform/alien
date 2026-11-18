@@ -22,7 +22,7 @@ use crate::exec::ExecIdentity;
 use crate::image_command::ImageProcess;
 
 /// Set by setup on a sandbox that declares persistent storage: `{ path, exclude, maxSizeBytes }`.
-pub const ENV_PERSISTENT_STORAGE: &str = "ALIEN_SANDBOX_PERSISTENT_STORAGE";
+pub const ENV_PERSISTENT_STORAGE: &str = alien_core::ENV_ALIEN_SANDBOX_PERSISTENT_STORAGE;
 
 /// How often the directory is checked for changes. With one commit in flight at a time, a write
 /// is committed within about two of these plus the upload.
