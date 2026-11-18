@@ -154,9 +154,10 @@ impl AzureSandbox {
         let status = self
             .agent_storage(sandbox_id, reqwest::Method::GET, "/v1/storage", operation)
             .await?;
-        let renewed = crate::providers::sandbox::persistent_store::refresh_if_past_half(&status, |key| async move {
-            self.renew_grant(sandbox_id, &key, operation).await
-        })
+        let renewed = crate::providers::sandbox::persistent_store::refresh_if_past_half(
+            &status,
+            |key| async move { self.renew_grant(sandbox_id, &key, operation).await },
+        )
         .await?;
         if !renewed {
             return Ok(status);

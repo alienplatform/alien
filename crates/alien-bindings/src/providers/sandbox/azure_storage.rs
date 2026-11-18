@@ -521,6 +521,126 @@ mod live {
         }
     }
 
+    /// The agent's own storage, attached with a grant whose sandbox ends in 45 s, syncs until then;
+    /// after it Azure refuses the SAS and the agent reports `denied` instead of stalling. A grant
+    /// the binding renews puts it back to work: the next sync commits what was written while
+    /// denied.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs a live Azure hierarchical-namespace account"]
+    async fn the_agent_reports_denied_when_its_grant_expires_and_resumes_when_renewed() {
+        denied_until_renewed(false).await;
+    }
+
+    /// The same when the grant's stated expiry is later than its SAS's: the agent sends, Azure
+    /// answers 403, and the agent reports `denied` from that answer.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "needs a live Azure hierarchical-namespace account"]
+    async fn the_agent_reports_denied_when_azure_refuses_its_sas() {
+        denied_until_renewed(true).await;
+    }
+
+    async fn denied_until_renewed(overstate_expiry: bool) {
+        use alien_sandbox_agent::storage::attach::{
+            AttachRequest, PersistentStorage, ReplicationState, StorageConfig,
+        };
+        let grants = grants();
+        let key = format!("denied-{}", Utc::now().timestamp_millis());
+        let store = grants.key_store(&key).expect("a key store");
+        let claim = alien_sandbox_storage::takeover(&store, "sandbox-1")
+            .await
+            .expect("the binding claims the key");
+        let deadline = Utc::now() + Duration::seconds(45);
+        let mut grant = grants
+            .grant(&key, Some(deadline))
+            .await
+            .expect("the grant mints");
+        let StorageGrant::AzureSas { expires_at, .. } = &mut grant else {
+            panic!("an Azure grant")
+        };
+        if overstate_expiry {
+            *expires_at = deadline + Duration::hours(1);
+        }
+        let stated = *expires_at;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace = dir.path().join("workspace");
+        let storage = std::sync::Arc::new(PersistentStorage::with_staging(
+            StorageConfig {
+                path: workspace.display().to_string(),
+                exclude: vec![],
+                max_size_bytes: None,
+            },
+            dir.path().join("staging"),
+        ));
+        let image = alien_sandbox_agent::image_command::ImageProcess::default().awaiting_restore();
+        // SAFETY: plain getters.
+        let me = unsafe {
+            alien_sandbox_agent::exec::ExecIdentity {
+                uid: libc::getuid(),
+                gid: libc::getgid(),
+            }
+        };
+        let request: AttachRequest = serde_json::from_value(serde_json::json!({
+            "key": key,
+            "writer": "sandbox-1",
+            "headVersion": claim.head_version,
+            "grant": grant,
+        }))
+        .expect("parses");
+        let attached = storage.attach(request, &image, me).await.expect("attach");
+        assert_eq!(attached.grant_expires_at, Some(stated));
+
+        std::fs::write(workspace.join("before.txt"), b"before the deadline").unwrap();
+        let synced = storage
+            .sync()
+            .await
+            .expect("the grant syncs before its deadline");
+        assert_eq!(synced.state, ReplicationState::Replicating);
+
+        let wait = (deadline - Utc::now()).to_std().unwrap_or_default();
+        tokio::time::sleep(wait + std::time::Duration::from_secs(2)).await;
+        std::fs::write(workspace.join("after.txt"), b"written while denied").unwrap();
+        let refused = storage
+            .sync()
+            .await
+            .expect_err("an expired grant is refused");
+        assert!(
+            !refused.to_string().contains("sig="),
+            "the SAS is never printed: {refused}"
+        );
+        if overstate_expiry {
+            assert!(
+                refused.to_string().contains("403"),
+                "Azure refused it: {refused}"
+            );
+        } else {
+            assert!(
+                refused.to_string().contains("expired"),
+                "refused before sending: {refused}"
+            );
+        }
+        let status = storage.status();
+        assert_eq!(status.state, ReplicationState::Denied, "{status:?}");
+        eprintln!("deadline {deadline}, denied at {}: {refused}", Utc::now());
+
+        let renewed = grants.grant(&key, None).await.expect("a fresh grant mints");
+        storage
+            .renew(serde_json::from_value(serde_json::json!({ "grant": renewed })).unwrap())
+            .await
+            .expect("renew");
+        assert_ne!(storage.status().state, ReplicationState::Denied);
+        let resumed = storage.sync().await.expect("the renewed grant syncs");
+        assert_eq!(resumed.state, ReplicationState::Replicating);
+        eprintln!("resumed at {}, head {:?}", Utc::now(), resumed.head);
+
+        let mut listed = store.list("").await.expect("the binding lists the key");
+        assert!(listed.iter().any(|o| o == "HEAD"));
+        listed.sort();
+        for object in listed {
+            store.delete(&object).await.expect("the binding erases");
+        }
+    }
+
     /// The binding claims a key through `object_store` with its own identity (conditional puts
     /// on an HNS account), mints the agent's grant, and the grant writes and reads inside the
     /// key; the binding then reads what the grant wrote, lists the key and erases it.
